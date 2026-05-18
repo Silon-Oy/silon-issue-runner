@@ -1,0 +1,39 @@
+%% /run-issues orchestrator — state machine
+%% Source of truth for orchestrate.sh control flow. Update both together.
+stateDiagram-v2
+    [*] --> S0_Idle
+
+    S0_Idle --> S1_PickIssue: trigger (cmd or poller)
+    S1_PickIssue --> S2_Lock: candidate found
+    S1_PickIssue --> S0_Idle: no candidate
+
+    S2_Lock --> S3_Claim: lock acquired
+    S2_Lock --> S0_Idle: lock held by other run
+
+    S3_Claim --> S4_Worktree: claim verified
+    S3_Claim --> S2_Lock: claim race lost (retry)
+
+    S4_Worktree --> S5_DBClone: worktree ready
+    S5_DBClone --> S6_CycleReview: clone ok or not needed
+
+    S6_CycleReview --> S7_ReviewGate: cycle-review output written
+    S7_ReviewGate --> S8_Implementer: PROCEED
+    S7_ReviewGate --> S11_PostRunCleanup: BLOCKER or NEEDS_CLARIFICATION
+
+    S8_Implementer --> S9_Evolution: implementer commits done
+    S9_Evolution --> S10_PR: evolution refinements done
+    S10_PR --> S11_PostRunCleanup: PR opened
+
+    S11_PostRunCleanup --> S12_Finalize: cleanup done
+    S12_Finalize --> [*]
+
+    %% Failure transitions can occur from any active state into Finalize
+    S1_PickIssue --> S12_Finalize: fatal error
+    S2_Lock --> S12_Finalize: fatal error
+    S3_Claim --> S12_Finalize: fatal error
+    S4_Worktree --> S12_Finalize: fatal error
+    S5_DBClone --> S12_Finalize: fatal error
+    S6_CycleReview --> S12_Finalize: fatal error
+    S8_Implementer --> S12_Finalize: fatal error
+    S9_Evolution --> S12_Finalize: fatal error
+    S10_PR --> S12_Finalize: fatal error

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# db-clone/docker-compose.sh — clone a DB that lives inside a compose service.
+#
+# Args: <repo-root> <slug> <config-json>
+#
+# Config schema:
+#   {
+#     "type": "docker-compose",
+#     "compose_file": "docker-compose.yml",       # default "docker-compose.yml"
+#     "original_project": "silon",                # required (compose -p value)
+#     "db_service": "db",                         # required
+#     "db_engine": "mysql",                       # required, "mysql" or "postgres"
+#     "db_user_env": "MYSQL_ROOT_PASSWORD_USER",  # env var containing the user
+#     "db_pass_env": "MYSQL_ROOT_PASSWORD",       # env var containing the password
+#     "source_db_env": "MYSQL_DATABASE",          # env var with the source DB name
+#     "clone": {
+#       "name_prefix": "clone_"
+#     }
+#   }
+#
+# Creates a clone DB inside the SAME db service (not a separate compose
+# project — full project cloning is out of scope here). The "compose
+# project name: <original>-clone-<slug>" requirement in the plan refers
+# to OPTIONAL future support; for now we mirror the simpler in-service
+# clone behaviour and report the new DB name.
+#
+# Prints RUN_ISSUES_DB_CLONE=<cloned-db-name> on success.
+
+set -euo pipefail
+
+REPO_ROOT="$1"
+SLUG="$2"
+CONFIG="$3"
+
+j() { jq -r "$1" <<<"$CONFIG"; }
+
+COMPOSE_FILE=$(j '.compose_file // "docker-compose.yml"')
+ORIGINAL_PROJECT=$(j '.original_project // empty')
+DB_SERVICE=$(j '.db_service // empty')
+DB_ENGINE=$(j '.db_engine // empty')
+SOURCE_DB_ENV=$(j '.source_db_env // empty')
+USER_ENV=$(j '.db_user_env // empty')
+PASS_ENV=$(j '.db_pass_env // empty')
+NAME_PREFIX=$(j '.clone.name_prefix // "clone_"')
+
+[ -n "$ORIGINAL_PROJECT" ] || { echo "docker-compose: .original_project required" >&2; exit 2; }
+[ -n "$DB_SERVICE" ]       || { echo "docker-compose: .db_service required"       >&2; exit 2; }
+[ -n "$DB_ENGINE" ]        || { echo "docker-compose: .db_engine required"        >&2; exit 2; }
+[ -n "$SOURCE_DB_ENV" ]    || { echo "docker-compose: .source_db_env required"    >&2; exit 2; }
+
+SAFE_SLUG=$(printf '%s' "$SLUG" | tr -c '[:alnum:]_' '_' | cut -c1-32)
+CLONE_DB="${NAME_PREFIX}${SAFE_SLUG}"
+
+# Compose invocation prefix. We keep --project-name explicit so we don't
+# rely on the user's current shell having the right working directory.
+COMPOSE_PREFIX=(
+  docker compose
+  --project-name "$ORIGINAL_PROJECT"
+  --file "$REPO_ROOT/$COMPOSE_FILE"
+)
+
+# Reserved for future support of full project clones.
+# CLONE_PROJECT="${ORIGINAL_PROJECT}-clone-${SAFE_SLUG}"
+
+# Run a command inside the db service container. Credentials are pulled
+# from the container's own environment (env var indirection), so they
+# never appear on the host shell command line.
+db_run_in_container() {
+  "${COMPOSE_PREFIX[@]}" exec -T "$DB_SERVICE" "$@"
+}
+
+case "$DB_ENGINE" in
+  mysql)
+    USER_EXPR="\${$USER_ENV:-root}"
+    PASS_EXPR="\${$PASS_ENV:-}"
+    SOURCE_EXPR="\${$SOURCE_DB_ENV:-}"
+    echo "docker-compose/mysql: cloning \$$SOURCE_DB_ENV → $CLONE_DB" >&2
+    db_run_in_container sh -c "
+      set -e
+      : \"$USER_EXPR\"
+      : \"$PASS_EXPR\"
+      : \"$SOURCE_EXPR\"
+      mysql -u\"$USER_EXPR\" -p\"$PASS_EXPR\" -e \"DROP DATABASE IF EXISTS \\\`$CLONE_DB\\\`; CREATE DATABASE \\\`$CLONE_DB\\\`;\"
+      mysqldump -u\"$USER_EXPR\" -p\"$PASS_EXPR\" \"$SOURCE_EXPR\" | mysql -u\"$USER_EXPR\" -p\"$PASS_EXPR\" \"$CLONE_DB\"
+    "
+    ;;
+  postgres)
+    USER_EXPR="\${$USER_ENV:-postgres}"
+    SOURCE_EXPR="\${$SOURCE_DB_ENV:-}"
+    echo "docker-compose/postgres: cloning \$$SOURCE_DB_ENV → $CLONE_DB" >&2
+    db_run_in_container sh -c "
+      set -e
+      : \"$USER_EXPR\"
+      : \"$SOURCE_EXPR\"
+      psql -U \"$USER_EXPR\" -d postgres -c \"DROP DATABASE IF EXISTS \\\"$CLONE_DB\\\";\"
+      psql -U \"$USER_EXPR\" -d postgres -c \"CREATE DATABASE \\\"$CLONE_DB\\\" TEMPLATE \\\"$SOURCE_EXPR\\\";\"
+    "
+    ;;
+  *)
+    echo "docker-compose: unsupported db_engine '$DB_ENGINE'" >&2
+    exit 2
+    ;;
+esac
+
+printf 'RUN_ISSUES_DB_CLONE=%s\n' "$CLONE_DB"

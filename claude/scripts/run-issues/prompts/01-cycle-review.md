@@ -1,0 +1,70 @@
+# Cycle Review — `/run-issues` Vaihe S6
+
+Olet `/goodreason`-prosessin **Strategist**-roolissa. Tehtäväsi on lukea alla annettu
+GitHub-issue ja repon CLAUDE.md, ja päättää onko tehtävä **valmis toteutettavaksi nyt**
+vai puuttuuko jotain.
+
+Käytä Claude Code -ympäristössä saatavilla olevaa `/goodreason:cycle-review`-skilliä,
+jos se on määritelty. Jos ei, noudata alla olevaa rakennetta suoraan.
+
+## Issue
+
+**Title + body:**
+
+```
+{{ISSUE_BODY}}
+```
+
+**Kommentit:**
+
+```
+{{ISSUE_COMMENTS}}
+```
+
+## Repo-konteksti
+
+Repo: `{{REPO_ROOT}}`
+
+`CLAUDE.md` (mahdollinen `<project>/CLAUDE.md`):
+
+```
+{{REPO_CLAUDE_MD}}
+```
+
+## Tehtäväsi
+
+1. **Σ — strateginen jäsennys:** Mikä on issue-tikalin todellinen päämäärä? Onko se konkreettinen
+   muutos vai kysymys/keskustelunavaus?
+2. **β — rakenteellinen vastine:** Mitkä modulit, polut tai komponentit ovat muutoksen
+   keskiössä? Onko olemassa olevaa abstraktiota josta uusi koodi voisi periytyä?
+3. **τ — integraatiopinnat:** Mitkä rajapinnat (API-kentät, DB-skeema, UI-tilakomponentit,
+   ulkoiset palvelut) saattavat rikkoutua?
+4. **φ — toteutusvalmius:** Onko mitään blockerin tasoista epävarmuutta? Onko speksin
+   kentät — *tavoite, hyväksyntäkriteerit, edge-caset, scope-out* — olemassa edes
+   implisiittisesti?
+5. **χ — yleiskuva:** Kerro lyhyesti yhdessä virkkeessä mitä Implementer tekee.
+
+## Lopetus (PAKOLLINEN VIIMEINEN RIVI)
+
+Lopeta vastauksesi **TÄSMÄLLEEN YHDELLÄ** seuraavista riveistä. Mitään ei saa olla rivin
+jälkeen.
+
+```
+CYCLE_REVIEW_DECISION: PROCEED
+```
+
+```
+CYCLE_REVIEW_DECISION: BLOCKER
+```
+
+```
+CYCLE_REVIEW_DECISION: NEEDS_CLARIFICATION
+```
+
+- **PROCEED** = issue on tarpeeksi tarkka, Implementer voi aloittaa heti.
+- **BLOCKER** = jokin tekninen este (puuttuva pääsy, rikkinäinen riippuvuus, jne.) joka
+  vaatii maintainern manuaalisen toimenpiteen ennen jatkamista.
+- **NEEDS_CLARIFICATION** = issue-speksissä on liian iso epäselvyys; pyydä maintainera
+  täydentämään issuella ennen toteutusta.
+
+Älä laita tähän mitään muuta tekstiä. Orkestraattori parsii vain tämän rivin.

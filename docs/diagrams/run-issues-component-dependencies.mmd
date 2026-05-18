@@ -1,0 +1,70 @@
+%% /run-issues — component dependencies
+%% Shows which scripts call which libs and how external systems hook in.
+flowchart TB
+    subgraph Triggers
+        CMD["/run-issues slash command<br/>(interactive)"]
+        POLL["poller.sh<br/>(LaunchAgent, Studio)"]
+    end
+
+    subgraph Orchestrator
+        ORCH["orchestrate.sh<br/>12-state machine"]
+    end
+
+    subgraph Libraries["claude/scripts/run-issues/lib/"]
+        L_LOCK["locking.sh"]
+        L_ISSUE["issue.sh"]
+        L_WT["worktree.sh"]
+        L_STATE["state.sh"]
+        L_CLAUDE["claude-call.sh"]
+        L_HOOK["hook-runner.sh"]
+    end
+
+    subgraph Prompts["prompts/"]
+        P_CR["01-cycle-review.md"]
+        P_IMP["02-implementer.md"]
+        P_EVO["03-evolution.md"]
+    end
+
+    subgraph DBClone["db-clone/"]
+        DC_DISP["db-clone.sh<br/>(dispatcher)"]
+        DC_WP["wordpress-mysql.sh"]
+        DC_PG["postgres.sh"]
+        DC_DC["docker-compose.sh"]
+    end
+
+    subgraph External
+        GH["gh CLI<br/>(GitHub Issues + PRs)"]
+        GIT["git worktree<br/>+ post-commit hook"]
+        CC["claude CLI<br/>(--dangerously-skip-permissions)"]
+        PCH["post-commit hook<br/>(POST_COMMIT_SYNC=1)"]
+        DB["target repo DB<br/>(MySQL/PG/Compose)"]
+    end
+
+    CMD --> ORCH
+    POLL --> ORCH
+
+    ORCH --> L_LOCK
+    ORCH --> L_ISSUE
+    ORCH --> L_WT
+    ORCH --> L_STATE
+    ORCH --> L_CLAUDE
+    ORCH --> L_HOOK
+    ORCH --> DC_DISP
+
+    L_ISSUE --> GH
+    L_WT --> GIT
+    L_CLAUDE --> CC
+    L_HOOK --> PCH
+
+    DC_DISP --> DC_WP
+    DC_DISP --> DC_PG
+    DC_DISP --> DC_DC
+    DC_WP --> DB
+    DC_PG --> DB
+    DC_DC --> DB
+
+    ORCH -. reads .-> P_CR
+    ORCH -. reads .-> P_IMP
+    ORCH -. reads .-> P_EVO
+
+    L_CLAUDE -. passes prompt .-> CC
