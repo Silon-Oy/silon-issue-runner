@@ -97,19 +97,22 @@ state_set() {
 
 # state_finalize <run-dir> <status> [<blocked-reason>]
 # Sets status, finished_at, optional blocked_reason.
+# NOTE: we deliberately avoid naming a local variable `status` — that
+# clashes with a read-only special parameter in zsh and would break if
+# this file is ever sourced from a zsh shell (e.g. probe scripts).
 state_finalize() {
   local run_dir="$1"
-  local status="$2"
+  local new_status="$2"
   local reason="${3:-}"
 
   local tmp
   tmp=$(mktemp "$run_dir/.run.json.XXXXXX")
   if [ -n "$reason" ]; then
-    jq --arg s "$status" --arg ts "$(_state_now)" --arg r "$reason" \
+    jq --arg s "$new_status" --arg ts "$(_state_now)" --arg r "$reason" \
       '.status = $s | .finished_at = $ts | .blocked_reason = $r' \
       "$run_dir/run.json" > "$tmp"
   else
-    jq --arg s "$status" --arg ts "$(_state_now)" \
+    jq --arg s "$new_status" --arg ts "$(_state_now)" \
       '.status = $s | .finished_at = $ts' \
       "$run_dir/run.json" > "$tmp"
   fi

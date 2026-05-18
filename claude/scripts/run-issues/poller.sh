@@ -49,10 +49,9 @@ if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
   exit 0
 fi
 
-# Iterate repos. We read into arrays to keep portability across bash 3.x (default on macOS).
-mapfile -t REPOS < <(jq -c '.repos[]?' "$WATCHLIST")
-
-for repo_json in "${REPOS[@]}"; do
+# Iterate repos. We use a while-read loop instead of mapfile because
+# macOS ships bash 3.2 by default, which lacks the mapfile builtin.
+while IFS= read -r repo_json; do
   [ -n "$repo_json" ] || continue
 
   REPO_PATH=$(jq -r '.path // empty' <<<"$repo_json")
@@ -107,4 +106,4 @@ for repo_json in "${REPOS[@]}"; do
 
   tmux new-session -d -s "$SESSION" \
     "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto RUN_ISSUES_LABELS_CSV='$LABELS_CSV' '$ORCH' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
-done
+done < <(jq -c '.repos[]?' "$WATCHLIST")
