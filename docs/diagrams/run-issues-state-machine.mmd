@@ -1,39 +1,49 @@
 %% /run-issues orchestrator — state machine
 %% Source of truth for orchestrate.sh control flow. Update both together.
+%%
+%% Two-phase resume-capable machine:
+%%   Phase A (S1..S6) runs from start. Review gate (S7) either decides
+%%   automatically (RUN_ISSUES_AUTO=1) and continues to Phase B in the
+%%   same invocation, or exits 10 ("awaiting_review") preserving lock +
+%%   claim + worktree. A separate --resume <run-dir> --decision
+%%   PROCEED|CANCEL invocation jumps to Phase B (S8..S12) or to
+%%   resume_cancel.
 stateDiagram-v2
     [*] --> S0_Idle
 
+    %% ----- Phase A: pick → cycle-review -----
     S0_Idle --> S1_PickIssue: trigger (cmd or poller)
     S1_PickIssue --> S2_Lock: candidate found
-    S1_PickIssue --> S0_Idle: no candidate
+    S1_PickIssue --> [*]: no candidate (rc=2)
 
     S2_Lock --> S3_Claim: lock acquired
-    S2_Lock --> S0_Idle: lock held by other run
+    S2_Lock --> [*]: lock held by other run (rc=3)
 
     S3_Claim --> S4_Worktree: claim verified
-    S3_Claim --> S2_Lock: claim race lost (retry)
+    S3_Claim --> [*]: claim race lost (rc=3)
 
     S4_Worktree --> S5_DBClone: worktree ready
     S5_DBClone --> S6_CycleReview: clone ok or not needed
+    S5_DBClone --> [*]: clone failed (rc=5)
 
     S6_CycleReview --> S7_ReviewGate: cycle-review output written
-    S7_ReviewGate --> S8_Implementer: PROCEED
-    S7_ReviewGate --> S11_PostRunCleanup: BLOCKER or NEEDS_CLARIFICATION
 
-    S8_Implementer --> S9_Evolution: implementer commits done
-    S9_Evolution --> S10_PR: evolution refinements done
-    S10_PR --> S11_PostRunCleanup: PR opened
+    %% ----- Review gate: auto resolves in-process; interactive exits 10 -----
+    S7_ReviewGate --> S8_Implementer: auto + PROCEED
+    S7_ReviewGate --> [*]: auto + BLOCKER / NEEDS_CLARIFICATION (rc=4)
+    S7_ReviewGate --> S_AwaitingReview: interactive (rc=10)
 
-    S11_PostRunCleanup --> S12_Finalize: cleanup done
+    %% ----- Resume entry from awaiting_review -----
+    S_AwaitingReview --> S8_Implementer: --resume --decision PROCEED
+    S_AwaitingReview --> S_ResumeCancel: --resume --decision CANCEL
+    S_ResumeCancel --> [*]: claim removed, worktree kept (rc=0)
+
+    %% ----- Phase B: implementer → PR -----
+    S8_Implementer --> S9_Evolution: implementer SUCCESS / PARTIAL
+    S8_Implementer --> [*]: implementer BLOCKED (rc=5)
+    S9_Evolution --> S10_Push
+    S10_Push --> S11_PRCreate
+    S10_Push --> [*]: git push failed (rc=6)
+    S11_PRCreate --> S12_Finalize: PR opened
+    S11_PRCreate --> [*]: gh pr create failed (rc=6)
     S12_Finalize --> [*]
-
-    %% Failure transitions can occur from any active state into Finalize
-    S1_PickIssue --> S12_Finalize: fatal error
-    S2_Lock --> S12_Finalize: fatal error
-    S3_Claim --> S12_Finalize: fatal error
-    S4_Worktree --> S12_Finalize: fatal error
-    S5_DBClone --> S12_Finalize: fatal error
-    S6_CycleReview --> S12_Finalize: fatal error
-    S8_Implementer --> S12_Finalize: fatal error
-    S9_Evolution --> S12_Finalize: fatal error
-    S10_PR --> S12_Finalize: fatal error
