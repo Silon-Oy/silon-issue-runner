@@ -76,10 +76,10 @@ while IFS= read -r repo_json; do
         extra+=" label:\"$label\""
       done
     fi
+    # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
+    # no longer accepts standalone --sort/--order flags on `issue list`.
     gh issue list \
-      --search "is:open no:assignee -label:blocked -label:waiting -label:wip$extra" \
-      --sort created \
-      --order asc \
+      --search "is:open no:assignee -label:blocked -label:waiting -label:wip sort:created-asc$extra" \
       --limit 1 \
       --json number \
       --jq '.[0].number // empty' 2>/dev/null || true

@@ -56,35 +56,24 @@ call_claude() {
 
 # render_prompt <template-file> <output-file> <key1=val1> [<key2=val2> ...]
 # Substitutes {{KEY}} placeholders in the template. Values may contain
-# arbitrary text; substitution is done line-safe via awk to avoid shell
-# expansion of metacharacters in `sed`.
+# arbitrary text including newlines; substitution uses bash parameter
+# expansion (literal match, glob-free in the pattern) which preserves the
+# value byte-for-byte. Placeholder names are uppercase tokens by convention,
+# so no glob metacharacters appear in the pattern.
 render_prompt() {
   local template="$1"
   local out="$2"
   shift 2
 
-  local tmp
-  tmp=$(mktemp)
-  cp "$template" "$tmp"
+  local content
+  content=$(<"$template")
 
+  local kv k v
   for kv in "$@"; do
-    local k="${kv%%=*}"
-    local v="${kv#*=}"
-    # Use awk for safe literal substitution (no regex on the value).
-    local tmp2
-    tmp2=$(mktemp)
-    awk -v key="{{$k}}" -v val="$v" '
-      {
-        n = index($0, key)
-        while (n > 0) {
-          $0 = substr($0, 1, n - 1) val substr($0, n + length(key))
-          n = index($0, key)
-        }
-        print
-      }
-    ' "$tmp" > "$tmp2"
-    mv -f "$tmp2" "$tmp"
+    k="${kv%%=*}"
+    v="${kv#*=}"
+    content="${content//\{\{$k\}\}/$v}"
   done
 
-  mv -f "$tmp" "$out"
+  printf '%s\n' "$content" > "$out"
 }

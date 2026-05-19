@@ -14,7 +14,9 @@ set -euo pipefail
 pick_oldest_unassigned() {
   local repo="$1"
   local labels_csv="${2:-}"
-  local search='is:open no:assignee -label:blocked -label:waiting -label:wip'
+  # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
+  # no longer accepts standalone --sort/--order flags on `issue list`.
+  local search='is:open no:assignee -label:blocked -label:waiting -label:wip sort:created-asc'
 
   local extra=""
   if [ -n "$labels_csv" ]; then
@@ -28,12 +30,8 @@ pick_oldest_unassigned() {
 
   (
     cd "$repo"
-    # --sort created --order asc: oldest first.
-    # --search keeps full control over filters (label/no:assignee/etc).
     gh issue list \
       --search "${search}${extra}" \
-      --sort created \
-      --order asc \
       --limit 1 \
       --json number \
       --jq '.[0].number // empty'
