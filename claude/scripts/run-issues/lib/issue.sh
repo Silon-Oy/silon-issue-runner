@@ -50,7 +50,10 @@ claim_issue() {
 }
 
 # verify_claim <repo-root> <N>
-# Returns 0 if the current user owns the assignment, 1 otherwise.
+# Returns 0 only if the current user is the SOLE assignee. A multi-assignee
+# state means a racing runner has also claimed the issue — caller must lose
+# the race and unclaim. GitHub permits concurrent --add-assignee calls, so
+# verifying singleton membership is the only durable arbiter.
 verify_claim() {
   local repo="$1"
   local n="$2"
@@ -60,10 +63,7 @@ verify_claim() {
     cd "$repo"
     gh issue view "$n" --json assignees --jq '[.assignees[].login] | join(",")'
   )
-  case ",$current," in
-    *",$me,"*) return 0 ;;
-    *) return 1 ;;
-  esac
+  [ "$current" = "$me" ]
 }
 
 # unclaim_issue <repo-root> <N>

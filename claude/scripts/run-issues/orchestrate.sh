@@ -206,7 +206,8 @@ phase_a() {
   state_event "$RUN_DIR" "claim_attempted"
   sleep 5
   if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM"; then
-    log "claim race lost after verification"
+    log "claim race lost after verification — unclaiming and exiting"
+    unclaim_issue "$REPO_ROOT" "$ISSUE_NUM"
     state_finalize "$RUN_DIR" "lost_race" "claim_lost"
     exit 3
   fi
