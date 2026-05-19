@@ -55,25 +55,65 @@ call_claude() {
 }
 
 # render_prompt <template-file> <output-file> <key1=val1> [<key2=val2> ...]
-# Substitutes {{KEY}} placeholders in the template. Values may contain
-# arbitrary text including newlines; substitution uses bash parameter
-# expansion (literal match, glob-free in the pattern) which preserves the
-# value byte-for-byte. Placeholder names are uppercase tokens by convention,
-# so no glob metacharacters appear in the pattern.
+# Substitutes {{KEY}} placeholders in the template in a SINGLE pass.
+# Values are walked over but never re-scanned, so a literal "{{OTHER}}"
+# string inside a substituted value is preserved as-is — this prevents
+# placeholder injection from untrusted issue content. Values may contain
+# arbitrary text including newlines; glob metacharacters and backslashes
+# pass through byte-for-byte. Placeholder names are uppercase by
+# convention. The order of key=value arguments is irrelevant.
 render_prompt() {
   local template="$1"
   local out="$2"
   shift 2
 
-  local content
-  content=$(<"$template")
-
-  local kv k v
+  local kv k
+  local -a keys=()
+  local -a env_args=()
   for kv in "$@"; do
     k="${kv%%=*}"
-    v="${kv#*=}"
-    content="${content//\{\{$k\}\}/$v}"
+    keys+=("$k")
+    env_args+=("_RP_$k=${kv#*=}")
   done
 
-  printf '%s\n' "$content" > "$out"
+  env "${env_args[@]}" _RP_KEYS="${keys[*]}" \
+    awk -v template_file="$template" '
+      BEGIN {
+        n = split(ENVIRON["_RP_KEYS"], ks, " ")
+        for (i = 1; i <= n; i++) {
+          vals[ks[i]] = ENVIRON["_RP_" ks[i]]
+          valid[ks[i]] = 1
+        }
+
+        template = ""
+        first = 1
+        while ((getline line < template_file) > 0) {
+          if (first) { template = line; first = 0 }
+          else { template = template "\n" line }
+        }
+        close(template_file)
+        sub(/\n+$/, "", template)
+
+        out = ""
+        i = 1
+        len = length(template)
+        while (i <= len) {
+          if (substr(template, i, 2) == "{{") {
+            rest = substr(template, i + 2)
+            end = index(rest, "}}")
+            if (end > 0) {
+              key = substr(rest, 1, end - 1)
+              if (key in valid) {
+                out = out vals[key]
+                i = i + 2 + end + 1
+                continue
+              }
+            }
+          }
+          out = out substr(template, i, 1)
+          i++
+        }
+        printf "%s\n", out
+      }
+    ' > "$out"
 }
