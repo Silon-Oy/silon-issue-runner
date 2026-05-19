@@ -4,10 +4,12 @@ flowchart TB
     subgraph Triggers
         CMD["/run-issues slash command<br/>(interactive)"]
         POLL["poller.sh<br/>(LaunchAgent, Studio)"]
+        CLEAN_CMD["/cleanup-run slash command<br/>(manual recovery)"]
     end
 
     subgraph Orchestrator
         ORCH["orchestrate.sh<br/>12-state machine"]
+        CLEAN["cleanup-run.sh<br/>(worktree + branch + run-dir<br/>+ lock + gh assignee teardown)"]
     end
 
     subgraph Libraries["claude/scripts/run-issues/lib/"]
@@ -42,6 +44,11 @@ flowchart TB
 
     CMD --> ORCH
     POLL --> ORCH
+    CLEAN_CMD --> CLEAN
+
+    CLEAN -. reads .-> L_STATE
+    CLEAN --> GH
+    CLEAN --> GIT
 
     ORCH --> L_LOCK
     ORCH --> L_ISSUE
