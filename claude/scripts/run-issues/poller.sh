@@ -43,7 +43,13 @@ GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 DEFAULT_LABELS=$(jq -r '(.default_labels // ["auto-run"]) | join(",")' "$WATCHLIST")
 
 # Count currently active run-issues tmux sessions to respect the cap.
-ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-' || true)
+# The `|| ACTIVE=0` fallback lives OUTSIDE the command substitution on purpose:
+# grep -c always prints a count to stdout (0 on no matches) but exits 1 when the
+# count is 0, and pipefail propagates that. Putting `|| echo 0` *inside* the
+# substitution would append a second "0" to grep's own "0", yielding "0\n0" and
+# crashing the numeric comparison below under set -e. Out here, the fallback only
+# fires when the substitution exits non-zero, keeping ACTIVE a clean integer.
+ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
 if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
   echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), skipping" >> "$LOG"
   exit 0
@@ -96,7 +102,9 @@ while IFS= read -r repo_json; do
   fi
 
   # Re-check cap before spawning (another iteration may have started one).
-  ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-' || true)
+  # See the note at the first ACTIVE assignment for why the fallback is outside
+  # the command substitution.
+  ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
   if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
     echo "$(date -u +%FT%TZ) poller: hit cap during loop ($ACTIVE/$GLOBAL_MAX)" >> "$LOG"
     break
