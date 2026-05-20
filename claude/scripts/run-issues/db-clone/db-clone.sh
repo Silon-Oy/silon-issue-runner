@@ -10,7 +10,8 @@
 # Exit codes:
 #   0  clone succeeded
 #   1  no .claude/db-clone.json present (clone is opt-in; not an error)
-#   2  config invalid (bad JSON or missing required fields)
+#   2  config invalid (bad JSON, missing required fields, or a string value
+#      containing a shell metacharacter)
 #   3  unknown backend type
 #   4  backend reported failure
 #
