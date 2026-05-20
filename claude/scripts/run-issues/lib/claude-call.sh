@@ -47,6 +47,8 @@ call_claude() {
     # shellcheck disable=SC2086
     $timeout_prefix claude --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   else
+    printf '[claude-call %s] WARNING: no timeout binary available (timeout/gtimeout), claude calls may hang indefinitely — install coreutils (brew install coreutils)\n' \
+      "$(date -u +%FT%TZ)" >&2
     claude --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   fi
 
