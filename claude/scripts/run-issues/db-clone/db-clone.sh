@@ -40,6 +40,17 @@ if ! jq -e . "$CONFIG_PATH" >/dev/null 2>&1; then
   exit 2
 fi
 
+# Reject config string values containing shell metacharacters. Some backends
+# (notably docker-compose.sh) interpolate these values into shell command
+# strings built on the host, so a value like `$(...)`, a backtick, `;` or `|`
+# would be a shell-injection vector. See README "Turvallisuus". Legitimate
+# values — including postgres connection strings such as
+# postgres://user:pass@host:5432/db — contain none of these characters.
+if jq -r '.. | strings' "$CONFIG_PATH" | grep -qE '[$`;|]'; then
+  echo "db-clone: config value contains a shell metacharacter (\$ \` ; |); refusing for safety" >&2
+  exit 2
+fi
+
 TYPE=$(jq -r '.type // empty' "$CONFIG_PATH")
 if [ -z "$TYPE" ]; then
   echo "db-clone: .type missing in $CONFIG_PATH" >&2

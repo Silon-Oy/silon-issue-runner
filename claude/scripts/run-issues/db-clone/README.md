@@ -82,6 +82,29 @@ Klooni nimetään muodossa `<prefix><run-id-sanitized>`, leikataan 32 merkkiin.
 - Compose-pohjaista *koko projektin* kloonia (uusi `<project>-clone-<slug>`) ei tueta tässä
   vaiheessa — sama palvelu hoitaa vain DB-tason kloonin.
 
+## Turvallisuus
+
+`.claude/db-clone.json` on **luotettu tiedosto.** Backendit (erityisesti
+`docker-compose.sh`) rakentavat osasta configin arvoja shell-stringin, joka
+ajetaan `docker compose exec`-kutsulla. Käytännössä configia muokkaamaan pääsevä
+voi siis ajaa mielivaltaista shelliä kontti- tai host-prosessina.
+
+Tästä syystä:
+
+- **Älä committaa `.claude/db-clone.json`-tiedostoa julkiseen repoon** äläkä jaa
+  sitä tahoille, joihin et luota. Pidä se `.gitignore`:ssä tai vain paikallisena.
+- **Kohtele tiedostoa kuin credentiaalia** — sen kirjoitusoikeudet kuuluvat vain
+  configin omistajalle (käytännössä maintainer kirjoittaa configit itse).
+- Riskitaso tässä ympäristössä on matala (yksityiset repot), mutta luotettu-status
+  on silti syytä tiedostaa, jos workflow joskus laajenee jaettuihin repoihin.
+
+Puolustuksena `db-clone.sh`-dispatcher hylkää (exit 2) configin, jonka jossain
+string-arvossa esiintyy shell-metamerkki `$`, backtick, `;` tai `|`. Validointi
+on tarkoituksella kapea: legitiimit arvot — myös Postgres-conn-stringit muotoa
+`postgres://user:pass@host:5432/db` — eivät sisällä näitä merkkejä, joten oikeat
+configit eivät kaadu. Validointi **ei korvaa** tiedoston luotettu-statuksen
+ylläpitoa, vaan on lisäkerros sen päälle.
+
 ## Exit-koodit (`db-clone.sh`)
 
 | Koodi | Merkitys                                                  |
