@@ -82,10 +82,22 @@ state_event() {
 # state_set <run-dir> <key> <value>
 # Updates a single field in run.json atomically. Value is stored as a
 # JSON string. For nested fields, use a dot.path (e.g. nested.field).
+#
+# The <key> MUST contain only [a-zA-Z0-9_.] characters. The dot acts as a
+# nesting separator (split on "."), so keys with literal dots are not
+# supported. Although the key is passed to jq via --arg (so $, ", or
+# backslash cannot leak into jq syntax), the orchestrator owns a closed set
+# of keys and never derives them from user input — the check below rejects
+# anything outside that character set to keep the contract explicit.
 state_set() {
   local run_dir="$1"
   local key="$2"
   local value="$3"
+
+  if [[ ! "$key" =~ ^[a-zA-Z0-9_.]+$ ]]; then
+    echo "state_set: invalid key '$key' (allowed: [a-zA-Z0-9_.])" >&2
+    return 1
+  fi
 
   local tmp
   tmp=$(mktemp "$run_dir/.run.json.XXXXXX")
