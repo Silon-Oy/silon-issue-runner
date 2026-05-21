@@ -20,6 +20,10 @@
 #   RUN_ISSUES_REVIEW_GATE  "auto" or "interactive" (default: interactive
 #                           unless RUN_ISSUES_AUTO=1)
 #   RUN_ISSUES_LABELS_CSV   labels filter for "poll" mode (default empty)
+#   RUN_ISSUES_PR_LABELS_CSV  labels to propagate from the source issue to the
+#                           created PR, if present on the issue (default
+#                           "auto-merge"). Enables the autoflow chain
+#                           issue -> PR -> pr-watch auto-merge.
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
@@ -108,6 +112,8 @@ if [ -z "${RUN_ISSUES_REVIEW_GATE:-}" ]; then
   fi
 fi
 LABELS_CSV="${RUN_ISSUES_LABELS_CSV:-}"
+# Merge-relevant labels copied from the source issue onto the created PR.
+PR_LABELS_CSV="${RUN_ISSUES_PR_LABELS_CSV:-auto-merge}"
 
 # ---------- library loading ----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -578,6 +584,60 @@ _hand_to_human() {
     "/run-issues: $msg Run-kansio: \`$RUN_DIR\`. Lisätty label \`needs-human\`." || true
 }
 
+# propagate_pr_labels <pr-url> — best-effort: copy merge-relevant labels from
+# the source issue onto the freshly created PR. GitHub does not copy issue
+# labels to PRs automatically, so without this the pr-watch merge-policy
+# (auto-merge label + CI + mergeable) never fires and the autoflow chain
+# (issue -> PR -> auto-merge) stalls on the last step.
+#
+# The propagate-list is configurable via RUN_ISSUES_PR_LABELS_CSV (default
+# "auto-merge"); only labels actually present on the source issue are added.
+# Labels are added even on draft PRs: a draft is never CLEAN/mergeable, so
+# pr-watch will not merge it before it is marked ready anyway, and the label is
+# then already in place. Reads labels from the cached issue.json (populated in
+# both normal and --restart paths). All failures are non-fatal — the PR already
+# exists, so a label error must not flip a completed run to blocked.
+propagate_pr_labels() {
+  local pr="$1"
+  local issue_json="$RUN_DIR/issue.json"
+  [ -f "$issue_json" ] || { log "propagate_pr_labels: issue.json missing — skipping"; return 0; }
+
+  local issue_labels matched="" want
+  issue_labels=$(jq -r '[.labels[]?.name] | join("\n")' "$issue_json")
+
+  # Intersect the configured propagate-list with labels actually on the issue.
+  while IFS= read -r want; do
+    want="$(printf '%s' "$want" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$want" ] || continue
+    if printf '%s\n' "$issue_labels" | grep -qxF -- "$want"; then
+      matched="${matched:+$matched,}$want"
+    fi
+  done <<EOF
+$(printf '%s' "$PR_LABELS_CSV" | tr ',' '\n')
+EOF
+
+  if [ -z "$matched" ]; then
+    log "propagate_pr_labels: no propagatable labels on issue #$ISSUE_NUM (configured: $PR_LABELS_CSV)"
+    return 0
+  fi
+
+  # Best-effort: ensure each label exists in the target repo before adding it.
+  local lbl
+  while IFS= read -r lbl; do
+    [ -n "$lbl" ] || continue
+    ( cd "$REPO_ROOT" && gh label create "$lbl" >/dev/null 2>&1 ) || true
+  done <<EOF
+$(printf '%s' "$matched" | tr ',' '\n')
+EOF
+
+  if ( cd "$REPO_ROOT" && gh pr edit "$pr" --add-label "$matched" >/dev/null 2>&1 ); then
+    log "propagate_pr_labels: added [$matched] to PR (issue #$ISSUE_NUM)"
+    state_event "$RUN_DIR" "pr_labels_propagated" "labels=$matched"
+  else
+    log "propagate_pr_labels: 'gh pr edit --add-label $matched' failed (non-fatal — PR already created)"
+  fi
+}
+
 resume_cancel() {
   log "Resume cancelled at review gate"
   state_finalize "$RUN_DIR" "cancelled" "cancelled_at_gate"
@@ -734,6 +794,10 @@ phase_b() {
 
   state_set "$RUN_DIR" "pr_url" "$pr_url"
   state_event "$RUN_DIR" "pr_opened" "url=$pr_url"
+
+  # Propagate merge-relevant labels (e.g. auto-merge) from the issue to the PR
+  # so the pr-watch merge-policy can fire. Best-effort; never fatal.
+  propagate_pr_labels "$pr_url"
 
   # ---------- S11/S12: finalize ----------
   # Worktree is kept intentionally as a forensic artefact. The lock is
