@@ -59,48 +59,63 @@ if [ "$MODE" = "cleanup" ]; then
   exit 0
 fi
 
-# Build exclude flags for wp db export.
-EXCLUDE_ARGS=()
+# Collect tables to exclude. wp db export and wp search-replace name the same
+# intent differently (--exclude_tables vs --skip-tables), so keep the raw list
+# and build the right comma-separated flag per command below.
+EXCLUDE_TABLES=()
 while IFS= read -r t; do
   [ -n "$t" ] || continue
-  EXCLUDE_ARGS+=("--exclude_tables=$t")
+  EXCLUDE_TABLES+=("$t")
 done < <(jq -r '.clone.exclude_tables[]? // empty' <<<"$CONFIG")
+
+# Validate the URL pair before doing any work so we fail fast.
+if [ "$UPDATE_URLS" = "true" ]; then
+  [ -n "$URL_FROM" ] && [ -n "$URL_TO" ] || {
+    echo "wordpress-mysql: clone.url_pair.from/to required when update_urls=true" >&2
+    exit 2
+  }
+fi
 
 TMP_SQL=$(mktemp -t wpclone.XXXXXX.sql)
 trap 'rm -f "$TMP_SQL"' EXIT
 
-echo "wordpress-mysql: exporting $SOURCE_DB → $TMP_SQL" >&2
-(
-  cd "$WP_DIR"
-  if [ "${#EXCLUDE_ARGS[@]}" -gt 0 ]; then
-    wp db export "$TMP_SQL" "${EXCLUDE_ARGS[@]}"
-  else
-    wp db export "$TMP_SQL"
-  fi
-)
+# Produce the dump that gets imported into the clone. When update_urls is set we
+# rewrite the URLs *during export*: `wp search-replace --export` reads the source
+# DB read-only and writes an already-rewritten SQL dump to a file (serialized
+# values handled correctly by wp-cli). wp-cli has no per-command flag to point at
+# a different database, so rewriting on export is what guarantees the change lands
+# only in the clone and never mutates the source DB.
+if [ "$UPDATE_URLS" = "true" ]; then
+  echo "wordpress-mysql: exporting $SOURCE_DB with URL rewrite $URL_FROM → $URL_TO → $TMP_SQL" >&2
+  (
+    cd "$WP_DIR"
+    if [ "${#EXCLUDE_TABLES[@]}" -gt 0 ]; then
+      wp search-replace "$URL_FROM" "$URL_TO" \
+        --all-tables --skip-columns=guid --report-changed-only \
+        --skip-tables="$(IFS=,; echo "${EXCLUDE_TABLES[*]}")" \
+        --export="$TMP_SQL"
+    else
+      wp search-replace "$URL_FROM" "$URL_TO" \
+        --all-tables --skip-columns=guid --report-changed-only \
+        --export="$TMP_SQL"
+    fi
+  )
+else
+  echo "wordpress-mysql: exporting $SOURCE_DB → $TMP_SQL" >&2
+  (
+    cd "$WP_DIR"
+    if [ "${#EXCLUDE_TABLES[@]}" -gt 0 ]; then
+      wp db export "$TMP_SQL" "--exclude_tables=$(IFS=,; echo "${EXCLUDE_TABLES[*]}")"
+    else
+      wp db export "$TMP_SQL"
+    fi
+  )
+fi
 
 echo "wordpress-mysql: creating $CLONE_DB on $MYSQL_HOST" >&2
 mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" -e "DROP DATABASE IF EXISTS \`$CLONE_DB\`; CREATE DATABASE \`$CLONE_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 echo "wordpress-mysql: importing dump into $CLONE_DB" >&2
 mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" "$CLONE_DB" < "$TMP_SQL"
-
-if [ "$UPDATE_URLS" = "true" ]; then
-  [ -n "$URL_FROM" ] && [ -n "$URL_TO" ] || {
-    echo "wordpress-mysql: clone.url_pair.from/to required when update_urls=true" >&2
-    exit 2
-  }
-  echo "wordpress-mysql: rewriting URLs $URL_FROM → $URL_TO in $CLONE_DB" >&2
-  (
-    cd "$WP_DIR"
-    # Run search-replace against the cloned DB by overriding DB_NAME.
-    wp search-replace "$URL_FROM" "$URL_TO" \
-      --all-tables \
-      --skip-columns=guid \
-      --report-changed-only \
-      --db_name="$CLONE_DB" 2>/dev/null \
-      || wp --url="$URL_FROM" db query "USE \`$CLONE_DB\`;" >/dev/null 2>&1 || true
-  )
-fi
 
 printf 'RUN_ISSUES_DB_CLONE=%s\n' "$CLONE_DB"

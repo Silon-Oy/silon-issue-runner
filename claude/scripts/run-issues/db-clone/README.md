@@ -37,8 +37,8 @@ Klooni nimetään muodossa `<prefix><run-id-sanitized>`, leikataan 32 merkkiin.
 ```
 
 - `wp_path` on `wp-cli`:n juuri repon sisällä (yleensä `.`).
-- `exclude_tables` välitetään `wp db export`:lle.
-- `update_urls=true` ajaa `wp search-replace`:n kloonatussa kannassa.
+- `exclude_tables` välitetään `wp db export`:lle (`--exclude_tables`), tai `update_urls=true`-tilassa `wp search-replace`:lle (`--skip-tables`). Useampi taulu kelpaa.
+- `update_urls=true` kirjoittaa URL:t uudelleen **export-vaiheessa**: `wp search-replace --export` lukee lähde-DB:tä read-onlyna ja kirjoittaa valmiiksi uudelleenkirjoitetun dumpin, joka tuodaan klooniin. Lähde-DB:hen ei kosketa, ja serialized-arvot säilyvät wp-cli:n hoitamana. (wp-cli:ssä ei ole lippua osoittaa komentoa toiseen kantaan, joten uudelleenkirjoitus tehdään exportissa.)
 
 ### `postgres`
 
