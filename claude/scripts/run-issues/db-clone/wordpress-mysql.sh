@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# db-clone/wordpress-mysql.sh — clone a WP database via wp db export + mysql.
+# db-clone/wordpress-mysql.sh — clone (or drop) a WP database via wp db export + mysql.
 #
-# Args: <repo-root> <slug> <config-json>
+# Args: <repo-root> <slug> <config-json> [clone|cleanup]   (default: clone)
+#
+# In cleanup mode the clone DB name is recomputed with the same logic as
+# clone (name_prefix + sanitized slug) and only the DROP DATABASE branch runs.
+# No export/import happens. DROP DATABASE IF EXISTS makes cleanup idempotent.
 #
 # Config schema (subset of .claude/db-clone.json relevant here):
 #   {
@@ -28,6 +32,7 @@ set -euo pipefail
 REPO_ROOT="$1"
 SLUG="$2"
 CONFIG="$3"
+MODE="${4:-clone}"
 
 j() { jq -r "$1" <<<"$CONFIG"; }
 
@@ -47,6 +52,12 @@ SAFE_SLUG=$(printf '%s' "$SLUG" | tr -c '[:alnum:]_' '_' | cut -c1-32)
 CLONE_DB="${NAME_PREFIX}${SAFE_SLUG}"
 
 WP_DIR="$REPO_ROOT/$WP_PATH"
+
+if [ "$MODE" = "cleanup" ]; then
+  echo "wordpress-mysql: dropping $CLONE_DB on $MYSQL_HOST" >&2
+  mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" -e "DROP DATABASE IF EXISTS \`$CLONE_DB\`;"
+  exit 0
+fi
 
 # Build exclude flags for wp db export.
 EXCLUDE_ARGS=()

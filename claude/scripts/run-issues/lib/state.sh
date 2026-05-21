@@ -33,12 +33,14 @@ state_init() {
     --arg repo "$repo" \
     --arg issue_num "$issue_num" \
     --arg ts "$(_state_now)" \
+    --arg host "$(hostname -s)" \
     '{
       run_id: $run_id,
       repo: $repo,
       issue_number: ($issue_num | tonumber),
       status: "initialized",
       started_at: $ts,
+      host: $host,
       finished_at: null,
       current_state: "S0_Idle",
       branch: null,

@@ -5,11 +5,15 @@ flowchart TB
         CMD["/run-issues slash command<br/>(interactive)"]
         POLL["poller.sh<br/>(LaunchAgent, Studio)"]
         CLEAN_CMD["/cleanup-run slash command<br/>(manual recovery)"]
+        PR_CMD["/pr-watch slash command<br/>(interactive, Phase 2)"]
+        PR_POLL["pr-watch-poller.sh<br/>(LaunchAgent, Studio)"]
     end
 
     subgraph Orchestrator
         ORCH["orchestrate.sh<br/>12-state machine"]
-        CLEAN["cleanup-run.sh<br/>(worktree + branch + run-dir<br/>+ lock + gh assignee teardown)"]
+        CLEAN["cleanup-run.sh<br/>(DB drop + archive + worktree<br/>+ branch + run-dir + lock<br/>+ gh assignee teardown)"]
+        PRWATCH["pr-watch.sh<br/>9-state PR watcher (Phase 2)"]
+        PRLIB["lib/pr-watch-lib.sh<br/>(pr_decide classification)"]
     end
 
     subgraph Libraries["claude/scripts/run-issues/lib/"]
@@ -45,10 +49,20 @@ flowchart TB
     CMD --> ORCH
     POLL --> ORCH
     CLEAN_CMD --> CLEAN
+    PR_CMD --> PRWATCH
+    PR_POLL --> PRWATCH
 
     CLEAN -. reads .-> L_STATE
     CLEAN --> GH
     CLEAN --> GIT
+    CLEAN --> DC_DISP
+
+    PRWATCH --> PRLIB
+    PRWATCH --> L_LOCK
+    PRWATCH --> L_STATE
+    PRWATCH --> GH
+    PRWATCH --> GIT
+    PRWATCH --> CLEAN
 
     ORCH --> L_LOCK
     ORCH --> L_ISSUE

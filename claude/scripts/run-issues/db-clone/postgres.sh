@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# db-clone/postgres.sh — clone a Postgres database via pg_dump + psql.
+# db-clone/postgres.sh — clone (or drop) a Postgres database via pg_dump + psql.
 #
-# Args: <repo-root> <slug> <config-json>
+# Args: <repo-root> <slug> <config-json> [clone|cleanup]   (default: clone)
+#
+# In cleanup mode the clone DB name is recomputed with the same logic as
+# clone (name_prefix + sanitized slug) and only the DROP DATABASE branch runs.
+# No dump/import happens. DROP DATABASE IF EXISTS makes cleanup idempotent.
 #
 # Config schema:
 #   {
@@ -26,6 +30,7 @@ set -euo pipefail
 REPO_ROOT="$1"  # unused but kept for signature symmetry
 SLUG="$2"
 CONFIG="$3"
+MODE="${4:-clone}"
 
 : "$REPO_ROOT"  # silence unused warning under set -u when used by linters
 
@@ -47,9 +52,15 @@ SAFE_SLUG=$(printf '%s' "$SLUG" | tr -c '[:alnum:]_' '_' | cut -c1-32)
 CLONE_DB="${NAME_PREFIX}${SAFE_SLUG}"
 
 # Build a maintenance connection by replacing {db} with the postgres
-# default DB so we can create the clone DB.
+# default DB so we can create/drop the clone DB.
 ADMIN_CONN=$(printf '%s' "$TARGET_TPL" | sed "s|{db}|postgres|g")
 TARGET_CONN=$(printf '%s' "$TARGET_TPL" | sed "s|{db}|${CLONE_DB}|g")
+
+if [ "$MODE" = "cleanup" ]; then
+  echo "postgres: dropping database $CLONE_DB" >&2
+  psql --dbname="$ADMIN_CONN" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$CLONE_DB\";"
+  exit 0
+fi
 
 TMP_DUMP=$(mktemp -t pgclone.XXXXXX.sql)
 trap 'rm -f "$TMP_DUMP"' EXIT

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# db-clone/docker-compose.sh — clone a DB that lives inside a compose service.
+# db-clone/docker-compose.sh — clone (or drop) a DB inside a compose service.
 #
-# Args: <repo-root> <slug> <config-json>
+# Args: <repo-root> <slug> <config-json> [clone|cleanup]   (default: clone)
+#
+# In cleanup mode the clone DB name is recomputed with the same logic as
+# clone (name_prefix + sanitized slug) and only the DROP DATABASE branch runs.
+# No dump/import happens. DROP DATABASE IF EXISTS is idempotent, but if the
+# compose stack is down the `exec` fails and we return non-zero — the
+# dispatcher maps that to RC=4 (drop failed) without crashing the caller.
 #
 # Config schema:
 #   {
@@ -31,6 +37,7 @@ set -euo pipefail
 REPO_ROOT="$1"
 SLUG="$2"
 CONFIG="$3"
+MODE="${4:-clone}"
 
 j() { jq -r "$1" <<<"$CONFIG"; }
 
@@ -74,6 +81,16 @@ case "$DB_ENGINE" in
     USER_EXPR="\${$USER_ENV:-root}"
     PASS_EXPR="\${$PASS_ENV:-}"
     SOURCE_EXPR="\${$SOURCE_DB_ENV:-}"
+    if [ "$MODE" = "cleanup" ]; then
+      echo "docker-compose/mysql: dropping $CLONE_DB" >&2
+      db_run_in_container sh -c "
+        set -e
+        : \"$USER_EXPR\"
+        : \"$PASS_EXPR\"
+        mysql -u\"$USER_EXPR\" -p\"$PASS_EXPR\" -e \"DROP DATABASE IF EXISTS \\\`$CLONE_DB\\\`;\"
+      "
+      exit 0
+    fi
     echo "docker-compose/mysql: cloning \$$SOURCE_DB_ENV → $CLONE_DB" >&2
     db_run_in_container sh -c "
       set -e
@@ -87,6 +104,15 @@ case "$DB_ENGINE" in
   postgres)
     USER_EXPR="\${$USER_ENV:-postgres}"
     SOURCE_EXPR="\${$SOURCE_DB_ENV:-}"
+    if [ "$MODE" = "cleanup" ]; then
+      echo "docker-compose/postgres: dropping $CLONE_DB" >&2
+      db_run_in_container sh -c "
+        set -e
+        : \"$USER_EXPR\"
+        psql -U \"$USER_EXPR\" -d postgres -c \"DROP DATABASE IF EXISTS \\\"$CLONE_DB\\\";\"
+      "
+      exit 0
+    fi
     echo "docker-compose/postgres: cloning \$$SOURCE_DB_ENV → $CLONE_DB" >&2
     db_run_in_container sh -c "
       set -e

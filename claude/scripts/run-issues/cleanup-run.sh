@@ -18,9 +18,10 @@
 #   1. GitHub assignment (gh issue edit --remove-assignee @me)
 #   2. Worktree         (git worktree remove --force)
 #   3. Local branch     (git branch -D)
-#   4. Run-dir          (rm -rf .claude/run-issues/<run-id>)
-#   5. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/issue-N)
-#   6. DB clone         (only warned about — drop manually with backend-specific tooling)
+#   4. DB clone         (best-effort drop via db-clone.sh cleanup; non-fatal)
+#   5. Archive          (essential artefacts copied to .claude/run-issues-archive/<run-id>/)
+#   6. Run-dir          (rm -rf .claude/run-issues/<run-id>)
+#   7. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/issue-N)
 
 set -euo pipefail
 
@@ -65,9 +66,55 @@ done
 [ -d "$REPO_ROOT/.git" ] || { echo "cleanup-run: not a git repo: $REPO_ROOT" >&2; exit 1; }
 
 RUNS_DIR="$REPO_ROOT/.claude/run-issues"
+ARCHIVE_DIR="$REPO_ROOT/.claude/run-issues-archive"
 LOCK_ROOT="${HOME}/Library/Application Support/run-issues/locks"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Artefacts worth keeping after a run-dir is torn down. Logs and prompts are
+# intentionally excluded — they can contain large/transient content; these
+# four capture the canonical state and the agent decisions worth auditing.
+ARCHIVE_FILES=(run.json state.jsonl 01-cycle-review.out 03-evolution.out)
+
+# state_event lives in lib/state.sh; we source it so archive_run can record an
+# `archived` event into state.jsonl before that file is copied to the archive.
+# Sourcing is best-effort: if the lib is missing we degrade to a plain copy.
+STATE_LIB="$SCRIPT_DIR/lib/state.sh"
+if [ -f "$STATE_LIB" ]; then
+  # shellcheck source=lib/state.sh
+  . "$STATE_LIB"
+fi
 
 # ---------- helpers ----------
+
+# archive_run <run-id> <run-dir> — copy essential artefacts to
+# .claude/run-issues-archive/<run-id>/ before the run-dir is removed. Records
+# an `archived` event into state.jsonl first (so the event lands in the
+# archived copy). Best-effort: missing files are skipped, failures are
+# non-fatal so they never block the teardown.
+archive_run() {
+  local rid="$1" run_dir="$2"
+  local dest="$ARCHIVE_DIR/$rid"
+
+  if [ "$DRY_RUN" = "1" ]; then
+    printf '  [dry] archive: %s -> %s\n' "${ARCHIVE_FILES[*]}" "$dest"
+    return 0
+  fi
+
+  # Record the event into the live state.jsonl so the archived copy carries it.
+  if [ -f "$run_dir/state.jsonl" ] && type state_event >/dev/null 2>&1; then
+    state_event "$run_dir" "archived" "dest=$dest" 2>/dev/null || true
+  fi
+
+  mkdir -p "$dest" 2>/dev/null || { printf '    (archive dir create failed, skipping)\n' >&2; return 0; }
+  local f copied=0
+  for f in "${ARCHIVE_FILES[@]}"; do
+    if [ -f "$run_dir/$f" ]; then
+      cp -p "$run_dir/$f" "$dest/$f" 2>/dev/null && copied=$((copied + 1))
+    fi
+  done
+  printf '  archive: %s file(s) -> %s\n' "$copied" "$dest"
+}
+
 run_field() {
   # run_field <run-id> <jq-path> — prints empty string if file/key missing.
   local rid="$1" path="$2"
@@ -163,6 +210,23 @@ cleanup_run() {
     )
   fi
 
+  # Drop the cloned DB (best-effort). db-clone.sh cleanup is opt-in and
+  # idempotent; a non-zero rc must not abort the rest of the teardown, so we
+  # report it and continue. We pass the run-id as the slug — the same value
+  # the orchestrator used as the slug when cloning (orchestrate.sh S5).
+  if [ -n "$db_clone" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      printf '  [dry] db-clone: %s cleanup %s %s\n' "$SCRIPT_DIR/db-clone/db-clone.sh" "$REPO_ROOT" "$rid"
+    else
+      printf '  db-clone: dropping clone %s\n' "$db_clone"
+      if ! "$SCRIPT_DIR/db-clone/db-clone.sh" cleanup "$REPO_ROOT" "$rid"; then
+        printf '  ! DB clone drop failed for %s — drop manually with backend tooling.\n' "$db_clone" >&2
+      fi
+    fi
+  fi
+
+  archive_run "$rid" "$run_dir"
+
   do_or_dry "run-dir" rm -rf "$run_dir"
 
   if [ -n "$issue_num" ]; then
@@ -172,10 +236,6 @@ cleanup_run() {
     else
       printf '  lock: issue-%s not held\n' "$issue_num"
     fi
-  fi
-
-  if [ -n "$db_clone" ]; then
-    printf '  ! DB clone present (%s) — NOT cleaned automatically. Drop manually.\n' "$db_clone"
   fi
 }
 

@@ -1,0 +1,58 @@
+%% /run-issues Phase 2 — PR watcher state machine (P1..P9)
+%% pr-watch.sh <repo-root> <pr-number|scan>. Idempotent polling, no resume.
+%% Decision logic lives in lib/pr-watch-lib.sh (pr_decide).
+stateDiagram-v2
+    [*] --> P1_Discover
+
+    P1_Discover: P1 Discover\nnamed PR or scan completed runs\n(host match, pr_url non-null)
+    P1_Discover --> P2_Lock: candidate found
+    P1_Discover --> SCAN_EMPTY: scan, no candidate
+
+    P2_Lock: P2 Lock\nlock_issue(issue) — shared per-issue lock
+    P2_Lock --> P3_Classify: lock acquired
+    P2_Lock --> LOCK_RACE: lock held elsewhere
+
+    P3_Classify: P3 Classify\ngh pr view (state, mergeable,\nmergeStateStatus, labels, rollup)
+    P3_Classify --> P4_Decide: classified
+    P3_Classify --> NOT_MERGEABLE: gh pr view failed
+
+    P4_Decide: P4 Decide\npr_decide()
+    P4_Decide --> P6_Merge: MERGE
+    P4_Decide --> P5_Resolve: REBASE (conflict-res ON)
+    P4_Decide --> NOT_MERGEABLE: SKIP_* / WAIT_*
+
+    P5_Resolve: P5 Resolve\nrebase origin/main in feature worktree\n+ force-push + CI revalidation\n(NO AI conflict resolution)
+    P5_Resolve --> P6_Merge: rebase clean + CI green
+    P5_Resolve --> CONFLICT: conflict -> abort + comment
+    P5_Resolve --> CONFLICT: CI not green after rebase
+    P5_Resolve --> NOT_MERGEABLE: no worktree / blocked
+
+    P6_Merge: P6 Merge\ngh pr merge --rebase --delete-branch
+    P6_Merge --> P7_PostMerge: merged
+    P6_Merge --> MERGE_FAIL: merge failed
+
+    P7_PostMerge: P7 PostMerge\noptional .claude/post-merge-migrate.sh\n(on main; POST_COMMIT_SYNC NOT set)
+    P7_PostMerge --> P8_Finalize: ok / no script
+    P7_PostMerge --> MIGRATE_FAIL: script exit != 0
+
+    P8_Finalize: P8 Finalize\nstate_finalize merged + pr_merged event\n(BEFORE cleanup — invariant I4)
+    P8_Finalize --> P9_Cleanup
+
+    P9_Cleanup: P9 Cleanup\nhost gate: local cleanup only if\nrun.json.host == hostname -s\nelse print ssh hint
+    P9_Cleanup --> DONE
+
+    DONE: exit 0
+    SCAN_EMPTY: exit 2
+    LOCK_RACE: exit 3
+    NOT_MERGEABLE: exit 4 (retry next poll)
+    MERGE_FAIL: exit 5
+    CONFLICT: exit 6 (human needed)
+    MIGRATE_FAIL: exit 7
+
+    DONE --> [*]
+    SCAN_EMPTY --> [*]
+    LOCK_RACE --> [*]
+    NOT_MERGEABLE --> [*]
+    MERGE_FAIL --> [*]
+    CONFLICT --> [*]
+    MIGRATE_FAIL --> [*]
