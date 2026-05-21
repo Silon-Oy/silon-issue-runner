@@ -26,6 +26,9 @@ stateDiagram-v2
     S5_DBClone --> S6_CycleReview: clone ok or not needed
     S5_DBClone --> [*]: clone failed (rc=5)
 
+    %% S6_CycleReview merges the GoodReason Strategist (Σ/χ) and Architect
+    %% (β/τ) roles into one prompt (prompts/01-cycle-review.md) — there is no
+    %% separate Architect call. Deliberate simplification; see CLAUDE.md.
     S6_CycleReview --> S7_ReviewGate: cycle-review output written
 
     %% ----- Review gate: auto resolves in-process; interactive exits 10 -----

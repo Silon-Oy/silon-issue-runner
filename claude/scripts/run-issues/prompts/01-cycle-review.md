@@ -1,8 +1,16 @@
 # Cycle Review — `/run-issues` Vaihe S6
 
-Olet `/goodreason`-prosessin **Strategist**-roolissa. Tehtäväsi on lukea alla annettu
-GitHub-issue ja repon CLAUDE.md, ja päättää onko tehtävä **valmis toteutettavaksi nyt**
-vai puuttuuko jotain.
+Olet `/goodreason`-prosessin **Strategist + Architect** -roolissa. Tehtäväsi on lukea alla
+annettu GitHub-issue ja repon CLAUDE.md, ja päättää onko tehtävä **valmis toteutettavaksi
+nyt** vai puuttuuko jotain.
+
+> **Huom — tietoinen yksinkertaistus:** Alkuperäinen GoodReason-sykli ajaa Strategistin
+> (Σ/χ — päämäärä ja yleiskuva) ja Architectin (β/τ — rakenne ja integraatiopinnat)
+> erillisinä vaiheina. `/run-issues` **yhdistää nämä tähän yhteen cycle-review-vaiheeseen**:
+> alla oleva Σ/β/τ/φ/χ-rakenne kattaa molempien roolien analyysin (β ja τ ovat Architectin
+> osuus). Erillistä Architect-kutsua ei ole. Tämä pitää yhden issuen läpimenon kevyenä;
+> jos cycle-review-tuotokset alkavat osoittaa että β-laajuinen suunnittelu jää vajaaksi,
+> erillinen Architect-vaihe voidaan harkita myöhemmin (Phase 2).
 
 Käytä Claude Code -ympäristössä saatavilla olevaa `/goodreason:cycle-review`-skilliä,
 jos se on määritelty. Jos ei, noudata alla olevaa rakennetta suoraan.
