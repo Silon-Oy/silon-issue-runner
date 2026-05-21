@@ -479,7 +479,7 @@ review_gate() {
       fi
       _post_situation_to_issue "cycle_review_blocker" \
         "Cycle review esti ajon (\`$reason\`). Tarkista issue ja korjaa este." \
-        "$cr_out" 0
+        "$cr_out" 0 prose
       exit 4
       ;;
     interactive)
@@ -763,13 +763,17 @@ RUN_ISSUES_SITUATION_ARTIFACT_MAX="${RUN_ISSUES_SITUATION_ARTIFACT_MAX:-60000}"
 #
 #   <kind>          slug for logging/event (e.g. cycle_review_clarification)
 #   <headline>      1–3 Finnish sentences: WHAT happened + WHAT maintainer should do
-#   <artifact-file> optional absolute path to attach in a fenced code block
+#   <artifact-file> optional absolute path to attach
 #   <awaitable>     1 = answerable -> embed marker + reply instruction; default 0
+#   <artifact-mode> "prose" renders the artifact as Markdown (wraps on GitHub —
+#                   right for cycle-review/implementer output); "log" (default)
+#                   wraps it in a code fence to keep monospace log formatting.
 _post_situation_to_issue() {
   local kind="$1"
   local headline="$2"
   local artifact_file="${3:-}"
   local awaitable="${4:-0}"
+  local artifact_mode="${5:-log}"
 
   local host
   host=$(hostname -s)
@@ -795,10 +799,21 @@ _post_situation_to_issue() {
     raw=$(cat "$artifact_file")
     raw_bytes=$(printf '%s' "$raw" | wc -c | tr -d ' ')
     rendered=$(printf '%s' "$raw" | truncate_for_github "$RUN_ISSUES_SITUATION_ARTIFACT_MAX")
-    body+=$'\n'"### $(basename "$artifact_file")"$'\n'
-    body+='```'$'\n'
-    body+="${rendered}"$'\n'
-    body+='```'$'\n'
+    if [ "$artifact_mode" = "prose" ]; then
+      # Prose (Markdown) artifacts like cycle-review output render as text so
+      # long lines wrap on GitHub — a code fence would force horizontal scroll.
+      # A blank line after <summary> is required for GitHub to render Markdown
+      # inside <details>.
+      body+=$'\n'"<details open>"$'\n'"<summary>$(basename "$artifact_file")</summary>"$'\n\n'
+      body+="${rendered}"$'\n\n'
+      body+="</details>"$'\n'
+    else
+      # Log/plain artifacts keep monospace formatting in a code fence.
+      body+=$'\n'"### $(basename "$artifact_file")"$'\n'
+      body+='```'$'\n'
+      body+="${rendered}"$'\n'
+      body+='```'$'\n'
+    fi
     if [ "$raw_bytes" -gt "$RUN_ISSUES_SITUATION_ARTIFACT_MAX" ]; then
       body+=$'\n'"Täysi loki Studiolla: \`${RUN_DIR}\` (host \`${host}\`)."$'\n'
     fi
@@ -837,17 +852,18 @@ _finalize_awaiting_clarification() {
   _add_waiting_label
   _post_situation_to_issue "cycle_review_clarification" \
     "Cycle review tarvitsee tarkennusta (kierros $round) ennen kuin toteutus voi jatkua. Kerro puuttuvat tiedot kommentissa." \
-    "$cr_out" 1
+    "$cr_out" 1 prose
   state_event "$RUN_DIR" "awaiting_clarification" "round=$round"
 }
 
 # _hand_to_human <message> [<artifact-file>] — best-effort: post a full
 # situation report and ensure the needs-human label is attached. All failures
-# are non-fatal (the run is already finalized in run.json regardless).
+# are non-fatal (the run is already finalized in run.json regardless). The
+# artifact (when present) is implementer output, so render it as prose.
 _hand_to_human() {
   local msg="$1"
   local artifact_file="${2:-}"
-  _post_situation_to_issue "needs_human" "$msg" "$artifact_file" 0
+  _post_situation_to_issue "needs_human" "$msg" "$artifact_file" 0 prose
   ( cd "$REPO_ROOT" && gh label create needs-human --color B60205 \
       --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
   ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --add-label needs-human >/dev/null 2>&1 ) || true
@@ -972,7 +988,7 @@ phase_b() {
       state_finalize "$RUN_DIR" "blocked" "implementer_${imp_result:-no_result}"
       _post_situation_to_issue "implementer_blocked" \
         "Toteutusvaihe (implementer) jäi jumiin eikä tuottanut valmista tulosta. Tarkista alla oleva tuloste ja issuen vaatimukset." \
-        "$imp_out" 0
+        "$imp_out" 0 prose
       exit 5
       ;;
   esac

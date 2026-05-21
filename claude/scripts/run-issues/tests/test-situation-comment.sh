@@ -61,22 +61,27 @@ ART="$WORK/cr.out"
   echo "CYCLE_REVIEW_DECISION: BLOCKER"
 } > "$ART"
 
-_post_situation_to_issue "cycle_review_blocker" "Cycle review esti ajon. Korjaa este." "$ART" 0
+# cycle-review artifacts use prose mode: Markdown wraps on GitHub instead of a
+# horizontally-scrolling code fence.
+_post_situation_to_issue "cycle_review_blocker" "Cycle review esti ajon. Korjaa este." "$ART" 0 prose
 BODY=$(cat "$CAPTURE")
 echo "--- case 1 body (first 6 lines) ---"; printf '%s\n' "$BODY" | head -6
 
 printf '%s' "$BODY" | grep -q 'Cycle review esti ajon' || { echo "FAIL c1: headline missing"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'CYCLE_REVIEW_DECISION: BLOCKER' || { echo "FAIL c1: artifact decision line missing"; FAIL=1; }
+printf '%s' "$BODY" | grep -q '<details open>' || { echo "FAIL c1: prose artifact not in <details>"; FAIL=1; }
+printf '%s' "$BODY" | grep -q '<summary>cr.out</summary>' || { echo "FAIL c1: prose <summary> missing"; FAIL=1; }
+printf '%s' "$BODY" | grep -q '```' && { echo "FAIL c1: prose artifact wrapped in code fence"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'run-issues:awaiting-answer' && { echo "FAIL c1: marker present in non-awaitable"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'Vastaa tähän issueen' && { echo "FAIL c1: reply prompt present in non-awaitable"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'Status/syy: `cycle_review_blocker`' || { echo "FAIL c1: kind meta line missing"; FAIL=1; }
 grep -q '"event":"situation_posted"' "$RUN_DIR/state.jsonl" || { echo "FAIL c1: no situation_posted event"; FAIL=1; }
 grep -q '"awaitable":"0"' "$RUN_DIR/state.jsonl" || { echo "FAIL c1: event awaitable!=0"; FAIL=1; }
-[ "$FAIL" = "0" ] && echo "PASS case 1: blocker, no marker, artifact + event"
+[ "$FAIL" = "0" ] && echo "PASS case 1: blocker prose (<details>, no fence), no marker, event"
 
 # === case 2: awaitable clarification (marker + reply prompt) ==============
 : > "$RUN_DIR/state.jsonl"
-_post_situation_to_issue "cycle_review_clarification" "Tarvitsen tarkennusta." "$ART" 1
+_post_situation_to_issue "cycle_review_clarification" "Tarvitsen tarkennusta." "$ART" 1 prose
 BODY=$(cat "$CAPTURE")
 echo "--- case 2 body (first 4 lines) ---"; printf '%s\n' "$BODY" | head -4
 
@@ -84,8 +89,9 @@ printf '%s' "$BODY" | head -1 | grep -q 'run-issues:awaiting-answer' || { echo "
 printf '%s' "$BODY" | grep -q "run=$RUN_ID" || { echo "FAIL c2: marker run field wrong"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'Vastaa tähän issueen' || { echo "FAIL c2: reply prompt missing"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'Tarvitsen tarkennusta' || { echo "FAIL c2: headline missing"; FAIL=1; }
+printf '%s' "$BODY" | grep -q '<details open>' || { echo "FAIL c2: prose artifact not in <details>"; FAIL=1; }
 grep -q '"awaitable":"1"' "$RUN_DIR/state.jsonl" || { echo "FAIL c2: event awaitable!=1"; FAIL=1; }
-[ "$FAIL" = "0" ] && echo "PASS case 2: clarification, marker first + reply prompt"
+[ "$FAIL" = "0" ] && echo "PASS case 2: clarification, marker first + reply prompt + prose"
 
 # === case 3: no artifact ==================================================
 : > "$RUN_DIR/state.jsonl"
@@ -109,6 +115,18 @@ printf '%s' "$BODY" | grep -q 'typistetty' || { echo "FAIL c4: truncation notice
 printf '%s' "$BODY" | grep -q 'IMPLEMENTER_RESULT: BLOCKED' || { echo "FAIL c4: decision line (tail) dropped"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'Täysi loki Studiolla' || { echo "FAIL c4: fallback path missing"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 4: oversized -> notice + fallback, body under cap"
+
+# === case 5: log mode keeps the code fence (monospace logs) ================
+: > "$RUN_DIR/state.jsonl"
+LOG="$WORK/db.log"
+{ echo "mysqldump: column-aligned   output"; echo "ERROR 1045 (28000): Access denied"; } > "$LOG"
+_post_situation_to_issue "db_clone_failed" "DB-klooni epäonnistui." "$LOG" 0 log
+BODY=$(cat "$CAPTURE")
+printf '%s' "$BODY" | grep -q 'DB-klooni epäonnistui' || { echo "FAIL c5: headline missing"; FAIL=1; }
+printf '%s' "$BODY" | grep -q '```' || { echo "FAIL c5: log artifact not in code fence"; FAIL=1; }
+printf '%s' "$BODY" | grep -q '<details open>' && { echo "FAIL c5: log mode used <details>"; FAIL=1; }
+printf '%s' "$BODY" | grep -q 'Access denied' || { echo "FAIL c5: log content missing"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS case 5: log mode -> code fence preserved"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "situation-comment: all passed" || echo "situation-comment: FAILURES"
