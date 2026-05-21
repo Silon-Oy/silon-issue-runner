@@ -49,7 +49,9 @@ state_init() {
       cycle_review_decision: null,
       blocked_reason: null,
       retry_count: 0,
-      timeout_phase: null
+      timeout_phase: null,
+      clarification_round: 0,
+      awaiting_answer_since: null
     }' > "$tmp"
   mv -f "$tmp" "$run_dir/run.json"
 }
@@ -127,10 +129,27 @@ state_increment_retry() {
   jq -r '.retry_count' "$run_dir/run.json"
 }
 
+# state_increment_clarification <run-dir>
+# Atomically increments .clarification_round in run.json and prints the NEW
+# value to stdout. Mirrors state_increment_retry: the increment happens under
+# the per-issue lock BEFORE the cycle-review re-run, so the loop-cap spend is
+# durable even if the subsequent claude call dies. Used by the --continue path.
+state_increment_clarification() {
+  local run_dir="$1"
+
+  local tmp
+  tmp=$(mktemp "$run_dir/.run.json.XXXXXX")
+  jq '.clarification_round = ((.clarification_round // 0) + 1)' \
+    "$run_dir/run.json" > "$tmp"
+  mv -f "$tmp" "$run_dir/run.json"
+  jq -r '.clarification_round' "$run_dir/run.json"
+}
+
 # state_finalize <run-dir> <status> [<blocked-reason>]
 # Sets status, finished_at, optional blocked_reason.
 # Valid status values (enum, informal): initialized, completed, blocked,
-# lost_race, cancelled, merged, pr_conflicted, timed_out.
+# lost_race, cancelled, merged, pr_conflicted, timed_out,
+# awaiting_clarification.
 # NOTE: we deliberately avoid naming a local variable `status` — that
 # clashes with a read-only special parameter in zsh and would break if
 # this file is ever sourced from a zsh shell (e.g. probe scripts).

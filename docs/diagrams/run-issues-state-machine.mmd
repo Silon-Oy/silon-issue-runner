@@ -33,7 +33,8 @@ stateDiagram-v2
 
     %% ----- Review gate: auto resolves in-process; interactive exits 10 -----
     S7_ReviewGate --> S8_Implementer: auto + PROCEED
-    S7_ReviewGate --> [*]: auto + BLOCKER / NEEDS_CLARIFICATION (rc=4)
+    S7_ReviewGate --> [*]: auto + BLOCKER (rc=4)
+    S7_ReviewGate --> S_AwaitingClarification: auto + NEEDS_CLARIFICATION (rc=11)
     S7_ReviewGate --> S_AwaitingReview: interactive (rc=10)
 
     %% ----- Resume entry from awaiting_review -----
@@ -67,3 +68,21 @@ stateDiagram-v2
     S_RestartLoad --> S8_Implementer: worktree OK, retry incremented, timeout ramped
     S_RestartLoad --> [*]: worktree corrupt → needs-human (rc=0)
     S_RestartLoad --> [*]: lock held by other run (rc=3)
+
+    %% ----- Clarification answer-and-continue loop -----
+    %% NEEDS_CLARIFICATION parks the run as status=awaiting_clarification (rc=11):
+    %% lock released, GitHub assignee + waiting label kept. The situation comment
+    %% embeds an awaiting-answer marker (ts). poller.sh's scan_answered (host gate,
+    %% round < MAX_CLARIFICATIONS) detects maintainer's reply by timestamp (detect_answer:
+    %% createdAt > marker ts AND body lacks the run-issues: token) and launches
+    %% orchestrate.sh --continue <run-dir> in a run-issues-continue-<issue> session.
+    %% --continue re-runs S6 (run_cycle_review) with CLARIFICATION_CONTEXT built from
+    %% the reply; clarification_round is incremented BEFORE the claude call.
+    S_AwaitingClarification --> S_ContinueLoad: --continue (reply found, round < MAX)
+    S_AwaitingClarification --> [*]: no reply yet (parked, rc=11)
+    S_ContinueLoad --> S6_CycleReview: worktree OK, round incremented, context built
+    S_ContinueLoad --> [*]: worktree corrupt / budget exhausted → needs-human (rc=0)
+    S_ContinueLoad --> [*]: lock held by other run (rc=3)
+    %% Re-run outcomes feed straight back through S7_ReviewGate:
+    %%   PROCEED → remove waiting label → Phase B; still NEEDS_CLARIFICATION →
+    %%   re-park (round+1, rc=11); BLOCKER → needs-human (rc=4, no loop).

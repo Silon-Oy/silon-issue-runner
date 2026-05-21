@@ -39,6 +39,15 @@ Repo: `{{REPO_ROOT}}`
 {{REPO_CLAUDE_MD}}
 ```
 
+## maintainer vastasi aiempaan tarkennuspyyntöön
+
+{{CLARIFICATION_CONTEXT}}
+
+Jos yllä on maintainern vastaus, tämä on uudelleenarvioitu cycle-review: aiempi arviosi
+oli NEEDS_CLARIFICATION. Lue vastaus, päivitä Σ/β/τ/φ/χ sen valossa, päätä uudelleen.
+Vastaus poistaa epäselvyyden → PROCEED. Tuo uuden esteen → BLOCKER. Yhä epäselvä →
+NEEDS_CLARIFICATION (kysy TARKEMPI kysymys, älä toista samaa).
+
 ## Tehtäväsi
 
 1. **Σ — strateginen jäsennys:** Mikä on issue-tikalin todellinen päämäärä? Onko se konkreettinen

@@ -155,3 +155,47 @@ fetch_issue_json() {
     gh issue view "$n" --json title,body,labels,author,comments
   )
 }
+
+# parse_marker <issue-json-file>
+# Scans the issue comments for the NEWEST `run-issues:awaiting-answer` marker
+# and prints "ts=<ISO> round=<n> run=<id>" on stdout, or nothing if absent.
+# "Newest" is decided by the marker's own ts= field, which the orchestrator
+# sets from _state_now (%FT%TZ) — so a string sort is a chronological sort
+# (see tests/test-answer-detection.sh for why string comparison is valid).
+# A comment may carry the marker anywhere in its body; we match the HTML
+# comment with a regex and capture its ts/round/run attributes.
+parse_marker() {
+  local fixture="$1"
+  jq -r '
+    [ .comments[]?
+      | .body
+      | capture("<!-- run-issues:awaiting-answer run=(?<run>[^ ]+) issue=[^ ]+ ts=(?<ts>[^ ]+) round=(?<round>[^ ]+) -->"; "g")
+    ]
+    | sort_by(.ts)
+    | last
+    | if . == null then empty else "ts=\(.ts) round=\(.round) run=\(.run)" end
+  ' "$fixture"
+}
+
+# detect_answer <issue-json-file> <marker-ts>
+# Prints the body of the NEWEST comment created strictly after <marker-ts>
+# that is NOT itself a run-issues bot comment (body does not contain the
+# "run-issues:" token). Empty output means "no human reply yet".
+#
+# The bot and maintainer share the same GitHub account, so author is NOT a usable
+# discriminator — the marker timestamp is the only durable boundary. The reply
+# body is capped to keep the downstream cycle-review prompt bounded.
+detect_answer() {
+  local fixture="$1"
+  local marker_ts="$2"
+  local max_chars="${3:-8000}"
+  jq -r --arg ts "$marker_ts" --argjson max "$max_chars" '
+    [ .comments[]?
+      | select(.createdAt > $ts)
+      | select((.body | contains("run-issues:")) | not)
+    ]
+    | sort_by(.createdAt)
+    | last
+    | if . == null then empty else (.body[0:$max]) end
+  ' "$fixture"
+}

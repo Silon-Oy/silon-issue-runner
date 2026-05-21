@@ -36,10 +36,19 @@
 #   7   implementer (S8) timed out — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
 #  10   awaiting human review — invoke --resume to continue
+#  11   awaiting clarification — cycle review returned NEEDS_CLARIFICATION; the
+#       run is finalized as awaiting_clarification with the waiting label and an
+#       answerable situation comment. Poller's scan_answered restarts it via
+#       --continue once maintainer replies.
 #
 # --restart <run-dir> resumes a timed_out run with a ramped, capped timeout
 # (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). It skips pick/claim
 # and re-enters Phase B. Budget is RUN_ISSUES_MAX_RETRIES (default 1).
+#
+# --continue <run-dir> resumes an awaiting_clarification run after maintainer has
+# replied: it re-takes the lock, increments clarification_round, re-runs S6
+# cycle-review with the reply as context, and falls through the review gate.
+# Loop cap is RUN_ISSUES_MAX_CLARIFICATIONS (default 3).
 
 set -euo pipefail
 
@@ -48,6 +57,7 @@ MODE="start"
 RESUME_RUN_DIR=""
 RESUME_DECISION=""
 RESTART_RUN_DIR=""
+CONTINUE_RUN_DIR=""
 REPO_ROOT=""
 ISSUE_ARG=""
 
@@ -57,6 +67,7 @@ usage:
   orchestrate.sh <repo-root> <issue-number-or-"poll">
   orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL
   orchestrate.sh --restart <run-dir>
+  orchestrate.sh --continue <run-dir>
 USAGE
   exit 1
 }
@@ -67,6 +78,12 @@ if [ "${1:-}" = "--restart" ]; then
   RESTART_RUN_DIR="${1:-}"
   [ -n "$RESTART_RUN_DIR" ] || usage
   [ -d "$RESTART_RUN_DIR" ] || { echo "orchestrate: run-dir not found: $RESTART_RUN_DIR" >&2; exit 1; }
+elif [ "${1:-}" = "--continue" ]; then
+  MODE="continue"
+  shift
+  CONTINUE_RUN_DIR="${1:-}"
+  [ -n "$CONTINUE_RUN_DIR" ] || usage
+  [ -d "$CONTINUE_RUN_DIR" ] || { echo "orchestrate: run-dir not found: $CONTINUE_RUN_DIR" >&2; exit 1; }
 elif [ "${1:-}" = "--resume" ]; then
   MODE="resume"
   shift
@@ -194,9 +211,20 @@ LOCK_HELD=0
 CLAIMED=0
 CURRENT_STATE=""
 RESTART_CONTEXT=""
+# CLARIFICATION_CONTEXT is rendered into the cycle-review prompt. Empty on a
+# normal first pass (the prompt section collapses); the --continue path fills
+# it with the prior clarification headline + maintainer's reply.
+CLARIFICATION_CONTEXT=""
+# IS_CONTINUE distinguishes a first NEEDS_CLARIFICATION (exit 11, post marker)
+# from a re-evaluation after a reply (still NEEDS_CLARIFICATION -> new marker,
+# round+1, exit 11; BLOCKER -> hand to human, no loop).
+IS_CONTINUE=0
 
 # Retry budget: how many auto-restarts a single timed-out run may receive.
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
+# Clarification loop cap: how many answer-and-re-review rounds before the run
+# is handed to a human (the clarification loop does not converge).
+RUN_ISSUES_MAX_CLARIFICATIONS="${RUN_ISSUES_MAX_CLARIFICATIONS:-3}"
 
 # enter_state <state> — record the state both in a process global (cheap,
 # used by the cleanup trap) and in run.json's current_state field (durable,
@@ -264,8 +292,10 @@ cleanup_on_exit() {
     finalize_timeout "S8_Implementer" "implementer_killed_in_S8" || true
   fi
   # Awaiting-review exit (10) keeps the lock alive so --resume still owns
-  # the issue. Any other exit releases it. The lock is a per-machine
-  # advisory only; the GitHub assignee remains in place as the durable claim.
+  # the issue. Any other exit releases it — including awaiting_clarification
+  # (exit 11): that state is parked across machines via the GitHub waiting
+  # label + assignee, not the per-machine advisory lock, so --continue re-takes
+  # the lock cleanly. The GitHub assignee remains in place as the durable claim.
   if [ "$LOCK_HELD" = "1" ] && [ -n "$ISSUE_NUM" ] && [ "$rc" != "10" ]; then
     unlock_issue "$ISSUE_NUM" || true
   fi
@@ -374,6 +404,16 @@ phase_a() {
   esac
 
   # ---------- S6: cycle review ----------
+  run_cycle_review
+}
+
+# run_cycle_review — S6. Renders and runs the cycle-review prompt, parses the
+# decision into CR_DECISION, and records it. Reads the optional global
+# CLARIFICATION_CONTEXT: phase_a leaves it empty (the prompt section collapses);
+# the --continue path fills it with the prior headline + maintainer's reply so the
+# review is re-evaluated in light of the answer. This is the single cycle-review
+# code path — there is no second one.
+run_cycle_review() {
   enter_state "S6_CycleReview"
   log "S6_CycleReview"
   local repo_claude_md=""
@@ -386,7 +426,8 @@ phase_a() {
     "ISSUE_BODY=$ISSUE_BODY" \
     "ISSUE_COMMENTS=$ISSUE_COMMENTS" \
     "REPO_ROOT=$REPO_ROOT" \
-    "REPO_CLAUDE_MD=$repo_claude_md"
+    "REPO_CLAUDE_MD=$repo_claude_md" \
+    "CLARIFICATION_CONTEXT=$CLARIFICATION_CONTEXT"
 
   (
     cd "$WORKTREE_PATH"
@@ -409,25 +450,36 @@ review_gate() {
     auto)
       if [ "$CR_DECISION" = "PROCEED" ]; then
         state_event "$RUN_DIR" "review_gate_auto_proceed"
+        # A continue that now PROCEEDs clears the waiting label so the issue is
+        # no longer parked; phase_b takes it from here.
+        [ "$IS_CONTINUE" = "1" ] && _remove_waiting_label
         return 0
       fi
       log "auto review-gate did not PROCEED (decision=$CR_DECISION)"
-      local reason="cycle_review_${CR_DECISION:-empty}"
-      state_finalize "$RUN_DIR" "blocked" "$reason"
       local cr_out="$RUN_DIR/01-cycle-review.out"
       if [ "$CR_DECISION" = "NEEDS_CLARIFICATION" ]; then
-        # α1: emit an answerable situation comment (marker + reply prompt) but
-        # keep the existing finalize status/exit code. The await-and-continue
-        # flow (status awaiting_clarification, waiting label, scan_answered) is
-        # α2 and intentionally NOT implemented here.
-        _post_situation_to_issue "cycle_review_clarification" \
-          "Cycle review tarvitsee tarkennusta ennen kuin toteutus voi jatkua. Kerro puuttuvat tiedot kommentissa." \
-          "$cr_out" 1
-      else
-        _post_situation_to_issue "cycle_review_blocker" \
-          "Cycle review esti ajon (\`$reason\`). Tarkista issue ja korjaa este." \
-          "$cr_out" 0
+        # Answer-and-continue (α2): finalize awaiting_clarification, attach the
+        # waiting label, and post an answerable marker. On a re-review that is
+        # STILL unclear (IS_CONTINUE=1) the round was already incremented in
+        # continue_load_state, so this posts a NEW marker (newer ts, higher
+        # round) — maintainer answers again, the poller continues again, up to the cap.
+        _finalize_awaiting_clarification
+        exit 11
       fi
+      # BLOCKER (or empty/unknown): a technical obstacle, not a spec gap. There
+      # is no loop here — hand to a human in both first-pass and continue mode.
+      local reason="cycle_review_${CR_DECISION:-empty}"
+      state_finalize "$RUN_DIR" "blocked" "$reason"
+      if [ "$IS_CONTINUE" = "1" ]; then
+        _remove_waiting_label
+        _hand_to_human \
+          "Cycle review esti ajon tarkennuksen jälkeen (\`$reason\`). Tarkista issue ja korjaa este." \
+          "$cr_out"
+        exit 4
+      fi
+      _post_situation_to_issue "cycle_review_blocker" \
+        "Cycle review esti ajon (\`$reason\`). Tarkista issue ja korjaa este." \
+        "$cr_out" 0
       exit 4
       ;;
     interactive)
@@ -586,6 +638,118 @@ restart_load_state() {
   state_event "$RUN_DIR" "restarted" "retry_count=$new_retry" "timeout=$RUN_ISSUES_CLAUDE_TIMEOUT"
 }
 
+# ===========================================================================
+# Continue: resume an awaiting_clarification run after maintainer has replied
+# ===========================================================================
+# continue_load_state — validates an awaiting_clarification run, takes the lock,
+# checks the loop cap, validates the worktree, fetches maintainer's reply, increments
+# clarification_round, builds CLARIFICATION_CONTEXT, and re-opens the run so the
+# main flow can re-run S6 cycle-review. Cap exhaustion or a corrupt worktree
+# hand to a human (exit 0). A missing reply (race: poller saw it, it's gone now)
+# re-parks the run as awaiting_clarification and exits 0 — not an error.
+continue_load_state() {
+  RUN_DIR="$CONTINUE_RUN_DIR"
+  RUN_ID="$(basename "$RUN_DIR")"
+  local rj="$RUN_DIR/run.json"
+  [ -f "$rj" ] || { echo "orchestrate: no run.json in $RUN_DIR" >&2; exit 1; }
+
+  REPO_ROOT=$(jq -r '.repo // ""' "$rj")
+  ISSUE_NUM=$(jq -r '.issue_number // empty | tostring' "$rj")
+  BRANCH=$(jq -r '.branch // ""' "$rj")
+  WORKTREE_PATH=$(jq -r '.worktree_path // ""' "$rj")
+  DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
+  local prior_status round
+  prior_status=$(jq -r '.status // ""' "$rj")
+  round=$(jq -r '.clarification_round // 0' "$rj")
+
+  if [ -z "$REPO_ROOT" ] || [ -z "$ISSUE_NUM" ] || [ -z "$WORKTREE_PATH" ]; then
+    echo "orchestrate: incomplete run.json (missing repo/issue_number/worktree_path)" >&2
+    exit 1
+  fi
+
+  # Only awaiting_clarification runs are continuable. Anything else is a usage error.
+  if [ "$prior_status" != "awaiting_clarification" ]; then
+    echo "orchestrate: --continue only applies to awaiting_clarification runs (status='$prior_status')" >&2
+    exit 1
+  fi
+
+  # Take the per-issue lock for the duration of the continue.
+  if ! lock_issue "$ISSUE_NUM"; then
+    log "continue: lock held by another runner for issue #$ISSUE_NUM — skipping"
+    exit 3
+  fi
+  LOCK_HELD=1
+  CLAIMED=1
+  IS_CONTINUE=1
+
+  # Loop cap. Exhausted -> hand to a human, exit 0 (terminal, not an error).
+  if [ "$round" -ge "$RUN_ISSUES_MAX_CLARIFICATIONS" ]; then
+    log "continue: clarification budget exhausted (round=$round >= max=$RUN_ISSUES_MAX_CLARIFICATIONS) — handing to human"
+    state_finalize "$RUN_DIR" "blocked" "clarification_loop_exhausted"
+    _remove_waiting_label
+    _hand_to_human "clarification-silmukka ei suppene $round kierroksen jälkeen. Cycle review tarvitsee yhä tarkennusta — tarkista issue käsin." \
+      "$RUN_DIR/01-cycle-review.out"
+    exit 0
+  fi
+
+  # Worktree validation (restart model): clear a stale index.lock, then prove
+  # the worktree is usable. Corruption -> human.
+  rm -f "$WORKTREE_PATH/.git/index.lock" 2>/dev/null || true
+  if [ -z "$WORKTREE_PATH" ] || [ ! -d "$WORKTREE_PATH" ] \
+     || ! git -C "$WORKTREE_PATH" status >/dev/null 2>&1; then
+    log "continue: worktree unusable at '$WORKTREE_PATH' — handing to human"
+    state_finalize "$RUN_DIR" "blocked" "continue_worktree_corrupt"
+    _remove_waiting_label
+    _hand_to_human "Continue epäonnistui: worktree \`$WORKTREE_PATH\` on rikki tai puuttuu. Siivoa ajo ja aja issue uudelleen."
+    exit 0
+  fi
+
+  # Fetch the freshest issue payload and locate maintainer's reply via the marker.
+  local issue_json="$RUN_DIR/issue.json"
+  fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" > "$issue_json"
+
+  local marker_line marker_ts answer
+  marker_line=$(parse_marker "$issue_json")
+  marker_ts=$(printf '%s' "$marker_line" | sed -n 's/.*ts=\([^ ]*\).*/\1/p')
+  if [ -z "$marker_ts" ]; then
+    log "continue: no awaiting-answer marker found on issue #$ISSUE_NUM — re-parking"
+    state_finalize "$RUN_DIR" "awaiting_clarification" "no_marker_on_continue"
+    exit 0
+  fi
+  answer=$(detect_answer "$issue_json" "$marker_ts")
+  if [ -z "$answer" ]; then
+    # Race: scan_answered saw a reply, but it's gone now (deleted/edited). Park
+    # the run again so the next poll re-checks. Not an error.
+    log "continue: no reply detected after marker — re-parking as awaiting_clarification"
+    state_finalize "$RUN_DIR" "awaiting_clarification" "no_reply_on_continue"
+    exit 0
+  fi
+
+  # Increment the clarification round BEFORE the claude call so the loop-cap
+  # spend is durable under the lock even if this attempt dies (idempotency).
+  local new_round
+  new_round=$(state_increment_clarification "$RUN_DIR")
+  state_event "$RUN_DIR" "continue_attempt" "clarification_round=$new_round"
+
+  # Re-open the run as in-progress; the gate will re-finalize on its own.
+  state_set "$RUN_DIR" "status" "initialized"
+  state_set "$RUN_DIR" "finished_at" ""
+
+  # Restore issue text fields for the cycle-review prompt.
+  ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
+  ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
+  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+
+  # Build the clarification context fed into the re-run cycle-review prompt.
+  # render_prompt substitutes in a single pass, so any {{...}} inside maintainer's
+  # reply passes through verbatim (no placeholder injection).
+  CLARIFICATION_CONTEXT="Aiempi tarkennuspyyntö (kierros $((new_round - 1))): cycle review palautti NEEDS_CLARIFICATION."$'\n\n'
+  CLARIFICATION_CONTEXT+="maintainern vastaus:"$'\n'"$answer"
+
+  load_repo_timeout "$REPO_ROOT"
+  log "continue: round=$new_round — re-running cycle review with maintainer's reply as context"
+}
+
 # Byte budget for an artifact embedded in a situation comment. GitHub caps a
 # comment body at ~65536 bytes; we leave headroom for the headline, meta lines,
 # code fences, marker, and human instructions.
@@ -643,6 +807,38 @@ _post_situation_to_issue() {
   comment_issue "$REPO_ROOT" "$ISSUE_NUM" "$body" || true
   state_event "$RUN_DIR" "situation_posted" "kind=${kind}" "awaitable=${awaitable}" || true
   return 0
+}
+
+# _add_waiting_label / _remove_waiting_label — best-effort label management for
+# the awaiting_clarification state. The `waiting` label keeps pick_oldest_unassigned
+# and the poller from re-picking the issue while it waits for maintainer's reply (both
+# exclude -label:waiting). Failures are non-fatal.
+_add_waiting_label() {
+  ( cd "$REPO_ROOT" && gh label create waiting --color FBCA04 \
+      --description "Odottaa ihmisen vastausta — automaattinen ajo jatkaa kommentista" >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --add-label waiting >/dev/null 2>&1 ) || true
+}
+_remove_waiting_label() {
+  ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --remove-label waiting >/dev/null 2>&1 ) || true
+}
+
+# _finalize_awaiting_clarification — shared NEEDS_CLARIFICATION terminal path.
+# Finalizes the run as awaiting_clarification, records the round + timestamp,
+# attaches the waiting label, and posts an answerable situation comment (marker
+# + reply prompt). The poller's scan_answered restarts via --continue once maintainer
+# replies. Used by both the first NEEDS_CLARIFICATION (review_gate, IS_CONTINUE=0)
+# and a re-review that is still unclear (IS_CONTINUE=1).
+_finalize_awaiting_clarification() {
+  local cr_out="$RUN_DIR/01-cycle-review.out"
+  local round
+  round=$(jq -r '.clarification_round // 0' "$RUN_DIR/run.json" 2>/dev/null || echo 0)
+  state_finalize "$RUN_DIR" "awaiting_clarification" "cycle_review_needs_clarification"
+  state_set "$RUN_DIR" "awaiting_answer_since" "$(date -u +%FT%TZ)"
+  _add_waiting_label
+  _post_situation_to_issue "cycle_review_clarification" \
+    "Cycle review tarvitsee tarkennusta (kierros $round) ennen kuin toteutus voi jatkua. Kerro puuttuvat tiedot kommentissa." \
+    "$cr_out" 1
+  state_event "$RUN_DIR" "awaiting_clarification" "round=$round"
 }
 
 # _hand_to_human <message> [<artifact-file>] — best-effort: post a full
@@ -907,6 +1103,12 @@ case "$MODE" in
     ;;
   restart)
     restart_load_state   # exits 0/3 on budget/lock/worktree problems
+    phase_b
+    ;;
+  continue)
+    continue_load_state  # exits 0/1/3 on cap/usage/lock/worktree/no-reply
+    run_cycle_review     # re-run S6 with maintainer's reply as context
+    review_gate          # PROCEED -> phase_b; NEEDS_CLARIFICATION -> exit 11; BLOCKER -> human
     phase_b
     ;;
 esac

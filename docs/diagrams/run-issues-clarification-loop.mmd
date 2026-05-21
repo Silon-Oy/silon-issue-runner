@@ -1,0 +1,48 @@
+%% Author: GoodReason cycle (Architect design, verified against implementation)
+%% Created: 2026-05-21
+%% Topic: run-issues clarification answer-and-continue loop (α2)
+%% Task: NEEDS_CLARIFICATION → maintainer replies on the issue → Studio continues from S6
+%%
+%% Companion to run-issues-state-machine.mmd. This sequence view shows the
+%% cross-machine flow: the run + worktree + lock live on Studio (host gate),
+%% but maintainer can reply from anywhere; the Studio poller is the only trigger.
+%% Bot and human share the same GitHub account (maintainer), so the reply is
+%% detected by timestamp vs. an embedded marker, not by comment author.
+sequenceDiagram
+    autonumber
+    participant Orch as orchestrate.sh (Studio)
+    participant GH as GitHub Issue
+    participant maintainer
+    participant Poller as poller.sh (Studio)
+
+    Note over Orch: S6 run_cycle_review → NEEDS_CLARIFICATION
+    Orch->>Orch: state_finalize awaiting_clarification<br/>(clarification_round, awaiting_answer_since)
+    Orch->>GH: _post_situation_to_issue (awaitable=1)<br/>full analysis + marker ts=T round=n
+    Orch->>GH: add label "waiting"
+    Orch--xOrch: release lock + exit 11<br/>(GitHub assignee + waiting label kept)
+
+    maintainer->>GH: reply comment<br/>(createdAt > T, no run-issues: token)
+
+    loop every 5 min (host gate: only this machine's runs)
+        Poller->>Poller: scan_answered: local awaiting_clarification run?<br/>(host == hostname -s, round < MAX)
+        Poller->>GH: fetch_issue_json + parse_marker + detect_answer(T)
+        alt reply found & round < MAX_CLARIFICATIONS
+            Poller->>Orch: tmux run-issues-continue-<issue>:<br/>orchestrate.sh --continue <run-dir>
+            Orch->>Orch: lock + validate worktree<br/>clarification_round++ (before claude)
+            Orch->>GH: read reply → CLARIFICATION_CONTEXT
+            Orch->>Orch: S6 run_cycle_review (enriched context)
+            alt PROCEED
+                Orch->>GH: remove label "waiting"
+                Orch->>Orch: Phase B → implementer → PR
+            else still NEEDS_CLARIFICATION & round < MAX
+                Orch->>GH: new marker round=n+1 + sharper question
+                Orch--xOrch: re-park, exit 11 (loop continues)
+            else BLOCKER (environment fix)
+                Orch->>GH: _hand_to_human + needs-human, remove waiting
+                Orch--xOrch: exit 4 (no loop)
+            end
+        else round >= MAX_CLARIFICATIONS
+            Orch->>GH: _hand_to_human + needs-human, remove waiting
+            Orch--xOrch: exit 0 (human takes over)
+        end
+    end
