@@ -15,7 +15,9 @@
 #                   have an open PR — only clean after the PR is merged)
 #
 # What gets cleaned per run:
-#   1. GitHub assignment (gh issue edit --remove-assignee @me)
+#   1. GitHub assignment (gh issue edit --remove-assignee @me) and the
+#      needs-human label (gh issue edit --remove-label) so the issue can
+#      re-enter auto-run pickup
 #   2. Worktree         (git worktree remove --force)
 #   3. Local branch     (git branch -D)
 #   4. DB clone         (best-effort drop via db-clone.sh cleanup; non-fatal)
@@ -190,6 +192,11 @@ cleanup_run() {
     (
       cd "$REPO_ROOT"
       do_or_dry "unassign" gh issue edit "$issue_num" --remove-assignee "@me"
+      # Drop the needs-human label so the issue re-enters auto-run pickup once
+      # unassigned. Without this the poll re-surfaces the issue as no:assignee
+      # but the stale label lingers. Best-effort: do_or_dry swallows the
+      # non-fatal failure when the label is absent.
+      do_or_dry "unlabel" gh issue edit "$issue_num" --remove-label needs-human
     )
   fi
 
