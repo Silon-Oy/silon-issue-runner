@@ -23,6 +23,25 @@ issuen Strategistin/Cycle Review:n hyväksymässä laajuudessa.
 {{CYCLE_REVIEW_OUTPUT}}
 ```
 
+## Restart-konteksti
+
+```
+{{RESTART_CONTEXT}}
+```
+
+Jos yllä on listattu committeja (tai maininta keskenjääneestä työstä), tämä on
+**uudelleenkäynnistetty ajo**: edellinen Implementer-vaihe aikakatkesi (esim. hidas
+pnpm-monorepo-build verifioinnissa). Ohjeet tässä tilanteessa:
+
+- **Älä aloita alusta.** Tarkista ensin `git status` ja `git log` worktreessä — yllä
+  olevat commitit ovat jo haaralla.
+- **Committoi tai hylkää keskeneräiset muutokset ensin** (`git status` → joko `sync_commit`
+  tai `git restore`), jotta lähtötila on puhdas, ennen kuin jatkat.
+- **Jatka siitä mihin jäätiin** — tyypillisesti verifioinnista/buildista, ei koodin
+  uudelleenkirjoituksesta. Sinulla on tällä kertaa pidempi aikabudjetti.
+
+Jos restart-konteksti on tyhjä, tämä on tavallinen ensiajo — ohita tämä osio.
+
 ## Sääntöjä (RUN_ISSUES_AUTO=1)
 
 Olet automaattisessa tilassa. Sinun **EI** tarvitse kysyä lupaa jokaiseen muutokseen, mutta:

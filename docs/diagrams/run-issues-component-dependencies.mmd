@@ -48,6 +48,11 @@ flowchart TB
 
     CMD --> ORCH
     POLL --> ORCH
+    %% poller.sh also restarts timed_out runs: scan_timed_out reads each
+    %% run.json (status=timed_out, retry_count<MAX, host gate) and launches
+    %% orchestrate.sh --restart <run-dir> in a run-issues-restart-<N> tmux session.
+    POLL -. "--restart timed_out runs<br/>(scan_timed_out)" .-> ORCH
+    POLL -. reads run.json .-> L_STATE
     CLEAN_CMD --> CLEAN
     PR_CMD --> PRWATCH
     PR_POLL --> PRWATCH
@@ -87,5 +92,10 @@ flowchart TB
     ORCH -. reads .-> P_CR
     ORCH -. reads .-> P_IMP
     ORCH -. reads .-> P_EVO
+
+    %% Opt-in per-repo config: .claude/run-issues.json (claude_timeout_seconds)
+    %% sets the base claude timeout, same convention as .claude/db-clone.json.
+    RICFG[".claude/run-issues.json<br/>(opt-in: claude_timeout_seconds)"]
+    ORCH -. reads .-> RICFG
 
     L_CLAUDE -. passes prompt .-> CC

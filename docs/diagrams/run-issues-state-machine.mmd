@@ -44,9 +44,26 @@ stateDiagram-v2
     %% ----- Phase B: implementer → PR -----
     S8_Implementer --> S9_Evolution: implementer SUCCESS / PARTIAL
     S8_Implementer --> [*]: implementer BLOCKED (rc=5)
+    %% Timeout (claude rc=124, or a hard-kill caught by the cleanup trap):
+    %% finalize status=timed_out + timeout_phase=S8_Implementer, exit 7. The
+    %% per-run current_state field (written by enter_state at every step) is the
+    %% durable record the trap reads to detect a non-terminal S8.
+    S8_Implementer --> S_TimedOut: implementer TIMEOUT (rc=7)
     S9_Evolution --> S10_Push
     S10_Push --> S11_PRCreate
     S10_Push --> [*]: git push failed (rc=6)
     S11_PRCreate --> S12_Finalize: PR opened
     S11_PRCreate --> [*]: gh pr create failed (rc=6)
     S12_Finalize --> [*]
+
+    %% ----- Timeout auto-restart loop -----
+    %% A timed_out run is picked up by poller.sh's scan_timed_out (or a manual
+    %% --restart) and re-enters Phase B with a ramped, capped timeout
+    %% (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). retry_count is
+    %% incremented BEFORE the claude call so the spend is durable under the lock.
+    %% Restart skips pick/claim — the lock + GitHub assignee persist.
+    S_TimedOut --> S_RestartLoad: --restart (retry_count < MAX_RETRIES)
+    S_TimedOut --> [*]: budget exhausted → needs-human (rc=0)
+    S_RestartLoad --> S8_Implementer: worktree OK, retry incremented, timeout ramped
+    S_RestartLoad --> [*]: worktree corrupt → needs-human (rc=0)
+    S_RestartLoad --> [*]: lock held by other run (rc=3)

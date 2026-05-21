@@ -18,11 +18,14 @@ RUN_ISSUES_CLAUDE_TIMEOUT="${RUN_ISSUES_CLAUDE_TIMEOUT:-1800}"
 # Path to a `timeout` binary. macOS ships `gtimeout` via coreutils;
 # fall back to a no-op wrapper that just exec's the command if no
 # timeout is available.
+# --kill-after=60 escalates to SIGKILL 60s after the initial SIGTERM if the
+# child ignores TERM, so a wedged claude process is reaped deterministically
+# and `timeout` still reports rc=124.
 _resolve_timeout() {
   if command -v timeout >/dev/null 2>&1; then
-    printf 'timeout %s' "$RUN_ISSUES_CLAUDE_TIMEOUT"
+    printf 'timeout --kill-after=60 %s' "$RUN_ISSUES_CLAUDE_TIMEOUT"
   elif command -v gtimeout >/dev/null 2>&1; then
-    printf 'gtimeout %s' "$RUN_ISSUES_CLAUDE_TIMEOUT"
+    printf 'gtimeout --kill-after=60 %s' "$RUN_ISSUES_CLAUDE_TIMEOUT"
   else
     printf '' # no-op
   fi

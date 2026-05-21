@@ -1,0 +1,41 @@
+%% /run-issues — implementer timeout + auto-restart sequence
+%% Companion to run-issues-state-machine.mmd. Shows the actors and ordering
+%% across a first run that times out in S8 and the poller-driven restart that
+%% follows. Update together with orchestrate.sh phase_b / restart_load_state,
+%% lib/state.sh, and poller.sh scan_timed_out.
+sequenceDiagram
+    autonumber
+    participant Poller as poller.sh (Studio LaunchAgent)
+    participant Orch as orchestrate.sh
+    participant Claude as claude-call.sh (timeout wrapper)
+    participant State as run.json / state.jsonl
+    participant GH as gh (Issues)
+
+    Note over Poller,Orch: First run reaches S8_Implementer (auto mode)
+    Orch->>State: enter_state S8_Implementer (current_state durable)
+    Orch->>Claude: call_claude (timeout --kill-after=60 N)
+    Claude--xClaude: claude overruns budget → SIGTERM (then SIGKILL +60s)
+    Claude-->>Orch: rc=124 (subshell survives; .exit written)
+    Orch->>State: finalize_timeout → status=timed_out,<br/>timeout_phase=S8_Implementer
+    Orch-->>Poller: exit 7 (lock released, GitHub assignee kept)
+
+    Note over Orch: Safety net — if a hard kill skipped the rc-handler,<br/>the EXIT trap re-reads run.json; non-terminal S8 → finalize_timeout
+
+    Note over Poller: Next poll (≤5 min)
+    Poller->>State: scan_timed_out (status=timed_out,<br/>retry_count<MAX, host==this)
+    State-->>Poller: issue + run-dir
+    Poller->>Orch: orchestrate.sh --restart <run-dir><br/>(tmux run-issues-restart-<N>)
+
+    Orch->>State: validate status==timed_out, retry_count<MAX
+    alt budget left and worktree OK
+        Orch->>State: state_increment_retry (BEFORE claude call → durable spend)
+        Orch->>Orch: ramp timeout = base*(1+retry), cap MAX
+        Orch->>Orch: RESTART_CONTEXT = git log origin/main..HEAD
+        Orch->>Claude: call_claude (longer budget, restart prompt)
+        Claude-->>Orch: rc=0, IMPLEMENTER_RESULT: SUCCESS
+        Orch->>State: continue S9..S12 → status=completed, PR opened
+    else budget exhausted or worktree corrupt
+        Orch->>State: finalize timed_out/blocked
+        Orch->>GH: best-effort label needs-human + comment
+        Orch-->>Poller: exit 0 (terminal; handed to human)
+    end

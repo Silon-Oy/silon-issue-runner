@@ -41,6 +41,33 @@ fi
 
 GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 DEFAULT_LABELS=$(jq -r '(.default_labels // ["auto-run"]) | join(",")' "$WATCHLIST")
+THIS_HOST=$(hostname -s)
+RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
+
+# scan_timed_out <repo-path> — prints "<issue-number> <run-dir>" lines for
+# timed_out runs on THIS host that still have retry budget. Modelled on
+# pr-watch.sh's scan_candidates: iterate run.json files, gate on host so we
+# never restart a worktree that lives on another machine.
+scan_timed_out() {
+  local repo_path="$1"
+  local runs_dir="$repo_path/.claude/run-issues"
+  [ -d "$runs_dir" ] || return 0
+  local rj status host retry inum
+  shopt -s nullglob
+  for rj in "$runs_dir"/*/run.json; do
+    status=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
+    [ "$status" = "timed_out" ] || continue
+    host=$(jq -r '.host // ""' "$rj" 2>/dev/null || echo "")
+    # Empty host = pre-host-field run.json; treat as local (best effort).
+    if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
+      continue
+    fi
+    retry=$(jq -r '.retry_count // 0' "$rj" 2>/dev/null || echo 0)
+    [ "$retry" -lt "$RUN_ISSUES_MAX_RETRIES" ] || continue
+    inum=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$inum" ] && printf '%s %s\n' "$inum" "$(dirname "$rj")"
+  done
+}
 
 # Count currently active run-issues tmux sessions to respect the cap.
 # The `|| ACTIVE=0` fallback lives OUTSIDE the command substitution on purpose:
@@ -70,6 +97,31 @@ while IFS= read -r repo_json; do
 
   LABELS_CSV="$REPO_LABELS"
   [ -z "$LABELS_CSV" ] && LABELS_CSV="$DEFAULT_LABELS"
+
+  # ----- Restart timed-out runs FIRST (before picking new issues) ----------
+  # A timed_out run on this host with retry budget left gets a higher timeout
+  # and continues from where it left off. Restarts count against GLOBAL_MAX.
+  while IFS= read -r restart_line; do
+    [ -n "$restart_line" ] || continue
+    RESTART_ISSUE="${restart_line%% *}"
+    RESTART_DIR="${restart_line#* }"
+
+    R_SESSION="run-issues-restart-${RESTART_ISSUE}"
+    if tmux has-session -t "$R_SESSION" 2>/dev/null; then
+      echo "$(date -u +%FT%TZ) poller: restart session $R_SESSION already running" >> "$LOG"
+      continue
+    fi
+
+    ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
+    if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
+      echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring restart of issue $RESTART_ISSUE" >> "$LOG"
+      break
+    fi
+
+    echo "$(date -u +%FT%TZ) poller: restarting $R_SESSION for run=$RESTART_DIR" >> "$LOG"
+    tmux new-session -d -s "$R_SESSION" \
+      "RUN_ISSUES_AUTO=1 '$ORCH' --restart '$RESTART_DIR' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+  done < <(scan_timed_out "$REPO_PATH")
 
   # Find the candidate issue using gh inside the repo.
   ISSUE_NUM=$(

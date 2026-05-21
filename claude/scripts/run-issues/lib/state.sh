@@ -47,7 +47,9 @@ state_init() {
       worktree_path: null,
       pr_url: null,
       cycle_review_decision: null,
-      blocked_reason: null
+      blocked_reason: null,
+      retry_count: 0,
+      timeout_phase: null
     }' > "$tmp"
   mv -f "$tmp" "$run_dir/run.json"
 }
@@ -109,8 +111,26 @@ state_set() {
   mv -f "$tmp" "$run_dir/run.json"
 }
 
+# state_increment_retry <run-dir>
+# Atomically increments .retry_count in run.json and prints the NEW value
+# to stdout. Used by the restart path under the per-issue lock, so the
+# increment is the durable record of "we have spent one retry on this run"
+# — it must persist even if the subsequent claude call times out again.
+state_increment_retry() {
+  local run_dir="$1"
+
+  local tmp
+  tmp=$(mktemp "$run_dir/.run.json.XXXXXX")
+  jq '.retry_count = ((.retry_count // 0) + 1)' \
+    "$run_dir/run.json" > "$tmp"
+  mv -f "$tmp" "$run_dir/run.json"
+  jq -r '.retry_count' "$run_dir/run.json"
+}
+
 # state_finalize <run-dir> <status> [<blocked-reason>]
 # Sets status, finished_at, optional blocked_reason.
+# Valid status values (enum, informal): initialized, completed, blocked,
+# lost_race, cancelled, merged, pr_conflicted, timed_out.
 # NOTE: we deliberately avoid naming a local variable `status` — that
 # clashes with a read-only special parameter in zsh and would break if
 # this file is ever sourced from a zsh shell (e.g. probe scripts).
