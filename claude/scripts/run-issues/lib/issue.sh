@@ -27,9 +27,13 @@ set -euo pipefail
 pick_oldest_unassigned() {
   local repo="$1"
   local labels_csv="${2:-}"
+  # auto-clean issues are a teardown signal handled by the poller's scan_clean,
+  # never a development candidate — exclude them from new-issue pickup so a
+  # labelled issue is not picked up as work.
+  local clean_label="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
   # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
   # no longer accepts standalone --sort/--order flags on `issue list`.
-  local search='is:open no:assignee -label:blocked -label:waiting -label:wip sort:created-asc'
+  local search="is:open no:assignee -label:blocked -label:waiting -label:wip -label:${clean_label} sort:created-asc"
 
   local extra=""
   if [ -n "$labels_csv" ]; then

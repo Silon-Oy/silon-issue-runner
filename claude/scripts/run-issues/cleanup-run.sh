@@ -23,7 +23,7 @@
 #   4. DB clone         (best-effort drop via db-clone.sh cleanup; non-fatal)
 #   5. Archive          (essential artefacts copied to .claude/run-issues-archive/<run-id>/)
 #   6. Run-dir          (rm -rf .claude/run-issues/<run-id>)
-#   7. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/issue-N)
+#   7. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/issue-N.lock)
 
 set -euo pipefail
 
@@ -69,7 +69,6 @@ done
 
 RUNS_DIR="$REPO_ROOT/.claude/run-issues"
 ARCHIVE_DIR="$REPO_ROOT/.claude/run-issues-archive"
-LOCK_ROOT="${HOME}/Library/Application Support/run-issues/locks"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Artefacts worth keeping after a run-dir is torn down. Logs and prompts are
@@ -84,6 +83,17 @@ STATE_LIB="$SCRIPT_DIR/lib/state.sh"
 if [ -f "$STATE_LIB" ]; then
   # shellcheck source=lib/state.sh
   . "$STATE_LIB"
+fi
+
+# locking.sh owns the lock-path convention (issue-N.lock). We source it so the
+# teardown removes the SAME directory that lock_issue created — deriving the
+# path here by hand was the original bug (it used issue-N without the .lock
+# suffix). Sourcing also defines RUN_ISSUES_LOCK_ROOT (default under
+# ~/Library/Application Support/run-issues/locks), honouring any test override.
+LOCKING_LIB="$SCRIPT_DIR/lib/locking.sh"
+if [ -f "$LOCKING_LIB" ]; then
+  # shellcheck source=lib/locking.sh
+  . "$LOCKING_LIB"
 fi
 
 # ---------- helpers ----------
@@ -237,7 +247,8 @@ cleanup_run() {
   do_or_dry "run-dir" rm -rf "$run_dir"
 
   if [ -n "$issue_num" ]; then
-    local lock_dir="$LOCK_ROOT/issue-$issue_num"
+    local lock_dir
+    lock_dir="$(_lock_dir "$issue_num")"
     if [ -d "$lock_dir" ]; then
       do_or_dry "lock" rm -rf "$lock_dir"
     else

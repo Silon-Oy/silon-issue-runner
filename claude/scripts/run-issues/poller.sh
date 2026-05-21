@@ -44,6 +44,8 @@ DEFAULT_LABELS=$(jq -r '(.default_labels // ["auto-run"]) | join(",")' "$WATCHLI
 THIS_HOST=$(hostname -s)
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
 RUN_ISSUES_MAX_CLARIFICATIONS="${RUN_ISSUES_MAX_CLARIFICATIONS:-3}"
+RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
+AUTO_CLEAN="${DOTFILES}/claude/scripts/run-issues/auto-clean.sh"
 
 # parse_marker / detect_answer / fetch_issue_json live in lib/issue.sh; the
 # poller needs them for scan_answered. Sourcing is safe — lib/issue.sh only
@@ -126,6 +128,60 @@ scan_answered() {
   return 0
 }
 
+# scan_clean <repo-path> — prints UNIQUE "<issue-number> <repo-path>" lines for
+# issues that (a) have at least one LOCAL run-dir on THIS host and (b) currently
+# carry the RUN_ISSUES_CLEAN_LABEL but NOT auto-clean-skipped.
+#
+# Two phases keep network use minimal (the same discipline as scan_answered):
+#   Phase 1 — collect the unique set of issue numbers that have a local run-dir,
+#             host-gated. No network.
+#   Phase 2 — for each unique issue only, one `gh issue view` to read its labels.
+# bash 3.2 has no associative arrays, so the unique set is a temp file fed
+# through `sort -u`.
+scan_clean() {
+  local repo_path="$1"
+  local runs_dir="$repo_path/.claude/run-issues"
+  [ -d "$runs_dir" ] || return 0
+
+  local rj host inum
+  local seen
+  seen=$(mktemp)
+
+  # Phase 1: collect unique LOCAL issue numbers (host-gated).
+  shopt -s nullglob
+  for rj in "$runs_dir"/*/run.json; do
+    host=$(jq -r '.host // ""' "$rj" 2>/dev/null || echo "")
+    # Empty host = pre-host-field run.json; treat as local (best effort).
+    if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
+      continue
+    fi
+    inum=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$inum" ] && printf '%s\n' "$inum" >> "$seen"
+  done
+
+  # Phase 2: per unique issue, read labels and decide.
+  local n labels
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    labels=$(
+      cd "$repo_path"
+      gh issue view "$n" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo ""
+    )
+    # auto-clean-skipped wins: already handed to a human, never re-emit.
+    case ",$labels," in
+      *,auto-clean-skipped,*) continue ;;
+    esac
+    case ",$labels," in
+      *,"$RUN_ISSUES_CLEAN_LABEL",*) printf '%s %s\n' "$n" "$repo_path" ;;
+    esac
+  done < <(sort -u "$seen")
+
+  rm -f "$seen"
+  # Return 0 regardless: callers capture this in a command substitution under
+  # `set -e`, where a trailing-false branch would otherwise abort the caller.
+  return 0
+}
+
 # Count currently active run-issues tmux sessions to respect the cap.
 # The `|| ACTIVE=0` fallback lives OUTSIDE the command substitution on purpose:
 # grep -c always prints a count to stdout (0 on no matches) but exits 1 when the
@@ -154,6 +210,34 @@ while IFS= read -r repo_json; do
 
   LABELS_CSV="$REPO_LABELS"
   [ -z "$LABELS_CSV" ] && LABELS_CSV="$DEFAULT_LABELS"
+
+  # ----- Clean labelled issues FIRST (before restart/continue/pick) --------
+  # An issue carrying RUN_ISSUES_CLEAN_LABEL with a local run-dir gets its
+  # temporary resources torn down and the issue closed by auto-clean.sh. This
+  # runs first so a clean request is not starved by new-issue pickup. Cleans
+  # count against GLOBAL_MAX like every other spawned session. auto-clean.sh is
+  # NOT run with RUN_ISSUES_AUTO=1 — it makes no code changes, only teardown.
+  while IFS= read -r clean_line; do
+    [ -n "$clean_line" ] || continue
+    CLEAN_ISSUE="${clean_line%% *}"
+    CLEAN_REPO="${clean_line#* }"
+
+    CL_SESSION="run-issues-clean-${CLEAN_ISSUE}"
+    if tmux has-session -t "$CL_SESSION" 2>/dev/null; then
+      echo "$(date -u +%FT%TZ) poller: clean session $CL_SESSION already running" >> "$LOG"
+      continue
+    fi
+
+    ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
+    if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
+      echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring clean of issue $CLEAN_ISSUE" >> "$LOG"
+      break
+    fi
+
+    echo "$(date -u +%FT%TZ) poller: cleaning $CL_SESSION for repo=$CLEAN_REPO issue=$CLEAN_ISSUE" >> "$LOG"
+    tmux new-session -d -s "$CL_SESSION" \
+      "'$AUTO_CLEAN' --repo '$CLEAN_REPO' --issue '$CLEAN_ISSUE' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+  done < <(scan_clean "$REPO_PATH")
 
   # ----- Restart timed-out runs FIRST (before picking new issues) ----------
   # A timed_out run on this host with retry budget left gets a higher timeout
@@ -220,7 +304,7 @@ while IFS= read -r repo_json; do
     # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
     # no longer accepts standalone --sort/--order flags on `issue list`.
     gh issue list \
-      --search "is:open no:assignee -label:blocked -label:waiting -label:wip sort:created-asc$extra" \
+      --search "is:open no:assignee -label:blocked -label:waiting -label:wip -label:$RUN_ISSUES_CLEAN_LABEL sort:created-asc$extra" \
       --limit 1 \
       --json number \
       --jq '.[0].number // empty' 2>/dev/null || true

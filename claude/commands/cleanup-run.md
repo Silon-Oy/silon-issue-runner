@@ -39,12 +39,13 @@ Korvaa `$ARGS` käyttäjän antamilla argumenteilla (esim. `--list`, `<run-id>`,
 
 Jokaisen ajon kohdalla skripti tekee `run.json`:n perusteella:
 
-1. **GitHub-assignaatio** (`gh issue edit --remove-assignee @me`)
+1. **GitHub-assignaatio + `needs-human`-label** (`gh issue edit --remove-assignee @me --remove-label needs-human`)
 2. **Worktree** (`git worktree remove --force`)
 3. **Branch** (`git branch -D`)
-4. **Run-kansio** (`rm -rf .claude/run-issues/<run-id>`)
-5. **Paikallinen lukko** (`rm -rf ~/Library/Application Support/run-issues/locks/issue-N`)
-6. **DB-klooni** — **EI** siivota automaattisesti, vain varoittaa. Drop manuaalisesti backend-kohtaisilla työkaluilla (`wp db drop`, `dropdb`, `docker compose down -v`).
+4. **DB-klooni** — **siivotaan automaattisesti** (`db-clone.sh cleanup`, best-effort). Jos drop epäonnistuu, skripti varoittaa eikä kaada siivousta — droppaa silloin manuaalisesti backend-kohtaisilla työkaluilla (`wp db drop`, `dropdb`, `docker compose down -v`).
+5. **Arkisto** — olennaiset artefaktit (`run.json`, `state.jsonl`, `01-cycle-review.out`, `03-evolution.out`) kopioidaan hakemistoon `.claude/run-issues-archive/<run-id>/` ennen run-dirin poistoa.
+6. **Run-kansio** (`rm -rf .claude/run-issues/<run-id>`)
+7. **Paikallinen lukko** (`rm -rf ~/Library/Application Support/run-issues/locks/issue-N.lock`)
 
 ## Turvasäännöt
 

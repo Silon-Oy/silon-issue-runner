@@ -77,7 +77,7 @@ case "$s" in
 esac
 
 # --- 2. standing filters always present ----------------------------------
-for term in 'is:open' 'no:assignee' '-label:blocked' '-label:waiting' '-label:wip' 'sort:created-asc'; do
+for term in 'is:open' 'no:assignee' '-label:blocked' '-label:waiting' '-label:wip' '-label:auto-clean' 'sort:created-asc'; do
   case "$s" in
     *"$term"*) : ;;
     *) fail "search missing standing filter '$term': $s" ;;

@@ -1,0 +1,32 @@
+%% Author: maintainer maintainer (GoodReason agents)
+%% Created: 2026-05-21
+%% Topic: /run-issues auto-clean — label-driven local teardown + issue close
+%%
+%% Render: mmdc -i run-issues-auto-clean-flow.mmd -o out.svg
+flowchart TD
+    P[poller.sh tick - Studio only] --> SC[scan_clean repo]
+    SC -->|Phase 1: collect unique LOCAL issues, host-gate| L1{run.json host == THIS_HOST or empty?}
+    L1 -->|no| SKIP1[skip run-dir]
+    L1 -->|yes| COLLECT[add issue_number to seen set]
+    COLLECT --> DEDUP[sort -u]
+    DEDUP --> L2{Phase 2: gh issue view labels}
+    L2 -->|has auto-clean-skipped| SKIP2[skip - already handed to human]
+    L2 -->|has auto-clean| EMIT[emit issue repo]
+    L2 -->|neither| SKIP3[skip]
+    EMIT --> GUARD{tmux has-session run-issues-clean-N?}
+    GUARD -->|yes| DEFER[skip - already cleaning]
+    GUARD -->|no| CAP{ACTIVE < GLOBAL_MAX?}
+    CAP -->|no| BREAK[defer to next tick]
+    CAP -->|yes| SPAWN[tmux new-session: auto-clean.sh --repo --issue N]
+    SPAWN --> AC[auto-clean.sh]
+    AC --> LOCK{lock_issue N acquired?}
+    LOCK -->|no - run in progress| RC3[exit 3 - safe retry later]
+    LOCK -->|yes| COUNT{count matching run-dirs}
+    COUNT -->|0 total - cross-machine| RC5[comment ssh hint + label auto-clean-skipped, exit 5]
+    COUNT -->|any completed run completed gt 0| RC4[comment close-PR-first + label auto-clean-skipped, exit 4]
+    COUNT -->|all non-completed| TEARDOWN[cleanup-run.sh --repo --issue N --yes]
+    TEARDOWN -->|rc != 0| RC6[exit 6 - teardown failed]
+    TEARDOWN -->|rc == 0| CLOSE[gh issue close N]
+    CLOSE --> COMMENT[comment_issue: situation summary FI]
+    COMMENT --> UNLABEL[remove auto-clean label]
+    UNLABEL --> RC0[exit 0 - done]
