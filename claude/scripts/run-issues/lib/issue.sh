@@ -11,6 +11,19 @@ set -euo pipefail
 # pick_oldest_unassigned <repo-root> <labels-csv>
 # Prints issue number on stdout, or empty string if no match.
 # labels-csv may be empty; otherwise it's filtered with -label:waiting -label:blocked -label:wip.
+#
+# gh search label semantics (probed empirically against a live repo with
+# gh 2.88.0, issue #12 — see tests/test-issue-pick.sh):
+#   - Multiple `label:"x" label:"y"` terms are ANDed: only issues carrying
+#     BOTH labels match. (label:"auto-run" label:"enhancement" → only the
+#     issue with both; an issue with auto-run alone does NOT match.)
+#   - Negative `-label:"x"` excludes and composes with positive label: terms
+#     (label:"auto-run" -label:"enhancement" → auto-run issues lacking
+#     enhancement).
+#   - Zero matches → gh exits 0 with empty/[] output, so `// empty` yields an
+#     empty string and the caller sees a clean "no candidate" signal.
+# This AND behaviour is exactly what the orchestrator wants (require every
+# configured label), so separate label:"…" terms are the correct encoding.
 pick_oldest_unassigned() {
   local repo="$1"
   local labels_csv="${2:-}"
@@ -20,7 +33,7 @@ pick_oldest_unassigned() {
 
   local extra=""
   if [ -n "$labels_csv" ]; then
-    # gh search semantics: each label is added as a separate label: term.
+    # Each label becomes a separate `label:"x"` term; gh ANDs them (see above).
     local IFS=','
     for label in $labels_csv; do
       [ -n "$label" ] || continue
