@@ -103,6 +103,48 @@ comment_issue() {
   )
 }
 
+# build_marker <run-id> <issue-num> <iso-ts> [<round>]
+# Emits an HTML comment marker on stdout that uniquely identifies an
+# awaiting-answer situation comment. Invisible in rendered GitHub markdown.
+# Used by α2 (answer-and-continue) to find the run a human reply belongs to;
+# in α1 it is emitted in answerable situations as a harmless forward-marker.
+build_marker() {
+  local run_id="$1"
+  local issue_num="$2"
+  local ts="$3"
+  local round="${4:-0}"
+  printf '<!-- run-issues:awaiting-answer run=%s issue=%s ts=%s round=%s -->' \
+    "$run_id" "$issue_num" "$ts" "$round"
+}
+
+# truncate_for_github <max-bytes>
+# Reads stdin, writes stdout. If the input fits within max-bytes it is passed
+# through unchanged. Otherwise the TAIL is kept (the decision line lives at the
+# end: CYCLE_REVIEW_DECISION: / IMPLEMENTER_RESULT:) and the head is dropped,
+# with a visible truncation notice prepended. The notice is included in the
+# byte budget so the result (notice + tail) stays at or under max-bytes.
+truncate_for_github() {
+  local max_bytes="$1"
+  local input
+  input=$(cat)
+  local in_bytes
+  in_bytes=$(printf '%s' "$input" | wc -c | tr -d ' ')
+
+  if [ "$in_bytes" -le "$max_bytes" ]; then
+    printf '%s' "$input"
+    return 0
+  fi
+
+  local notice='_(Tuloste typistetty — täysi loki run-kansiossa.)_'$'\n'
+  local notice_bytes
+  notice_bytes=$(printf '%s' "$notice" | wc -c | tr -d ' ')
+  local tail_bytes=$(( max_bytes - notice_bytes ))
+  [ "$tail_bytes" -lt 0 ] && tail_bytes=0
+
+  printf '%s' "$notice"
+  printf '%s' "$input" | tail -c "$tail_bytes"
+}
+
 # fetch_issue_json <repo-root> <N>
 # Prints the issue body + comments as a JSON object on stdout.
 fetch_issue_json() {

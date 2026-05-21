@@ -245,7 +245,7 @@ finalize_timeout() {
   if [ -n "$ISSUE_NUM" ] && [ "$rc_now" -ge "$RUN_ISSUES_MAX_RETRIES" ]; then
     log "timed_out run has exhausted its retry budget (retry_count=$rc_now >= max=$RUN_ISSUES_MAX_RETRIES) — handing to human"
     state_finalize "$RUN_DIR" "timed_out" "timeout_budget_exhausted"
-    _hand_to_human "auto-restart-budgetti loppui ($rc_now/$RUN_ISSUES_MAX_RETRIES). Implementer-vaihe aikakatkesi toistuvasti." || true
+    _hand_to_human "auto-restart-budgetti loppui ($rc_now/$RUN_ISSUES_MAX_RETRIES). Implementer-vaihe aikakatkesi toistuvasti." "$RUN_DIR/02-implementer.out" || true
     state_event "$RUN_DIR" "handed_to_human" "reason=timeout_budget_exhausted" "retry_count=$rc_now"
   fi
 }
@@ -366,6 +366,9 @@ phase_a() {
     *)
       log "db-clone failed (rc=$db_rc) — see $db_clone_log"
       state_finalize "$RUN_DIR" "blocked" "db_clone_rc_$db_rc"
+      _post_situation_to_issue "db_clone_failed" \
+        "Tietokannan kloonaus epäonnistui (rc=$db_rc) ennen toteutusvaihetta. Tarkista DB-klooni-konfiguraatio ja palvelut." \
+        "$db_clone_log" 0
       exit 5
       ;;
   esac
@@ -411,9 +414,20 @@ review_gate() {
       log "auto review-gate did not PROCEED (decision=$CR_DECISION)"
       local reason="cycle_review_${CR_DECISION:-empty}"
       state_finalize "$RUN_DIR" "blocked" "$reason"
-      comment_issue "$REPO_ROOT" "$ISSUE_NUM" \
-        "/run-issues pysähtyi cycle-review-vaiheessa: \`$reason\`. Ks. run-kansio: \`$RUN_DIR\`" \
-        || true
+      local cr_out="$RUN_DIR/01-cycle-review.out"
+      if [ "$CR_DECISION" = "NEEDS_CLARIFICATION" ]; then
+        # α1: emit an answerable situation comment (marker + reply prompt) but
+        # keep the existing finalize status/exit code. The await-and-continue
+        # flow (status awaiting_clarification, waiting label, scan_answered) is
+        # α2 and intentionally NOT implemented here.
+        _post_situation_to_issue "cycle_review_clarification" \
+          "Cycle review tarvitsee tarkennusta ennen kuin toteutus voi jatkua. Kerro puuttuvat tiedot kommentissa." \
+          "$cr_out" 1
+      else
+        _post_situation_to_issue "cycle_review_blocker" \
+          "Cycle review esti ajon (\`$reason\`). Tarkista issue ja korjaa este." \
+          "$cr_out" 0
+      fi
       exit 4
       ;;
     interactive)
@@ -517,7 +531,7 @@ restart_load_state() {
   if [ "$retry_count" -ge "$RUN_ISSUES_MAX_RETRIES" ]; then
     log "restart: retry budget exhausted (retry_count=$retry_count >= max=$RUN_ISSUES_MAX_RETRIES) — handing to human"
     state_finalize "$RUN_DIR" "timed_out" "timeout_budget_exhausted"
-    _hand_to_human "auto-restart-budgetti loppui ($retry_count/$RUN_ISSUES_MAX_RETRIES). Implementer-vaihe aikakatkesi toistuvasti."
+    _hand_to_human "auto-restart-budgetti loppui ($retry_count/$RUN_ISSUES_MAX_RETRIES). Implementer-vaihe aikakatkesi toistuvasti." "$RUN_DIR/02-implementer.out"
     exit 0
   fi
 
@@ -572,16 +586,75 @@ restart_load_state() {
   state_event "$RUN_DIR" "restarted" "retry_count=$new_retry" "timeout=$RUN_ISSUES_CLAUDE_TIMEOUT"
 }
 
-# _hand_to_human <message> — best-effort: ensure a needs-human label exists,
-# attach it to the issue, and post an explanatory comment. All failures are
-# non-fatal (the run is already finalized in run.json regardless).
+# Byte budget for an artifact embedded in a situation comment. GitHub caps a
+# comment body at ~65536 bytes; we leave headroom for the headline, meta lines,
+# code fences, marker, and human instructions.
+RUN_ISSUES_SITUATION_ARTIFACT_MAX="${RUN_ISSUES_SITUATION_ARTIFACT_MAX:-60000}"
+
+# _post_situation_to_issue <kind> <headline> [<artifact-file>] [<awaitable>]
+# Builds a full Finnish situation report and posts it as an issue comment.
+# Best-effort: always returns 0 — the run's terminal status already lives in
+# run.json, so a GitHub hiccup must never break finalization. Does NOT mutate
+# run.json status; the caller finalizes first.
+#
+#   <kind>          slug for logging/event (e.g. cycle_review_clarification)
+#   <headline>      1–3 Finnish sentences: WHAT happened + WHAT maintainer should do
+#   <artifact-file> optional absolute path to attach in a fenced code block
+#   <awaitable>     1 = answerable -> embed marker + reply instruction; default 0
+_post_situation_to_issue() {
+  local kind="$1"
+  local headline="$2"
+  local artifact_file="${3:-}"
+  local awaitable="${4:-0}"
+
+  local host
+  host=$(hostname -s)
+
+  local body
+  body="## /run-issues — ${headline}"$'\n\n'
+  body+="- Issue: #${ISSUE_NUM}"$'\n'
+  body+="- Branch: \`${BRANCH}\`"$'\n'
+  body+="- Status/syy: \`${kind}\`"$'\n'
+  body+="- Host: \`${host}\`"$'\n'
+  body+="- Run-id: \`${RUN_ID}\`"$'\n'
+
+  if [ "$awaitable" = "1" ]; then
+    local marker
+    marker=$(build_marker "$RUN_ID" "$ISSUE_NUM" "$(date -u +%FT%TZ)")
+    # Marker first so α2's scanner finds it deterministically at the top.
+    body="${marker}"$'\n'"${body}"
+    body+=$'\n'"**Vastaa tähän issueen kommentilla — Studio jatkaa automaattisesti (≤5 min).**"$'\n'
+  fi
+
+  if [ -n "$artifact_file" ] && [ -f "$artifact_file" ]; then
+    local raw raw_bytes rendered
+    raw=$(cat "$artifact_file")
+    raw_bytes=$(printf '%s' "$raw" | wc -c | tr -d ' ')
+    rendered=$(printf '%s' "$raw" | truncate_for_github "$RUN_ISSUES_SITUATION_ARTIFACT_MAX")
+    body+=$'\n'"### $(basename "$artifact_file")"$'\n'
+    body+='```'$'\n'
+    body+="${rendered}"$'\n'
+    body+='```'$'\n'
+    if [ "$raw_bytes" -gt "$RUN_ISSUES_SITUATION_ARTIFACT_MAX" ]; then
+      body+=$'\n'"Täysi loki Studiolla: \`${RUN_DIR}\` (host \`${host}\`)."$'\n'
+    fi
+  fi
+
+  comment_issue "$REPO_ROOT" "$ISSUE_NUM" "$body" || true
+  state_event "$RUN_DIR" "situation_posted" "kind=${kind}" "awaitable=${awaitable}" || true
+  return 0
+}
+
+# _hand_to_human <message> [<artifact-file>] — best-effort: post a full
+# situation report and ensure the needs-human label is attached. All failures
+# are non-fatal (the run is already finalized in run.json regardless).
 _hand_to_human() {
   local msg="$1"
+  local artifact_file="${2:-}"
+  _post_situation_to_issue "needs_human" "$msg" "$artifact_file" 0
   ( cd "$REPO_ROOT" && gh label create needs-human --color B60205 \
       --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
   ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --add-label needs-human >/dev/null 2>&1 ) || true
-  comment_issue "$REPO_ROOT" "$ISSUE_NUM" \
-    "/run-issues: $msg Run-kansio: \`$RUN_DIR\`. Lisätty label \`needs-human\`." || true
 }
 
 # propagate_pr_labels <pr-url> — best-effort: copy merge-relevant labels from
@@ -701,6 +774,9 @@ phase_b() {
     BLOCKED*|"")
       log "implementer blocked or no result line"
       state_finalize "$RUN_DIR" "blocked" "implementer_${imp_result:-no_result}"
+      _post_situation_to_issue "implementer_blocked" \
+        "Toteutusvaihe (implementer) jäi jumiin eikä tuottanut valmista tulosta. Tarkista alla oleva tuloste ja issuen vaatimukset." \
+        "$imp_out" 0
       exit 5
       ;;
   esac
@@ -770,6 +846,9 @@ phase_b() {
   if [ "$push_rc" -ne 0 ]; then
     log "git push failed (rc=$push_rc)"
     state_finalize "$RUN_DIR" "blocked" "git_push_failed"
+    _post_situation_to_issue "git_push_failed" \
+      "Toteutus valmistui, mutta haaran push GitHubiin epäonnistui (rc=$push_rc). Tarkista push-loki ja remote-oikeudet." \
+      "$RUN_DIR/git-push.log" 0
     exit 6
   fi
 
@@ -789,6 +868,9 @@ phase_b() {
   if [ -z "$pr_url" ] || [ "$pr_rc" -ne 0 ]; then
     log "gh pr create failed"
     state_finalize "$RUN_DIR" "blocked" "pr_create_failed"
+    _post_situation_to_issue "pr_create_failed" \
+      "Haara pushattiin, mutta pull requestin avaaminen epäonnistui. Tarkista alla oleva gh-loki ja avaa PR tarvittaessa käsin." \
+      "$RUN_DIR/gh-pr-create.log" 0
     exit 6
   fi
 
