@@ -25,10 +25,13 @@
 #   }
 #
 # Creates a clone DB inside the SAME db service (not a separate compose
-# project — full project cloning is out of scope here). The "compose
-# project name: <original>-clone-<slug>" requirement in the plan refers
-# to OPTIONAL future support; for now we mirror the simpler in-service
-# clone behaviour and report the new DB name.
+# project). Full project cloning (a separate <original>-clone-<slug>
+# compose project with its own containers, volumes, networks and ports)
+# is a DELIBERATE non-goal, not an unfinished feature: it has zero current
+# consumers and the in-service clone never opens new ports, so parallel
+# worktrees can't collide. The evaluation, trigger condition and future
+# design path live in docs/design/docker-compose-full-project-clone.md
+# (issue #11). Here we report the new in-service DB name.
 #
 # Prints RUN_ISSUES_DB_CLONE=<cloned-db-name> on success.
 
@@ -66,8 +69,10 @@ COMPOSE_PREFIX=(
   --file "$REPO_ROOT/$COMPOSE_FILE"
 )
 
-# Reserved for future support of full project clones.
-# CLONE_PROJECT="${ORIGINAL_PROJECT}-clone-${SAFE_SLUG}"
+# A full project clone would derive its own compose project name here, e.g.
+#   CLONE_PROJECT="${ORIGINAL_PROJECT}-clone-${SAFE_SLUG}"
+# That path is deferred by design — see the header comment and
+# docs/design/docker-compose-full-project-clone.md.
 
 # Run a command inside the db service container. Credentials are pulled
 # from the container's own environment (env var indirection), so they

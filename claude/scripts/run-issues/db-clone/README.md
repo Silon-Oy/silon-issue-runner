@@ -79,8 +79,13 @@ Klooni nimetään muodossa `<prefix><run-id-sanitized>`, leikataan 32 merkkiin.
 - `db_engine`: `mysql` tai `postgres`. Postgresilla käytetään `CREATE DATABASE ... TEMPLATE
   <source>` -menetelmää (nopea, mutta vaatii että source-kanta ei ole aktiivisesti käytössä
   hetkellä kun klooni luodaan).
-- Compose-pohjaista *koko projektin* kloonia (uusi `<project>-clone-<slug>`) ei tueta tässä
-  vaiheessa — sama palvelu hoitaa vain DB-tason kloonin.
+- Compose-pohjaista *koko projektin* kloonia (uusi `<project>-clone-<slug>`: omat kontit,
+  volyymit, verkot, portit) **ei tueta** — ja se on tietoinen päätös, ei keskeneräisyys.
+  DB-tason klooni jakaa saman jo käynnissä olevan `db`-palvelun eikä avaa uusia portteja,
+  joten rinnakkaiset worktreet eivät törmää porttikonflikteihin. Koko projektin kloonin
+  arviointi, käynnistysehto ja formalisoitu tuleva polku:
+  [`docs/design/docker-compose-full-project-clone.md`](../../../../docs/design/docker-compose-full-project-clone.md)
+  (issue [#11](https://github.com/Silon-Oy/dotfiles/issues/11)).
 
 ## Turvallisuus
 
