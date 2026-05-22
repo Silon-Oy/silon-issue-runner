@@ -140,6 +140,8 @@ source "$SCRIPT_DIR/lib/locking.sh"
 source "$SCRIPT_DIR/lib/issue.sh"
 # shellcheck source=lib/worktree.sh
 source "$SCRIPT_DIR/lib/worktree.sh"
+# shellcheck source=lib/gitignore.sh
+source "$SCRIPT_DIR/lib/gitignore.sh"
 # shellcheck source=lib/state.sh
 source "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/claude-call.sh
@@ -962,12 +964,36 @@ resume_cancel() {
   exit 0
 }
 
+# commit_run_issues_gitignore — ensure the target repo's .gitignore ignores the
+# /run-issues runtime artefacts (run-issues/, run-issues-archive/, worktrees/),
+# committing the change on the feature branch so it lands in the PR. Run before
+# the implementer so the run-dir artefacts are already ignored when the
+# implementer stages files. Idempotent: on a restart/resume where the block is
+# already present (and current) the helper reports no change and we skip the
+# commit entirely. Best-effort — a .gitignore hiccup must not block the run.
+commit_run_issues_gitignore() {
+  [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ] || return 0
+  if ensure_run_issues_gitignore "$WORKTREE_PATH/.gitignore"; then
+    (
+      cd "$WORKTREE_PATH"
+      git add .gitignore
+      # Defensive: only commit when there is a staged delta. The helper writes
+      # only on a content change, so this is normally always true.
+      if ! git diff --cached --quiet; then
+        sync_commit "chore: gitignore /run-issues runtime artifacts"
+      fi
+    ) || log "commit_run_issues_gitignore: .gitignore update failed (non-fatal)"
+    state_event "$RUN_DIR" "gitignore_updated" || true
+  fi
+}
+
 # ===========================================================================
 # Phase B: implementer → evolution → PR
 # ===========================================================================
 phase_b() {
   # ---------- S8: implementer ----------
   enter_state "S8_Implementer"
+  commit_run_issues_gitignore
   log "S8_Implementer"
   local cr_out="$RUN_DIR/01-cycle-review.out"
   local cr_full=""
