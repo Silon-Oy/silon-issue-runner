@@ -8,7 +8,12 @@
 # The state machine runs in two phases:
 #   Phase A (S1..S6)  pick → claim → worktree → db-clone → cycle-review
 #   Review gate (S7)  auto-mode: in-process; interactive: exit 10
-#   Phase B (S8..S12) implementer → evolution → push → PR
+#   Phase B (S7b..S12) env-bootstrap → implementer → evolution → push → PR
+#
+# S7b (env bootstrap) is a fail-fast dependency-install gate before the
+# implementer: a failed install (e.g. missing GITHUB_TOKEN for private deps)
+# finalizes the run as blocked/env_bootstrap_failed and hands it to a human
+# instead of letting the implementer burn its whole timeout budget silently.
 #
 # Exit code 10 means "awaiting human review": the run dir and lock are kept
 # alive, and the caller (slash command or poller) is expected to inspect the
@@ -31,7 +36,8 @@
 #   2   no candidate issue (poll mode, nothing to do)
 #   3   lock/claim race lost
 #   4   cycle review blocked the run (auto mode only)
-#   5   implementer or evolution failed
+#   5   blocked before/at the implementer — db-clone failed, env bootstrap
+#       (S7b dependency install) failed, or implementer returned BLOCKED
 #   6   PR open failed
 #   7   implementer (S8) timed out — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
@@ -140,12 +146,16 @@ source "$SCRIPT_DIR/lib/locking.sh"
 source "$SCRIPT_DIR/lib/issue.sh"
 # shellcheck source=lib/worktree.sh
 source "$SCRIPT_DIR/lib/worktree.sh"
+# shellcheck source=lib/gitignore.sh
+source "$SCRIPT_DIR/lib/gitignore.sh"
 # shellcheck source=lib/state.sh
 source "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/claude-call.sh
 source "$SCRIPT_DIR/lib/claude-call.sh"
 # shellcheck source=lib/hook-runner.sh
 source "$SCRIPT_DIR/lib/hook-runner.sh"
+# shellcheck source=lib/env-bootstrap.sh
+source "$SCRIPT_DIR/lib/env-bootstrap.sh"
 
 export POST_COMMIT_SYNC=1
 export RUN_ISSUES_AUTO
@@ -224,6 +234,52 @@ ensure_node_runtime() {
     || log "WARNING: npx not found after sourcing nvm ($nvm_dir); claude calls will fail (exit 127)"
 }
 ensure_node_runtime
+
+# ---------- machine-local secret provisioning ----------
+# The Studio poller runs as a LaunchAgent, which does NOT inherit the
+# interactive shell's environment. Secrets that the implementer needs to install
+# private dependencies — most importantly GITHUB_TOKEN (read:packages) for
+# @scope/* packages on GitHub Packages — are therefore absent, and a silent
+# dependency-install failure used to burn the whole implementer timeout budget.
+#
+# Source a machine-local, gitignored env file (default ~/.config/run-issues/env,
+# override via RUN_ISSUES_ENV_FILE) so those secrets reach EVERY path that ends
+# in the implementer: normal start, --resume, --restart and --continue. Running
+# this once at top level (before the MODE dispatch) covers all four uniformly.
+#
+# The file lives OUTSIDE any repo and MUST NOT be committed or baked into a
+# plist (plists are deployed from the repo → forbidden for secrets). It is shell
+# code that gets sourced, so it must be user-owned with chmod 600 — we warn (but
+# do not fail) on laxer permissions. When the file is absent the behaviour is
+# unchanged from before (one log line, no secrets injected) — no regression.
+RUN_ISSUES_ENV_FILE="${RUN_ISSUES_ENV_FILE:-$HOME/.config/run-issues/env}"
+source_machine_env() {
+  local f="$RUN_ISSUES_ENV_FILE"
+  if [ ! -f "$f" ]; then
+    log "no machine-local env file at $f — proceeding without it (no secrets injected)"
+    return 0
+  fi
+  local perm=""
+  if [ "$(uname -s)" = "Darwin" ]; then
+    perm=$(stat -f '%Lp' "$f" 2>/dev/null || echo "")
+  else
+    perm=$(stat -c '%a' "$f" 2>/dev/null || echo "")
+  fi
+  case "$perm" in
+    600|400|"") : ;;
+    *) log "WARNING: env file $f has permissions $perm — recommend 'chmod 600 $f' (it holds secrets)" ;;
+  esac
+  log "sourcing machine-local env file: $f"
+  # The env file is plain shell that exports variables; it is not written for
+  # `set -euo pipefail`, so relax while sourcing and restore afterwards (mirrors
+  # the nvm source above). Exported vars are inherited by the claude child and
+  # the bootstrap install.
+  set +eu
+  # shellcheck disable=SC1090
+  . "$f"
+  set -eu
+}
+source_machine_env
 
 # ---------- globals (populated as we progress; also restored on resume) ----------
 ISSUE_NUM=""
@@ -885,6 +941,17 @@ _finalize_awaiting_clarification() {
   state_event "$RUN_DIR" "awaiting_clarification" "round=$round"
 }
 
+# _add_needs_human_label — best-effort: ensure the needs-human label exists in
+# the repo and is attached to the issue. Failures are non-fatal (the run is
+# already finalized in run.json regardless). Shared by _hand_to_human and the
+# env-bootstrap gate, which posts its own log-mode situation comment but still
+# needs the same hand-off signal.
+_add_needs_human_label() {
+  ( cd "$REPO_ROOT" && gh label create needs-human --color B60205 \
+      --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --add-label needs-human >/dev/null 2>&1 ) || true
+}
+
 # _hand_to_human <message> [<artifact-file>] — best-effort: post a full
 # situation report and ensure the needs-human label is attached. All failures
 # are non-fatal (the run is already finalized in run.json regardless). The
@@ -893,9 +960,7 @@ _hand_to_human() {
   local msg="$1"
   local artifact_file="${2:-}"
   _post_situation_to_issue "needs_human" "$msg" "$artifact_file" 0 prose
-  ( cd "$REPO_ROOT" && gh label create needs-human --color B60205 \
-      --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
-  ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --add-label needs-human >/dev/null 2>&1 ) || true
+  _add_needs_human_label
 }
 
 # propagate_pr_labels <pr-url> — best-effort: copy merge-relevant labels from
@@ -962,12 +1027,97 @@ resume_cancel() {
   exit 0
 }
 
+# commit_run_issues_gitignore — ensure the target repo's .gitignore ignores the
+# /run-issues runtime artefacts (run-issues/, run-issues-archive/, worktrees/),
+# committing the change on the feature branch so it lands in the PR. Run before
+# the implementer so the run-dir artefacts are already ignored when the
+# implementer stages files. Idempotent: on a restart/resume where the block is
+# already present (and current) the helper reports no change and we skip the
+# commit entirely. Best-effort — a .gitignore hiccup must not block the run.
+commit_run_issues_gitignore() {
+  [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ] || return 0
+  if ensure_run_issues_gitignore "$WORKTREE_PATH/.gitignore"; then
+    (
+      cd "$WORKTREE_PATH"
+      git add .gitignore
+      # Defensive: only commit when there is a staged delta. The helper writes
+      # only on a content change, so this is normally always true.
+      if ! git diff --cached --quiet; then
+        sync_commit "chore: gitignore /run-issues runtime artifacts"
+      fi
+    ) || log "commit_run_issues_gitignore: .gitignore update failed (non-fatal)"
+    state_event "$RUN_DIR" "gitignore_updated" || true
+  fi
+}
+
+# ===========================================================================
+# S7b: env bootstrap — fail-fast dependency install before the implementer
+# ===========================================================================
+# run_env_bootstrap — install the worktree's dependencies BEFORE the implementer
+# so an environment obstacle (e.g. a missing GITHUB_TOKEN that breaks private
+# @scope/* installs) surfaces as an immediate, diagnosable blocked run instead
+# of a silent implementer timeout that burns the whole budget.
+#
+#   no package.json   -> no-op (the dotfiles repo itself hits this); proceed.
+#   install succeeds   -> proceed to the implementer normally.
+#   install fails      -> finalize blocked / env_bootstrap_failed, attach the
+#                         needs-human label, post the install log to the issue,
+#                         and exit 5 WITHOUT spending any implementer timeout.
+#
+# Runs on every path that reaches phase_b (start, --resume, --restart,
+# --continue), so it is the single chokepoint before S8. Idempotent: a restart
+# re-installs harmlessly.
+run_env_bootstrap() {
+  enter_state "S7b_EnvBootstrap"
+  log "S7b_EnvBootstrap"
+  local pm
+  pm=$(detect_package_manager "$WORKTREE_PATH")
+  if [ -z "$pm" ]; then
+    log "env-bootstrap: no package.json in $WORKTREE_PATH — no-op"
+    state_event "$RUN_DIR" "env_bootstrap_skipped" "reason=no_package_json"
+    return 0
+  fi
+
+  log "env-bootstrap: detected $pm — installing dependencies"
+  local boot_log="$RUN_DIR/env-bootstrap.log"
+  set +e
+  (
+    cd "$WORKTREE_PATH"
+    case "$pm" in
+      pnpm) pnpm install ;;
+      yarn) yarn install ;;
+      npm)  npm install ;;
+    esac
+  ) > "$boot_log" 2>&1
+  local boot_rc=$?
+  set -e
+
+  if [ "$boot_rc" -ne 0 ]; then
+    log "env-bootstrap: '$pm install' failed (rc=$boot_rc) — finalizing blocked (no implementer budget spent)"
+    state_finalize "$RUN_DIR" "blocked" "env_bootstrap_failed"
+    state_event "$RUN_DIR" "env_bootstrap_failed" "pm=$pm" "rc=$boot_rc"
+    # Post the install log in log-mode (monospace) — it is tool output, not prose.
+    _post_situation_to_issue "env_bootstrap_failed" \
+      "Riippuvuuksien asennus ($pm) epäonnistui ennen toteutusvaihetta (rc=$boot_rc). Yleisin syy on puuttuva GITHUB_TOKEN yksityisille @scope/*-paketeille — tarkista koneellinen env-tiedosto. Asennusvirhe alla." \
+      "$boot_log" 0 log
+    _add_needs_human_label
+    exit 5
+  fi
+
+  log "env-bootstrap: '$pm install' succeeded"
+  state_event "$RUN_DIR" "env_bootstrap_ok" "pm=$pm"
+}
+
 # ===========================================================================
 # Phase B: implementer → evolution → PR
 # ===========================================================================
 phase_b() {
+  # ---------- S7b: env bootstrap (fail-fast dep install) ----------
+  run_env_bootstrap
+
   # ---------- S8: implementer ----------
   enter_state "S8_Implementer"
+  commit_run_issues_gitignore
   log "S8_Implementer"
   local cr_out="$RUN_DIR/01-cycle-review.out"
   local cr_full=""

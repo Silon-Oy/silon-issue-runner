@@ -32,15 +32,28 @@ stateDiagram-v2
     S6_CycleReview --> S7_ReviewGate: cycle-review output written
 
     %% ----- Review gate: auto resolves in-process; interactive exits 10 -----
-    S7_ReviewGate --> S8_Implementer: auto + PROCEED
+    S7_ReviewGate --> S7b_EnvBootstrap: auto + PROCEED
     S7_ReviewGate --> [*]: auto + BLOCKER (rc=4)
     S7_ReviewGate --> S_AwaitingClarification: auto + NEEDS_CLARIFICATION (rc=11)
     S7_ReviewGate --> S_AwaitingReview: interactive (rc=10)
 
     %% ----- Resume entry from awaiting_review -----
-    S_AwaitingReview --> S8_Implementer: --resume --decision PROCEED
+    S_AwaitingReview --> S7b_EnvBootstrap: --resume --decision PROCEED
     S_AwaitingReview --> S_ResumeCancel: --resume --decision CANCEL
     S_ResumeCancel --> [*]: claim removed, worktree kept (rc=0)
+
+    %% ----- S7b: fail-fast env bootstrap before the implementer -----
+    %% Installs the worktree's dependencies (package manager detected from the
+    %% root lockfile: pnpm-lock.yaml/yarn.lock/package-lock.json). This turns an
+    %% environment obstacle (e.g. a missing GITHUB_TOKEN that breaks private
+    %% @scope/* installs from GitHub Packages) into an immediate, diagnosable
+    %% blocked run instead of a silent implementer timeout that burns the whole
+    %% budget. No package.json -> no-op (the dotfiles repo itself). On every path
+    %% that reaches phase_b (start, --resume, --restart, --continue) this is the
+    %% single chokepoint before S8. Secrets come from a machine-local, gitignored
+    %% env file (~/.config/run-issues/env) sourced at startup — never the repo.
+    S7b_EnvBootstrap --> S8_Implementer: install OK or no package.json
+    S7b_EnvBootstrap --> [*]: install failed → blocked/env_bootstrap_failed + needs-human (rc=5)
 
     %% ----- Phase B: implementer → PR -----
     S8_Implementer --> S9_Evolution: implementer SUCCESS / PARTIAL
@@ -65,7 +78,7 @@ stateDiagram-v2
     %% Restart skips pick/claim — the lock + GitHub assignee persist.
     S_TimedOut --> S_RestartLoad: --restart (retry_count < MAX_RETRIES)
     S_TimedOut --> [*]: budget exhausted → needs-human (rc=0)
-    S_RestartLoad --> S8_Implementer: worktree OK, retry incremented, timeout ramped
+    S_RestartLoad --> S7b_EnvBootstrap: worktree OK, retry incremented, timeout ramped
     S_RestartLoad --> [*]: worktree corrupt → needs-human (rc=0)
     S_RestartLoad --> [*]: lock held by other run (rc=3)
 
