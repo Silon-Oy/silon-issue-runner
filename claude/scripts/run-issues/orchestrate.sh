@@ -196,6 +196,35 @@ log() {
   printf '[orchestrate %s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2
 }
 
+# ---------- node runtime ----------
+# The poller launches this script via a fresh tmux server whose environment
+# lacks the interactive shell's nvm PATH (nvm is sourced in zsh/shared.zsh,
+# interactive only). The cycle-review and implementer phases shell out to
+# `npx`, so a missing node bin makes every claude call die with exit 127 and
+# the run stalls at S6. Source nvm (mirroring zsh/shared.zsh) so npx resolves
+# regardless of launch context — poller/tmux, manual --restart, or --continue.
+# No-op when npx is already on PATH (the common interactive case).
+ensure_node_runtime() {
+  command -v npx >/dev/null 2>&1 && return 0
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  # nvm.sh is not written for `set -euo pipefail`; relax while sourcing, then
+  # restore. pipefail is unaffected by `set +eu`.
+  set +eu
+  if [ -s "$nvm_dir/nvm.sh" ]; then
+    # shellcheck disable=SC1090
+    . "$nvm_dir/nvm.sh"
+    nvm use default >/dev/null 2>&1 || true
+  elif [ -s "/opt/homebrew/opt/nvm/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    . "/opt/homebrew/opt/nvm/nvm.sh"
+    nvm use default >/dev/null 2>&1 || true
+  fi
+  set -eu
+  command -v npx >/dev/null 2>&1 \
+    || log "WARNING: npx not found after sourcing nvm ($nvm_dir); claude calls will fail (exit 127)"
+}
+ensure_node_runtime
+
 # ---------- globals (populated as we progress; also restored on resume) ----------
 ISSUE_NUM=""
 ISSUE_TITLE=""
