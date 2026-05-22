@@ -10,10 +10,12 @@
 
 set -euo pipefail
 
-# Hard wall-clock budget per claude invocation. 30 minutes is enough for
-# implementer cycles that include commits + post-commit hooks; if you
-# need longer, the prompt is probably too big.
-RUN_ISSUES_CLAUDE_TIMEOUT="${RUN_ISSUES_CLAUDE_TIMEOUT:-1800}"
+# Hard wall-clock budget per claude invocation. 60 minutes accommodates
+# implementer cycles in slower repos (e.g. pnpm monorepos whose verification
+# step builds + runs tests) that otherwise time out on the first attempt and
+# only succeed after the restart ramp. A repo can still override this via
+# .claude/run-issues.json (claude_timeout_seconds) or the env var.
+RUN_ISSUES_CLAUDE_TIMEOUT="${RUN_ISSUES_CLAUDE_TIMEOUT:-3600}"
 
 # The CLI invocation used for every claude call. Defaults to the globally
 # installed npm package via npx, which routes usage through the Claude plan
