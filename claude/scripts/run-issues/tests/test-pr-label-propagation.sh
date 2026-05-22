@@ -90,6 +90,7 @@ run_orch() {
   ( cd "$REPO" && \
     PATH="$BIN:$PATH" \
     RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto \
+    RUN_ISSUES_CLAUDE_CMD="$BIN/claude" \
     RUN_ISSUES_LOCK_ROOT="$WORK/locks" \
     "$@" )
 }
