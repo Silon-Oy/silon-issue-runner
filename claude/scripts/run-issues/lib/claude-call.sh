@@ -15,6 +15,16 @@ set -euo pipefail
 # need longer, the prompt is probably too big.
 RUN_ISSUES_CLAUDE_TIMEOUT="${RUN_ISSUES_CLAUDE_TIMEOUT:-1800}"
 
+# The CLI invocation used for every claude call. Defaults to the globally
+# installed npm package via npx, which routes usage through the Claude plan
+# (cost control) instead of API billing. `--no-install` forces the already
+# installed package and never downloads from the registry, and the full
+# scoped package name avoids resolving an unrelated `claude` bin (typosquat
+# safety). Tests override this with a mock binary on PATH.
+# NOTE: deliberately word-split at the call site (multi-token command), hence
+# the SC2086 disables below.
+RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-npx --no-install @anthropic-ai/claude-code}"
+
 # Path to a `timeout` binary. macOS ships `gtimeout` via coreutils;
 # fall back to a no-op wrapper that just exec's the command if no
 # timeout is available.
@@ -48,11 +58,12 @@ call_claude() {
   local rc=0
   if [ -n "$timeout_prefix" ]; then
     # shellcheck disable=SC2086
-    $timeout_prefix claude --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   else
     printf '[claude-call %s] WARNING: no timeout binary available (timeout/gtimeout), claude calls may hang indefinitely — install coreutils (brew install coreutils)\n' \
       "$(date -u +%FT%TZ)" >&2
-    claude --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    # shellcheck disable=SC2086
+    $RUN_ISSUES_CLAUDE_CMD --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   fi
 
   printf '%s\n' "$rc" > "$exit_file"
