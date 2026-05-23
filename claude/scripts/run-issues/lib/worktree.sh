@@ -7,10 +7,33 @@
 
 set -euo pipefail
 
+# refresh_origin <repo-root>
+# Fetches origin so the local origin/* refs reflect the remote tip before a
+# worktree is branched off them. The return code carries the outcome so the
+# caller can decide policy (fail-fast on a new run, soft on restart/continue):
+#   0  fetch succeeded
+#   1  fetch ran but failed (network/auth) — origin/* refs may be stale
+#   2  no origin remote (e.g. a brand-new or local-only repo) — benign no-op
+# Prints nothing to stdout; the caller may capture stderr for diagnostics.
+refresh_origin() {
+  local repo="$1"
+
+  # No origin remote -> nothing to refresh. Benign; not an error.
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 2
+
+  git -C "$repo" fetch origin --quiet || return 1
+  return 0
+}
+
 # create_worktree <repo-root> <run-id> <branch>
 # Creates a worktree at <repo-root>/.claude/worktrees/<run-id>/ on a NEW
 # branch <branch> based on the repo's default remote HEAD (origin/main
 # unless the symbolic ref points elsewhere). Prints the worktree path.
+#
+# The base ref is assumed already fresh: fetching origin is the caller's
+# responsibility (orchestrate.sh calls refresh_origin before this), so a
+# stale base can be turned into an explicit, diagnosable block instead of
+# being silently swallowed here.
 create_worktree() {
   local repo="$1"
   local run_id="$2"
@@ -31,7 +54,6 @@ create_worktree() {
 
   (
     cd "$repo"
-    git fetch origin --quiet 2>/dev/null || true
     git worktree add -b "$branch" "$wt_path" "$base_ref" >/dev/null
   )
 

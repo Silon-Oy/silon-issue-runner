@@ -457,6 +457,28 @@ phase_a() {
   # ---------- S4: worktree ----------
   enter_state "S4_Worktree"
   log "S4_Worktree run_id=$RUN_ID branch=$BRANCH"
+
+  # Refresh origin BEFORE branching so the worktree's base is the real remote
+  # tip. On a new run a stale base is unrecoverable (the whole run builds on the
+  # wrong commit), so a failed fetch is fail-fast: blocked + needs-human. Never
+  # `git pull` into a checkout — only fetch and let create_worktree branch off
+  # origin/HEAD.
+  local fetch_rc=0
+  refresh_origin "$REPO_ROOT" 2>"$RUN_DIR/origin-fetch.log" || fetch_rc=$?
+  case "$fetch_rc" in
+    0) state_event "$RUN_DIR" "origin_fetched" "phase=S4" ;;
+    2) log "S4: no origin remote — skipping fetch (local repo)"
+       state_event "$RUN_DIR" "origin_fetch_skipped" "phase=S4" "reason=no_origin" ;;
+    1) log "S4: 'git fetch origin' failed — base would be stale; blocking"
+       state_finalize "$RUN_DIR" "blocked" "origin_fetch_failed"
+       state_event "$RUN_DIR" "origin_fetch_failed" "phase=S4"
+       _post_situation_to_issue "origin_fetch_failed" \
+         "Remote-haku (\`git fetch origin\`) epäonnistui ennen worktreen luontia — feature-haara haarautuisi vanhentuneesta \`origin/main\`:sta. Tyypillisesti verkkokatko tai auth-ongelma. Tarkista yhteys ja aja issue uudelleen." \
+         "$RUN_DIR/origin-fetch.log" 0 log
+       _add_needs_human_label
+       exit 5 ;;
+  esac
+
   WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH")
   state_set "$RUN_DIR" "worktree_path" "$WORKTREE_PATH"
   state_event "$RUN_DIR" "worktree_created" "path=$WORKTREE_PATH"
@@ -703,6 +725,18 @@ restart_load_state() {
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
   ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
 
+  # Refresh origin so RESTART_CONTEXT (git log origin/main..HEAD) compares the
+  # branch against the real remote tip. Soft: a failed fetch only risks a
+  # slightly stale comparison base — not worth blocking an in-flight run.
+  local rfrc=0
+  refresh_origin "$REPO_ROOT" 2>>"$RUN_DIR/origin-fetch.log" || rfrc=$?
+  case "$rfrc" in
+    0) state_event "$RUN_DIR" "origin_fetched" "phase=restart" ;;
+    2) state_event "$RUN_DIR" "origin_fetch_skipped" "phase=restart" "reason=no_origin" ;;
+    1) log "restart: 'git fetch origin' failed — RESTART_CONTEXT may use a stale origin/main (non-fatal)"
+       state_event "$RUN_DIR" "origin_fetch_failed_soft" "phase=restart" ;;
+  esac
+
   # Restart context: the commits already on the feature branch so the
   # implementer continues from verification instead of starting over.
   RESTART_CONTEXT=$(git -C "$WORKTREE_PATH" log --oneline origin/main..HEAD 2>/dev/null || true)
@@ -824,6 +858,18 @@ continue_load_state() {
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
   ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+
+  # Refresh origin so the re-run cycle-review reasons against the real remote
+  # tip. Soft: a failed fetch only means cycle-review sees a possibly stale
+  # origin/main — not worth blocking a parked clarification run.
+  local rfrc=0
+  refresh_origin "$REPO_ROOT" 2>>"$RUN_DIR/origin-fetch.log" || rfrc=$?
+  case "$rfrc" in
+    0) state_event "$RUN_DIR" "origin_fetched" "phase=continue" ;;
+    2) state_event "$RUN_DIR" "origin_fetch_skipped" "phase=continue" "reason=no_origin" ;;
+    1) log "continue: 'git fetch origin' failed — cycle-review sees possibly stale origin/main (non-fatal)"
+       state_event "$RUN_DIR" "origin_fetch_failed_soft" "phase=continue" ;;
+  esac
 
   # Build the clarification context fed into the re-run cycle-review prompt.
   # render_prompt substitutes in a single pass, so any {{...}} inside maintainer's
