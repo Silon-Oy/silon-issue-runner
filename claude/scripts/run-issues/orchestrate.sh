@@ -8,12 +8,19 @@
 # The state machine runs in two phases:
 #   Phase A (S1..S6)  pick → claim → worktree → db-clone → cycle-review
 #   Review gate (S7)  auto-mode: in-process; interactive: exit 10
-#   Phase B (S7b..S12) env-bootstrap → implementer → evolution → push → PR
+#   Phase B (S7b..S12) env-bootstrap → provision-test-env → implementer →
+#                     evolution → push → PR
 #
 # S7b (env bootstrap) is a fail-fast dependency-install gate before the
 # implementer: a failed install (e.g. missing GITHUB_TOKEN for private deps)
 # finalizes the run as blocked/env_bootstrap_failed and hands it to a human
 # instead of letting the implementer burn its whole timeout budget silently.
+#
+# S7c (provision-test-env) is an opt-in, target-repo-owned hook that provisions
+# whatever external resources a run's tests need (a migrated test database,
+# Redis, …) with run-id isolation, and injects their addresses as KEY=VALUE env
+# vars into the implementer. Missing hook -> no-op; a failed hook fail-fasts as
+# blocked/provision_test_env_failed (same hand-off as S7b).
 #
 # Exit code 10 means "awaiting human review": the run dir and lock are kept
 # alive, and the caller (slash command or poller) is expected to inspect the
@@ -37,7 +44,8 @@
 #   3   lock/claim race lost
 #   4   cycle review blocked the run (auto mode only)
 #   5   blocked before/at the implementer — db-clone failed, env bootstrap
-#       (S7b dependency install) failed, or implementer returned BLOCKED
+#       (S7b dependency install) failed, the test-env provisioning hook (S7c)
+#       failed, or implementer returned BLOCKED
 #   6   PR open failed
 #   7   implementer (S8) timed out — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
@@ -292,6 +300,11 @@ BRANCH=""
 WORKTREE_PATH=""
 CR_DECISION=""
 DB_CLONE_VALUE=""
+# PROVISION_TEST_ENV_PAIRS holds the KEY=VALUE lines emitted by the opt-in
+# per-run test-env provisioning hook (S7c). It is repopulated on every path that
+# reaches the implementer (the hook is re-run idempotently), so it is exported
+# into the implementer's environment without needing to be persisted/restored.
+PROVISION_TEST_ENV_PAIRS=""
 LOCK_HELD=0
 CLAIMED=0
 CURRENT_STATE=""
@@ -1155,11 +1168,120 @@ run_env_bootstrap() {
 }
 
 # ===========================================================================
+# S7c: per-run test-env provisioning hook (opt-in, target-repo owned)
+# ===========================================================================
+# run_provision_test_env — run the target repo's opt-in provisioning hook
+# (<worktree>/.claude/provision-test-env.sh) so a run gets whatever external
+# resources its tests need — a migrated test database, a Redis instance, an
+# object-store stub — provisioned automatically, with run-id isolation so two
+# concurrent runs never share state. This generalizes the db-clone pattern: the
+# project owns the project-specific logic (migration command, connection-string
+# shape); the orchestrator stays generic.
+#
+# Contract (see provision-test-env.README.md):
+#   - invoked as `provision-test-env.sh provision <run-id>` with the worktree
+#     root as CWD (so e.g. `pnpm prisma` resolves the schema path and the
+#     node_modules S7b just installed);
+#   - <run-id> is the MANDATORY isolation key — the hook derives resource names
+#     from it (e.g. test_<run-id>) so concurrent runs do not collide;
+#   - the hook prints `KEY=VALUE` lines to stdout; the orchestrator injects them
+#     into the implementer's environment. Diagnostics go to stderr (or any
+#     non-KEY=VALUE stdout line, which is ignored);
+#   - static credentials (Postgres host/user/password) come from the existing
+#     machine-local env file (source_machine_env), never from the committed hook.
+#
+#   no hook / not executable -> no-op (benign skip), proceed.
+#   hook succeeds            -> collect KEY=VALUE, record keys in run.json,
+#                               proceed to the implementer.
+#   hook fails (rc != 0)     -> finalize blocked / provision_test_env_failed,
+#                               attach needs-human, post the log to the issue,
+#                               exit 5 WITHOUT spending any implementer budget.
+#
+# Runs on every path that reaches phase_b (start, --resume, --restart,
+# --continue) right after S7b, so it is the single chokepoint where node_modules
+# are present but the implementer has not yet started. Idempotent: a restart
+# re-runs the hook, which (per contract) reuses or recreates the run-id-keyed
+# resource rather than provisioning a second one.
+run_provision_test_env() {
+  enter_state "S7c_ProvisionTestEnv"
+  log "S7c_ProvisionTestEnv"
+  PROVISION_TEST_ENV_PAIRS=""
+
+  local hook="$WORKTREE_PATH/.claude/provision-test-env.sh"
+  if [ ! -x "$hook" ]; then
+    log "provision-test-env: no executable hook at $hook — no-op"
+    state_event "$RUN_DIR" "provision_test_env_skipped" "reason=no_hook"
+    return 0
+  fi
+
+  log "provision-test-env: running hook with run-id $RUN_ID"
+  local prov_stdout="$RUN_DIR/provision-test-env.stdout"
+  local prov_stderr="$RUN_DIR/provision-test-env.stderr"
+  local prov_log="$RUN_DIR/provision-test-env.log"
+  set +e
+  (
+    cd "$WORKTREE_PATH"
+    "$hook" provision "$RUN_ID"
+  ) > "$prov_stdout" 2> "$prov_stderr"
+  local prov_rc=$?
+  set -e
+
+  # Combined log for the failure comment: both streams, clearly separated.
+  {
+    echo "# provision-test-env.sh provision $RUN_ID (rc=$prov_rc)"
+    echo "## stdout"
+    cat "$prov_stdout"
+    echo "## stderr"
+    cat "$prov_stderr"
+  } > "$prov_log"
+
+  if [ "$prov_rc" -ne 0 ]; then
+    log "provision-test-env: hook failed (rc=$prov_rc) — finalizing blocked (no implementer budget spent)"
+    state_finalize "$RUN_DIR" "blocked" "provision_test_env_failed"
+    state_event "$RUN_DIR" "provision_test_env_failed" "rc=$prov_rc"
+    _post_situation_to_issue "provision_test_env_failed" \
+      "Testiympäristön provisiointi (\`.claude/provision-test-env.sh\`) epäonnistui ennen toteutusvaihetta (rc=$prov_rc). Tyypillisesti puuttuva tai väärä tietokantayhteys/migraatio — tarkista koneellinen env-tiedosto ja hookin loki alla." \
+      "$prov_log" 0 log
+    _add_needs_human_label
+    exit 5
+  fi
+
+  # Parse KEY=VALUE lines from stdout ONLY (stderr is diagnostics). A line counts
+  # as an injection only when its key is a valid shell env-var name — anything
+  # else (prose diagnostics that happened to land on stdout) is ignored.
+  local injected_keys="" line key
+  while IFS= read -r line; do
+    case "$line" in
+      [A-Za-z_]*=*)
+        key="${line%%=*}"
+        if printf '%s' "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+          PROVISION_TEST_ENV_PAIRS+="${line}"$'\n'
+          injected_keys="${injected_keys:+$injected_keys,}$key"
+        fi
+        ;;
+    esac
+  done < "$prov_stdout"
+
+  # Persist the injected key NAMES (never the values — they may carry secrets such
+  # as a connection-string password) so teardown knows provisioning ran and what
+  # was injected. A non-empty value gates cleanup-run.sh's hook teardown; if the
+  # hook provisioned a resource without emitting any keys we still mark it so the
+  # resource gets torn down. The run-id is the teardown handle, not these keys.
+  state_set "$RUN_DIR" "provision_test_env" "${injected_keys:-provisioned}"
+  state_event "$RUN_DIR" "provision_test_env_ok" "keys=${injected_keys:-none}"
+  log "provision-test-env: injected keys [${injected_keys:-none}]"
+}
+
+# ===========================================================================
 # Phase B: implementer → evolution → PR
 # ===========================================================================
 phase_b() {
   # ---------- S7b: env bootstrap (fail-fast dep install) ----------
   run_env_bootstrap
+
+  # ---------- S7c: per-run test-env provisioning (opt-in hook) ----------
+  # After S7b so the hook can rely on installed node_modules (e.g. pnpm prisma).
+  run_provision_test_env
 
   # ---------- S8: implementer ----------
   enter_state "S8_Implementer"
@@ -1190,6 +1312,15 @@ phase_b() {
   set +e
   (
     cd "$WORKTREE_PATH"
+    # Inject the per-run provisioned test-env vars (run-id-isolated) so the
+    # implementer's test run sees e.g. DATABASE_URL_TEST. Empty on the no-op path.
+    if [ -n "$PROVISION_TEST_ENV_PAIRS" ]; then
+      while IFS= read -r _kv; do
+        [ -n "$_kv" ] && export "$_kv"
+      done <<PROVISION_ENV
+$PROVISION_TEST_ENV_PAIRS
+PROVISION_ENV
+    fi
     call_claude "$RUN_DIR" "02-implementer" "$imp_prompt"
   )
   local imp_rc=$?
