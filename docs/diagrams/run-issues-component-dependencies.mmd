@@ -38,12 +38,17 @@ flowchart TB
         DC_DC["docker-compose.sh"]
     end
 
+    subgraph TargetRepo["target repo (worktree, opt-in)"]
+        PTE[".claude/provision-test-env.sh<br/>(S7c hook: provision/cleanup &lt;run-id&gt;)"]
+    end
+
     subgraph External
         GH["gh CLI<br/>(GitHub Issues + PRs)"]
         GIT["git worktree<br/>+ post-commit hook"]
         CC["claude CLI<br/>(--dangerously-skip-permissions)"]
         PCH["post-commit hook<br/>(POST_COMMIT_SYNC=1)"]
         DB["target repo DB<br/>(MySQL/PG/Compose)"]
+        RES["per-run test resources<br/>(test DB / Redis / stub,<br/>run-id-isolated)"]
     end
 
     CMD --> ORCH
@@ -68,6 +73,10 @@ flowchart TB
     CLEAN --> GH
     CLEAN --> GIT
     CLEAN --> DC_DISP
+    %% cleanup-run.sh runs the provision hook's teardown BEFORE removing the
+    %% worktree (the hook lives in the worktree), gated on run.json
+    %% provision_test_env. Best-effort.
+    CLEAN -. "cleanup &lt;run-id&gt; (best-effort)" .-> PTE
 
     PRWATCH --> PRLIB
     PRWATCH --> L_LOCK
@@ -83,6 +92,10 @@ flowchart TB
     ORCH --> L_CLAUDE
     ORCH --> L_HOOK
     ORCH --> DC_DISP
+    %% S7c: orchestrate.sh runs the opt-in provision hook (provision <run-id>)
+    %% after S7b, before S8, and injects its KEY=VALUE stdout into the implementer.
+    ORCH -. "provision &lt;run-id&gt; (S7c, opt-in)" .-> PTE
+    PTE --> RES
 
     L_ISSUE --> GH
     L_WT --> GIT
