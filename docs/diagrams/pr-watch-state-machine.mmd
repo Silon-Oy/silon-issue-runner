@@ -21,11 +21,11 @@ stateDiagram-v2
     P4_Decide --> P5_Resolve: REBASE (conflict-res ON)
     P4_Decide --> NOT_MERGEABLE: SKIP_* / WAIT_*
 
-    P5_Resolve: P5 Resolve\nrebase origin/main in feature worktree\n+ force-push + CI revalidation\n(NO AI conflict resolution)
-    P5_Resolve --> P6_Merge: rebase clean + CI green
-    P5_Resolve --> CONFLICT: conflict -> abort + comment
+    P5_Resolve: P5 Resolve\nrebase origin/main in feature worktree\nconflict -> AI resolves in worktree\nthen force-push + mandatory CI revalidation
+    P5_Resolve --> P6_Merge: rebase clean (direct or AI-resolved) + CI green
+    P5_Resolve --> CONFLICT: AI could not resolve -> abort + comment
     P5_Resolve --> CONFLICT: CI not green after rebase
-    P5_Resolve --> NOT_MERGEABLE: no worktree / blocked
+    P5_Resolve --> NOT_MERGEABLE: no worktree / fetch failed / blocked
 
     P6_Merge: P6 Merge\ngh pr merge --rebase --delete-branch
     P6_Merge --> P7_PostMerge: merged
