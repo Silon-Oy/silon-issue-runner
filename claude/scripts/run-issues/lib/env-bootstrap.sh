@@ -34,3 +34,21 @@ detect_package_manager() {
     printf '%s' "npm"
   fi
 }
+
+# detect_composer <dir> — echo "composer" when a composer.lock is present at the
+# directory root (meaning `composer install` must run to materialize vendor/),
+# else "". This is the PHP/Composer counterpart of detect_package_manager and is
+# deliberately INDEPENDENT of it: a Bedrock-style WordPress repo carries BOTH a
+# composer.lock (PHP deps + the WP core under web/wp/) and a JS lockfile
+# (package-lock.json for the front-end build), so the orchestrator runs both.
+# composer.lock is the canonical signal — `composer install` needs a lockfile to
+# produce a deterministic vendor/ tree. Pure: reads the filesystem, mutates
+# nothing.
+detect_composer() {
+  local dir="$1"
+  if [ -f "$dir/composer.lock" ]; then
+    printf '%s' "composer"
+  else
+    printf '%s' ""
+  fi
+}

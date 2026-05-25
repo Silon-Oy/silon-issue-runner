@@ -1150,54 +1150,91 @@ commit_run_issues_gitignore() {
 # @scope/* installs) surfaces as an immediate, diagnosable blocked run instead
 # of a silent implementer timeout that burns the whole budget.
 #
-#   no package.json   -> no-op (the dotfiles repo itself hits this); proceed.
+# Two ecosystems are handled INDEPENDENTLY, because a Bedrock-style WordPress
+# repo carries both:
+#   - PHP/Composer: a composer.lock at the worktree root -> `composer install`
+#     (materializes vendor/ and the WP core under web/wp/).
+#   - JS: a package.json (+ optional lockfile) -> pnpm/yarn/npm install.
+# Neither precludes the other; whichever signals are present run.
+#
+#   neither present    -> no-op (the dotfiles repo itself hits this); proceed.
 #   install succeeds   -> proceed to the implementer normally.
 #   install fails      -> finalize blocked / env_bootstrap_failed, attach the
 #                         needs-human label, post the install log to the issue,
 #                         and exit 5 WITHOUT spending any implementer timeout.
 #
 # Runs on every path that reaches phase_b (start, --resume, --restart,
-# --continue), so it is the single chokepoint before S8. Idempotent: a restart
-# re-installs harmlessly.
+# --continue), so it is the single chokepoint before S8. Idempotent: both
+# composer install and the JS install are safe to re-run on a restart.
 run_env_bootstrap() {
   enter_state "S7b_EnvBootstrap"
   log "S7b_EnvBootstrap"
-  local pm
-  pm=$(detect_package_manager "$WORKTREE_PATH")
-  if [ -z "$pm" ]; then
-    log "env-bootstrap: no package.json in $WORKTREE_PATH — no-op"
-    state_event "$RUN_DIR" "env_bootstrap_skipped" "reason=no_package_json"
-    return 0
+
+  local ran=0
+
+  # PHP/Composer first: Bedrock-style repos need vendor/ and the WP core present
+  # before anything else. Independent of the JS bootstrap below.
+  if [ -n "$(detect_composer "$WORKTREE_PATH")" ]; then
+    ran=1
+    _run_env_install "composer" "$RUN_DIR/env-bootstrap-composer.log"
   fi
 
-  log "env-bootstrap: detected $pm — installing dependencies"
-  local boot_log="$RUN_DIR/env-bootstrap.log"
+  # JS: pnpm/yarn/npm per the root lockfile (precedence pnpm > yarn > npm).
+  local pm
+  pm=$(detect_package_manager "$WORKTREE_PATH")
+  if [ -n "$pm" ]; then
+    ran=1
+    _run_env_install "$pm" "$RUN_DIR/env-bootstrap.log"
+  fi
+
+  if [ "$ran" -eq 0 ]; then
+    log "env-bootstrap: no package.json or composer.lock in $WORKTREE_PATH — no-op"
+    state_event "$RUN_DIR" "env_bootstrap_skipped" "reason=nothing_to_install"
+    return 0
+  fi
+}
+
+# _run_env_install <manager> <log-path> — run the dependency install for one
+# ecosystem (composer | pnpm | yarn | npm), capturing all output to <log-path>.
+# Shared by every branch of run_env_bootstrap so composer and JS get identical
+# fail-fast semantics. On rc != 0: finalize blocked / env_bootstrap_failed,
+# attach needs-human, post the install log to the issue, and exit 5 (no
+# implementer budget spent). On success: emit env_bootstrap_ok and return.
+# A missing manager binary surfaces as rc=127 here -> the same blocked path.
+_run_env_install() {
+  local manager="$1" boot_log="$2"
+  log "env-bootstrap: detected $manager — installing dependencies"
   set +e
   (
     cd "$WORKTREE_PATH"
-    case "$pm" in
-      pnpm) pnpm install ;;
-      yarn) yarn install ;;
-      npm)  npm install ;;
+    case "$manager" in
+      composer) composer install ;;
+      pnpm)     pnpm install ;;
+      yarn)     yarn install ;;
+      npm)      npm install ;;
     esac
   ) > "$boot_log" 2>&1
   local boot_rc=$?
   set -e
 
   if [ "$boot_rc" -ne 0 ]; then
-    log "env-bootstrap: '$pm install' failed (rc=$boot_rc) — finalizing blocked (no implementer budget spent)"
+    log "env-bootstrap: '$manager install' failed (rc=$boot_rc) — finalizing blocked (no implementer budget spent)"
     state_finalize "$RUN_DIR" "blocked" "env_bootstrap_failed"
-    state_event "$RUN_DIR" "env_bootstrap_failed" "pm=$pm" "rc=$boot_rc"
+    state_event "$RUN_DIR" "env_bootstrap_failed" "pm=$manager" "rc=$boot_rc"
+    local detail
+    if [ "$manager" = "composer" ]; then
+      detail="Composer-riippuvuuksien asennus epäonnistui ennen toteutusvaihetta (rc=$boot_rc). Bedrockin riippuvuudet ovat yleensä julkisia (Packagist), mutta jos kohderepossa on yksityisiä Composer-paketteja, tarvitaan GITHUB_TOKEN kuten JS-puolella — tarkista koneellinen env-tiedosto. Asennusvirhe alla."
+    else
+      detail="Riippuvuuksien asennus ($manager) epäonnistui ennen toteutusvaihetta (rc=$boot_rc). Yleisin syy on puuttuva GITHUB_TOKEN yksityisille @scope/*-paketeille — tarkista koneellinen env-tiedosto. Asennusvirhe alla."
+    fi
     # Post the install log in log-mode (monospace) — it is tool output, not prose.
-    _post_situation_to_issue "env_bootstrap_failed" \
-      "Riippuvuuksien asennus ($pm) epäonnistui ennen toteutusvaihetta (rc=$boot_rc). Yleisin syy on puuttuva GITHUB_TOKEN yksityisille @scope/*-paketeille — tarkista koneellinen env-tiedosto. Asennusvirhe alla." \
-      "$boot_log" 0 log
+    _post_situation_to_issue "env_bootstrap_failed" "$detail" "$boot_log" 0 log
     _add_needs_human_label
     exit 5
   fi
 
-  log "env-bootstrap: '$pm install' succeeded"
-  state_event "$RUN_DIR" "env_bootstrap_ok" "pm=$pm"
+  log "env-bootstrap: '$manager install' succeeded"
+  state_event "$RUN_DIR" "env_bootstrap_ok" "pm=$manager"
 }
 
 # ===========================================================================
