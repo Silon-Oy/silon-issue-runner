@@ -156,7 +156,7 @@ watch_one() {
   if ! pr_json=$(
         cd "$REPO_ROOT"
         gh pr view "$pr_num" \
-          --json state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName 2>/dev/null
+          --json state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName 2>/dev/null
       ); then
     log "gh pr view failed for PR #$pr_num"
     _release
@@ -296,27 +296,33 @@ pr_resolve() {
     return 4
   fi
 
-  log "rebasing PR #$pr_num branch '$branch' onto origin/main in worktree $worktree"
+  # Rebase onto the PR's OWN base branch (e.g. a "twenty" integration branch),
+  # not a hardcoded main — gh reports it as baseRefName. Fallback to main keeps
+  # behaviour stable for older mocks / payloads without the field.
+  local base_ref
+  base_ref=$(jq -r '.baseRefName // "main"' <<<"$pr_json")
 
-  # All git operations run INSIDE the feature worktree, never on main.
-  local main_sha
+  log "rebasing PR #$pr_num branch '$branch' onto origin/$base_ref in worktree $worktree"
+
+  # All git operations run INSIDE the feature worktree, never on the base branch.
+  local base_sha
   if ! (
         cd "$worktree" || exit 99
-        git fetch origin main --quiet || exit 98
-        git rebase origin/main
+        git fetch origin "$base_ref" --quiet || exit 98
+        git rebase "origin/$base_ref"
       ); then
     # Rebase failed — abort to leave the worktree clean, then ask a human.
     ( cd "$worktree" && git rebase --abort 2>/dev/null || true )
-    main_sha=$( cd "$worktree" && git rev-parse origin/main 2>/dev/null || echo "unknown" )
+    base_sha=$( cd "$worktree" && git rev-parse "origin/$base_ref" 2>/dev/null || echo "unknown" )
 
     log "rebase conflict on PR #$pr_num — aborted; asking for human resolution"
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
       state_finalize "$run_dir" "pr_conflicted" "rebase_conflict_pr_$pr_num"
-      state_event "$run_dir" "pr_conflicted" "pr=$pr_num" "main_sha=$main_sha"
+      state_event "$run_dir" "pr_conflicted" "pr=$pr_num" "base_sha=$base_sha"
     }
     local body
     body=$(printf '%s\n\n%s\n%s\n%s\n' \
-      "PR-valvoja yritti rebasea \`origin/main\` (sha \`$main_sha\`) päälle, mutta kohtasi konfliktin." \
+      "PR-valvoja yritti rebasea \`origin/$base_ref\` (sha \`$base_sha\`) päälle, mutta kohtasi konfliktin." \
       "Rebase peruttiin (\`git rebase --abort\`), joten haara \`$branch\` on ennallaan." \
       "Ratkaise konflikti manuaalisesti worktreessä \`$worktree\`, pushaa, ja merkkaa PR uudelleen." \
       "PR-valvoja EI ratkaise konflikteja automaattisesti (lukittu päätös 2).")

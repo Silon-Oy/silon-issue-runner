@@ -193,6 +193,28 @@ load_repo_timeout() {
   fi
 }
 
+# load_repo_base_branch <repo-root> — prints the base branch name (or empty).
+# Resolution order:
+#   1. RUN_ISSUES_BASE_BRANCH from the environment (explicit override)
+#   2. base_branch in the target repo's .claude/run-issues.json (opt-in, same
+#      file/convention as claude_timeout_seconds)
+#   3. empty -> caller treats it as "use the repo default" (origin/HEAD for the
+#      worktree base, no --base for the PR) — fully backward compatible.
+# Unlike load_repo_timeout this does NOT export: the base branch is only needed
+# in this process (worktree base + `gh pr create --base`), so it prints to
+# stdout for $(...) capture, keeping the function pure and testable.
+load_repo_base_branch() {
+  local repo="$1"
+  if [ -n "${RUN_ISSUES_BASE_BRANCH:-}" ]; then
+    printf '%s' "$RUN_ISSUES_BASE_BRANCH"
+    return 0
+  fi
+  local cfg="$repo/.claude/run-issues.json"
+  if [ -f "$cfg" ] && jq -e . "$cfg" >/dev/null 2>&1; then
+    jq -r '.base_branch // empty' "$cfg" 2>/dev/null || true
+  fi
+}
+
 # ---------- helpers ----------
 slugify_title() {
   printf '%s' "$1" \
@@ -290,6 +312,7 @@ RUN_ID=""
 RUN_DIR=""
 BRANCH=""
 WORKTREE_PATH=""
+BASE_BRANCH=""
 CR_DECISION=""
 DB_CLONE_VALUE=""
 LOCK_HELD=0
@@ -456,8 +479,13 @@ phase_a() {
 
   # ---------- S4: worktree ----------
   enter_state "S4_Worktree"
-  log "S4_Worktree run_id=$RUN_ID branch=$BRANCH"
-  WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH")
+  # Resolve the opt-in base branch once and persist it so the --resume,
+  # --restart and --continue paths (which never re-enter phase_a) read the
+  # SAME base from run.json instead of re-reading config that may have drifted.
+  BASE_BRANCH=$(load_repo_base_branch "$REPO_ROOT")
+  state_set "$RUN_DIR" "base_branch" "$BASE_BRANCH"
+  log "S4_Worktree run_id=$RUN_ID branch=$BRANCH base=${BASE_BRANCH:-<default>}"
+  WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH" "$BASE_BRANCH")
   state_set "$RUN_DIR" "worktree_path" "$WORKTREE_PATH"
   state_event "$RUN_DIR" "worktree_created" "path=$WORKTREE_PATH"
 
@@ -599,6 +627,7 @@ resume_load_state() {
   WORKTREE_PATH=$(jq -r '.worktree_path // ""' "$rj")
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
+  BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
 
   if [ -z "$REPO_ROOT" ] || [ -z "$ISSUE_NUM" ] || [ -z "$WORKTREE_PATH" ]; then
     echo "orchestrate: incomplete run.json (missing repo/issue_number/worktree_path)" >&2
@@ -641,6 +670,7 @@ restart_load_state() {
   WORKTREE_PATH=$(jq -r '.worktree_path // ""' "$rj")
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
+  BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
   local prior_status retry_count
   prior_status=$(jq -r '.status // ""' "$rj")
   retry_count=$(jq -r '.retry_count // 0' "$rj")
@@ -705,7 +735,9 @@ restart_load_state() {
 
   # Restart context: the commits already on the feature branch so the
   # implementer continues from verification instead of starting over.
-  RESTART_CONTEXT=$(git -C "$WORKTREE_PATH" log --oneline origin/main..HEAD 2>/dev/null || true)
+  # Diff against the SAME base the branch was cut from, so the restart context
+  # lists only this run's own commits (not commits that diverged on the base).
+  RESTART_CONTEXT=$(git -C "$WORKTREE_PATH" log --oneline "origin/${BASE_BRANCH:-main}..HEAD" 2>/dev/null || true)
   [ -n "$RESTART_CONTEXT" ] || RESTART_CONTEXT="(ei committeja vielä haaralla — edellinen ajo katkesi ennen ensimmäistä committia)"
 
   # Ramped, capped timeout: base * (1 + retry_count). load_repo_timeout sets the
@@ -743,6 +775,7 @@ continue_load_state() {
   BRANCH=$(jq -r '.branch // ""' "$rj")
   WORKTREE_PATH=$(jq -r '.worktree_path // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
+  BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
   local prior_status round
   prior_status=$(jq -r '.status // ""' "$rj")
   round=$(jq -r '.clarification_round // 0' "$rj")
@@ -1243,12 +1276,19 @@ phase_b() {
     exit 6
   fi
 
+  # Target the opt-in base branch when set; empty -> repo default (backward
+  # compatible). Unquoted on the command line so an empty flag disappears,
+  # mirroring $pr_draft_flag.
+  local base_flag=""
+  [ -n "$BASE_BRANCH" ] && base_flag="--base $BASE_BRANCH"
+
   local pr_url=""
   set +e
   pr_url=$(
     cd "$REPO_ROOT"
     gh pr create \
       --head "$BRANCH" \
+      $base_flag \
       --title "Auto: $ISSUE_TITLE (#$ISSUE_NUM)" \
       --body-file "$pr_body" \
       $pr_draft_flag \

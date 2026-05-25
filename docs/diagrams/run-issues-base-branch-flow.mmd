@@ -1,0 +1,34 @@
+%% Topic: Configurable base branch (run-issues.json base_branch) data flow
+%% Task: customer-b-customer-b auto-run PRs target the twenty branch, not main
+flowchart TD
+    cfg["repo/.claude/run-issues.json<br/>{ base_branch: twenty }"]
+    env["env RUN_ISSUES_BASE_BRANCH<br/>(override, optional)"]
+
+    cfg --> loader
+    env --> loader
+    loader["load_repo_base_branch repo-root<br/>(orchestrate.sh)<br/>empty -> fallback"]
+
+    loader -->|"phase_a S4 only"| setglobal["BASE_BRANCH global<br/>state_set base_branch -> run.json"]
+
+    setglobal --> rj[("run.json<br/>.base_branch")]
+
+    rj -.->|"--resume"| resume["resume_load_state<br/>reads .base_branch"]
+    rj -.->|"--restart"| restart["restart_load_state<br/>reads .base_branch"]
+    rj -.->|"--continue"| cont["continue_load_state<br/>reads .base_branch"]
+
+    setglobal --> cw["create_worktree repo run-id branch BASE_BRANCH<br/>(worktree.sh)"]
+    cw -->|"non-empty"| origintwenty["git worktree add -b branch from origin/BASE_BRANCH<br/>(fetch + rev-parse verify)"]
+    cw -->|"empty"| originhead["fallback: origin/HEAD<br/>(backward compatible)"]
+
+    resume --> phaseb
+    restart --> phaseb
+    cont --> phaseb
+    setglobal --> phaseb
+
+    phaseb["phase_b S10 (single convergence point)"]
+    phaseb --> prcreate["gh pr create --head BRANCH<br/>+ optional --base BASE_BRANCH"]
+    prcreate -->|"non-empty"| prtwenty["PR base = twenty"]
+    prcreate -->|"empty"| prdefault["PR base = repo default (main)<br/>(backward compatible)"]
+
+    prtwenty --> watcher["pr-watch P6<br/>gh pr merge --rebase<br/>(respects PR base automatically)"]
+    prtwenty -.->|"opt-in PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1"| p5["pr_resolve P5<br/>base_ref = baseRefName from gh pr view<br/>git rebase origin/base_ref (NOT main)"]
