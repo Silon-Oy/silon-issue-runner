@@ -22,7 +22,14 @@ stateDiagram-v2
     S3_Claim --> S4_Worktree: claim verified
     S3_Claim --> [*]: claim race lost (rc=3)
 
-    S4_Worktree --> S5_DBClone: worktree ready
+    %% S4 refreshes origin (refresh_origin) BEFORE branching so the worktree's
+    %% base is the real remote tip. On a NEW run a stale base is unrecoverable,
+    %% so a failed fetch is fail-fast. No origin remote -> skipped (local repo).
+    %% (restart/continue also refresh origin, but softly — internal state_events,
+    %% no state transition: a failed fetch there only risks a slightly stale
+    %% RESTART_CONTEXT / cycle-review base and is non-fatal.)
+    S4_Worktree --> S5_DBClone: origin fetched (or no origin) → worktree ready
+    S4_Worktree --> [*]: origin fetch failed → blocked/origin_fetch_failed + needs-human (rc=5)
     S5_DBClone --> S6_CycleReview: clone ok or not needed
     S5_DBClone --> [*]: clone failed (rc=5)
 
@@ -52,8 +59,22 @@ stateDiagram-v2
     %% that reaches phase_b (start, --resume, --restart, --continue) this is the
     %% single chokepoint before S8. Secrets come from a machine-local, gitignored
     %% env file (~/.config/run-issues/env) sourced at startup — never the repo.
-    S7b_EnvBootstrap --> S8_Implementer: install OK or no package.json
+    S7b_EnvBootstrap --> S7c_ProvisionTestEnv: install OK or no package.json
     S7b_EnvBootstrap --> [*]: install failed → blocked/env_bootstrap_failed + needs-human (rc=5)
+
+    %% ----- S7c: opt-in per-run test-env provisioning hook -----
+    %% Runs the target repo's <worktree>/.claude/provision-test-env.sh
+    %% (provision <run-id>) so a run gets whatever external resources its tests
+    %% need — a migrated test database, Redis, … — provisioned automatically with
+    %% run-id isolation, and injects their addresses as KEY=VALUE env vars into
+    %% the implementer. Generalizes the db-clone pattern; the project owns the
+    %% project-specific logic (migration command, conn-string shape). Placed
+    %% AFTER S7b so the hook can rely on installed node_modules (e.g. pnpm prisma)
+    %% and BEFORE S8 so the implementer's test run sees the injected vars. No hook
+    %% / not executable -> no-op. Idempotent on every phase_b path. Static
+    %% credentials come from the machine-local env file, never the committed hook.
+    S7c_ProvisionTestEnv --> S8_Implementer: hook OK or no hook
+    S7c_ProvisionTestEnv --> [*]: hook failed → blocked/provision_test_env_failed + needs-human (rc=5)
 
     %% ----- Phase B: implementer → PR -----
     S8_Implementer --> S9_Evolution: implementer SUCCESS / PARTIAL

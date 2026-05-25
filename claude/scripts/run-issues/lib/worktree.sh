@@ -7,6 +7,24 @@
 
 set -euo pipefail
 
+# refresh_origin <repo-root>
+# Fetches origin so the local origin/* refs reflect the remote tip before a
+# worktree is branched off them. The return code carries the outcome so the
+# caller can decide policy (fail-fast on a new run, soft on restart/continue):
+#   0  fetch succeeded
+#   1  fetch ran but failed (network/auth) — origin/* refs may be stale
+#   2  no origin remote (e.g. a brand-new or local-only repo) — benign no-op
+# Prints nothing to stdout; the caller may capture stderr for diagnostics.
+refresh_origin() {
+  local repo="$1"
+
+  # No origin remote -> nothing to refresh. Benign; not an error.
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 2
+
+  git -C "$repo" fetch origin --quiet || return 1
+  return 0
+}
+
 # create_worktree <repo-root> <run-id> <branch> [<base-branch>]
 # Creates a worktree at <repo-root>/.claude/worktrees/<run-id>/ on a NEW
 # branch <branch>. The base is resolved in this order:
@@ -16,7 +34,12 @@ set -euo pipefail
 #      points elsewhere)
 #   3. local HEAD (brand-new repo with no origin symbolic ref)
 # Prints the worktree path. Returns non-zero if an explicit base branch does
-# not resolve after fetch.
+# not resolve.
+#
+# The base ref is assumed already fresh: fetching origin is the caller's
+# responsibility (orchestrate.sh calls refresh_origin before this), so a stale
+# base can be turned into an explicit, diagnosable block instead of being
+# silently swallowed here.
 create_worktree() {
   local repo="$1"
   local run_id="$2"
@@ -42,12 +65,12 @@ create_worktree() {
   # trailing `printf`, so guard the subshell explicitly with `|| return 1`.
   (
     cd "$repo"
-    git fetch origin --quiet 2>/dev/null || true
-    # Validate an explicit base branch resolves after fetch; a clear error
-    # here beats a cryptic `git worktree add` failure downstream.
+    # Validate an explicit base branch resolves (origin is already fresh via the
+    # caller's refresh_origin); a clear error here beats a cryptic
+    # `git worktree add` failure downstream.
     if [ -n "$base_branch" ] \
        && ! git rev-parse --verify --quiet "refs/remotes/origin/$base_branch" >/dev/null; then
-      echo "create_worktree: base branch 'origin/$base_branch' not found after fetch" >&2
+      echo "create_worktree: base branch 'origin/$base_branch' not found (origin fresh)" >&2
       exit 1
     fi
     git worktree add -b "$branch" "$wt_path" "$base_ref" >/dev/null

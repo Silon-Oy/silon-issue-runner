@@ -18,12 +18,14 @@
 #   1. GitHub assignment (gh issue edit --remove-assignee @me) and the
 #      needs-human label (gh issue edit --remove-label) so the issue can
 #      re-enter auto-run pickup
-#   2. Worktree         (git worktree remove --force)
-#   3. Local branch     (git branch -D)
-#   4. DB clone         (best-effort drop via db-clone.sh cleanup; non-fatal)
-#   5. Archive          (essential artefacts copied to .claude/run-issues-archive/<run-id>/)
-#   6. Run-dir          (rm -rf .claude/run-issues/<run-id>)
-#   7. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/issue-N.lock)
+#   2. Test-env resources (best-effort .claude/provision-test-env.sh cleanup,
+#      run BEFORE the worktree removal because the hook lives in the worktree)
+#   3. Worktree         (git worktree remove --force)
+#   4. Local branch     (git branch -D)
+#   5. DB clone         (best-effort drop via db-clone.sh cleanup; non-fatal)
+#   6. Archive          (essential artefacts copied to .claude/run-issues-archive/<run-id>/)
+#   7. Run-dir          (rm -rf .claude/run-issues/<run-id>)
+#   8. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/issue-N.lock)
 
 set -euo pipefail
 
@@ -183,12 +185,13 @@ cleanup_run() {
     return 1
   fi
 
-  local status issue_num branch worktree_path db_clone
+  local status issue_num branch worktree_path db_clone provision_env
   status=$(run_field "$rid" '.status')
   issue_num=$(run_field "$rid" '.issue_number')
   branch=$(run_field "$rid" '.branch')
   worktree_path=$(run_field "$rid" '.worktree_path')
   db_clone=$(run_field "$rid" '.db_clone')
+  provision_env=$(run_field "$rid" '.provision_test_env')
 
   if [ "$status" = "completed" ] && [ "$FORCE" != "1" ]; then
     printf 'SKIP %s — status=completed (PR likely open; pass --force to clean anyway)\n' "$rid"
@@ -208,6 +211,29 @@ cleanup_run() {
       # non-fatal failure when the label is absent.
       do_or_dry "unlabel" gh issue edit "$issue_num" --remove-label needs-human
     )
+  fi
+
+  # Tear down per-run provisioned test-env resources (best-effort, idempotent).
+  # The hook lives INSIDE the worktree, so this MUST run before the worktree is
+  # removed below — unlike db-clone.sh, which lives in the orchestrator's script
+  # dir and survives worktree removal. Gated on the run.json provision_test_env
+  # field (set by orchestrate.sh S7c on a successful provision). The run-id is
+  # the teardown handle; the hook reconstructs the resource name from it
+  # (DROP ... IF EXISTS), so a non-zero rc is non-fatal — we report and continue.
+  if [ -n "$provision_env" ]; then
+    local prov_hook="$worktree_path/.claude/provision-test-env.sh"
+    if [ -n "$worktree_path" ] && [ -x "$prov_hook" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        printf '  [dry] provision-test-env: %s cleanup %s\n' "$prov_hook" "$rid"
+      else
+        printf '  provision-test-env: tearing down resources for %s\n' "$rid"
+        if ! ( cd "$worktree_path" && "$prov_hook" cleanup "$rid" ); then
+          printf '  ! provision-test-env cleanup failed for %s — tear down manually.\n' "$rid" >&2
+        fi
+      fi
+    else
+      printf '  provision-test-env: hook gone (worktree removed?) — skipping teardown for %s\n' "$rid"
+    fi
   fi
 
   if [ -n "$worktree_path" ] && [ -d "$worktree_path" ]; then
