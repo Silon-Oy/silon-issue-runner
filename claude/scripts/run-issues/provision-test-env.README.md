@@ -77,6 +77,65 @@ esac
 > oman skriptinsä; orkestraattori pysyy geneerisenä eikä sisällä DB-/Prisma-spesifistä
 > logiikkaa.
 
+## Esimerkki (WordPress/Bedrock — selain-UI-verifiointi)
+
+Bedrock-worktree ei ole sellaisenaan selaimella ladattava sivusto: `vendor/` ja WP-core
+(`web/wp/`) syntyvät vasta `composer install`:lla (S7b ajaa sen automaattisesti, kun
+`composer.lock` on worktreen juuressa), eikä worktreessä ole `.env`:iä, uploads-hakemistoa
+tai serving-prosessia. Tämä hook pystyttää ne per ajo ja injektoi serving-osoitteen
+sovitulla avaimella **`RUN_ISSUES_BASE_URL`**, jonka implementer-prompt tunnistaa
+(Playwright `e2e/` -ajo `baseURL`:lla).
+
+`<repo>/.claude/provision-test-env.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+mode="$1"; runid="$2"
+
+# Run-id-eristys: rinnakkaiset ajot saavat eri Valet-linkin/portin eivätkä törmää.
+slug="run-$(printf '%s' "$runid" | tr -c 'a-zA-Z0-9' '-')"
+host="$slug.test"                          # per-ajo Valet-domain
+url="https://$host"
+wt="$PWD"                                  # CWD = worktreen juuri (S7c-sopimus)
+
+case "$mode" in
+  provision)
+    # Per-ajo .env. DB_NAME = orkestraattorin kloonaama kanta (RUN_ISSUES_DB_CLONE),
+    # DB-credentiaalit koneellisesta env-tiedostosta (source_machine_env) — EIVÄT tästä
+    # committiin menevästä skriptistä.
+    cat > "$wt/.env" <<ENV
+DB_NAME=${RUN_ISSUES_DB_CLONE:?provision needs a DB clone}
+DB_USER=${WP_DB_USER:-root}
+DB_PASSWORD=${WP_DB_PASSWORD:-}
+DB_HOST=${WP_DB_HOST:-127.0.0.1}
+WP_ENV=development
+WP_HOME=$url
+WP_SITEURL=$url/wp
+ENV
+
+    # Uploads: linkitä jaettuun mediahakemistoon (worktreessä ei ole sitä).
+    mkdir -p "$wt/web/app"
+    [ -e "$wt/web/app/uploads" ] || ln -s "${WP_UPLOADS_DIR:?}" "$wt/web/app/uploads"
+
+    # Serving: per-ajo Valet-linkki worktreen web/-juureen.
+    ( cd "$wt/web" && valet link "$slug" >&2 )
+
+    echo "RUN_ISSUES_BASE_URL=$url"         # KEY=VALUE -> stdout (implementerin baseURL)
+    ;;
+  cleanup)
+    ( cd "$wt/web" 2>/dev/null && valet unlink "$slug" >&2 ) || true
+    rm -f "$wt/web/app/uploads" "$wt/.env" || true
+    ;;
+esac
+```
+
+> Sama invariantit kuin Postgres-esimerkissä: **run-id-eristys pakollinen** (eri ajo → eri
+> Valet-domain, ei jaettua serving-osoitetta), salaisuudet `source_machine_env`:stä, ja
+> `cleanup` purkaa serving-linkin **ennen worktreen poistoa** (`cleanup-run.sh` ajaa sen).
+> Serving-tapa (`valet link` vs. `php -S`/`wp server`) on **hookin valinta** — orkestraattori
+> tarjoaa vain `RUN_ISSUES_BASE_URL`-kanavan.
+
 ## Vaiheen sijainti tilakoneessa
 
 ```
