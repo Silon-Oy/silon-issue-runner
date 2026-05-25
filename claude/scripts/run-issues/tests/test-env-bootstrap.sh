@@ -82,7 +82,28 @@ assert_pm "$D/yarn"   "yarn"
 assert_pm "$D/npm"    "npm"
 assert_pm "$D/nolock" "npm"
 assert_pm "$D/multi"  "pnpm"
-[ "$FAIL" = "0" ] && echo "PASS (a) detect_package_manager: lockfile detection + no-op"
+
+# detect_composer — independent PHP/Composer signal (composer.lock at root). A
+# Bedrock repo carries BOTH a composer.lock and a JS lockfile, so the two
+# detectors must fire independently and not clobber each other.
+assert_composer() {
+  local got want="$2"
+  got=$(detect_composer "$1")
+  if [ "$got" != "$want" ]; then
+    echo "FAIL (a): detect_composer('$1') = '$got' (want '$want')"; FAIL=1
+  fi
+}
+mk "$D/composer"; : > "$D/composer/composer.json"; : > "$D/composer/composer.lock"
+# Bedrock-style: composer.lock AND a JS lockfile coexist at the root.
+mk "$D/bedrock";  : > "$D/bedrock/composer.json";  : > "$D/bedrock/composer.lock"
+: > "$D/bedrock/package.json"; : > "$D/bedrock/package-lock.json"
+assert_composer "$D/none"     ""           # no composer.lock -> no composer run
+assert_composer "$D/composer" "composer"
+assert_composer "$D/npm"      ""           # JS-only repo emits no composer signal
+assert_composer "$D/bedrock"  "composer"
+# Independence: in the Bedrock dir each detector keys off its own lockfile.
+assert_pm "$D/bedrock" "npm"
+[ "$FAIL" = "0" ] && echo "PASS (a) detect_package_manager + detect_composer: independent lockfile detection + no-op"
 
 # Helper to drive the orchestrator in resume/PROCEED mode.
 run_orch() {
@@ -174,6 +195,96 @@ grep -q 'issue comment' "$GH_LOG" || { echo "FAIL (c): situation comment not pos
 grep -q '"event":"env_bootstrap_failed"' "$RD_C/state.jsonl" \
   || { echo "FAIL (c): no env_bootstrap_failed event"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (c) install failure -> blocked/env_bootstrap_failed + needs-human + exit 5"
+
+# ===========================================================================
+# (d) composer.lock + JS lockfile -> BOTH installs run, implementer reached
+# ===========================================================================
+# composer mock that succeeds and logs its invocation (proves it ran + CWD).
+COMPOSER_LOG="$WORK/composer-calls.log"
+cat > "$BIN/composer" <<SH
+#!/usr/bin/env bash
+echo "composer \$* (cwd=\$PWD)" >> "$COMPOSER_LOG"
+echo "Installing dependencies from composer.lock"
+exit 0
+SH
+chmod +x "$BIN/composer"
+# npm mock that succeeds (test (c) left the pnpm shim failing; (d) uses npm).
+NPM_LOG="$WORK/npm-calls.log"
+cat > "$BIN/npm" <<SH
+#!/usr/bin/env bash
+echo "npm \$*" >> "$NPM_LOG"
+exit 0
+SH
+chmod +x "$BIN/npm"
+
+RID_D="20260522-1702-issue-62"
+RD_D="$REPO/.claude/run-issues/$RID_D"
+WT_D="$WORK/wt-d"; mkdir -p "$WT_D"
+: > "$WT_D/composer.lock"                                  # -> composer install
+: > "$WT_D/package.json"; : > "$WT_D/package-lock.json"    # -> npm install
+state_init "$RD_D" "$RID_D" "$REPO" "62"
+state_set "$RD_D" "branch" "auto-run/issue-62-x"
+state_set "$RD_D" "worktree_path" "$WT_D"
+state_set "$RD_D" "cycle_review_decision" "PROCEED"
+echo '{"title":"t","body":"b","comments":[]}' > "$RD_D/issue.json"
+echo "CYCLE_REVIEW_DECISION: PROCEED" > "$RD_D/01-cycle-review.out"
+rm -f "$SENTINEL" "$COMPOSER_LOG" "$NPM_LOG"
+
+set +e
+OUT_D=$(run_orch "$ORCH" --resume "$RD_D" --decision PROCEED 2>&1)
+RC_D=$?
+set -e
+echo "--- (d) composer + JS both run (rc=$RC_D) ---"; echo "$OUT_D" | tail -4
+grep -q 'composer install' "$COMPOSER_LOG" 2>/dev/null \
+  || { echo "FAIL (d): composer install was not run"; FAIL=1; }
+[ -f "$NPM_LOG" ] || { echo "FAIL (d): npm install was not run"; FAIL=1; }
+[ -f "$RD_D/env-bootstrap-composer.log" ] || { echo "FAIL (d): composer log not written"; FAIL=1; }
+[ -f "$RD_D/env-bootstrap.log" ] || { echo "FAIL (d): JS bootstrap log not written"; FAIL=1; }
+OKCOUNT_D=$(grep -c '"event":"env_bootstrap_ok"' "$RD_D/state.jsonl")
+[ "$OKCOUNT_D" = "2" ] || { echo "FAIL (d): expected 2 env_bootstrap_ok events, got $OKCOUNT_D"; FAIL=1; }
+[ -f "$SENTINEL" ] || { echo "FAIL (d): implementer not reached after both installs"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS (d) composer.lock + JS lockfile -> both installs run, implementer reached"
+
+# ===========================================================================
+# (e) composer install failure -> blocked / env_bootstrap_failed, no implementer
+# ===========================================================================
+cat > "$BIN/composer" <<'SH'
+#!/usr/bin/env bash
+echo "Your requirements could not be resolved to an installable set of packages."
+echo "  Problem 1: roots/wordpress could not be found in any version."
+exit 1
+SH
+chmod +x "$BIN/composer"
+
+RID_E="20260522-1703-issue-63"
+RD_E="$REPO/.claude/run-issues/$RID_E"
+WT_E="$WORK/wt-e"; mkdir -p "$WT_E"
+: > "$WT_E/composer.lock"                                  # -> composer install (fails)
+state_init "$RD_E" "$RID_E" "$REPO" "63"
+state_set "$RD_E" "branch" "auto-run/issue-63-x"
+state_set "$RD_E" "worktree_path" "$WT_E"
+state_set "$RD_E" "cycle_review_decision" "PROCEED"
+echo '{"title":"t","body":"b","comments":[]}' > "$RD_E/issue.json"
+echo "CYCLE_REVIEW_DECISION: PROCEED" > "$RD_E/01-cycle-review.out"
+rm -f "$SENTINEL"
+: > "$GH_LOG"
+
+set +e
+OUT_E=$(run_orch "$ORCH" --resume "$RD_E" --decision PROCEED 2>&1)
+RC_E=$?
+set -e
+echo "--- (e) composer failure (rc=$RC_E) ---"; echo "$OUT_E" | tail -5
+[ "$RC_E" = "5" ] || { echo "FAIL (e): expected exit 5, got $RC_E"; FAIL=1; }
+ST_E=$(jq -r '.status' "$RD_E/run.json")
+RE_E=$(jq -r '.blocked_reason' "$RD_E/run.json")
+[ "$ST_E" = "blocked" ] || { echo "FAIL (e): status='$ST_E' (want blocked)"; FAIL=1; }
+[ "$RE_E" = "env_bootstrap_failed" ] || { echo "FAIL (e): blocked_reason='$RE_E'"; FAIL=1; }
+[ ! -f "$SENTINEL" ] || { echo "FAIL (e): implementer invoked despite composer failure (budget spent)"; FAIL=1; }
+[ -f "$RD_E/env-bootstrap-composer.log" ] || { echo "FAIL (e): composer log not written"; FAIL=1; }
+grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (e): needs-human label not attempted"; FAIL=1; }
+grep -q '"event":"env_bootstrap_failed"' "$RD_E/state.jsonl" \
+  || { echo "FAIL (e): no env_bootstrap_failed event"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS (e) composer install failure -> blocked/env_bootstrap_failed + needs-human + exit 5"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "env-bootstrap: all passed" || echo "env-bootstrap: FAILURES"

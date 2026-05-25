@@ -53,6 +53,21 @@ Olet automaattisessa tilassa. Sinun **EI** tarvitse kysyä lupaa jokaiseen muuto
 - **Jos issue-speksi on epäselvä työn aikana**: pysähdy, commitoi siihen mennessä syntynyt
   työ, ja kirjaa kysymys PR-kuvaukseen draft-tilassa. Älä arvaa.
 
+## Selain-UI-verifiointi (jos serving-osoite on injektoitu)
+
+Kohderepon S7c provision-hook (`.claude/provision-test-env.sh`) **voi** pystyttää
+ajon ajaksi selaimella ladattavan sivuston (esim. WordPress/Bedrock-worktree per-ajo
+`valet link` / `php -S`) ja injektoida sen osoitteen ympäristöön sovitulla avaimella
+`RUN_ISSUES_BASE_URL`.
+
+- **Jos `RUN_ISSUES_BASE_URL` on asetettu** ja teet frontend-/UI-muutoksia, verifioi
+  ne selaimella tätä osoitetta vasten: aja repon Playwright-paketti (`e2e/`) niin että
+  `baseURL` osoittaa `RUN_ISSUES_BASE_URL`:iin (esim. `PLAYWRIGHT_BASE_URL="$RUN_ISSUES_BASE_URL"`
+  tai vastaava repon konventio), tai avaa sivu manuaalisesti tarkistettavaksi.
+- **Jos muuttujaa ei ole asetettu**, älä yritä pystyttää serving-ympäristöä itse — useimmat
+  repot eivät tarjoa sitä, ja silloin verifiointi tehdään yksikkö-/integraatiotestein kuten
+  ennenkin. Älä siis tee tästä pakollista vaihetta.
+
 ## Committaaminen (kriittinen)
 
 Tämä ajo on osa `/run-issues`-pipelineä. Post-commit-hookit (doc-update +
