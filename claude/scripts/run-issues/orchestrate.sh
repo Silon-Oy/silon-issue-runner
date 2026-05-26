@@ -152,6 +152,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/locking.sh"
 # shellcheck source=lib/issue.sh
 source "$SCRIPT_DIR/lib/issue.sh"
+# shellcheck source=lib/issue-images.sh
+source "$SCRIPT_DIR/lib/issue-images.sh"
 # shellcheck source=lib/worktree.sh
 source "$SCRIPT_DIR/lib/worktree.sh"
 # shellcheck source=lib/gitignore.sh
@@ -316,6 +318,11 @@ ISSUE_NUM=""
 ISSUE_TITLE=""
 ISSUE_BODY=""
 ISSUE_COMMENTS=""
+# ISSUE_IMAGES holds the rendered {{ISSUE_IMAGES}} prompt block (a list of
+# locally downloaded image paths + a Read-tool instruction), or empty when the
+# issue references no images. Repopulated on every path that renders a prompt
+# (the download is idempotent/reuse), so it is never persisted to run.json.
+ISSUE_IMAGES=""
 RUN_ID=""
 RUN_DIR=""
 BRANCH=""
@@ -555,6 +562,40 @@ phase_a() {
   run_cycle_review
 }
 
+# prepare_issue_images — download images embedded in the issue (body + comments)
+# into <run-dir>/attachments/ and populate the ISSUE_IMAGES prompt block. Pure
+# best-effort: any failure (auth/network/404/non-image) leaves ISSUE_IMAGES empty
+# and the run proceeds in text mode, exactly like an issue with no images.
+#
+# The run dir is already gitignored (ensure_run_issues_gitignore covers
+# .claude/run-issues/), so attachments never leak into the target repo. The gh
+# token used for the download stays inside download_issue_images and is never
+# logged or persisted. Called on every path that renders a prompt; the download
+# is idempotent (reuses already-downloaded files), so the S6->S8 chain and the
+# --resume/--restart/--continue re-runs do not re-fetch.
+prepare_issue_images() {
+  ISSUE_IMAGES=""
+  local issue_json="$RUN_DIR/issue.json"
+  [ -f "$issue_json" ] || return 0
+  local dest="$RUN_DIR/attachments"
+
+  local paths
+  paths=$(download_issue_images "$issue_json" "$dest" 2>>"$RUN_DIR/issue-images.log") || true
+  [ -n "$paths" ] || return 0
+
+  local -a arr=()
+  while IFS= read -r p; do
+    [ -n "$p" ] && arr+=("$p")
+  done <<EOF
+$paths
+EOF
+  [ "${#arr[@]}" -gt 0 ] || return 0
+
+  ISSUE_IMAGES=$(build_issue_images_block "${arr[@]}")
+  log "issue-images: prepared ${#arr[@]} image(s) for the prompt"
+  state_event "$RUN_DIR" "issue_images_prepared" "count=${#arr[@]}" || true
+}
+
 # run_cycle_review — S6. Renders and runs the cycle-review prompt, parses the
 # decision into CR_DECISION, and records it. Reads the optional global
 # CLARIFICATION_CONTEXT: phase_a leaves it empty (the prompt section collapses);
@@ -567,12 +608,16 @@ run_cycle_review() {
   local repo_claude_md=""
   [ -f "$REPO_ROOT/CLAUDE.md" ] && repo_claude_md=$(cat "$REPO_ROOT/CLAUDE.md")
 
+  # Download any embedded issue images so the cycle-review agent can Read them.
+  prepare_issue_images
+
   local cr_prompt="$RUN_DIR/01-cycle-review.prompt"
   render_prompt \
     "$SCRIPT_DIR/prompts/01-cycle-review.md" \
     "$cr_prompt" \
     "ISSUE_BODY=$ISSUE_BODY" \
     "ISSUE_COMMENTS=$ISSUE_COMMENTS" \
+    "ISSUE_IMAGES=$ISSUE_IMAGES" \
     "REPO_ROOT=$REPO_ROOT" \
     "REPO_CLAUDE_MD=$repo_claude_md" \
     "CLARIFICATION_CONTEXT=$CLARIFICATION_CONTEXT"
@@ -1361,6 +1406,11 @@ phase_b() {
   local cr_full=""
   [ -f "$cr_out" ] && cr_full=$(cat "$cr_out")
 
+  # Download any embedded issue images so the implementer can Read them. On the
+  # normal/continue path cycle-review already downloaded them; this reuses the
+  # files. On --resume/--restart (cycle-review not re-run) this is the download.
+  prepare_issue_images
+
   local imp_prompt="$RUN_DIR/02-implementer.prompt"
   render_prompt \
     "$SCRIPT_DIR/prompts/02-implementer.md" \
@@ -1371,6 +1421,7 @@ phase_b() {
     "ISSUE_NUMBER=$ISSUE_NUM" \
     "ISSUE_TITLE=$ISSUE_TITLE" \
     "ISSUE_BODY=$ISSUE_BODY" \
+    "ISSUE_IMAGES=$ISSUE_IMAGES" \
     "RUN_ISSUES_DB_CLONE=$DB_CLONE_VALUE" \
     "CYCLE_REVIEW_OUTPUT=$cr_full" \
     "RESTART_CONTEXT=$RESTART_CONTEXT"
