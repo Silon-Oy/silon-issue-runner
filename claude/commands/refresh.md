@@ -54,12 +54,17 @@ lopussa). Jos konfigia ei ole, vaihe 0 päättelee järkevän fallbackin.
 Älä koskaan pullaa committaamattomien muutosten päälle.
 
 ```bash
-git -C "$REPO_ROOT" status --porcelain
+# Salli työpuu, jonka AINOA muutos on .gitignore — refresh ylläpitää sitä itse
+# (PHASE 3b), eikä komento saa pysähtyä omaan huoltoonsa.
+NON_GITIGNORE_DIRTY=$(git -C "$REPO_ROOT" status --porcelain | grep -v '\.gitignore$' || true)
+echo "NON_GITIGNORE_DIRTY=[$NON_GITIGNORE_DIRTY]"
 ```
 
-Jos tuloste on **ei-tyhjä** → työpuu on likainen. Aja `git -C "$REPO_ROOT" status -sb`,
-näytä sen tuloste maintainerlle ja **STOP** ("Työpuu likainen — committaa tai stashaa ensin,
-en pullaa muutosten päälle"). Älä etene PHASE 2:een.
+Jos tuloste on **ei-tyhjä** → työpuussa on muita committaamattomia muutoksia kuin
+`.gitignore`. Aja `git -C "$REPO_ROOT" status -sb`, näytä sen tuloste maintainerlle ja **STOP**
+("Työpuu likainen — committaa tai stashaa ensin, en pullaa muutosten päälle"). Älä etene
+PHASE 2:een. (Pelkkä `.gitignore`-muutos ei pysäytä — se kannetaan ff-pullin läpi ja
+PHASE 3b täydentää sen.)
 
 ---
 
@@ -73,16 +78,17 @@ BEHIND=$(git -C "$REPO_ROOT" rev-list --count "HEAD..origin/$BRANCH")
 echo "BEFORE=$BEFORE BRANCH=$BRANCH BEHIND=$BEHIND"
 ```
 
-- Jos `BEHIND == 0` → repo on jo ajan tasalla. **Hyppää suoraan PHASE 4:ään** (ei buildeja).
+- Jos `BEHIND == 0` → repo on jo ajan tasalla. **Hyppää suoraan PHASE 3b:hen** (ei buildeja,
+  mutta gitignore-huolto ajetaan silti).
 - Muuten pullaa fast-forward-only:
 
   ```bash
   git -C "$REPO_ROOT" pull --ff-only origin "$BRANCH"
   ```
 
-  - Jos pull **epäonnistuu** (esim. haarat ovat hajaantuneet / ff ei mahdollinen) →
-    näytä virhe ja **STOP** ("Pull ei ff-only-onnistunut — haara on hajaantunut, selvitä
-    manuaalisesti").
+  - Jos pull **epäonnistuu** (esim. haarat ovat hajaantuneet / ff ei mahdollinen, tai
+    paikallinen committaamaton `.gitignore`-muutos törmää originin `.gitignore`-muutokseen) →
+    näytä virhe ja **STOP** ("Pull ei ff-only-onnistunut — selvitä manuaalisesti").
   - Onnistuessa:
 
     ```bash
@@ -141,6 +147,54 @@ dev-serveriä migratoimattoman kannan päälle.
 Raportoi **jokaisesta** ajetusta buildista mitä ajettiin ja **miksi** (mikä muuttunut
 tiedosto laukaisi sen). Jos jokin build **failaa** → tulosta sen stderr ja **STOP**
 (älä käynnistä dev-serveriä rikkinäisen riippuvuustilan päälle).
+
+---
+
+## PHASE 3b — .gitignore-huolto (ajetaan aina)
+
+Varmista että `/refresh`:n **omat artefaktit** on gitignorattu projektissa, jottei
+henkilökohtainen konfig tai runtime-loki vahingossa päädy versionhallintaan. Tämä vaihe
+ajetaan **aina** — myös kun `BEHIND == 0` — ja **ennen PHASE 5:tä**, koska PHASE 5
+kirjoittaa lokin (`.claude/refresh-dev.log`); loki pitää olla ignorattu ennen kirjoitusta.
+
+Huoltosäännöt:
+
+- **`.claude/refresh-dev.log`** — runtime-loki, **aina** ignorattava.
+- **`.claude/refresh.json`** — henkilökohtainen konfig. Ignoroi vain jos se on olemassa,
+  **ei trackattu** ja ei jo ignorattu. Jos tiedosto on jo committattu (trackattu), maintainer on
+  tietoisesti valinnut versioida sen → **älä taistele sitä vastaan**, jätä rauhaan.
+
+Idempotentti — lisää rivi vain jos `git check-ignore` ei jo kata sitä, joten vakiotilassa
+ei synny muutosta:
+
+```bash
+GITIGNORE="$REPO_ROOT/.gitignore"
+GI_ADDED=""
+
+ensure_ignored() {
+  entry="$1"
+  # Jo efektiivisesti ignorattu (mikä tahansa sääntö kattaa)? → ei toimenpidettä.
+  git -C "$REPO_ROOT" check-ignore -q "$entry" 2>/dev/null && return 0
+  # Literaalirivi jo olemassa? → ei duplikaattia.
+  [ -f "$GITIGNORE" ] && grep -qxF "$entry" "$GITIGNORE" && return 0
+  printf '%s\n' "$entry" >> "$GITIGNORE"
+  GI_ADDED="$GI_ADDED $entry"
+}
+
+ensure_ignored ".claude/refresh-dev.log"
+
+# refresh.json: vain jos olemassa eikä trackattu.
+if [ -f "$REPO_ROOT/.claude/refresh.json" ] \
+   && ! git -C "$REPO_ROOT" ls-files --error-unmatch .claude/refresh.json >/dev/null 2>&1; then
+  ensure_ignored ".claude/refresh.json"
+fi
+
+echo "GI_ADDED=[$GI_ADDED]"
+```
+
+Jos `GI_ADDED` on ei-tyhjä → huomioi PHASE 6:n raportissa, että `.gitignore` sai uusia
+rivejä ja ne kannattaa committaa. **Älä committaa automaattisesti.** (Seuraava ajo ei
+pysähdy tähän, koska PHASE 1 sietää pelkkää `.gitignore`-muutosta.)
 
 ---
 
@@ -297,9 +351,11 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
 3. **Uudelleenkäynnistys**: jos PHASE 4b ajettiin, kerro että käynnissä ollut dev-server
    pysäytettiin ja käynnistettiin uudelleen vanhentuneen Prisma Clientin takia (vanha
    PID → uusi `DEV_PID`), ja että se ajaa nyt taustalla.
-4. **Dev-URL(t)**: primary ensin (esim. `http://localhost:5173`), sitten muut.
-5. **Taustaprosessi**: `DEV_PID` ja lokipolku `.claude/refresh-dev.log`.
-6. **Muistutus**: dev-server jää taustalle — pysäytä `kill <DEV_PID>` kun et tarvitse.
+4. **.gitignore-huolto**: jos `GI_ADDED` oli ei-tyhjä, kerro mitkä rivit lisättiin
+   `.gitignore`:en ja että ne kannattaa committaa.
+5. **Dev-URL(t)**: primary ensin (esim. `http://localhost:5173`), sitten muut.
+6. **Taustaprosessi**: `DEV_PID` ja lokipolku `.claude/refresh-dev.log`.
+7. **Muistutus**: dev-server jää taustalle — pysäytä `kill <DEV_PID>` kun et tarvitse.
 
 ---
 
@@ -357,3 +413,7 @@ varmista että kukin pätee yhä:
    (**ei** `migrate dev`) ja `pnpm db:generate`. Jos dev-server pyöri jo tästä reposta,
    se käynnistetään uudelleen (PHASE 4b), jottei jää vanhentuneen Prisma Clientin varaan.
    Jos dev-kanta on alhaalla, komento pysähtyy ja neuvoo `pnpm db:up`.
+8. **gitignore-huolto on idempotentti.** PHASE 3b varmistaa että `.claude/refresh-dev.log`
+   (aina) ja `.claude/refresh.json` (jos olemassa eikä trackattu) ovat ignorattuja. Kun
+   rivit ovat jo olemassa → ei muutosta eikä likaista työpuuta. Trackattua `refresh.json`:ia
+   ei ignoroida. Pelkkä `.gitignore`-muutos ei laukaise PHASE 1:n STOP:ia seuraavalla ajolla.
