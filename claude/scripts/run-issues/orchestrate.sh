@@ -320,9 +320,16 @@ ISSUE_BODY=""
 ISSUE_COMMENTS=""
 # ISSUE_IMAGES holds the rendered {{ISSUE_IMAGES}} prompt block (a list of
 # locally downloaded image paths + a Read-tool instruction), or empty when the
-# issue references no images. Repopulated on every path that renders a prompt
-# (the download is idempotent/reuse), so it is never persisted to run.json.
+# issue references no images. Computed once per process (see
+# prepare_issue_images) and reused by both the cycle-review and implementer
+# renders, so it is never persisted to run.json.
 ISSUE_IMAGES=""
+# Once-per-process guard for prepare_issue_images: the start/continue paths call
+# it at S6 and again at S8, but a single process must download only once. A fresh
+# --continue/--restart/--resume process starts with this reset to 0, so it
+# re-downloads from the freshest issue.json (picking up a clarification reply's
+# new image).
+ISSUE_IMAGES_PREPARED=0
 RUN_ID=""
 RUN_DIR=""
 BRANCH=""
@@ -574,6 +581,12 @@ phase_a() {
 # is idempotent (reuses already-downloaded files), so the S6->S8 chain and the
 # --resume/--restart/--continue re-runs do not re-fetch.
 prepare_issue_images() {
+  # Once per process: S6 (cycle-review) and S8 (implementer) both call this, but
+  # the download must happen once. A separate --continue/--restart/--resume
+  # process has this reset, so it re-evaluates the freshest issue.json.
+  [ "$ISSUE_IMAGES_PREPARED" = "1" ] && return 0
+  ISSUE_IMAGES_PREPARED=1
+
   ISSUE_IMAGES=""
   local issue_json="$RUN_DIR/issue.json"
   [ -f "$issue_json" ] || return 0

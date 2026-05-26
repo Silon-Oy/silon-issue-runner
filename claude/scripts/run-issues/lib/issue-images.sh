@@ -165,22 +165,15 @@ _download_one() {
 # print the local paths of those that succeeded (one per line). Always returns 0
 # — a failed download never breaks the run (graceful degradation).
 #
-# Idempotent reuse: if <dest-dir> already holds image-* files (a prior call on
-# the S6->S8 path, or a --restart/--continue re-run), those are reused without
-# re-downloading. Filenames are deterministic (image-NN<ext>) given the stable,
-# deduped URL order from extract_image_urls.
+# Filenames are deterministic (image-NN<ext>) given the stable, deduped URL order
+# from extract_image_urls; a re-run overwrites them in place. The orchestrator's
+# prepare_issue_images guards against re-running within a single process (so the
+# S6->S8 chain downloads once); a separate --continue/--restart/--resume process
+# re-downloads from the freshest issue.json on purpose, so a clarification reply
+# that adds a new screenshot is picked up.
 download_issue_images() {
   local fixture="$1" dest="$2"
   local max="$RUN_ISSUES_MAX_IMAGES"
-
-  if [ -d "$dest" ]; then
-    local existing
-    existing=$(find "$dest" -maxdepth 1 -type f -name 'image-*' 2>/dev/null | sort)
-    if [ -n "$existing" ]; then
-      printf '%s\n' "$existing"
-      return 0
-    fi
-  fi
 
   local urls
   urls=$(extract_image_urls "$fixture")
