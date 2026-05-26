@@ -29,6 +29,8 @@ jos se on määritelty. Jos ei, noudata alla olevaa rakennetta suoraan.
 {{ISSUE_COMMENTS}}
 ```
 
+{{ISSUE_IMAGES}}
+
 ## Repo-konteksti
 
 Repo: `{{REPO_ROOT}}`

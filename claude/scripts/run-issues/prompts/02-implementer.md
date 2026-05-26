@@ -17,6 +17,8 @@ issuen Strategistin/Cycle Review:n hyväksymässä laajuudessa.
 {{ISSUE_BODY}}
 ```
 
+{{ISSUE_IMAGES}}
+
 ## Cycle Review -tulos
 
 ```
