@@ -15,8 +15,17 @@
 #                                        non-interactive behaviour toggles.
 #   PR_WATCH_ENABLE_CONFLICT_RESOLUTION  default 0 — OFF. When 1, a BEHIND/DIRTY
 #                                        PR is rebased in its feature worktree
-#                                        with mandatory CI revalidation. Any
-#                                        conflict aborts and asks a human.
+#                                        (never main) with mandatory CI
+#                                        revalidation. A conflict-free rebase
+#                                        proceeds directly; a conflicting rebase
+#                                        is handed to an AI agent that resolves
+#                                        the conflict IN THE WORKTREE. Either way
+#                                        CI must go green again before the merge.
+#                                        If the AI cannot resolve durably, or CI
+#                                        stays red, the rebase aborts and a human
+#                                        is asked (exit 6).
+#   PR_WATCH_CONFLICT_TIMEOUT            default 1800 — wall-clock budget (s) for
+#                                        the AI conflict-resolution claude call.
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
 #   PR_WATCH_LABELS_CSV                  optional scan filter (unused gate today;
 #                                        the merge label is the real gate).
@@ -30,7 +39,8 @@
 #   3  lock race lost (another watcher/orchestrator holds the issue)
 #   4  not mergeable yet (reporting; safe to retry next poll)
 #   5  merge failed
-#   6  conflict needs a human (rebase aborted, PR commented)
+#   6  conflict needs a human (AI could not resolve / CI red — rebase aborted or
+#      left for inspection, PR commented)
 #   7  post-merge migration failed
 
 set -euo pipefail
@@ -42,9 +52,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/pr-watch-lib.sh
 . "$SCRIPT_DIR/lib/pr-watch-lib.sh"
+# shellcheck source=lib/claude-call.sh
+. "$SCRIPT_DIR/lib/claude-call.sh"
 
 PR_WATCH_AUTO="${PR_WATCH_AUTO:-0}"
 PR_WATCH_ENABLE_CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-0}"
+PR_WATCH_CONFLICT_TIMEOUT="${PR_WATCH_CONFLICT_TIMEOUT:-1800}"
 PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
 PR_WATCH_LABELS_CSV="${PR_WATCH_LABELS_CSV:-}"
 
@@ -271,14 +284,19 @@ watch_one() {
 # ----- P5: Resolve --------------------------------------------------------
 # Conflict resolution is OFF by default (PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0),
 # in which case pr_decide never returns REBASE and this is unreachable. When ON
-# and the PR is BEHIND/DIRTY we attempt a CONFLICT-FREE rebase onto origin/main
-# in the PR's own feature worktree (never main), then force-push and require CI
-# to go green again before allowing the merge. There is NO AI conflict
-# resolution: any rebase conflict aborts, comments, and asks a human (exit 6).
+# and the PR is BEHIND/DIRTY we rebase onto the PR's base branch (origin/<baseRefName>) in its own feature
+# worktree (never main):
+#   - a CONFLICT-FREE rebase is published directly, then CI is revalidated;
+#   - a CONFLICTING rebase is handed to an AI agent (pr_resolve_conflict_ai)
+#     which resolves the conflict in the worktree and completes the rebase.
+# Either path force-pushes the rebased branch and REQUIRES CI to go green again
+# before the merge is allowed — CI is the safety gate that catches a wrong AI
+# resolution. If the AI cannot resolve durably, or CI stays red, the rebase is
+# aborted/left for inspection, the PR is commented, and a human is asked (exit 6).
 #
 # Returns: 0 rebased + CI green (caller proceeds to merge)
-#          6 conflict / CI not green after rebase (human needed)
-#          4 not actionable (no worktree, BLOCKED, etc.)
+#          6 conflict unresolved / CI not green after rebase (human needed)
+#          4 not actionable (no worktree, fetch failed, BLOCKED, etc.)
 pr_resolve() {
   local pr_num="$1" rid="$2" run_dir="$3" pr_json="$4"
 
@@ -304,35 +322,119 @@ pr_resolve() {
 
   log "rebasing PR #$pr_num branch '$branch' onto origin/$base_ref in worktree $worktree"
 
-  # All git operations run INSIDE the feature worktree, never on the base branch.
-  local base_sha
-  if ! (
-        cd "$worktree" || exit 99
-        git fetch origin "$base_ref" --quiet || exit 98
-        git rebase "origin/$base_ref"
-      ); then
-    # Rebase failed — abort to leave the worktree clean, then ask a human.
-    ( cd "$worktree" && git rebase --abort 2>/dev/null || true )
-    base_sha=$( cd "$worktree" && git rev-parse "origin/$base_ref" 2>/dev/null || echo "unknown" )
-
-    log "rebase conflict on PR #$pr_num — aborted; asking for human resolution"
-    [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
-      state_finalize "$run_dir" "pr_conflicted" "rebase_conflict_pr_$pr_num"
-      state_event "$run_dir" "pr_conflicted" "pr=$pr_num" "base_sha=$base_sha"
-    }
-    local body
-    body=$(printf '%s\n\n%s\n%s\n%s\n' \
-      "PR-valvoja yritti rebasea \`origin/$base_ref\` (sha \`$base_sha\`) päälle, mutta kohtasi konfliktin." \
-      "Rebase peruttiin (\`git rebase --abort\`), joten haara \`$branch\` on ennallaan." \
-      "Ratkaise konflikti manuaalisesti worktreessä \`$worktree\`, pushaa, ja merkkaa PR uudelleen." \
-      "PR-valvoja EI ratkaise konflikteja automaattisesti (lukittu päätös 2).")
-    ( cd "$REPO_ROOT" && printf '%s' "$body" | gh pr comment "$pr_num" --body-file - ) || \
-      log "failed to post conflict comment on PR #$pr_num"
-    return 6
+  # Fetch first so a network/auth failure is distinguishable from a conflict
+  # (transient — retry next poll, do not claim a conflict or comment).
+  if ! ( cd "$worktree" && git fetch origin "$base_ref" --quiet ); then
+    log "git fetch origin $base_ref failed for PR #$pr_num — retrying next poll"
+    [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+      state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
+    return 4
   fi
 
-  # Conflict-free rebase succeeded. Publish it and revalidate CI.
-  log "rebase clean — force-pushing $branch (--force-with-lease) and revalidating CI"
+  # Attempt the rebase INSIDE the feature worktree, never on the base branch.
+  local rebase_rc=0
+  ( cd "$worktree" && git rebase "origin/$base_ref" ) || rebase_rc=$?
+
+  if [ "$rebase_rc" -eq 0 ]; then
+    # Conflict-free rebase. Publish it and revalidate CI.
+    _pr_publish_and_revalidate "$pr_num" "$rid" "$run_dir" "$worktree" "$branch" "$base_ref"
+    return $?
+  fi
+
+  # Conflict. Hand it to the AI agent to resolve in the worktree.
+  log "rebase conflict on PR #$pr_num — attempting AI conflict resolution in $worktree"
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+    state_event "$run_dir" "pr_conflict_resolution_started" "pr=$pr_num"
+
+  if pr_resolve_conflict_ai "$pr_num" "$rid" "$run_dir" "$worktree" "$branch" "$base_ref"; then
+    log "AI resolved conflicts for PR #$pr_num — rebase complete, publishing + revalidating CI"
+    [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+      state_event "$run_dir" "pr_conflict_resolved" "pr=$pr_num"
+    _pr_publish_and_revalidate "$pr_num" "$rid" "$run_dir" "$worktree" "$branch" "$base_ref"
+    return $?
+  fi
+
+  # AI could not produce a clean, completed rebase — abort and ask a human.
+  _pr_abort_to_human "$pr_num" "$rid" "$run_dir" "$worktree" "$branch" "$base_ref"
+  return 6
+}
+
+# pr_resolve_conflict_ai <pr-number> <run-id> <run-dir> <worktree> <branch>
+# Invokes the AI agent to resolve an in-progress rebase conflict in the feature
+# worktree and complete the rebase. The agent runs with the worktree as CWD.
+# Returns 0 only if the worktree ends in a clean, completed-rebase state
+# (verified independently of the agent's self-report); non-zero otherwise.
+pr_resolve_conflict_ai() {
+  local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="${6:-main}"
+
+  local base_sha conflict_files
+  base_sha=$( cd "$worktree" && git rev-parse --short "origin/$base_ref" 2>/dev/null || echo "unknown" )
+  conflict_files=$( cd "$worktree" && git diff --name-only --diff-filter=U 2>/dev/null )
+  [ -n "$conflict_files" ] || conflict_files="(ei listattavissa — tarkista \`git status\`)"
+
+  # The .out/.exit files live in the run-dir when available, else a scratch dir.
+  local ai_out_dir="$run_dir"
+  if [ -z "$ai_out_dir" ] || [ ! -d "$ai_out_dir" ]; then
+    ai_out_dir=$(mktemp -d -t pr-watch-conflict.XXXXXX)
+  fi
+
+  local prompt_file="$ai_out_dir/04-conflict-resolution.prompt"
+  render_prompt "$SCRIPT_DIR/prompts/04-conflict-resolution.md" "$prompt_file" \
+    PR_NUMBER="$pr_num" \
+    BRANCH="$branch" \
+    BASE_REF="$base_ref" \
+    BASE_SHA="$base_sha" \
+    CONFLICT_FILES="$conflict_files"
+
+  # Run the agent with the worktree as CWD (it edits files + drives git there)
+  # and a dedicated wall-clock budget so a wedged resolution can't hang the
+  # watcher. We do NOT trust the agent's exit code or self-report — the
+  # worktree state below is the source of truth.
+  local crc=0
+  (
+    cd "$worktree" || exit 99
+    RUN_ISSUES_CLAUDE_TIMEOUT="$PR_WATCH_CONFLICT_TIMEOUT" \
+      call_claude "$ai_out_dir" "04-conflict-resolution" "$prompt_file"
+  ) || crc=$?
+  log "AI conflict-resolution call for PR #$pr_num returned rc=$crc"
+
+  if _conflict_resolution_clean "$worktree" "$base_ref"; then
+    return 0
+  fi
+  log "AI conflict resolution did not leave a clean, completed rebase for PR #$pr_num"
+  return 1
+}
+
+# _conflict_resolution_clean <worktree> [base-ref] — 0 iff the worktree is in a
+# clean, fully-rebased state: no rebase in progress, no unmerged paths, a clean
+# working tree, and HEAD descends from origin/<base-ref> (the rebase landed).
+_conflict_resolution_clean() {
+  local wt="$1" base_ref="${2:-main}"
+  (
+    cd "$wt" || exit 1
+    local rebase_merge rebase_apply
+    rebase_merge=$(git rev-parse --git-path rebase-merge 2>/dev/null || echo "")
+    rebase_apply=$(git rev-parse --git-path rebase-apply 2>/dev/null || echo "")
+    [ -n "$rebase_merge" ] && [ -d "$rebase_merge" ] && exit 1
+    [ -n "$rebase_apply" ] && [ -d "$rebase_apply" ] && exit 1
+    # Any unmerged path (UU/AA/DD/AU/UA/DU/UD) means conflicts remain.
+    git diff --name-only --diff-filter=U 2>/dev/null | grep -q . && exit 1
+    # Working tree + index must be clean (rebase committed everything).
+    git status --porcelain 2>/dev/null | grep -q . && exit 1
+    # HEAD must descend from origin/<base-ref>, i.e. the rebase landed on the new base.
+    git merge-base --is-ancestor "origin/$base_ref" HEAD || exit 1
+    exit 0
+  )
+}
+
+# _pr_publish_and_revalidate <pr-number> <run-id> <run-dir> <worktree> <branch> [base-ref]
+# Force-pushes the rebased branch and revalidates CI. Shared by the clean-rebase
+# and AI-resolved paths so the CI gate is identical on both.
+# Returns 0 (CI green, caller proceeds to merge) or 6 (push failed / CI red).
+_pr_publish_and_revalidate() {
+  local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="${6:-main}"
+
+  log "rebase landed — force-pushing $branch (--force-with-lease) and revalidating CI"
   if ! ( cd "$worktree" && git push --force-with-lease origin "$branch" ); then
     log "force-push failed for PR #$pr_num after rebase"
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
@@ -347,9 +449,44 @@ pr_resolve() {
     return 0
   fi
   log "CI not green after rebase for PR #$pr_num — stopping (human needed)"
-  [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
+    state_finalize "$run_dir" "pr_conflicted" "ci_red_after_resolution_pr_$pr_num"
     state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=ci_not_green_after_rebase"
+  }
+  local body
+  body=$(printf '%s\n\n%s\n%s\n' \
+    "PR-valvoja rebasesi haaran \`$branch\` \`origin/$base_ref\`:n päälle (konfliktit ratkaistiin AI:lla, jos niitä oli), mutta **CI ei vihreytynyt** uudelleenajossa." \
+    "Haara on pushattu rebasetussa tilassa — tarkista CI-lokit ja ratkaisun oikeellisuus worktreessä \`$worktree\`." \
+    "PR:ää **ei mergetty**. Korjaa ja merkkaa PR uudelleen, tai aja valvoja uudelleen.")
+  ( cd "$REPO_ROOT" && printf '%s' "$body" | gh pr comment "$pr_num" --body-file - ) || \
+    log "failed to post ci-red comment on PR #$pr_num"
   return 6
+}
+
+# _pr_abort_to_human <pr-number> <run-id> <run-dir> <worktree> <branch> [base-ref]
+# Aborts any in-progress rebase to leave the branch unchanged, records the
+# conflicted state, and comments the PR asking for human resolution. Used when
+# the AI agent could not produce a clean, completed rebase.
+_pr_abort_to_human() {
+  local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="${6:-main}"
+
+  ( cd "$worktree" && git rebase --abort 2>/dev/null || true )
+  local base_sha
+  base_sha=$( cd "$worktree" && git rev-parse "origin/$base_ref" 2>/dev/null || echo "unknown" )
+
+  log "AI could not resolve conflict on PR #$pr_num — rebase aborted; asking for human resolution"
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
+    state_finalize "$run_dir" "pr_conflicted" "rebase_conflict_pr_$pr_num"
+    state_event "$run_dir" "pr_conflicted" "pr=$pr_num" "base_sha=$base_sha"
+  }
+  local body
+  body=$(printf '%s\n\n%s\n%s\n%s\n' \
+    "PR-valvoja yritti rebasea \`origin/$base_ref\` (sha \`$base_sha\`) päälle ja ratkaista konfliktin AI-agentilla, mutta kestävää ratkaisua ei syntynyt." \
+    "Rebase peruttiin (\`git rebase --abort\`), joten haara \`$branch\` on ennallaan." \
+    "Ratkaise konflikti manuaalisesti worktreessä \`$worktree\`, pushaa, ja merkkaa PR uudelleen." \
+    "(AI-konfliktinratkaisu on päällä \`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1\` — tämä konflikti vaati ihmisen.)")
+  ( cd "$REPO_ROOT" && printf '%s' "$body" | gh pr comment "$pr_num" --body-file - ) || \
+    log "failed to post conflict comment on PR #$pr_num"
 }
 
 # pr_wait_ci_green <pr-number> — poll `gh pr checks` until all checks pass,

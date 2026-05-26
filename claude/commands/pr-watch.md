@@ -39,15 +39,18 @@ echo "PR_WATCH_EXIT=$RC"
 | 3 | Lock race hävitty | Joku toinen ajo omistaa issuen. Lopeta hiljaa. |
 | 4 | Ei vielä mergettävissä (label puuttuu, CI kesken/punainen, dirty res OFF) | Raportoiva — kerro miksi (lue `state.jsonl` viimeinen `pr_classified`/`pr_watch_skipped`). |
 | 5 | Merge epäonnistui | Tulosta `gh pr merge`-virhe. |
-| 6 | Konflikti — ihminen tarvitaan | PR:ään on jätetty kommentti; rebase on abortattu. Ohjaa maintainer ratkaisemaan. |
+| 6 | Konflikti — ihminen tarvitaan | AI ei kyennyt ratkaisemaan konfliktia kestävästi tai CI jäi punaiseksi rebasen jälkeen. PR:ään on jätetty kommentti; rebase on abortattu (haara ennallaan) tai jätetty tarkasteltavaksi. PR:ää ei mergetty. Ohjaa maintainer ratkaisemaan. |
 | 7 | Post-merge-migraatio epäonnistui | PR on jo mergetty mainiin; migraatio kaatui. Tutki `.claude/post-merge-migrate.sh`-loki. |
 | 1 | Käyttövirhe | Tulosta usage. |
 
 ## Huomioita
 
 - **Conflict-resolution on OFF oletuksena** (`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0`).
-  Päällä (`=1`) valvoja yrittää konfliktittoman rebasen feature-worktreessä +
-  pakollisen CI-revalidoinnin. Mikä tahansa konflikti → abort + PR-kommentti + RC 6.
+  Päällä (`=1`) valvoja rebasetaa feature-worktreessä: konfliktiton rebase pushataan
+  suoraan, konfliktillinen annetaan AI-agentille joka ratkaisee sen worktreessä ja
+  vie rebasen loppuun. Kummallakin polulla **pakollinen CI-revalidointi** ennen mergeä.
+  Jos AI ei kykene tai CI jää punaiseksi → abort + PR-kommentti + RC 6 (ei mergeä).
+  AI-kutsun aikabudjetti: `PR_WATCH_CONFLICT_TIMEOUT` (oletus 1800 s).
 - **Merge-label** on `auto-merge` oletuksena (`PR_WATCH_MERGE_LABEL`).
 - **Cross-machine:** valvoja siivoaa vain sen koneen ajot, jolla ajo alkoi
   (`run.json.host`). Toisen koneen PR mergetään, mutta siivous jätetään tekemättä

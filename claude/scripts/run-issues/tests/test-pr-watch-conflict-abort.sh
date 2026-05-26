@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# test-pr-watch-conflict-abort.sh — P5 rebase conflict path.
+# test-pr-watch-conflict-abort.sh — P5 AI conflict resolution FAILURE path.
 #
 # Builds a real local git repo where the feature branch and main diverge on
 # the same line, so `git rebase origin/main` conflicts. With conflict
-# resolution ON, pr-watch must: abort the rebase, leave the worktree clean,
-# record status=pr_conflicted, comment the PR (mocked gh), and exit 6.
+# resolution ON, pr-watch hands the conflict to the AI agent (mocked claude).
+# Here the agent FAILS to resolve — it leaves the rebase in progress. pr-watch
+# must then: abort the rebase, leave the worktree clean, record
+# status=pr_conflicted, comment the PR (mocked gh), and exit 6.
 #
 # `gh` is mocked: pr view reports a labelled BEHIND PR (=> REBASE decision);
-# pr comment just records that it was called.
+# pr comment just records that it was called. `claude` is mocked via
+# RUN_ISSUES_CLAUDE_CMD to a script that does NOT resolve the conflict.
 #
 # Run: bash tests/test-pr-watch-conflict-abort.sh
 
@@ -70,6 +73,17 @@ esac
 SH
 chmod +x "$BIN/gh"
 
+# --- claude mock that CANNOT resolve (leaves the rebase in progress) -----
+CLAUDE_MOCK="$WORK/bin/claude-mock"
+cat > "$CLAUDE_MOCK" <<'SH'
+#!/usr/bin/env bash
+# Pretend the agent gave up: do not touch the conflicted files, do not
+# continue the rebase. The watcher must detect the unclean state and abort.
+echo "CONFLICT_RESOLUTION_RESULT: UNRESOLVED — mock cannot resolve"
+exit 0
+SH
+chmod +x "$CLAUDE_MOCK"
+
 # --- completed run.json pointing at the feature worktree -----------------
 RID="20260521-1300-issue-88"
 RD="$REPO/.claude/run-issues/$RID"
@@ -84,6 +98,8 @@ state_finalize "$RD" "completed"
 export PATH="$BIN:$PATH"
 export RUN_ISSUES_LOCK_ROOT="$WORK/locks"
 export PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1
+export RUN_ISSUES_CLAUDE_CMD="$CLAUDE_MOCK"
+export PR_WATCH_CONFLICT_TIMEOUT=30
 
 set +e
 OUT=$( "$PRWATCH" "$REPO" 888 2>&1 )
@@ -94,7 +110,6 @@ echo "--- pr-watch output ---"; echo "$OUT"; echo "--- (rc=$RC) ---"
 FAIL=0
 [ "$RC" = "6" ] || { echo "FAIL expected rc 6, got $RC"; FAIL=1; }
 # Worktree must be clean (no rebase in progress, no merge markers).
-if [ -d "$WT/.git" ] || git -C "$REPO" -C "$WT" rev-parse --git-dir >/dev/null 2>&1; then :; fi
 if ( cd "$WT" && git status --porcelain | grep -q '^UU' ); then
   echo "FAIL worktree still has conflict markers (abort failed)"; FAIL=1
 else
@@ -105,8 +120,15 @@ if ( cd "$WT" && test -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" 
 else
   echo "PASS no rebase in progress"
 fi
+# Branch must be unchanged (still the original feature commit, base unchanged).
+if ( cd "$WT" && git merge-base --is-ancestor origin/main HEAD ); then
+  echo "FAIL branch was rebased despite unresolved conflict (base moved)"; FAIL=1
+else
+  echo "PASS branch left untouched (rebase aborted)"
+fi
 [ "$(jq -r '.status' "$RD/run.json")" = "pr_conflicted" ] || { echo "FAIL status not pr_conflicted"; FAIL=1; }
 grep -q '"event":"pr_conflicted"' "$RD/state.jsonl" || { echo "FAIL no pr_conflicted event"; FAIL=1; }
+grep -q '"event":"pr_conflict_resolution_started"' "$RD/state.jsonl" || { echo "FAIL no pr_conflict_resolution_started event"; FAIL=1; }
 [ -f "$COMMENT_FLAG" ] || { echo "FAIL gh pr comment was not called"; FAIL=1; }
 
 echo "----------------------------------------"
