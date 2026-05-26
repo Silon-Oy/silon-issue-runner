@@ -45,7 +45,8 @@ echo "PR_WATCH_EXIT=$RC"
 
 ## Huomioita
 
-- **Conflict-resolution on OFF oletuksena** (`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0`).
+- **Conflict-resolution on `pr-watch.sh`:ssä OFF oletuksena** (`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0`)
+  manuaali-/interaktiiviajossa — **Studion poller kytkee sen `=1` kaikille watchlist-repoille** (ks. Auto-tila alla).
   Päällä (`=1`) valvoja rebasetaa feature-worktreessä: konfliktiton rebase pushataan
   suoraan, konfliktillinen annetaan AI-agentille joka ratkaisee sen worktreessä ja
   vie rebasen loppuun. Kummallakin polulla **pakollinen CI-revalidointi** ennen mergeä.
@@ -57,3 +58,6 @@ echo "PR_WATCH_EXIT=$RC"
   ja tulostetaan `ssh`-ohje.
 - **Auto-tila (Studion poller)** ajaa `pr-watch.sh ... scan` 5 min välein
   `com.maintainer.pr-watch-poller` -LaunchAgentista. Slash-komentoa ei silloin tarvita.
+  Poller kytkee **AI-konfliktinratkaisun päälle** (`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1`)
+  kaikille watchlist-repoille, jotta auto-merge etenee rebase-konfliktin läpi ilman ihmistä.
+  Override: exportaa `0` pollerin ympäristöön.
