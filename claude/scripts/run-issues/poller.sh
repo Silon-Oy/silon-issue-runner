@@ -45,6 +45,15 @@ THIS_HOST=$(hostname -s)
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
 RUN_ISSUES_MAX_CLARIFICATIONS="${RUN_ISSUES_MAX_CLARIFICATIONS:-3}"
 RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
+# Liveness threshold for scan_stalled: if state.jsonl's last event timestamp
+# (or run.json.started_at as fallback) is older than this, the run is treated
+# as stalled — its tmux session is killed and the run finalized as
+# blocked/stalled_in_<current_state>. The bound MUST exceed the longest
+# legitimate single-phase claude call so a slow-but-progressing run is not
+# killed mid-flight; the default 3600s aligns with claude-call.sh's own
+# timeout (after which it finalizes via finalize_timeout and writes an event,
+# resetting the staleness clock).
+RUN_ISSUES_STALE_AFTER="${RUN_ISSUES_STALE_AFTER:-3600}"
 AUTO_CLEAN="${DOTFILES}/claude/scripts/run-issues/auto-clean.sh"
 
 # parse_marker / detect_answer / fetch_issue_json live in lib/issue.sh; the
@@ -53,6 +62,177 @@ AUTO_CLEAN="${DOTFILES}/claude/scripts/run-issues/auto-clean.sh"
 LIB_ISSUE="${DOTFILES}/claude/scripts/run-issues/lib/issue.sh"
 # shellcheck source=lib/issue.sh
 [ -f "$LIB_ISSUE" ] && . "$LIB_ISSUE"
+
+# state_finalize / state_event are sourced from lib/state.sh — finalize_stalled
+# writes run.json + state.jsonl directly (the orchestrator process is dead by
+# the time we tap the session, so there is no other code path to delegate to).
+# Pure functions, no top-level work, safe to source.
+LIB_STATE="${DOTFILES}/claude/scripts/run-issues/lib/state.sh"
+# shellcheck source=lib/state.sh
+[ -f "$LIB_STATE" ] && . "$LIB_STATE"
+
+# _iso_to_epoch <iso-utc-ts> — convert an ISO-8601 Zulu timestamp (the format
+# state.sh writes: YYYY-MM-DDTHH:MM:SSZ) to Unix epoch seconds. Empty string on
+# parse failure (callers treat this as "can't compare, leave it alone"). macOS
+# `date -j -f` parses + emits; GNU `date -d` is the Linux fallback for the
+# Studio CI shell (the Studio itself runs Darwin, but the tests run on either).
+_iso_to_epoch() {
+  local ts="$1"
+  [ -n "$ts" ] || { printf ''; return 0; }
+  date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" "+%s" 2>/dev/null \
+    || date -u -d "$ts" "+%s" 2>/dev/null \
+    || printf ''
+}
+
+# scan_stalled <repo-path> — prints "<issue-number> <run-dir>" lines for runs
+# on THIS host whose structural progress has stopped advancing for more than
+# RUN_ISSUES_STALE_AFTER seconds. "Structural progress" = state.jsonl's last
+# event timestamp; falls back to run.json.started_at when state.jsonl is empty
+# (so a run that crashed before its first event is still detectable).
+#
+# Only the in-progress (status=initialized) runs are stallable. Terminal
+# statuses are already finalized; awaiting_review and awaiting_clarification
+# wait for documented human action by contract and must NOT be killed under the
+# human's feet. Host-gated (same convention as scan_timed_out/scan_answered/
+# scan_clean) — a foreign machine's live session is never touched. Pure: no
+# tmux kill, no gh call — just selection. The caller (finalize_stalled) does
+# the side effects under its own log line.
+scan_stalled() {
+  local repo_path="$1"
+  local runs_dir="$repo_path/.claude/run-issues"
+  [ -d "$runs_dir" ] || return 0
+  local now stale_after rj status host inum rd jsonl last_ts last_epoch age
+  now=$(date -u +%s)
+  stale_after="${RUN_ISSUES_STALE_AFTER:-3600}"
+  shopt -s nullglob
+  for rj in "$runs_dir"/*/run.json; do
+    # jq's `// "initialized"` default treats a stray null/missing as in-progress
+    # — defensive, but only the explicit initialized case proceeds (everything
+    # else falls into the catch-all skip).
+    status=$(jq -r '.status // "initialized"' "$rj" 2>/dev/null || echo "")
+    case "$status" in
+      initialized) ;;
+      *) continue ;;
+    esac
+    host=$(jq -r '.host // ""' "$rj" 2>/dev/null || echo "")
+    # Empty host = pre-host-field run.json; treat as local (best effort).
+    if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
+      continue
+    fi
+    rd=$(dirname "$rj")
+    jsonl="$rd/state.jsonl"
+    # Prefer the last state.jsonl event ts (structural progress). Empty file ->
+    # fall back to run.json.started_at so a crash-on-init run is still caught.
+    last_ts=""
+    if [ -s "$jsonl" ]; then
+      last_ts=$(tail -n 1 "$jsonl" 2>/dev/null | jq -r '.ts // empty' 2>/dev/null || echo "")
+    fi
+    [ -n "$last_ts" ] || last_ts=$(jq -r '.started_at // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$last_ts" ] || continue   # nothing comparable — leave it alone
+    last_epoch=$(_iso_to_epoch "$last_ts")
+    [ -n "$last_epoch" ] || continue
+    age=$(( now - last_epoch ))
+    [ "$age" -gt "$stale_after" ] || continue
+    inum=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$inum" ] && printf '%s %s\n' "$inum" "$rd"
+  done
+  # Return 0 regardless: callers capture this in a command substitution under
+  # `set -e`, where a trailing-false branch would otherwise abort the caller.
+  return 0
+}
+
+# finalize_stalled <issue-number> <run-dir> — terminate a stalled run:
+#   1. Kill any matching tmux session (run-issues-<N> / run-issues-restart-<N>
+#      / run-issues-continue-<N>) so it stops consuming GLOBAL_MAX.
+#   2. Finalize run.json as blocked/stalled_in_<current_state> via
+#      state_finalize (lib/state.sh).
+#   3. Best-effort: post a Finnish situation comment to the issue, add the
+#      needs-human label, release the per-issue advisory lock.
+#
+# All gh calls are `|| true` — a GitHub hiccup must never wedge the poller's
+# main loop. The lock teardown matches lib/locking.sh's path convention
+# (RUN_ISSUES_LOCK_ROOT/issue-<N>.lock) and is idempotent.
+#
+# After finalization the run carries terminal status=blocked + label
+# needs-human, so subsequent scan_timed_out/scan_answered/scan_stalled passes
+# will NOT re-pick it (terminal status), and the issue's needs-human label
+# blocks pick_oldest_unassigned from re-claiming it as new work.
+finalize_stalled() {
+  local issue="$1" run_dir="$2"
+  local rj="$run_dir/run.json"
+  [ -f "$rj" ] || return 0
+
+  local current_state repo host_in_run
+  current_state=$(jq -r '.current_state // "unknown"' "$rj" 2>/dev/null || echo "unknown")
+  repo=$(jq -r '.repo // empty' "$rj" 2>/dev/null || echo "")
+  host_in_run=$(jq -r '.host // empty' "$rj" 2>/dev/null || echo "")
+  # Defense in depth: scan_stalled host-gates, but a misalignment between
+  # caller and helper would otherwise let us tap a foreign session.
+  if [ -n "$host_in_run" ] && [ "$host_in_run" != "$THIS_HOST" ]; then
+    echo "$(date -u +%FT%TZ) poller: finalize_stalled refusing foreign host run (host=$host_in_run, this=$THIS_HOST)" >> "$LOG"
+    return 0
+  fi
+  local reason="stalled_in_${current_state}"
+
+  echo "$(date -u +%FT%TZ) poller: STALLED issue=#${issue} state=${current_state} run_dir=${run_dir} — killing tmux sessions and finalizing blocked/${reason}" >> "$LOG"
+
+  # Kill any tmux session for this issue. There is exactly one orchestrator per
+  # issue (the per-issue lock guarantees it), but it could carry any of three
+  # prefixes depending on how it was launched. Iterate all three defensively.
+  local sess
+  for sess in "run-issues-${issue}" "run-issues-restart-${issue}" "run-issues-continue-${issue}"; do
+    if tmux has-session -t "$sess" 2>/dev/null; then
+      echo "$(date -u +%FT%TZ) poller: killing stalled tmux session $sess" >> "$LOG"
+      tmux kill-session -t "$sess" 2>/dev/null || true
+    fi
+  done
+
+  # Finalize state. The orchestrator process is dead (or never had a chance to
+  # write a terminal status), so we own the run.json transition here.
+  state_finalize "$run_dir" "blocked" "$reason"
+  state_event "$run_dir" "stalled_finalized" \
+    "current_state=$current_state" \
+    "host=$THIS_HOST" \
+    "stale_after=${RUN_ISSUES_STALE_AFTER:-3600}"
+
+  # Best-effort label + comment via gh. We change into the repo (from run.json)
+  # so gh resolves the right repo even from the poller's cwd.
+  if [ -n "$repo" ]; then
+    ( cd "$repo" && gh label create needs-human --color B60205 \
+        --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
+    ( cd "$repo" && gh issue edit "$issue" --add-label needs-human >/dev/null 2>&1 ) || true
+
+    # Write the comment body to a temp file (heredoc inside $(...) has fragile
+    # parser interactions with bash's case-statement-aware tokenizer; the temp
+    # file is simpler and verifiable). The comment intentionally mirrors
+    # _post_situation_to_issue's headline + meta-list shape so an maintainer
+    # scanning issues sees the same skeleton across all hand-off paths.
+    local stale_after_log body_file
+    stale_after_log="${RUN_ISSUES_STALE_AFTER:-3600}"
+    body_file=$(mktemp -t poller-stalled-body.XXXXXX)
+    {
+      echo "## /run-issues — Ajo jumitettu vaiheessa \`${current_state}\`"
+      echo
+      echo "- Issue: #${issue}"
+      echo "- Status/syy: \`${reason}\`"
+      echo "- Host: \`${THIS_HOST}\`"
+      echo "- Run-dir: \`${run_dir}\`"
+      echo
+      echo "Pollerin liveness-tarkistus havaitsi että rakenteinen etenemistila (\`state.jsonl\`-aikaleima) ei ole liikahtanut yli ${stale_after_log}s. Tmux-sessio tapettiin ja ajo viimeisteltiin \`blocked\`-tilaan, jotta yksittäinen jumi-ajo ei tukkisi \`GLOBAL_MAX\`-kapasiteettia loputtomiin (issue #49)."
+      echo
+      echo "Siivoa ajo Studiolla: \`ssh studio '~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes'\` ja aja issue tarvittaessa uudelleen."
+    } > "$body_file"
+    ( cd "$repo" && gh issue comment "$issue" --body-file "$body_file" >/dev/null 2>&1 ) || true
+    rm -f "$body_file"
+  fi
+
+  # Release the per-issue advisory lock (its owner is dead). Same path shape as
+  # lib/locking.sh; idempotent — a missing lock is fine.
+  local lock_root="${RUN_ISSUES_LOCK_ROOT:-${HOME}/Library/Application Support/run-issues/locks}"
+  rm -rf "${lock_root}/issue-${issue}.lock" 2>/dev/null || true
+
+  return 0
+}
 
 # scan_timed_out <repo-path> — prints "<issue-number> <run-dir>" lines for
 # timed_out runs on THIS host that still have retry budget. Modelled on
@@ -181,6 +361,28 @@ scan_clean() {
   # `set -e`, where a trailing-false branch would otherwise abort the caller.
   return 0
 }
+
+# ----- Pre-loop liveness sweep (across ALL watchlist repos) ----------------
+# A wedged orchestrator can keep its tmux session alive forever (issue #49: a
+# composer install hanging in S7b held a GLOBAL_MAX slot for 48+ hours and
+# blocked the whole factory). This sweep walks the watchlist, kills the tmux
+# session of every stalled run on THIS host, and finalizes it as
+# blocked/stalled_in_<state> — BEFORE the ACTIVE-cap check below measures
+# capacity. Without this, a single jammed repo could starve every other repo
+# even with the cap check working as designed. finalize_stalled is best-effort
+# and host-gated (defense in depth on top of scan_stalled's own gate). Empty
+# REPO_PATH and missing .git get skipped silently (same guard as the main
+# loop). Walking the same watchlist twice is cheap — scan_stalled does no
+# network work, only filesystem reads.
+while IFS= read -r stalled_repo_json; do
+  [ -n "$stalled_repo_json" ] || continue
+  STALLED_REPO_PATH=$(jq -r '.path // empty' <<<"$stalled_repo_json")
+  [ -n "$STALLED_REPO_PATH" ] && [ -d "$STALLED_REPO_PATH/.git" ] || continue
+  while IFS= read -r stalled_line; do
+    [ -n "$stalled_line" ] || continue
+    finalize_stalled "${stalled_line%% *}" "${stalled_line#* }" || true
+  done < <(scan_stalled "$STALLED_REPO_PATH")
+done < <(jq -c '.repos[]?' "$WATCHLIST")
 
 # Count currently active run-issues tmux sessions to respect the cap.
 # The `|| ACTIVE=0` fallback lives OUTSIDE the command substitution on purpose:
