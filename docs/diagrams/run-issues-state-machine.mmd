@@ -59,8 +59,16 @@ stateDiagram-v2
     %% that reaches phase_b (start, --resume, --restart, --continue) this is the
     %% single chokepoint before S8. Secrets come from a machine-local, gitignored
     %% env file (~/.config/run-issues/env) sourced at startup — never the repo.
+    %%
+    %% Each install (composer/pnpm/yarn/npm) is wrapped in
+    %%   timeout --kill-after=60 ${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT:-1200}
+    %% so a hung install (issue #49: composer install stuck 48+h) cannot wedge
+    %% the whole factory. rc=124 finalizes blocked/env_bootstrap_timeout —
+    %% distinct from the rc!=0 env_bootstrap_failed reason so diagnosis stays
+    %% separable in logs/issue comments.
     S7b_EnvBootstrap --> S7c_ProvisionTestEnv: install OK or no package.json
     S7b_EnvBootstrap --> [*]: install failed → blocked/env_bootstrap_failed + needs-human (rc=5)
+    S7b_EnvBootstrap --> [*]: install timed out (rc=124) → blocked/env_bootstrap_timeout + needs-human (rc=5)
 
     %% ----- S7c: opt-in per-run test-env provisioning hook -----
     %% Runs the target repo's <worktree>/.claude/provision-test-env.sh
@@ -102,6 +110,28 @@ stateDiagram-v2
     S_RestartLoad --> S7b_EnvBootstrap: worktree OK, retry incremented, timeout ramped
     S_RestartLoad --> [*]: worktree corrupt → needs-human (rc=0)
     S_RestartLoad --> [*]: lock held by other run (rc=3)
+
+    %% ----- Poller liveness sweep (issue #49) -----
+    %% scan_stalled (poller.sh) detects an in-progress run whose state.jsonl's
+    %% last event ts is older than RUN_ISSUES_STALE_AFTER (default 3600s). The
+    %% threshold MUST exceed the longest legitimate single-phase claude call so
+    %% a slow-but-progressing run is not killed mid-flight. finalize_stalled
+    %% kills the tmux session (run-issues-<N> / run-issues-restart-<N> /
+    %% run-issues-continue-<N>), finalizes blocked/stalled_in_<current_state>,
+    %% adds needs-human, posts a situation comment, releases the advisory lock.
+    %% awaiting_review and awaiting_clarification are NEVER stalled (documented
+    %% human-wait contract). The sweep runs BEFORE the ACTIVE-cap check so a
+    %% fully wedged GLOBAL_MAX (issue #49 root cause) can never short-circuit
+    %% the cleanup. Host-gated like every other poller scan.
+    %% Generic incoming arrow from any in-progress phase (S4..S9):
+    S_StalledByPoller: poller scan_stalled detected stalled (no event for RUN_ISSUES_STALE_AFTER s)
+    S4_Worktree --> S_StalledByPoller: state.jsonl stalled (host-gated)
+    S5_DBClone --> S_StalledByPoller: state.jsonl stalled (host-gated)
+    S6_CycleReview --> S_StalledByPoller: state.jsonl stalled (host-gated)
+    S7b_EnvBootstrap --> S_StalledByPoller: state.jsonl stalled (host-gated)
+    S7c_ProvisionTestEnv --> S_StalledByPoller: state.jsonl stalled (host-gated)
+    S8_Implementer --> S_StalledByPoller: state.jsonl stalled (host-gated)
+    S_StalledByPoller --> [*]: kill tmux + blocked/stalled_in_<state> + needs-human (rc=0, poller-side)
 
     %% ----- Clarification answer-and-continue loop -----
     %% NEEDS_CLARIFICATION parks the run as status=awaiting_clarification (rc=11):
