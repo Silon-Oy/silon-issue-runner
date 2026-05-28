@@ -44,8 +44,8 @@
 #   3   lock/claim race lost
 #   4   cycle review blocked the run (auto mode only)
 #   5   blocked before/at the implementer — db-clone failed, env bootstrap
-#       (S7b dependency install) failed, the test-env provisioning hook (S7c)
-#       failed, or implementer returned BLOCKED
+#       (S7b dependency install) failed or timed out, the test-env provisioning
+#       hook (S7c) failed, or implementer returned BLOCKED
 #   6   PR open failed
 #   7   implementer (S8) timed out — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
@@ -1252,28 +1252,72 @@ run_env_bootstrap() {
   fi
 }
 
+# Wall-clock budget per env-bootstrap install (composer/pnpm/yarn/npm). A
+# network/lock/auth hiccup used to hang the install forever and burn the whole
+# implementer timeout budget silently (issue #49). With this budget the
+# fail-fast gate actually fires: rc=124 -> env_bootstrap_timeout (distinct from
+# rc!=0 env_bootstrap_failed so diagnosis stays separable in logs/issue
+# comments). 1200s = 20 min is generous for cold pnpm/composer installs on a
+# slow network but won't let a stuck process wedge the whole factory.
+RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT="${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT:-1200}"
+
+# _resolve_env_bootstrap_timeout — same shape as claude-call.sh's
+# _resolve_timeout. Prints the `timeout --kill-after=60 N` prefix, or empty if
+# neither timeout nor gtimeout is available (then the install runs unbounded,
+# which is the pre-fix behaviour — we WARN once to make the gap visible).
+_resolve_env_bootstrap_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    printf 'timeout --kill-after=60 %s' "$RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    printf 'gtimeout --kill-after=60 %s' "$RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT"
+  else
+    printf ''
+  fi
+}
+
 # _run_env_install <manager> <log-path> — run the dependency install for one
 # ecosystem (composer | pnpm | yarn | npm), capturing all output to <log-path>.
 # Shared by every branch of run_env_bootstrap so composer and JS get identical
-# fail-fast semantics. On rc != 0: finalize blocked / env_bootstrap_failed,
-# attach needs-human, post the install log to the issue, and exit 5 (no
-# implementer budget spent). On success: emit env_bootstrap_ok and return.
-# A missing manager binary surfaces as rc=127 here -> the same blocked path.
+# fail-fast semantics. Wrapped in timeout(1) with --kill-after=60 (same shape
+# as claude-call.sh) so a hung install can't wedge the run forever.
+#   rc == 0   -> emit env_bootstrap_ok and return.
+#   rc == 124 -> finalize blocked / env_bootstrap_timeout, post the install log,
+#                attach needs-human, exit 5 (no implementer budget spent).
+#   rc != 0,124 -> finalize blocked / env_bootstrap_failed (same path; missing
+#                  manager binary lands here as rc=127).
 _run_env_install() {
   local manager="$1" boot_log="$2"
-  log "env-bootstrap: detected $manager — installing dependencies"
+  log "env-bootstrap: detected $manager — installing dependencies (timeout=${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT}s)"
+
+  local timeout_prefix
+  timeout_prefix=$(_resolve_env_bootstrap_timeout)
+  [ -n "$timeout_prefix" ] \
+    || log "WARNING: no timeout binary available (timeout/gtimeout) — env-bootstrap '$manager install' will run unbounded (install coreutils: brew install coreutils)"
+
   set +e
   (
     cd "$WORKTREE_PATH"
+    # shellcheck disable=SC2086
     case "$manager" in
-      composer) composer install ;;
-      pnpm)     pnpm install ;;
-      yarn)     yarn install ;;
-      npm)      npm install ;;
+      composer) $timeout_prefix composer install ;;
+      pnpm)     $timeout_prefix pnpm install ;;
+      yarn)     $timeout_prefix yarn install ;;
+      npm)      $timeout_prefix npm install ;;
     esac
   ) > "$boot_log" 2>&1
   local boot_rc=$?
   set -e
+
+  if [ "$boot_rc" -eq 124 ]; then
+    log "env-bootstrap: '$manager install' timed out after ${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT}s — finalizing blocked (no implementer budget spent)"
+    state_finalize "$RUN_DIR" "blocked" "env_bootstrap_timeout"
+    state_event "$RUN_DIR" "env_bootstrap_timeout" "pm=$manager" "timeout=$RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT"
+    local detail
+    detail="Riippuvuuksien asennus ($manager) aikakatkesi (${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT}s) ennen toteutusvaihetta. Yleisin syy on jumiutunut paketinhallinta-lukko, hidas/jumahtava verkkoyhteys (Packagist/npm-registry/GitHub Packages) tai vialliset auth-tokenit. Tarkista asennusloki ja koneellinen env-tiedosto. Asennusloki (kesken jäänyt) alla."
+    _post_situation_to_issue "env_bootstrap_timeout" "$detail" "$boot_log" 0 log
+    _add_needs_human_label
+    exit 5
+  fi
 
   if [ "$boot_rc" -ne 0 ]; then
     log "env-bootstrap: '$manager install' failed (rc=$boot_rc) — finalizing blocked (no implementer budget spent)"
