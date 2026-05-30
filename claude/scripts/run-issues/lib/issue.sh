@@ -5,8 +5,28 @@
 # into it for the duration of each call to avoid relying on $PWD in the
 # orchestrator. Output is plain JSON / number / text on stdout; errors
 # escape via gh's non-zero exit.
+#
+# GitHub App identity: when the orchestrator has loaded lib/github-app-auth.sh
+# and gha_enabled is true, the helpers below route comment / view / label
+# operations through gha_with_token so they post as <app>[bot] instead of the
+# personal gh-CLI identity. claim_issue / verify_claim / unclaim_issue
+# DELIBERATELY stay on the personal identity: GitHub Apps cannot be issue
+# assignees, so the race-arbitration logic ("am I the sole assignee?") must
+# continue to use a real user account.
 
 set -euo pipefail
+
+# _issue_gh — run `gh` with App identity when gha_with_token is loaded and
+# gha_enabled returns 0; otherwise pass through unchanged so the default
+# `gh auth` credential is used. Centralising the wrap keeps every comment /
+# label / view call going through one code path that opt-in mode can swap.
+_issue_gh() {
+  if declare -F gha_with_token >/dev/null 2>&1; then
+    gha_with_token gh "$@"
+  else
+    gh "$@"
+  fi
+}
 
 # pick_oldest_unassigned <repo-root> <labels-csv>
 # Prints issue number on stdout, or empty string if no match.
@@ -47,6 +67,9 @@ pick_oldest_unassigned() {
 
   (
     cd "$repo"
+    # Reading the issue list is unaffected by identity (no privacy boundary
+    # crossed) and used during pick — keep this on the gh-CLI default to avoid
+    # spending an App API call on every pick attempt.
     gh issue list \
       --search "${search}${extra}" \
       --limit 1 \
@@ -57,6 +80,12 @@ pick_oldest_unassigned() {
 
 # claim_issue <repo-root> <N>
 # Assigns the issue to @me. Returns 0 on success, non-zero on failure.
+#
+# Stays on the personal gh-CLI identity even when App mode is on: GitHub Apps
+# CANNOT be issue assignees, so race-arbitration must remain a real-user
+# operation. (App-mode automation is still attributable: comments / labels /
+# PR are App-identified; only the "who is working on this" assignment retains
+# the personal identity, which is acceptable since it is an internal signal.)
 claim_issue() {
   local repo="$1"
   local n="$2"
@@ -71,6 +100,9 @@ claim_issue() {
 # state means a racing runner has also claimed the issue — caller must lose
 # the race and unclaim. GitHub permits concurrent --add-assignee calls, so
 # verifying singleton membership is the only durable arbiter.
+#
+# Stays on the personal identity for the same reason as claim_issue: the
+# arbiter is "is @me alone assigned", and @me only resolves to a user account.
 verify_claim() {
   local repo="$1"
   local n="$2"
@@ -97,13 +129,18 @@ unclaim_issue() {
 # comment_issue <repo-root> <N> <text>
 # Posts a comment to the issue. Text is passed via stdin to avoid
 # argument-length and quoting issues on long bodies.
+#
+# Routed via _issue_gh so the comment is authored as <app>[bot] when App mode
+# is active. The clarification loop's detect_answer compares COMMENT TIMESTAMPS
+# against an awaiting-answer marker, not authors, so the identity switch is
+# safe — see tests/test-answer-detection.sh for the invariant.
 comment_issue() {
   local repo="$1"
   local n="$2"
   local text="$3"
   (
     cd "$repo"
-    printf '%s' "$text" | gh issue comment "$n" --body-file -
+    printf '%s' "$text" | _issue_gh issue comment "$n" --body-file -
   )
 }
 
@@ -151,12 +188,14 @@ truncate_for_github() {
 
 # fetch_issue_json <repo-root> <N>
 # Prints the issue body + comments as a JSON object on stdout.
+# Routed via _issue_gh so reads count against the App's rate limit (15k/h) when
+# active, leaving the personal account's lower budget free.
 fetch_issue_json() {
   local repo="$1"
   local n="$2"
   (
     cd "$repo"
-    gh issue view "$n" --json title,body,labels,author,comments
+    _issue_gh issue view "$n" --json title,body,labels,author,comments
   )
 }
 

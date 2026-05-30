@@ -166,6 +166,11 @@ source "$SCRIPT_DIR/lib/claude-call.sh"
 source "$SCRIPT_DIR/lib/hook-runner.sh"
 # shellcheck source=lib/env-bootstrap.sh
 source "$SCRIPT_DIR/lib/env-bootstrap.sh"
+# shellcheck source=lib/github-app-auth.sh
+# Sourced AFTER source_machine_env (below) populates env vars. We require the
+# file to exist; the helper guards every side effect on gha_enabled, so loading
+# it is a no-op when the App env vars are not set.
+source "$SCRIPT_DIR/lib/github-app-auth.sh"
 
 export POST_COMMIT_SYNC=1
 export RUN_ISSUES_AUTO
@@ -1064,12 +1069,12 @@ _post_situation_to_issue() {
 # and the poller from re-picking the issue while it waits for maintainer's reply (both
 # exclude -label:waiting). Failures are non-fatal.
 _add_waiting_label() {
-  ( cd "$REPO_ROOT" && gh label create waiting --color FBCA04 \
+  ( cd "$REPO_ROOT" && gha_with_token gh label create waiting --color FBCA04 \
       --description "Odottaa ihmisen vastausta — automaattinen ajo jatkaa kommentista" >/dev/null 2>&1 ) || true
-  ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --add-label waiting >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && gha_with_token gh issue edit "$ISSUE_NUM" --add-label waiting >/dev/null 2>&1 ) || true
 }
 _remove_waiting_label() {
-  ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --remove-label waiting >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && gha_with_token gh issue edit "$ISSUE_NUM" --remove-label waiting >/dev/null 2>&1 ) || true
 }
 
 # _finalize_awaiting_clarification — shared NEEDS_CLARIFICATION terminal path.
@@ -1097,9 +1102,9 @@ _finalize_awaiting_clarification() {
 # env-bootstrap gate, which posts its own log-mode situation comment but still
 # needs the same hand-off signal.
 _add_needs_human_label() {
-  ( cd "$REPO_ROOT" && gh label create needs-human --color B60205 \
+  ( cd "$REPO_ROOT" && gha_with_token gh label create needs-human --color B60205 \
       --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
-  ( cd "$REPO_ROOT" && gh issue edit "$ISSUE_NUM" --add-label needs-human >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && gha_with_token gh issue edit "$ISSUE_NUM" --add-label needs-human >/dev/null 2>&1 ) || true
 }
 
 # _hand_to_human <message> [<artifact-file>] — best-effort: post a full
@@ -1154,12 +1159,12 @@ EOF
   local lbl
   while IFS= read -r lbl; do
     [ -n "$lbl" ] || continue
-    ( cd "$REPO_ROOT" && gh label create "$lbl" >/dev/null 2>&1 ) || true
+    ( cd "$REPO_ROOT" && gha_with_token gh label create "$lbl" >/dev/null 2>&1 ) || true
   done <<EOF
 $(printf '%s' "$matched" | tr ',' '\n')
 EOF
 
-  if ( cd "$REPO_ROOT" && gh pr edit "$pr" --add-label "$matched" >/dev/null 2>&1 ); then
+  if ( cd "$REPO_ROOT" && gha_with_token gh pr edit "$pr" --add-label "$matched" >/dev/null 2>&1 ); then
     log "propagate_pr_labels: added [$matched] to PR (issue #$ISSUE_NUM)"
     state_event "$RUN_DIR" "pr_labels_propagated" "labels=$matched"
   else
@@ -1582,13 +1587,39 @@ PROVISION_ENV
     *PARTIAL*|*NEEDS_FOLLOWUP*) pr_draft_flag="--draft" ;;
   esac
 
+  # When App mode is on, push as the App via `git -c http.extraheader=...` so
+  # the commit's pusher event (and any GitHub Actions triggered by it) is
+  # attributed to <app>[bot]. The header value is captured into a LOCAL
+  # variable that we never echo to stdout/stderr, and the `git -c` flag keeps
+  # the token out of .git/config (unlike `git remote set-url` with a tokenised
+  # URL, which would persist the secret). `gha_git_push_header` returns
+  # non-zero when App mode is off — we just push without the header in that
+  # case (default credential helper).
+  local _push_auth_header=""
+  if gha_git_push_header_value=$(gha_git_push_header 2>/dev/null); then
+    _push_auth_header="$gha_git_push_header_value"
+  fi
   set +e
-  (
-    cd "$WORKTREE_PATH"
-    git push --set-upstream origin "$BRANCH"
-  ) >> "$RUN_DIR/git-push.log" 2>&1
+  if [ -n "$_push_auth_header" ]; then
+    (
+      cd "$WORKTREE_PATH"
+      # Quoting matters: $_push_auth_header contains a space. Pass it as one
+      # token via -c "http.extraheader=..."; do not let the shell split it.
+      git -c "http.extraheader=$_push_auth_header" push --set-upstream origin "$BRANCH"
+    ) >> "$RUN_DIR/git-push.log" 2>&1
+  else
+    (
+      cd "$WORKTREE_PATH"
+      git push --set-upstream origin "$BRANCH"
+    ) >> "$RUN_DIR/git-push.log" 2>&1
+  fi
   local push_rc=$?
   set -e
+  # Belt-and-braces: scrub the header value from memory and unset the carrier.
+  # The `git -c` invocation already kept it out of .git/config; this just
+  # ensures no later `env`/`set` dump in this process can echo it.
+  _push_auth_header=""
+  unset gha_git_push_header_value
   if [ "$push_rc" -ne 0 ]; then
     log "git push failed (rc=$push_rc)"
     state_finalize "$RUN_DIR" "blocked" "git_push_failed"
@@ -1608,7 +1639,7 @@ PROVISION_ENV
   set +e
   pr_url=$(
     cd "$REPO_ROOT"
-    gh pr create \
+    gha_with_token gh pr create \
       --head "$BRANCH" \
       $base_flag \
       --title "Auto: $ISSUE_TITLE (#$ISSUE_NUM)" \
