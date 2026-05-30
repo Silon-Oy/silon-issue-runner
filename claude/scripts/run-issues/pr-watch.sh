@@ -349,9 +349,11 @@ pr_resolve() {
   # fetch credential matches the eventual push credential (otherwise a repo
   # configured to only accept the App's PAT-equivalent would refuse fetch).
   local _watch_auth_header=""
+  local _h=""
   if _h=$(gha_git_push_header 2>/dev/null); then
     _watch_auth_header="$_h"
   fi
+  _h=""
   if [ -n "$_watch_auth_header" ]; then
     if ! ( cd "$worktree" && git -c "http.extraheader=$_watch_auth_header" fetch origin "$base_ref" --quiet ); then
       log "git fetch origin $base_ref failed for PR #$pr_num — retrying next poll"
@@ -478,9 +480,11 @@ _pr_publish_and_revalidate() {
   # is captured to a local and never echoed; --force-with-lease still consults
   # the local ref the worktree fetched, so there is no extra leak surface.
   local _pub_auth_header=""
+  local _h2=""
   if _h2=$(gha_git_push_header 2>/dev/null); then
     _pub_auth_header="$_h2"
   fi
+  _h2=""
   local push_ok=0
   if [ -n "$_pub_auth_header" ]; then
     if ( cd "$worktree" && git -c "http.extraheader=$_pub_auth_header" push --force-with-lease origin "$branch" ); then

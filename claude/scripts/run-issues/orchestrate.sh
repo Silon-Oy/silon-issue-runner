@@ -1596,9 +1596,11 @@ PROVISION_ENV
   # non-zero when App mode is off — we just push without the header in that
   # case (default credential helper).
   local _push_auth_header=""
-  if gha_git_push_header_value=$(gha_git_push_header 2>/dev/null); then
-    _push_auth_header="$gha_git_push_header_value"
+  local _gha_hdr=""
+  if _gha_hdr=$(gha_git_push_header 2>/dev/null); then
+    _push_auth_header="$_gha_hdr"
   fi
+  _gha_hdr=""
   set +e
   if [ -n "$_push_auth_header" ]; then
     (
@@ -1615,11 +1617,10 @@ PROVISION_ENV
   fi
   local push_rc=$?
   set -e
-  # Belt-and-braces: scrub the header value from memory and unset the carrier.
+  # Belt-and-braces: scrub the header value from memory after the push.
   # The `git -c` invocation already kept it out of .git/config; this just
   # ensures no later `env`/`set` dump in this process can echo it.
   _push_auth_header=""
-  unset gha_git_push_header_value
   if [ "$push_rc" -ne 0 ]; then
     log "git push failed (rc=$push_rc)"
     state_finalize "$RUN_DIR" "blocked" "git_push_failed"
