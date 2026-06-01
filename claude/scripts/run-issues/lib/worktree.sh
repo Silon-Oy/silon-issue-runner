@@ -4,39 +4,50 @@
 # Worktrees live under <repo-root>/.claude/worktrees/<run-id>/. They are
 # intentionally kept after the run so maintainer can inspect what happened —
 # only the rollback path (cleanup_worktree) removes them.
+#
+# Multi-remote: every function takes an optional <remote> argument (default
+# "origin"). It is used to resolve the base ref and, in refresh_origin, which
+# remote to fetch. Passing "origin" explicitly is identical to the legacy
+# behaviour; non-origin remotes route fetch + base resolution to the right
+# org so a single clone can branch off `customer-d/main` as well as `origin/main`.
 
 set -euo pipefail
 
-# refresh_origin <repo-root>
-# Fetches origin so the local origin/* refs reflect the remote tip before a
-# worktree is branched off them. The return code carries the outcome so the
-# caller can decide policy (fail-fast on a new run, soft on restart/continue):
+# refresh_origin <repo-root> [<remote>]
+# Fetches the named remote (default "origin") so the local <remote>/* refs
+# reflect the remote tip before a worktree is branched off them. Despite the
+# legacy name, this works for any remote — the name is kept for backward
+# compatibility with existing callers and tests. The return code carries the
+# outcome so the caller can decide policy (fail-fast on a new run, soft on
+# restart/continue):
 #   0  fetch succeeded
-#   1  fetch ran but failed (network/auth) — origin/* refs may be stale
-#   2  no origin remote (e.g. a brand-new or local-only repo) — benign no-op
+#   1  fetch ran but failed (network/auth) — <remote>/* refs may be stale
+#   2  the named remote does not exist on the clone — benign no-op
 # Prints nothing to stdout; the caller may capture stderr for diagnostics.
 refresh_origin() {
   local repo="$1"
+  local remote="${2:-origin}"
 
-  # No origin remote -> nothing to refresh. Benign; not an error.
-  git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 2
+  # No such remote -> nothing to refresh. Benign; not an error.
+  git -C "$repo" remote get-url "$remote" >/dev/null 2>&1 || return 2
 
-  git -C "$repo" fetch origin --quiet || return 1
+  git -C "$repo" fetch "$remote" --quiet || return 1
   return 0
 }
 
-# create_worktree <repo-root> <run-id> <branch> [<base-branch>]
+# create_worktree <repo-root> <run-id> <branch> [<base-branch>] [<remote>]
 # Creates a worktree at <repo-root>/.claude/worktrees/<run-id>/ on a NEW
 # branch <branch>. The base is resolved in this order:
-#   1. origin/<base-branch> when <base-branch> is given — a repo's opt-in
+#   1. <remote>/<base-branch> when <base-branch> is given — a repo's opt-in
 #      base_branch (e.g. a long-lived integration branch like "twenty")
-#   2. the repo's default remote HEAD (origin/main unless the symbolic ref
-#      points elsewhere)
-#   3. local HEAD (brand-new repo with no origin symbolic ref)
+#   2. the named remote's default HEAD (<remote>/main unless the symbolic ref
+#      points elsewhere); falls back to origin/HEAD if the named remote has
+#      no symbolic HEAD ref locally
+#   3. local HEAD (brand-new repo with no symbolic ref)
 # Prints the worktree path. Returns non-zero if an explicit base branch does
 # not resolve.
 #
-# The base ref is assumed already fresh: fetching origin is the caller's
+# The base ref is assumed already fresh: fetching the remote is the caller's
 # responsibility (orchestrate.sh calls refresh_origin before this), so a stale
 # base can be turned into an explicit, diagnosable block instead of being
 # silently swallowed here.
@@ -45,6 +56,7 @@ create_worktree() {
   local run_id="$2"
   local branch="$3"
   local base_branch="${4:-}"
+  local remote="${5:-origin}"
 
   local base_path="$repo/.claude/worktrees"
   mkdir -p "$base_path"
@@ -54,9 +66,9 @@ create_worktree() {
   # the upstream default branch, then to local HEAD (brand-new repo).
   local base_ref
   if [ -n "$base_branch" ]; then
-    base_ref="origin/$base_branch"
-  elif base_ref=$(cd "$repo" && git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null); then
-    : # got something like origin/main
+    base_ref="$remote/$base_branch"
+  elif base_ref=$(cd "$repo" && git symbolic-ref --short "refs/remotes/$remote/HEAD" 2>/dev/null); then
+    : # got something like <remote>/main
   else
     base_ref="HEAD"
   fi
@@ -65,12 +77,12 @@ create_worktree() {
   # trailing `printf`, so guard the subshell explicitly with `|| return 1`.
   (
     cd "$repo"
-    # Validate an explicit base branch resolves (origin is already fresh via the
-    # caller's refresh_origin); a clear error here beats a cryptic
+    # Validate an explicit base branch resolves (the remote is already fresh
+    # via the caller's refresh_origin); a clear error here beats a cryptic
     # `git worktree add` failure downstream.
     if [ -n "$base_branch" ] \
-       && ! git rev-parse --verify --quiet "refs/remotes/origin/$base_branch" >/dev/null; then
-      echo "create_worktree: base branch 'origin/$base_branch' not found (origin fresh)" >&2
+       && ! git rev-parse --verify --quiet "refs/remotes/$remote/$base_branch" >/dev/null; then
+      echo "create_worktree: base branch '$remote/$base_branch' not found (remote fresh)" >&2
       exit 1
     fi
     git worktree add -b "$branch" "$wt_path" "$base_ref" >/dev/null

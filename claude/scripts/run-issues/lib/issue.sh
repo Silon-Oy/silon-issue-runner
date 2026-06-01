@@ -2,9 +2,16 @@
 # lib/issue.sh — GitHub issue interactions wrapped around the `gh` CLI.
 #
 # All commands operate against the repo passed as first argument; we cd
-# into it for the duration of each call to avoid relying on $PWD in the
-# orchestrator. Output is plain JSON / number / text on stdout; errors
-# escape via gh's non-zero exit.
+# into it for the duration of each call. Output is plain JSON / number / text
+# on stdout; errors escape via gh's non-zero exit.
+#
+# Multi-remote: every wrapper that talks to GitHub accepts an OPTIONAL trailing
+# <owner/repo> argument. When set, the gh call is targeted explicitly via
+# `--repo owner/repo` so it goes to that org regardless of which remote `gh`
+# would otherwise infer from cwd. This is the mechanism that lets one clone
+# poll issues from multiple orgs (issue #53). When the argument is empty, gh
+# falls back to its cwd-based resolution — fully backward compatible with
+# single-remote callers and existing tests.
 #
 # GitHub App identity: when the orchestrator has loaded lib/github-app-auth.sh
 # and gha_enabled is true, the helpers below route comment / view / label
@@ -13,22 +20,57 @@
 # DELIBERATELY stay on the personal identity: GitHub Apps cannot be issue
 # assignees, so the race-arbitration logic ("am I the sole assignee?") must
 # continue to use a real user account.
+#
+# Per-org App scope: the App identity is per-org (token is minted for one
+# installation). When the active remote is NOT origin, the App-mode wrapper
+# would route the call with a token minted for the WRONG org. Per-org App
+# support is explicitly scope-out for issue #53, so we fall back to the
+# personal gh-CLI identity for non-origin remotes. _issue_gh accepts an
+# optional <remote> hint for this purpose.
 
 set -euo pipefail
 
-# _issue_gh — run `gh` with App identity when gha_with_token is loaded and
-# gha_enabled returns 0; otherwise pass through unchanged so the default
-# `gh auth` credential is used. Centralising the wrap keeps every comment /
-# label / view call going through one code path that opt-in mode can swap.
+# _issue_gh [--remote <name>] -- <gh-args>...
+# Runs `gh` either through gha_with_token (App identity) or as a pass-through.
+# When the optional <remote> argument is "origin" or empty (the legacy
+# single-remote case) and App mode is on, the call goes through gha_with_token
+# so the comment / view / label is authored as <app>[bot]. When <remote> names
+# a non-origin remote (multi-org mode), App mode is bypassed — the App
+# installation token is minted for one org and would be the wrong credential
+# for another. Per-org App support is intentionally scope-out for issue #53;
+# non-origin remotes use the personal gh-CLI identity instead.
 _issue_gh() {
+  local remote=""
+  if [ "${1:-}" = "--remote" ]; then
+    remote="${2:-}"
+    shift 2
+  fi
+  # Drop the optional `--` argument separator if present.
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+
   if declare -F gha_with_token >/dev/null 2>&1; then
-    gha_with_token gh "$@"
+    case "$remote" in
+      ""|origin) gha_with_token gh "$@" ;;
+      *)         gh "$@" ;;  # App identity is per-org; bypass for non-origin.
+    esac
   else
     gh "$@"
   fi
 }
 
-# pick_oldest_unassigned <repo-root> <labels-csv>
+# _repo_args <owner/repo> — prints `--repo owner/repo` when the argument is
+# non-empty, or nothing otherwise. Centralising this keeps every wrapper a
+# one-liner that opts in to explicit repo targeting without sprinkling case
+# statements across the file. The result is intended for an unquoted expansion
+# in the gh call so an empty result disappears cleanly.
+_repo_args() {
+  local owner_repo="${1:-}"
+  [ -n "$owner_repo" ] && printf -- '--repo %s' "$owner_repo"
+}
+
+# pick_oldest_unassigned <repo-root> <labels-csv> [<owner/repo>]
 # Prints issue number on stdout, or empty string if no match.
 # labels-csv may be empty; otherwise it's filtered with -label:waiting -label:blocked -label:wip.
 #
@@ -47,6 +89,7 @@ _issue_gh() {
 pick_oldest_unassigned() {
   local repo="$1"
   local labels_csv="${2:-}"
+  local owner_repo="${3:-}"
   # auto-clean issues are a teardown signal handled by the poller's scan_clean,
   # never a development candidate — exclude them from new-issue pickup so a
   # labelled issue is not picked up as work.
@@ -70,7 +113,9 @@ pick_oldest_unassigned() {
     # Reading the issue list is unaffected by identity (no privacy boundary
     # crossed) and used during pick — keep this on the gh-CLI default to avoid
     # spending an App API call on every pick attempt.
+    # shellcheck disable=SC2046  # intentional word-splitting on _repo_args
     gh issue list \
+      $(_repo_args "$owner_repo") \
       --search "${search}${extra}" \
       --limit 1 \
       --json number \
@@ -78,7 +123,7 @@ pick_oldest_unassigned() {
   )
 }
 
-# claim_issue <repo-root> <N>
+# claim_issue <repo-root> <N> [<owner/repo>]
 # Assigns the issue to @me. Returns 0 on success, non-zero on failure.
 #
 # Stays on the personal gh-CLI identity even when App mode is on: GitHub Apps
@@ -89,13 +134,15 @@ pick_oldest_unassigned() {
 claim_issue() {
   local repo="$1"
   local n="$2"
+  local owner_repo="${3:-}"
   (
     cd "$repo"
-    gh issue edit "$n" --add-assignee "@me" >/dev/null
+    # shellcheck disable=SC2046
+    gh issue edit "$n" $(_repo_args "$owner_repo") --add-assignee "@me" >/dev/null
   )
 }
 
-# verify_claim <repo-root> <N>
+# verify_claim <repo-root> <N> [<owner/repo>]
 # Returns 0 only if the current user is the SOLE assignee. A multi-assignee
 # state means a racing runner has also claimed the issue — caller must lose
 # the race and unclaim. GitHub permits concurrent --add-assignee calls, so
@@ -106,41 +153,50 @@ claim_issue() {
 verify_claim() {
   local repo="$1"
   local n="$2"
+  local owner_repo="${3:-}"
   local me current
   me=$(gh api user --jq .login)
   current=$(
     cd "$repo"
-    gh issue view "$n" --json assignees --jq '[.assignees[].login] | join(",")'
+    # shellcheck disable=SC2046
+    gh issue view "$n" $(_repo_args "$owner_repo") --json assignees --jq '[.assignees[].login] | join(",")'
   )
   [ "$current" = "$me" ]
 }
 
-# unclaim_issue <repo-root> <N>
+# unclaim_issue <repo-root> <N> [<owner/repo>]
 # Removes the @me assignee. Idempotent (best-effort).
 unclaim_issue() {
   local repo="$1"
   local n="$2"
+  local owner_repo="${3:-}"
   (
     cd "$repo"
-    gh issue edit "$n" --remove-assignee "@me" >/dev/null 2>&1 || true
+    # shellcheck disable=SC2046
+    gh issue edit "$n" $(_repo_args "$owner_repo") --remove-assignee "@me" >/dev/null 2>&1 || true
   )
 }
 
-# comment_issue <repo-root> <N> <text>
+# comment_issue <repo-root> <N> <text> [<owner/repo>] [<remote>]
 # Posts a comment to the issue. Text is passed via stdin to avoid
 # argument-length and quoting issues on long bodies.
 #
 # Routed via _issue_gh so the comment is authored as <app>[bot] when App mode
-# is active. The clarification loop's detect_answer compares COMMENT TIMESTAMPS
-# against an awaiting-answer marker, not authors, so the identity switch is
-# safe — see tests/test-answer-detection.sh for the invariant.
+# is active AND the remote is origin (per-org App scope: non-origin remotes
+# bypass App mode). The clarification loop's detect_answer compares COMMENT
+# TIMESTAMPS against an awaiting-answer marker, not authors, so the identity
+# switch is safe — see tests/test-answer-detection.sh for the invariant.
 comment_issue() {
   local repo="$1"
   local n="$2"
   local text="$3"
+  local owner_repo="${4:-}"
+  local remote="${5:-origin}"
   (
     cd "$repo"
-    printf '%s' "$text" | _issue_gh issue comment "$n" --body-file -
+    # shellcheck disable=SC2046
+    printf '%s' "$text" | _issue_gh --remote "$remote" -- \
+      issue comment "$n" $(_repo_args "$owner_repo") --body-file -
   )
 }
 
@@ -186,16 +242,21 @@ truncate_for_github() {
   printf '%s' "$input" | tail -c "$tail_bytes"
 }
 
-# fetch_issue_json <repo-root> <N>
+# fetch_issue_json <repo-root> <N> [<owner/repo>] [<remote>]
 # Prints the issue body + comments as a JSON object on stdout.
 # Routed via _issue_gh so reads count against the App's rate limit (15k/h) when
-# active, leaving the personal account's lower budget free.
+# active and the remote is origin. Non-origin remotes bypass App mode (per-org
+# App scope-out).
 fetch_issue_json() {
   local repo="$1"
   local n="$2"
+  local owner_repo="${3:-}"
+  local remote="${4:-origin}"
   (
     cd "$repo"
-    _issue_gh issue view "$n" --json title,body,labels,author,comments
+    # shellcheck disable=SC2046
+    _issue_gh --remote "$remote" -- \
+      issue view "$n" $(_repo_args "$owner_repo") --json title,body,labels,author,comments
   )
 }
 
