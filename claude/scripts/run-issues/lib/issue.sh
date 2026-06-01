@@ -101,11 +101,18 @@ pick_oldest_unassigned() {
   local extra=""
   if [ -n "$labels_csv" ]; then
     # Each label becomes a separate `label:"x"` term; gh ANDs them (see above).
-    local IFS=','
-    for label in $labels_csv; do
-      [ -n "$label" ] || continue
-      extra+=" label:\"$label\""
-    done
+    # The IFS=',' split is confined to this command substitution so it does NOT
+    # leak into the subshell below — otherwise `$(_repo_args "$owner_repo")`
+    # would word-split on comma instead of space, passing "--repo owner/repo"
+    # as a single unknown flag and silently breaking pickup for any non-empty
+    # owner/repo. (See the matching fix in poller.sh's inline pickup.)
+    extra=$(
+      IFS=','
+      for label in $labels_csv; do
+        [ -n "$label" ] || continue
+        printf ' label:"%s"' "$label"
+      done
+    )
   fi
 
   (

@@ -576,10 +576,15 @@ while IFS= read -r repo_json; do
 
     # ----- Pick a new candidate issue (per remote) -------------------------
     # gh issue list is routed via `--repo owner/repo` when known so a
-    # non-origin remote sees its own org's issues.
-    REPO_ARGS=""
-    [ -n "$OWNER_REPO" ] && REPO_ARGS="--repo $OWNER_REPO"
-    # shellcheck disable=SC2086
+    # non-origin remote sees its own org's issues. REPO_ARGS is an array so
+    # the `--repo owner/repo` pair stays two distinct argv entries regardless
+    # of $IFS — the label loop below sets IFS=',' to split LABELS_CSV, and an
+    # unquoted string $REPO_ARGS would then fail to word-split on space,
+    # passing "--repo owner/repo" as a single unknown flag (silently swallowed
+    # by 2>/dev/null) and breaking pickup for every remote that resolves an
+    # owner/repo.
+    REPO_ARGS=()
+    [ -n "$OWNER_REPO" ] && REPO_ARGS=(--repo "$OWNER_REPO")
     ISSUE_NUM=$(
       cd "$REPO_PATH"
       extra=""
@@ -592,7 +597,7 @@ while IFS= read -r repo_json; do
       fi
       # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
       # no longer accepts standalone --sort/--order flags on `issue list`.
-      gh issue list $REPO_ARGS \
+      gh issue list "${REPO_ARGS[@]}" \
         --search "is:open no:assignee -label:blocked -label:waiting -label:wip -label:$RUN_ISSUES_CLEAN_LABEL sort:created-asc$extra" \
         --limit 1 \
         --json number \

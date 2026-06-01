@@ -35,10 +35,15 @@ fail() { echo "FAIL $1"; FAIL=1; }
 BIN="$WORK/bin"
 mkdir -p "$BIN"
 CAPTURE="$WORK/capture.txt"
+ARGV="$WORK/argv.txt"
 cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
-# Record argv for assertions.
+# Record argv for assertions: the joined form (for --search matching) and the
+# per-element form (so a word-split bug that collapses "--repo owner/repo" into
+# a single argv entry is detectable — \$* would hide it behind a space).
 printf '%s\n' "\$*" >> "$CAPTURE"
+: > "$ARGV"
+for a in "\$@"; do printf '%s\n' "\$a" >> "$ARGV"; done
 # Extract the value passed to --search.
 search=""
 while [ \$# -gt 0 ]; do
@@ -100,7 +105,23 @@ set -e
 [ "$rc" = "0" ] || fail "zero-match: expected rc 0, got $rc"
 [ -z "$out" ]   || fail "zero-match: expected empty stdout, got [$out]"
 
-# --- 5. optional live AND/OR probe (skipped by default) ------------------
+# --- 5. owner/repo arg is NOT collapsed by the label loop's IFS=',' -------
+# Regression for the IFS leak: pick_oldest_unassigned sets IFS=',' to split the
+# labels CSV. If that IFS leaks into the `$(_repo_args "$owner_repo")` word-split
+# below, "--repo owner/repo" stays a single argv entry → gh sees an unknown flag
+# and pickup silently returns nothing for every non-empty owner/repo (every
+# non-origin remote, and origin clones whose URL resolves). We pass BOTH a
+# multi-label CSV (forces IFS=',') AND an owner/repo, then assert gh received
+# "--repo" and "customer-d-oy/rahti" as two distinct argv entries.
+out=$(pick_oldest_unassigned "$REPO" "auto-run,enhancement" "customer-d-oy/rahti")
+[ "$out" = "12" ] || fail "owner/repo split: expected 12, got [$out]"
+grep -qxF -- '--repo' "$ARGV"        || fail "owner/repo split: '--repo' not a standalone argv entry"
+grep -qxF -- 'customer-d-oy/rahti' "$ARGV" || fail "owner/repo split: 'customer-d-oy/rahti' not a standalone argv entry"
+if grep -qxF -- '--repo customer-d-oy/rahti' "$ARGV"; then
+  fail "owner/repo split: IFS=',' leaked — '--repo customer-d-oy/rahti' collapsed into one argv entry"
+fi
+
+# --- 6. optional live AND/OR probe (skipped by default) ------------------
 if [ "${RUN_ISSUES_LIVE_PROBE:-0}" = "1" ]; then
   echo "--- live probe: RUN_ISSUES_LIVE_PROBE=1 ---"
   # Remove the mock from PATH for the live segment.
