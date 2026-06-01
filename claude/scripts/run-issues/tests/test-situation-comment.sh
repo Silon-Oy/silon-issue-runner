@@ -34,7 +34,7 @@ mkdir -p "$REPO"
 . "$STATE_LIB"
 
 CAPTURE="$WORK/last-comment.txt"
-comment_issue() {  # <repo> <N> <text> — capture only
+comment_issue() {  # <repo> <N> <text> [<owner/repo>] [<remote>] — capture body only
   printf '%s' "$3" > "$CAPTURE"
 }
 
@@ -50,6 +50,11 @@ RUN_DIR="$REPO/.claude/run-issues/$RUN_ID"
 REPO_ROOT="$REPO"
 ISSUE_NUM="99"
 BRANCH="auto-run/issue-99-x"
+# Multi-remote (issue #53): _post_situation_to_issue passes these to
+# comment_issue. The defaults exercise the legacy origin path (empty
+# OWNER_REPO -> gh's cwd resolution).
+OWNER_REPO=""
+REMOTE_NAME="origin"
 state_init "$RUN_DIR" "$RUN_ID" "$REPO" "99"
 
 FAIL=0

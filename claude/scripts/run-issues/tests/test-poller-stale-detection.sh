@@ -20,6 +20,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POLLER="$HERE/../poller.sh"
 STATE_LIB="$HERE/../lib/state.sh"
+GIT_REMOTE_LIB="$HERE/../lib/git-remote.sh"
 
 WORK=$(mktemp -d -t poller-stale.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
@@ -29,6 +30,12 @@ mkdir -p "$REPO/.git"
 
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"
+# Multi-remote (issue #53): finalize_stalled reads remote from run.json and
+# calls session_suffix + remote_label to derive tmux session names and lock
+# paths. Source git-remote.sh so the helper is in scope when we eval the
+# function body below.
+# shellcheck source=lib/git-remote.sh
+. "$GIT_REMOTE_LIB"
 
 # Extract function bodies from poller.sh. The awk pattern walks from each
 # function header to its closing brace at column 0, mirroring the harness
