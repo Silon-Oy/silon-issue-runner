@@ -74,11 +74,16 @@ RESTART_RUN_DIR=""
 CONTINUE_RUN_DIR=""
 REPO_ROOT=""
 ISSUE_ARG=""
+# Multi-remote (issue #53): the git remote name in the local clone that this
+# run targets. Default "origin" preserves the legacy single-remote path. The
+# poller passes --remote <name> per (repo × remote) iteration; resume/restart/
+# continue read it from run.json (set in phase_a or via state_set).
+REMOTE_NAME="origin"
 
 usage() {
   cat >&2 <<'USAGE'
 usage:
-  orchestrate.sh <repo-root> <issue-number-or-"poll">
+  orchestrate.sh [--remote <name>] <repo-root> <issue-number-or-"poll">
   orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL
   orchestrate.sh --restart <run-dir>
   orchestrate.sh --continue <run-dir>
@@ -128,6 +133,24 @@ elif [ "${1:-}" = "--resume" ]; then
   esac
   [ -d "$RESUME_RUN_DIR" ] || { echo "orchestrate: run-dir not found: $RESUME_RUN_DIR" >&2; exit 1; }
 else
+  # Optional `--remote <name>` flag before the two positional args. Default
+  # "origin" preserves the legacy invocation shape used by the slash command
+  # (`orchestrate.sh <repo> <issue>`). Use a case-based glob match so the
+  # `--remote=<name>` and `--remote <name>` shapes are both accepted.
+  while :; do
+    case "${1:-}" in
+      --remote)
+        REMOTE_NAME="${2:-origin}"
+        shift 2 || true
+        ;;
+      --remote=*)
+        REMOTE_NAME="${1#*=}"
+        shift
+        ;;
+      *) break ;;
+    esac
+  done
+  [ -n "$REMOTE_NAME" ] || REMOTE_NAME="origin"
   if [ "$#" -ne 2 ]; then usage; fi
   REPO_ROOT="$1"
   ISSUE_ARG="$2"
@@ -148,6 +171,8 @@ PR_LABELS_CSV="${RUN_ISSUES_PR_LABELS_CSV:-auto-merge}"
 
 # ---------- library loading ----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/git-remote.sh
+source "$SCRIPT_DIR/lib/git-remote.sh"
 # shellcheck source=lib/locking.sh
 source "$SCRIPT_DIR/lib/locking.sh"
 # shellcheck source=lib/issue.sh
@@ -359,6 +384,12 @@ CLARIFICATION_CONTEXT=""
 # from a re-evaluation after a reply (still NEEDS_CLARIFICATION -> new marker,
 # round+1, exit 11; BLOCKER -> hand to human, no loop).
 IS_CONTINUE=0
+# OWNER_REPO is the "owner/repo" string derived from `git remote get-url
+# $REMOTE_NAME` (issue #53). When non-empty it is passed to every `gh issue …`
+# / `gh pr create` call so the gh routes to the right org instead of inferring
+# from cwd (which is wrong for non-origin remotes). Empty -> gh's legacy
+# cwd-based resolution (origin); full backward compatibility.
+OWNER_REPO=""
 
 # Retry budget: how many auto-restarts a single timed-out run may receive.
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
@@ -437,21 +468,46 @@ cleanup_on_exit() {
   # label + assignee, not the per-machine advisory lock, so --continue re-takes
   # the lock cleanly. The GitHub assignee remains in place as the durable claim.
   if [ "$LOCK_HELD" = "1" ] && [ -n "$ISSUE_NUM" ] && [ "$rc" != "10" ]; then
-    unlock_issue "$ISSUE_NUM" || true
+    unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" || true
   fi
   exit "$rc"
 }
 trap cleanup_on_exit EXIT
+
+# resolve_owner_repo — derive OWNER_REPO from REPO_ROOT + REMOTE_NAME so every
+# subsequent gh call can route via `gh --repo owner/repo` instead of relying on
+# the cwd-based remote inference (which only picks up origin). For the legacy
+# "origin" remote we leave OWNER_REPO EMPTY on purpose: the existing tests
+# stub gh in repos that lack a github.com URL, and the empty value preserves
+# the historical cwd-based gh path. A non-origin remote that does not resolve
+# is fail-fast — the WHOLE point of opting in was to route to it.
+resolve_owner_repo() {
+  case "$REMOTE_NAME" in
+    ""|origin)
+      OWNER_REPO=""
+      return 0
+      ;;
+  esac
+  if ! OWNER_REPO=$(resolve_remote_to_owner_repo "$REPO_ROOT" "$REMOTE_NAME"); then
+    log "ERROR: remote '$REMOTE_NAME' not found in $REPO_ROOT or URL not parseable — cannot continue"
+    exit 1
+  fi
+  log "remote: routing gh via --repo $OWNER_REPO (remote=$REMOTE_NAME)"
+}
 
 # ===========================================================================
 # Phase A: pick → cycle-review
 # ===========================================================================
 phase_a() {
   load_repo_timeout "$REPO_ROOT"
+  # Resolve OWNER_REPO from REMOTE_NAME up front so every subsequent gh call
+  # can route via `gh --repo` for non-origin remotes (multi-org support).
+  resolve_owner_repo
+
   # ---------- S1: pick issue ----------
-  log "S1_PickIssue"
+  log "S1_PickIssue (remote=$REMOTE_NAME)"
   if [ "$ISSUE_ARG" = "poll" ]; then
-    ISSUE_NUM=$(pick_oldest_unassigned "$REPO_ROOT" "$LABELS_CSV" || true)
+    ISSUE_NUM=$(pick_oldest_unassigned "$REPO_ROOT" "$LABELS_CSV" "$OWNER_REPO" || true)
     if [ -z "$ISSUE_NUM" ]; then
       log "no candidate issue"
       exit 2
@@ -464,11 +520,15 @@ phase_a() {
   fi
 
   # Snapshot issue payload — used now for branch name and later (incl. resume).
-  RUN_ID="$(date +%Y%m%d-%H%M%S)-issue-${ISSUE_NUM}"
+  # Run-id is namespaced by remote for non-origin so the same issue number on
+  # two orgs gets distinct run-dirs (e.g. `<ts>-customer-d-issue-5` vs `<ts>-issue-5`).
+  local id_label
+  id_label=$(remote_label "$REMOTE_NAME" "$ISSUE_NUM")
+  RUN_ID="$(date +%Y%m%d-%H%M%S)-${id_label}"
   RUN_DIR="$REPO_ROOT/.claude/run-issues/$RUN_ID"
   mkdir -p "$RUN_DIR"
   local issue_json="$RUN_DIR/issue.json"
-  fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" > "$issue_json"
+  fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
   ISSUE_TITLE=$(jq -r '.title // empty' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
   ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
@@ -477,16 +537,20 @@ phase_a() {
   [ -n "$slug" ] || slug="issue_${ISSUE_NUM}"
 
   state_init "$RUN_DIR" "$RUN_ID" "$REPO_ROOT" "$ISSUE_NUM"
+  state_set "$RUN_DIR" "remote" "$REMOTE_NAME"
+  [ -n "$OWNER_REPO" ] && state_set "$RUN_DIR" "owner_repo" "$OWNER_REPO"
   enter_state "S1_PickIssue"
-  state_event "$RUN_DIR" "issue_picked" "issue_number=$ISSUE_NUM" "title=$ISSUE_TITLE"
+  state_event "$RUN_DIR" "issue_picked" "issue_number=$ISSUE_NUM" "title=$ISSUE_TITLE" "remote=$REMOTE_NAME"
 
-  BRANCH="auto-run/issue-${ISSUE_NUM}-${slug}"
+  # Branch is also namespaced for non-origin so two orgs' issue #5 do not
+  # collide on a single local branch name in the shared clone.
+  BRANCH="auto-run/${id_label}-${slug}"
   state_set "$RUN_DIR" "branch" "$BRANCH"
 
   # ---------- S2: lock ----------
   enter_state "S2_Lock"
-  log "S2_Lock issue=$ISSUE_NUM"
-  if ! lock_issue "$ISSUE_NUM"; then
+  log "S2_Lock issue=$ISSUE_NUM remote=$REMOTE_NAME"
+  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME"; then
     log "lock held by another runner; exiting"
     state_finalize "$RUN_DIR" "lost_race" "lock_held"
     exit 3
@@ -497,12 +561,12 @@ phase_a() {
   # ---------- S3: claim ----------
   enter_state "S3_Claim"
   log "S3_Claim issue=$ISSUE_NUM"
-  claim_issue "$REPO_ROOT" "$ISSUE_NUM"
+  claim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
   state_event "$RUN_DIR" "claim_attempted"
   sleep 5
-  if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM"; then
+  if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"; then
     log "claim race lost after verification — unclaiming and exiting"
-    unclaim_issue "$REPO_ROOT" "$ISSUE_NUM"
+    unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
     state_finalize "$RUN_DIR" "lost_race" "claim_lost"
     exit 3
   fi
@@ -518,28 +582,28 @@ phase_a() {
   state_set "$RUN_DIR" "base_branch" "$BASE_BRANCH"
   log "S4_Worktree run_id=$RUN_ID branch=$BRANCH base=${BASE_BRANCH:-<default>}"
 
-  # Refresh origin BEFORE branching so the worktree's base is the real remote
-  # tip. On a new run a stale base is unrecoverable (the whole run builds on the
-  # wrong commit), so a failed fetch is fail-fast: blocked + needs-human. Never
-  # `git pull` into a checkout — only fetch and let create_worktree branch off
-  # origin/HEAD (or origin/<base_branch>).
+  # Refresh the chosen remote BEFORE branching so the worktree's base is the
+  # real remote tip. On a new run a stale base is unrecoverable (the whole run
+  # builds on the wrong commit), so a failed fetch is fail-fast: blocked +
+  # needs-human. Never `git pull` into a checkout — only fetch and let
+  # create_worktree branch off <remote>/HEAD (or <remote>/<base_branch>).
   local fetch_rc=0
-  refresh_origin "$REPO_ROOT" 2>"$RUN_DIR/origin-fetch.log" || fetch_rc=$?
+  refresh_origin "$REPO_ROOT" "$REMOTE_NAME" 2>"$RUN_DIR/origin-fetch.log" || fetch_rc=$?
   case "$fetch_rc" in
-    0) state_event "$RUN_DIR" "origin_fetched" "phase=S4" ;;
-    2) log "S4: no origin remote — skipping fetch (local repo)"
-       state_event "$RUN_DIR" "origin_fetch_skipped" "phase=S4" "reason=no_origin" ;;
-    1) log "S4: 'git fetch origin' failed — base would be stale; blocking"
+    0) state_event "$RUN_DIR" "origin_fetched" "phase=S4" "remote=$REMOTE_NAME" ;;
+    2) log "S4: no '$REMOTE_NAME' remote — skipping fetch (local repo)"
+       state_event "$RUN_DIR" "origin_fetch_skipped" "phase=S4" "reason=no_origin" "remote=$REMOTE_NAME" ;;
+    1) log "S4: 'git fetch $REMOTE_NAME' failed — base would be stale; blocking"
        state_finalize "$RUN_DIR" "blocked" "origin_fetch_failed"
-       state_event "$RUN_DIR" "origin_fetch_failed" "phase=S4"
+       state_event "$RUN_DIR" "origin_fetch_failed" "phase=S4" "remote=$REMOTE_NAME"
        _post_situation_to_issue "origin_fetch_failed" \
-         "Remote-haku (\`git fetch origin\`) epäonnistui ennen worktreen luontia — feature-haara haarautuisi vanhentuneesta \`origin/main\`:sta. Tyypillisesti verkkokatko tai auth-ongelma. Tarkista yhteys ja aja issue uudelleen." \
+         "Remote-haku (\`git fetch $REMOTE_NAME\`) epäonnistui ennen worktreen luontia — feature-haara haarautuisi vanhentuneesta \`$REMOTE_NAME/main\`:sta. Tyypillisesti verkkokatko tai auth-ongelma. Tarkista yhteys ja aja issue uudelleen." \
          "$RUN_DIR/origin-fetch.log" 0 log
        _add_needs_human_label
        exit 5 ;;
   esac
 
-  WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH" "$BASE_BRANCH")
+  WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH" "$BASE_BRANCH" "$REMOTE_NAME")
   state_set "$RUN_DIR" "worktree_path" "$WORKTREE_PATH"
   state_event "$RUN_DIR" "worktree_created" "path=$WORKTREE_PATH"
 
@@ -726,16 +790,25 @@ resume_load_state() {
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  # Multi-remote: empty -> "origin" (legacy run.json predating the field).
+  REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
+  OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
 
   if [ -z "$REPO_ROOT" ] || [ -z "$ISSUE_NUM" ] || [ -z "$WORKTREE_PATH" ]; then
     echo "orchestrate: incomplete run.json (missing repo/issue_number/worktree_path)" >&2
     exit 1
   fi
 
+  # Re-derive OWNER_REPO if missing from a legacy run.json (best-effort: an
+  # unparseable URL leaves it empty, which is the correct legacy fallback).
+  if [ -z "$OWNER_REPO" ] && [ "$REMOTE_NAME" != "origin" ]; then
+    resolve_owner_repo
+  fi
+
   local issue_json="$RUN_DIR/issue.json"
   if [ ! -f "$issue_json" ]; then
     log "issue.json missing in $RUN_DIR — re-fetching from GitHub"
-    fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" > "$issue_json"
+    fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
   fi
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
@@ -769,6 +842,8 @@ restart_load_state() {
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
+  OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
   local prior_status retry_count
   prior_status=$(jq -r '.status // ""' "$rj")
   retry_count=$(jq -r '.retry_count // 0' "$rj")
@@ -778,6 +853,11 @@ restart_load_state() {
     exit 1
   fi
 
+  # Backfill OWNER_REPO from REMOTE_NAME when a legacy run.json predates it.
+  if [ -z "$OWNER_REPO" ] && [ "$REMOTE_NAME" != "origin" ]; then
+    resolve_owner_repo
+  fi
+
   # Only timed_out runs are restartable. Anything else is a usage error.
   if [ "$prior_status" != "timed_out" ]; then
     echo "orchestrate: --restart only applies to timed_out runs (status='$prior_status')" >&2
@@ -785,7 +865,7 @@ restart_load_state() {
   fi
 
   # Take the per-issue lock for the duration of the restart.
-  if ! lock_issue "$ISSUE_NUM"; then
+  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME"; then
     log "restart: lock held by another runner for issue #$ISSUE_NUM — skipping"
     exit 3
   fi
@@ -825,29 +905,29 @@ restart_load_state() {
   local issue_json="$RUN_DIR/issue.json"
   if [ ! -f "$issue_json" ]; then
     log "issue.json missing in $RUN_DIR — re-fetching from GitHub"
-    fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" > "$issue_json"
+    fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
   fi
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
   ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
 
-  # Refresh origin so RESTART_CONTEXT (git log origin/main..HEAD) compares the
-  # branch against the real remote tip. Soft: a failed fetch only risks a
-  # slightly stale comparison base — not worth blocking an in-flight run.
+  # Refresh the chosen remote so RESTART_CONTEXT (git log <remote>/<base>..HEAD)
+  # compares the branch against the real remote tip. Soft: a failed fetch only
+  # risks a slightly stale comparison base — not worth blocking an in-flight run.
   local rfrc=0
-  refresh_origin "$REPO_ROOT" 2>>"$RUN_DIR/origin-fetch.log" || rfrc=$?
+  refresh_origin "$REPO_ROOT" "$REMOTE_NAME" 2>>"$RUN_DIR/origin-fetch.log" || rfrc=$?
   case "$rfrc" in
-    0) state_event "$RUN_DIR" "origin_fetched" "phase=restart" ;;
-    2) state_event "$RUN_DIR" "origin_fetch_skipped" "phase=restart" "reason=no_origin" ;;
-    1) log "restart: 'git fetch origin' failed — RESTART_CONTEXT may use a stale origin/main (non-fatal)"
-       state_event "$RUN_DIR" "origin_fetch_failed_soft" "phase=restart" ;;
+    0) state_event "$RUN_DIR" "origin_fetched" "phase=restart" "remote=$REMOTE_NAME" ;;
+    2) state_event "$RUN_DIR" "origin_fetch_skipped" "phase=restart" "reason=no_origin" "remote=$REMOTE_NAME" ;;
+    1) log "restart: 'git fetch $REMOTE_NAME' failed — RESTART_CONTEXT may use a stale $REMOTE_NAME/main (non-fatal)"
+       state_event "$RUN_DIR" "origin_fetch_failed_soft" "phase=restart" "remote=$REMOTE_NAME" ;;
   esac
 
   # Restart context: the commits already on the feature branch so the
   # implementer continues from verification instead of starting over.
   # Diff against the SAME base the branch was cut from, so the restart context
   # lists only this run's own commits (not commits that diverged on the base).
-  RESTART_CONTEXT=$(git -C "$WORKTREE_PATH" log --oneline "origin/${BASE_BRANCH:-main}..HEAD" 2>/dev/null || true)
+  RESTART_CONTEXT=$(git -C "$WORKTREE_PATH" log --oneline "${REMOTE_NAME}/${BASE_BRANCH:-main}..HEAD" 2>/dev/null || true)
   [ -n "$RESTART_CONTEXT" ] || RESTART_CONTEXT="(ei committeja vielä haaralla — edellinen ajo katkesi ennen ensimmäistä committia)"
 
   # Ramped, capped timeout: base * (1 + retry_count). load_repo_timeout sets the
@@ -886,6 +966,8 @@ continue_load_state() {
   WORKTREE_PATH=$(jq -r '.worktree_path // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
+  OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
   local prior_status round
   prior_status=$(jq -r '.status // ""' "$rj")
   round=$(jq -r '.clarification_round // 0' "$rj")
@@ -895,6 +977,11 @@ continue_load_state() {
     exit 1
   fi
 
+  # Backfill OWNER_REPO from REMOTE_NAME when a legacy run.json predates it.
+  if [ -z "$OWNER_REPO" ] && [ "$REMOTE_NAME" != "origin" ]; then
+    resolve_owner_repo
+  fi
+
   # Only awaiting_clarification runs are continuable. Anything else is a usage error.
   if [ "$prior_status" != "awaiting_clarification" ]; then
     echo "orchestrate: --continue only applies to awaiting_clarification runs (status='$prior_status')" >&2
@@ -902,7 +989,7 @@ continue_load_state() {
   fi
 
   # Take the per-issue lock for the duration of the continue.
-  if ! lock_issue "$ISSUE_NUM"; then
+  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME"; then
     log "continue: lock held by another runner for issue #$ISSUE_NUM — skipping"
     exit 3
   fi
@@ -934,7 +1021,7 @@ continue_load_state() {
 
   # Fetch the freshest issue payload and locate maintainer's reply via the marker.
   local issue_json="$RUN_DIR/issue.json"
-  fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" > "$issue_json"
+  fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
 
   local marker_line marker_ts answer
   marker_line=$(parse_marker "$issue_json")
@@ -968,16 +1055,16 @@ continue_load_state() {
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
   ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
 
-  # Refresh origin so the re-run cycle-review reasons against the real remote
-  # tip. Soft: a failed fetch only means cycle-review sees a possibly stale
-  # origin/main — not worth blocking a parked clarification run.
+  # Refresh the chosen remote so the re-run cycle-review reasons against the
+  # real remote tip. Soft: a failed fetch only means cycle-review sees a
+  # possibly stale <remote>/main — not worth blocking a parked clarification run.
   local rfrc=0
-  refresh_origin "$REPO_ROOT" 2>>"$RUN_DIR/origin-fetch.log" || rfrc=$?
+  refresh_origin "$REPO_ROOT" "$REMOTE_NAME" 2>>"$RUN_DIR/origin-fetch.log" || rfrc=$?
   case "$rfrc" in
-    0) state_event "$RUN_DIR" "origin_fetched" "phase=continue" ;;
-    2) state_event "$RUN_DIR" "origin_fetch_skipped" "phase=continue" "reason=no_origin" ;;
-    1) log "continue: 'git fetch origin' failed — cycle-review sees possibly stale origin/main (non-fatal)"
-       state_event "$RUN_DIR" "origin_fetch_failed_soft" "phase=continue" ;;
+    0) state_event "$RUN_DIR" "origin_fetched" "phase=continue" "remote=$REMOTE_NAME" ;;
+    2) state_event "$RUN_DIR" "origin_fetch_skipped" "phase=continue" "reason=no_origin" "remote=$REMOTE_NAME" ;;
+    1) log "continue: 'git fetch $REMOTE_NAME' failed — cycle-review sees possibly stale $REMOTE_NAME/main (non-fatal)"
+       state_event "$RUN_DIR" "origin_fetch_failed_soft" "phase=continue" "remote=$REMOTE_NAME" ;;
   esac
 
   # Build the clarification context fed into the re-run cycle-review prompt.
@@ -1059,9 +1146,21 @@ _post_situation_to_issue() {
     fi
   fi
 
-  comment_issue "$REPO_ROOT" "$ISSUE_NUM" "$body" || true
+  comment_issue "$REPO_ROOT" "$ISSUE_NUM" "$body" "$OWNER_REPO" "$REMOTE_NAME" || true
   state_event "$RUN_DIR" "situation_posted" "kind=${kind}" "awaitable=${awaitable}" || true
   return 0
+}
+
+# _gh_for_labels — choose the gh-invocation flavour for label management.
+# Mirrors _issue_gh's per-org App scope-out: when REMOTE_NAME is origin we go
+# through gha_with_token so labels are attributed to <app>[bot]; otherwise we
+# fall back to plain gh (the App's installation token is per-org and would be
+# the wrong credential for a non-origin remote). Keeps the label helpers tight.
+_gh_for_labels() {
+  case "$REMOTE_NAME" in
+    ""|origin) gha_with_token gh "$@" ;;
+    *)         gh "$@" ;;
+  esac
 }
 
 # _add_waiting_label / _remove_waiting_label — best-effort label management for
@@ -1069,12 +1168,15 @@ _post_situation_to_issue() {
 # and the poller from re-picking the issue while it waits for maintainer's reply (both
 # exclude -label:waiting). Failures are non-fatal.
 _add_waiting_label() {
-  ( cd "$REPO_ROOT" && gha_with_token gh label create waiting --color FBCA04 \
+  # shellcheck disable=SC2046
+  ( cd "$REPO_ROOT" && _gh_for_labels label create waiting $(_repo_args "$OWNER_REPO") --color FBCA04 \
       --description "Odottaa ihmisen vastausta — automaattinen ajo jatkaa kommentista" >/dev/null 2>&1 ) || true
-  ( cd "$REPO_ROOT" && gha_with_token gh issue edit "$ISSUE_NUM" --add-label waiting >/dev/null 2>&1 ) || true
+  # shellcheck disable=SC2046
+  ( cd "$REPO_ROOT" && _gh_for_labels issue edit "$ISSUE_NUM" $(_repo_args "$OWNER_REPO") --add-label waiting >/dev/null 2>&1 ) || true
 }
 _remove_waiting_label() {
-  ( cd "$REPO_ROOT" && gha_with_token gh issue edit "$ISSUE_NUM" --remove-label waiting >/dev/null 2>&1 ) || true
+  # shellcheck disable=SC2046
+  ( cd "$REPO_ROOT" && _gh_for_labels issue edit "$ISSUE_NUM" $(_repo_args "$OWNER_REPO") --remove-label waiting >/dev/null 2>&1 ) || true
 }
 
 # _finalize_awaiting_clarification — shared NEEDS_CLARIFICATION terminal path.
@@ -1102,9 +1204,11 @@ _finalize_awaiting_clarification() {
 # env-bootstrap gate, which posts its own log-mode situation comment but still
 # needs the same hand-off signal.
 _add_needs_human_label() {
-  ( cd "$REPO_ROOT" && gha_with_token gh label create needs-human --color B60205 \
+  # shellcheck disable=SC2046
+  ( cd "$REPO_ROOT" && _gh_for_labels label create needs-human $(_repo_args "$OWNER_REPO") --color B60205 \
       --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
-  ( cd "$REPO_ROOT" && gha_with_token gh issue edit "$ISSUE_NUM" --add-label needs-human >/dev/null 2>&1 ) || true
+  # shellcheck disable=SC2046
+  ( cd "$REPO_ROOT" && _gh_for_labels issue edit "$ISSUE_NUM" $(_repo_args "$OWNER_REPO") --add-label needs-human >/dev/null 2>&1 ) || true
 }
 
 # _hand_to_human <message> [<artifact-file>] — best-effort: post a full
@@ -1159,12 +1263,14 @@ EOF
   local lbl
   while IFS= read -r lbl; do
     [ -n "$lbl" ] || continue
-    ( cd "$REPO_ROOT" && gha_with_token gh label create "$lbl" >/dev/null 2>&1 ) || true
+    # shellcheck disable=SC2046
+    ( cd "$REPO_ROOT" && _gh_for_labels label create "$lbl" $(_repo_args "$OWNER_REPO") >/dev/null 2>&1 ) || true
   done <<EOF
 $(printf '%s' "$matched" | tr ',' '\n')
 EOF
 
-  if ( cd "$REPO_ROOT" && gha_with_token gh pr edit "$pr" --add-label "$matched" >/dev/null 2>&1 ); then
+  # shellcheck disable=SC2046
+  if ( cd "$REPO_ROOT" && _gh_for_labels pr edit "$pr" $(_repo_args "$OWNER_REPO") --add-label "$matched" >/dev/null 2>&1 ); then
     log "propagate_pr_labels: added [$matched] to PR (issue #$ISSUE_NUM)"
     state_event "$RUN_DIR" "pr_labels_propagated" "labels=$matched"
   else
@@ -1177,8 +1283,9 @@ resume_cancel() {
   state_finalize "$RUN_DIR" "cancelled" "cancelled_at_gate"
   comment_issue "$REPO_ROOT" "$ISSUE_NUM" \
     "/run-issues peruutettu review-gate-vaiheessa. Worktree ja branch jätettiin paikoilleen: \`$WORKTREE_PATH\` ja \`$BRANCH\`. Voit jatkaa manuaalisesti tai poistaa nuo." \
+    "$OWNER_REPO" "$REMOTE_NAME" \
     || true
-  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" || true
+  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" || true
   exit 0
 }
 
@@ -1587,17 +1694,18 @@ PROVISION_ENV
     *PARTIAL*|*NEEDS_FOLLOWUP*) pr_draft_flag="--draft" ;;
   esac
 
-  # When App mode is on, push as the App via `git -c http.extraheader=...` so
-  # the commit's pusher event (and any GitHub Actions triggered by it) is
-  # attributed to <app>[bot]. The header value is captured into a LOCAL
-  # variable that we never echo to stdout/stderr, and the `git -c` flag keeps
-  # the token out of .git/config (unlike `git remote set-url` with a tokenised
-  # URL, which would persist the secret). `gha_git_push_header` returns
-  # non-zero when App mode is off — we just push without the header in that
-  # case (default credential helper).
+  # When App mode is on AND the remote is origin, push as the App via
+  # `git -c http.extraheader=...` so the commit's pusher event (and any GitHub
+  # Actions triggered by it) is attributed to <app>[bot]. The header value is
+  # captured into a LOCAL variable that we never echo to stdout/stderr, and the
+  # `git -c` flag keeps the token out of .git/config (unlike `git remote
+  # set-url` with a tokenised URL, which would persist the secret). For
+  # non-origin remotes we skip the App header (per-org App scope-out — the
+  # token is minted for the wrong org) and let the credential helper handle
+  # auth.
   local _push_auth_header=""
   local _gha_hdr=""
-  if _gha_hdr=$(gha_git_push_header 2>/dev/null); then
+  if [ "$REMOTE_NAME" = "origin" ] && _gha_hdr=$(gha_git_push_header 2>/dev/null); then
     _push_auth_header="$_gha_hdr"
   fi
   _gha_hdr=""
@@ -1607,12 +1715,12 @@ PROVISION_ENV
       cd "$WORKTREE_PATH"
       # Quoting matters: $_push_auth_header contains a space. Pass it as one
       # token via -c "http.extraheader=..."; do not let the shell split it.
-      git -c "http.extraheader=$_push_auth_header" push --set-upstream origin "$BRANCH"
+      git -c "http.extraheader=$_push_auth_header" push --set-upstream "$REMOTE_NAME" "$BRANCH"
     ) >> "$RUN_DIR/git-push.log" 2>&1
   else
     (
       cd "$WORKTREE_PATH"
-      git push --set-upstream origin "$BRANCH"
+      git push --set-upstream "$REMOTE_NAME" "$BRANCH"
     ) >> "$RUN_DIR/git-push.log" 2>&1
   fi
   local push_rc=$?
@@ -1638,9 +1746,15 @@ PROVISION_ENV
 
   local pr_url=""
   set +e
+  # `gh pr create` is routed via _gh_for_labels so the PR's author is the App
+  # for origin and the personal account for non-origin (per-org App scope-out).
+  # The repo flag pins it to the source remote's org so a non-origin remote
+  # opens the PR there instead of in origin's repo.
   pr_url=$(
     cd "$REPO_ROOT"
-    gha_with_token gh pr create \
+    # shellcheck disable=SC2046
+    _gh_for_labels pr create \
+      $(_repo_args "$OWNER_REPO") \
       --head "$BRANCH" \
       $base_flag \
       --title "Auto: $ISSUE_TITLE (#$ISSUE_NUM)" \

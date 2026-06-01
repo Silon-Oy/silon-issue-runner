@@ -9,6 +9,8 @@
 #
 # Flags:
 #   --repo <path>   target repo root (default: $(pwd))
+#   --remote <name> when paired with --issue, only clean runs from this remote
+#                   (default: all remotes match). Multi-org support (#53).
 #   --dry-run       print actions, do not execute
 #   --yes / -y      skip confirmation prompts
 #   --force         also clean runs whose status is "completed" (those normally
@@ -36,6 +38,10 @@ ASSUME_YES=0
 FORCE=0
 MODE=""
 TARGET=""
+# Remote filter for --issue mode (empty = match any remote). Per-run lock teardown
+# and gh routing read remote from each run's run.json so this flag only narrows
+# the SELECTION; the lock removal still uses the right namespace per run.
+REMOTE_FILTER=""
 
 usage() {
   sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'
@@ -45,6 +51,7 @@ usage() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo)    REPO_ROOT="$2"; shift 2 ;;
+    --remote)  REMOTE_FILTER="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -y|--yes)  ASSUME_YES=1; shift ;;
     --force)   FORCE=1; shift ;;
@@ -92,6 +99,8 @@ fi
 # path here by hand was the original bug (it used issue-N without the .lock
 # suffix). Sourcing also defines RUN_ISSUES_LOCK_ROOT (default under
 # ~/Library/Application Support/run-issues/locks), honouring any test override.
+# locking.sh pulls in git-remote.sh for remote_label, used to name multi-remote
+# locks (`<remote>-issue-<N>.lock` for non-origin).
 LOCKING_LIB="$SCRIPT_DIR/lib/locking.sh"
 if [ -f "$LOCKING_LIB" ]; then
   # shellcheck source=lib/locking.sh
@@ -185,31 +194,40 @@ cleanup_run() {
     return 1
   fi
 
-  local status issue_num branch worktree_path db_clone provision_env
+  local status issue_num branch worktree_path db_clone provision_env remote owner_repo
   status=$(run_field "$rid" '.status')
   issue_num=$(run_field "$rid" '.issue_number')
   branch=$(run_field "$rid" '.branch')
   worktree_path=$(run_field "$rid" '.worktree_path')
   db_clone=$(run_field "$rid" '.db_clone')
   provision_env=$(run_field "$rid" '.provision_test_env')
+  # Multi-remote: empty -> "origin" (legacy run.json predating the field).
+  remote=$(run_field "$rid" '.remote')
+  [ -n "$remote" ] || remote="origin"
+  owner_repo=$(run_field "$rid" '.owner_repo')
 
   if [ "$status" = "completed" ] && [ "$FORCE" != "1" ]; then
     printf 'SKIP %s — status=completed (PR likely open; pass --force to clean anyway)\n' "$rid"
     return 0
   fi
 
-  printf '\nCleaning %s (status=%s issue=%s):\n' \
-    "$rid" "${status:-unknown}" "${issue_num:-?}"
+  printf '\nCleaning %s (status=%s issue=%s remote=%s):\n' \
+    "$rid" "${status:-unknown}" "${issue_num:-?}" "$remote"
+
+  # Route gh calls to the right org for non-origin runs.
+  local repo_args=""
+  [ -n "$owner_repo" ] && repo_args="--repo $owner_repo"
 
   if [ -n "$issue_num" ]; then
+    # shellcheck disable=SC2086
     (
       cd "$REPO_ROOT"
-      do_or_dry "unassign" gh issue edit "$issue_num" --remove-assignee "@me"
+      do_or_dry "unassign" gh issue edit "$issue_num" $repo_args --remove-assignee "@me"
       # Drop the needs-human label so the issue re-enters auto-run pickup once
       # unassigned. Without this the poll re-surfaces the issue as no:assignee
       # but the stale label lingers. Best-effort: do_or_dry swallows the
       # non-fatal failure when the label is absent.
-      do_or_dry "unlabel" gh issue edit "$issue_num" --remove-label needs-human
+      do_or_dry "unlabel" gh issue edit "$issue_num" $repo_args --remove-label needs-human
     )
   fi
 
@@ -274,11 +292,11 @@ cleanup_run() {
 
   if [ -n "$issue_num" ]; then
     local lock_dir
-    lock_dir="$(_lock_dir "$issue_num")"
+    lock_dir="$(_lock_dir "$issue_num" "$remote")"
     if [ -d "$lock_dir" ]; then
       do_or_dry "lock" rm -rf "$lock_dir"
     else
-      printf '  lock: issue-%s not held\n' "$issue_num"
+      printf '  lock: %s not held\n' "$(basename "$lock_dir" .lock)"
     fi
   fi
 }
@@ -288,7 +306,7 @@ select_runs() {
   # Emits one run-id per line on stdout. bash 3.2 compatible — no mapfile,
   # no associative arrays.
   shopt -s nullglob
-  local d rid n s
+  local d rid n s r
   case "$MODE" in
     single)
       [ -n "$TARGET" ] && printf '%s\n' "$TARGET"
@@ -298,7 +316,13 @@ select_runs() {
       for d in "$RUNS_DIR"/*/; do
         rid=$(basename "$d")
         n=$(run_field "$rid" '.issue_number')
-        [ "$n" = "$TARGET" ] && printf '%s\n' "$rid"
+        [ "$n" = "$TARGET" ] || continue
+        if [ -n "$REMOTE_FILTER" ]; then
+          r=$(run_field "$rid" '.remote')
+          [ -n "$r" ] || r="origin"
+          [ "$r" = "$REMOTE_FILTER" ] || continue
+        fi
+        printf '%s\n' "$rid"
       done
       ;;
     all)

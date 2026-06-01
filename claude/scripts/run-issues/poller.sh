@@ -71,6 +71,13 @@ LIB_STATE="${DOTFILES}/claude/scripts/run-issues/lib/state.sh"
 # shellcheck source=lib/state.sh
 [ -f "$LIB_STATE" ] && . "$LIB_STATE"
 
+# remote_label / resolve_remote_to_owner_repo live in lib/git-remote.sh. Used by
+# the (repo × remote) iteration to derive owner/repo for `gh --repo` routing and
+# tmux session / lock naming. Pure functions; safe to source.
+LIB_GIT_REMOTE="${DOTFILES}/claude/scripts/run-issues/lib/git-remote.sh"
+# shellcheck source=lib/git-remote.sh
+[ -f "$LIB_GIT_REMOTE" ] && . "$LIB_GIT_REMOTE"
+
 # _iso_to_epoch <iso-utc-ts> — convert an ISO-8601 Zulu timestamp (the format
 # state.sh writes: YYYY-MM-DDTHH:MM:SSZ) to Unix epoch seconds. Empty string on
 # parse failure (callers treat this as "can't compare, leave it alone"). macOS
@@ -97,6 +104,10 @@ _iso_to_epoch() {
 # scan_clean) — a foreign machine's live session is never touched. Pure: no
 # tmux kill, no gh call — just selection. The caller (finalize_stalled) does
 # the side effects under its own log line.
+#
+# Multi-remote: scan_stalled does NOT filter by remote — a stalled run on ANY
+# remote should be finalized regardless. The run.json .remote field is read by
+# finalize_stalled to build the right namespaced tmux session names to kill.
 scan_stalled() {
   local repo_path="$1"
   local runs_dir="$repo_path/.claude/run-issues"
@@ -162,10 +173,13 @@ finalize_stalled() {
   local rj="$run_dir/run.json"
   [ -f "$rj" ] || return 0
 
-  local current_state repo host_in_run
+  local current_state repo host_in_run remote_in_run
   current_state=$(jq -r '.current_state // "unknown"' "$rj" 2>/dev/null || echo "unknown")
   repo=$(jq -r '.repo // empty' "$rj" 2>/dev/null || echo "")
   host_in_run=$(jq -r '.host // empty' "$rj" 2>/dev/null || echo "")
+  # Multi-remote (issue #53): empty -> "origin" (legacy run.json predating the
+  # field). The remote drives tmux session naming and lock teardown below.
+  remote_in_run=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
   # Defense in depth: scan_stalled host-gates, but a misalignment between
   # caller and helper would otherwise let us tap a foreign session.
   if [ -n "$host_in_run" ] && [ "$host_in_run" != "$THIS_HOST" ]; then
@@ -174,13 +188,16 @@ finalize_stalled() {
   fi
   local reason="stalled_in_${current_state}"
 
-  echo "$(date -u +%FT%TZ) poller: STALLED issue=#${issue} state=${current_state} run_dir=${run_dir} — killing tmux sessions and finalizing blocked/${reason}" >> "$LOG"
+  echo "$(date -u +%FT%TZ) poller: STALLED issue=#${issue} remote=${remote_in_run} state=${current_state} run_dir=${run_dir} — killing tmux sessions and finalizing blocked/${reason}" >> "$LOG"
 
   # Kill any tmux session for this issue. There is exactly one orchestrator per
-  # issue (the per-issue lock guarantees it), but it could carry any of three
-  # prefixes depending on how it was launched. Iterate all three defensively.
-  local sess
-  for sess in "run-issues-${issue}" "run-issues-restart-${issue}" "run-issues-continue-${issue}"; do
+  # (remote, issue) pair (the per-issue lock guarantees it), but it could carry
+  # any of four prefixes depending on how it was launched. The suffix shape
+  # depends on the remote (origin keeps the legacy `<N>`; others use
+  # `<remote>-issue-<N>`), so derive it from session_suffix.
+  local suffix sess
+  suffix=$(session_suffix "$remote_in_run" "$issue")
+  for sess in "run-issues-${suffix}" "run-issues-restart-${suffix}" "run-issues-continue-${suffix}" "run-issues-clean-${suffix}"; do
     if tmux has-session -t "$sess" 2>/dev/null; then
       echo "$(date -u +%FT%TZ) poller: killing stalled tmux session $sess" >> "$LOG"
       tmux kill-session -t "$sess" 2>/dev/null || true
@@ -227,22 +244,32 @@ finalize_stalled() {
   fi
 
   # Release the per-issue advisory lock (its owner is dead). Same path shape as
-  # lib/locking.sh; idempotent — a missing lock is fine.
+  # lib/locking.sh; idempotent — a missing lock is fine. Lock name uses the
+  # remote-namespaced label (origin keeps the legacy `issue-<N>` shape).
   local lock_root="${RUN_ISSUES_LOCK_ROOT:-${HOME}/Library/Application Support/run-issues/locks}"
-  rm -rf "${lock_root}/issue-${issue}.lock" 2>/dev/null || true
+  local lock_label
+  lock_label=$(remote_label "$remote_in_run" "$issue")
+  rm -rf "${lock_root}/${lock_label}.lock" 2>/dev/null || true
 
   return 0
 }
 
-# scan_timed_out <repo-path> — prints "<issue-number> <run-dir>" lines for
-# timed_out runs on THIS host that still have retry budget. Modelled on
-# pr-watch.sh's scan_candidates: iterate run.json files, gate on host so we
+# scan_timed_out <repo-path> [<remote>] — prints "<issue-number> <run-dir>"
+# lines for timed_out runs on THIS host that still have retry budget. Modelled
+# on pr-watch.sh's scan_candidates: iterate run.json files, gate on host so we
 # never restart a worktree that lives on another machine.
+#
+# Multi-remote: when <remote> is provided, only emit runs whose run.json
+# .remote field matches (empty remote in run.json is treated as "origin", so
+# legacy runs are picked up by the default origin iteration). When <remote> is
+# omitted (legacy single-arg call), no remote filter is applied — every local
+# timed-out run is emitted regardless of remote.
 scan_timed_out() {
   local repo_path="$1"
+  local want_remote="${2:-}"
   local runs_dir="$repo_path/.claude/run-issues"
   [ -d "$runs_dir" ] || return 0
-  local rj status host retry inum
+  local rj status host retry inum rem
   shopt -s nullglob
   for rj in "$runs_dir"/*/run.json; do
     status=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
@@ -251,6 +278,10 @@ scan_timed_out() {
     # Empty host = pre-host-field run.json; treat as local (best effort).
     if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
       continue
+    fi
+    if [ -n "$want_remote" ]; then
+      rem=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
+      [ "$rem" = "$want_remote" ] || continue
     fi
     retry=$(jq -r '.retry_count // 0' "$rj" 2>/dev/null || echo 0)
     [ "$retry" -lt "$RUN_ISSUES_MAX_RETRIES" ] || continue
@@ -262,17 +293,24 @@ scan_timed_out() {
   return 0
 }
 
-# scan_answered <repo-path> — prints "<issue-number> <run-dir>" lines for
-# awaiting_clarification runs on THIS host that (a) still have clarification
-# budget and (b) have a fresh human reply on the issue. Sibling of
-# scan_timed_out with the same host gate. Kept cheap: it only hits the network
-# (fetch_issue_json + parse_marker + detect_answer) for LOCAL runs that are
-# actually parked — never a blanket scan of all issues.
+# scan_answered <repo-path> [<remote>] [<owner/repo>] — prints
+# "<issue-number> <run-dir>" lines for awaiting_clarification runs on THIS host
+# that (a) still have clarification budget and (b) have a fresh human reply on
+# the issue. Sibling of scan_timed_out with the same host gate. Kept cheap: it
+# only hits the network (fetch_issue_json + parse_marker + detect_answer) for
+# LOCAL runs that are actually parked — never a blanket scan of all issues.
+#
+# Multi-remote: when <remote> is provided, only emit runs whose run.json
+# .remote field matches, and route the gh fetch through `gh --repo owner/repo`
+# so the right org's API is queried. When omitted, behaves like the legacy
+# single-arg version (no remote filter, gh inferred from cwd).
 scan_answered() {
   local repo_path="$1"
+  local want_remote="${2:-}"
+  local owner_repo="${3:-}"
   local runs_dir="$repo_path/.claude/run-issues"
   [ -d "$runs_dir" ] || return 0
-  local rj status host round inum repo marker_ts answer
+  local rj status host round inum repo marker_ts answer rem effective_remote
   shopt -s nullglob
   for rj in "$runs_dir"/*/run.json; do
     status=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
@@ -281,6 +319,13 @@ scan_answered() {
     # Empty host = pre-host-field run.json; treat as local (best effort).
     if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
       continue
+    fi
+    if [ -n "$want_remote" ]; then
+      rem=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
+      [ "$rem" = "$want_remote" ] || continue
+      effective_remote="$want_remote"
+    else
+      effective_remote="origin"
     fi
     round=$(jq -r '.clarification_round // 0' "$rj" 2>/dev/null || echo 0)
     [ "$round" -lt "$RUN_ISSUES_MAX_CLARIFICATIONS" ] || continue
@@ -291,7 +336,7 @@ scan_answered() {
 
     # Network: only for this local, parked run. Find the marker, then a reply.
     local issue_json
-    issue_json=$(fetch_issue_json "$repo" "$inum" 2>/dev/null || true)
+    issue_json=$(fetch_issue_json "$repo" "$inum" "$owner_repo" "$effective_remote" 2>/dev/null || true)
     [ -n "$issue_json" ] || continue
     local tmp_json
     tmp_json=$(mktemp)
@@ -308,26 +353,31 @@ scan_answered() {
   return 0
 }
 
-# scan_clean <repo-path> — prints UNIQUE "<issue-number> <repo-path>" lines for
-# issues that (a) have at least one LOCAL run-dir on THIS host and (b) currently
-# carry the RUN_ISSUES_CLEAN_LABEL but NOT auto-clean-skipped.
+# scan_clean <repo-path> [<remote>] [<owner/repo>] — prints UNIQUE
+# "<issue-number> <repo-path>" lines for issues that (a) have at least one
+# LOCAL run-dir on THIS host (filtered by remote when provided) and (b)
+# currently carry the RUN_ISSUES_CLEAN_LABEL but NOT auto-clean-skipped.
 #
 # Two phases keep network use minimal (the same discipline as scan_answered):
-#   Phase 1 — collect the unique set of issue numbers that have a local run-dir,
-#             host-gated. No network.
-#   Phase 2 — for each unique issue only, one `gh issue view` to read its labels.
+#   Phase 1 — collect the unique set of issue numbers that have a local run-dir
+#             matching the (host, remote) gate. No network.
+#   Phase 2 — for each unique issue only, one `gh issue view --repo owner/repo`
+#             to read its labels in the right org. When owner/repo is empty,
+#             gh falls back to cwd-based resolution (legacy single-remote).
 # bash 3.2 has no associative arrays, so the unique set is a temp file fed
 # through `sort -u`.
 scan_clean() {
   local repo_path="$1"
+  local want_remote="${2:-}"
+  local owner_repo="${3:-}"
   local runs_dir="$repo_path/.claude/run-issues"
   [ -d "$runs_dir" ] || return 0
 
-  local rj host inum
+  local rj host inum rem
   local seen
   seen=$(mktemp)
 
-  # Phase 1: collect unique LOCAL issue numbers (host-gated).
+  # Phase 1: collect unique LOCAL issue numbers (host-gated, remote-gated).
   shopt -s nullglob
   for rj in "$runs_dir"/*/run.json; do
     host=$(jq -r '.host // ""' "$rj" 2>/dev/null || echo "")
@@ -335,17 +385,25 @@ scan_clean() {
     if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
       continue
     fi
+    if [ -n "$want_remote" ]; then
+      rem=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
+      [ "$rem" = "$want_remote" ] || continue
+    fi
     inum=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
     [ -n "$inum" ] && printf '%s\n' "$inum" >> "$seen"
   done
 
-  # Phase 2: per unique issue, read labels and decide.
-  local n labels
+  # Phase 2: per unique issue, read labels and decide. The label fetch is
+  # routed via `gh --repo` when owner_repo is set so non-origin remotes hit
+  # the right org's API.
+  local n labels repo_args=""
+  [ -n "$owner_repo" ] && repo_args="--repo $owner_repo"
   while IFS= read -r n; do
     [ -n "$n" ] || continue
+    # shellcheck disable=SC2086  # intentional word-splitting on repo_args
     labels=$(
       cd "$repo_path"
-      gh issue view "$n" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo ""
+      gh issue view "$n" $repo_args --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo ""
     )
     # auto-clean-skipped wins: already handed to a human, never re-emit.
     case ",$labels," in
@@ -399,6 +457,13 @@ fi
 
 # Iterate repos. We use a while-read loop instead of mapfile because
 # macOS ships bash 3.2 by default, which lacks the mapfile builtin.
+#
+# Multi-remote (issue #53): each repo entry may carry a `remotes` array of
+# git-remote names (default `["origin"]`). We iterate (repo × remote), routing
+# scans + spawns per remote so a single clone can poll issues from multiple
+# orgs at once without colliding their identities. owner/repo is derived
+# per-remote from `git remote get-url`; an unresolvable remote is skipped with
+# a WARNING (the other remotes still proceed).
 while IFS= read -r repo_json; do
   [ -n "$repo_json" ] || continue
 
@@ -413,126 +478,151 @@ while IFS= read -r repo_json; do
   LABELS_CSV="$REPO_LABELS"
   [ -z "$LABELS_CSV" ] && LABELS_CSV="$DEFAULT_LABELS"
 
-  # ----- Clean labelled issues FIRST (before restart/continue/pick) --------
-  # An issue carrying RUN_ISSUES_CLEAN_LABEL with a local run-dir gets its
-  # temporary resources torn down and the issue closed by auto-clean.sh. This
-  # runs first so a clean request is not starved by new-issue pickup. Cleans
-  # count against GLOBAL_MAX like every other spawned session. auto-clean.sh is
-  # NOT run with RUN_ISSUES_AUTO=1 — it makes no code changes, only teardown.
-  while IFS= read -r clean_line; do
-    [ -n "$clean_line" ] || continue
-    CLEAN_ISSUE="${clean_line%% *}"
-    CLEAN_REPO="${clean_line#* }"
+  # remotes array (default ["origin"]) — newline-separated for the inner loop.
+  # A bad/empty array (missing field, non-array, empty) is treated as ["origin"]
+  # so the entry keeps working unchanged. We tolerate stringly-typed values to
+  # protect against a human watchlist edit slip.
+  REMOTES_LIST=$(jq -r '
+    (.remotes // ["origin"])
+    | if type == "array" then . else ["origin"] end
+    | map(select(type == "string" and length > 0))
+    | if length == 0 then ["origin"] else . end
+    | join("\n")
+  ' <<<"$repo_json")
 
-    CL_SESSION="run-issues-clean-${CLEAN_ISSUE}"
-    if tmux has-session -t "$CL_SESSION" 2>/dev/null; then
-      echo "$(date -u +%FT%TZ) poller: clean session $CL_SESSION already running" >> "$LOG"
+  for REMOTE in $REMOTES_LIST; do
+    # Resolve owner/repo via `git remote get-url <REMOTE>`. A missing or
+    # un-parseable URL means we cannot route gh calls correctly — skip this
+    # remote with a WARNING and let the other remotes proceed. Origin keeps
+    # legacy behaviour: owner/repo MAY be empty (existing gh-CLI cwd default).
+    OWNER_REPO=""
+    if ! OWNER_REPO=$(resolve_remote_to_owner_repo "$REPO_PATH" "$REMOTE" 2>/dev/null); then
+      if [ "$REMOTE" = "origin" ]; then
+        # origin special case: an un-parseable URL is non-fatal at the poller
+        # level — the orchestrator falls back to gh-CLI cwd resolution. Many
+        # existing repos have github.com SSH/HTTPS URLs that DO parse, so this
+        # is just defense in depth.
+        OWNER_REPO=""
+      else
+        echo "$(date -u +%FT%TZ) poller: WARNING remote '$REMOTE' missing or URL un-parseable in $REPO_PATH — skipping" >> "$LOG"
+        continue
+      fi
+    fi
+
+    # Session suffix (origin keeps the legacy `<N>` shape so existing sessions
+    # are not orphaned; non-origin remotes get `<remote>-issue-<N>`).
+    # ----- Clean labelled issues FIRST (before restart/continue/pick) --------
+    while IFS= read -r clean_line; do
+      [ -n "$clean_line" ] || continue
+      CLEAN_ISSUE="${clean_line%% *}"
+      CLEAN_REPO="${clean_line#* }"
+      CL_SUFFIX=$(session_suffix "$REMOTE" "$CLEAN_ISSUE")
+      CL_SESSION="run-issues-clean-${CL_SUFFIX}"
+      if tmux has-session -t "$CL_SESSION" 2>/dev/null; then
+        echo "$(date -u +%FT%TZ) poller: clean session $CL_SESSION already running" >> "$LOG"
+        continue
+      fi
+      ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
+      if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
+        echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring clean of issue $CLEAN_ISSUE (remote=$REMOTE)" >> "$LOG"
+        break
+      fi
+      echo "$(date -u +%FT%TZ) poller: cleaning $CL_SESSION for repo=$CLEAN_REPO issue=$CLEAN_ISSUE remote=$REMOTE" >> "$LOG"
+      tmux new-session -d -s "$CL_SESSION" \
+        "'$AUTO_CLEAN' --repo '$CLEAN_REPO' --issue '$CLEAN_ISSUE' --remote '$REMOTE' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+    done < <(scan_clean "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
+
+    # ----- Restart timed-out runs FIRST (before picking new issues) ----------
+    while IFS= read -r restart_line; do
+      [ -n "$restart_line" ] || continue
+      RESTART_ISSUE="${restart_line%% *}"
+      RESTART_DIR="${restart_line#* }"
+      R_SUFFIX=$(session_suffix "$REMOTE" "$RESTART_ISSUE")
+      R_SESSION="run-issues-restart-${R_SUFFIX}"
+      if tmux has-session -t "$R_SESSION" 2>/dev/null; then
+        echo "$(date -u +%FT%TZ) poller: restart session $R_SESSION already running" >> "$LOG"
+        continue
+      fi
+      ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
+      if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
+        echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring restart of issue $RESTART_ISSUE (remote=$REMOTE)" >> "$LOG"
+        break
+      fi
+      echo "$(date -u +%FT%TZ) poller: restarting $R_SESSION for run=$RESTART_DIR remote=$REMOTE" >> "$LOG"
+      tmux new-session -d -s "$R_SESSION" \
+        "RUN_ISSUES_AUTO=1 '$ORCH' --restart '$RESTART_DIR' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+    done < <(scan_timed_out "$REPO_PATH" "$REMOTE")
+
+    # ----- Continue answered clarifications --------------------------------
+    while IFS= read -r continue_line; do
+      [ -n "$continue_line" ] || continue
+      CONTINUE_ISSUE="${continue_line%% *}"
+      CONTINUE_DIR="${continue_line#* }"
+      C_SUFFIX=$(session_suffix "$REMOTE" "$CONTINUE_ISSUE")
+      C_SESSION="run-issues-continue-${C_SUFFIX}"
+      if tmux has-session -t "$C_SESSION" 2>/dev/null; then
+        echo "$(date -u +%FT%TZ) poller: continue session $C_SESSION already running" >> "$LOG"
+        continue
+      fi
+      ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
+      if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
+        echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring continue of issue $CONTINUE_ISSUE (remote=$REMOTE)" >> "$LOG"
+        break
+      fi
+      echo "$(date -u +%FT%TZ) poller: continuing $C_SESSION for run=$CONTINUE_DIR remote=$REMOTE" >> "$LOG"
+      tmux new-session -d -s "$C_SESSION" \
+        "RUN_ISSUES_AUTO=1 '$ORCH' --continue '$CONTINUE_DIR' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+    done < <(scan_answered "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
+
+    # ----- Pick a new candidate issue (per remote) -------------------------
+    # gh issue list is routed via `--repo owner/repo` when known so a
+    # non-origin remote sees its own org's issues.
+    REPO_ARGS=""
+    [ -n "$OWNER_REPO" ] && REPO_ARGS="--repo $OWNER_REPO"
+    # shellcheck disable=SC2086
+    ISSUE_NUM=$(
+      cd "$REPO_PATH"
+      extra=""
+      if [ -n "$LABELS_CSV" ]; then
+        IFS=','
+        for label in $LABELS_CSV; do
+          [ -n "$label" ] || continue
+          extra+=" label:\"$label\""
+        done
+      fi
+      # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
+      # no longer accepts standalone --sort/--order flags on `issue list`.
+      gh issue list $REPO_ARGS \
+        --search "is:open no:assignee -label:blocked -label:waiting -label:wip -label:$RUN_ISSUES_CLEAN_LABEL sort:created-asc$extra" \
+        --limit 1 \
+        --json number \
+        --jq '.[0].number // empty' 2>/dev/null || true
+    )
+
+    if [ -z "$ISSUE_NUM" ]; then
       continue
     fi
 
-    ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
-    if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
-      echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring clean of issue $CLEAN_ISSUE" >> "$LOG"
-      break
-    fi
-
-    echo "$(date -u +%FT%TZ) poller: cleaning $CL_SESSION for repo=$CLEAN_REPO issue=$CLEAN_ISSUE" >> "$LOG"
-    tmux new-session -d -s "$CL_SESSION" \
-      "'$AUTO_CLEAN' --repo '$CLEAN_REPO' --issue '$CLEAN_ISSUE' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
-  done < <(scan_clean "$REPO_PATH")
-
-  # ----- Restart timed-out runs FIRST (before picking new issues) ----------
-  # A timed_out run on this host with retry budget left gets a higher timeout
-  # and continues from where it left off. Restarts count against GLOBAL_MAX.
-  while IFS= read -r restart_line; do
-    [ -n "$restart_line" ] || continue
-    RESTART_ISSUE="${restart_line%% *}"
-    RESTART_DIR="${restart_line#* }"
-
-    R_SESSION="run-issues-restart-${RESTART_ISSUE}"
-    if tmux has-session -t "$R_SESSION" 2>/dev/null; then
-      echo "$(date -u +%FT%TZ) poller: restart session $R_SESSION already running" >> "$LOG"
+    NEW_SUFFIX=$(session_suffix "$REMOTE" "$ISSUE_NUM")
+    SESSION="run-issues-${NEW_SUFFIX}"
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+      echo "$(date -u +%FT%TZ) poller: session $SESSION already running" >> "$LOG"
       continue
     fi
 
+    # Re-check cap before spawning.
     ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
     if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
-      echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring restart of issue $RESTART_ISSUE" >> "$LOG"
-      break
+      echo "$(date -u +%FT%TZ) poller: hit cap during loop ($ACTIVE/$GLOBAL_MAX) — breaking remote iter" >> "$LOG"
+      break 2  # break out of both the for-remote loop and the while-repos loop
     fi
 
-    echo "$(date -u +%FT%TZ) poller: restarting $R_SESSION for run=$RESTART_DIR" >> "$LOG"
-    tmux new-session -d -s "$R_SESSION" \
-      "RUN_ISSUES_AUTO=1 '$ORCH' --restart '$RESTART_DIR' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
-  done < <(scan_timed_out "$REPO_PATH")
+    echo "$(date -u +%FT%TZ) poller: launching $SESSION for repo=$REPO_PATH issue=$ISSUE_NUM remote=$REMOTE" >> "$LOG"
 
-  # ----- Continue answered clarifications (after restarts, before new picks) --
-  # An awaiting_clarification run on this host with a fresh reply and budget left
-  # re-runs cycle-review with the answer as context. Continues count against
-  # GLOBAL_MAX like restarts and new picks.
-  while IFS= read -r continue_line; do
-    [ -n "$continue_line" ] || continue
-    CONTINUE_ISSUE="${continue_line%% *}"
-    CONTINUE_DIR="${continue_line#* }"
-
-    C_SESSION="run-issues-continue-${CONTINUE_ISSUE}"
-    if tmux has-session -t "$C_SESSION" 2>/dev/null; then
-      echo "$(date -u +%FT%TZ) poller: continue session $C_SESSION already running" >> "$LOG"
-      continue
-    fi
-
-    ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
-    if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
-      echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring continue of issue $CONTINUE_ISSUE" >> "$LOG"
-      break
-    fi
-
-    echo "$(date -u +%FT%TZ) poller: continuing $C_SESSION for run=$CONTINUE_DIR" >> "$LOG"
-    tmux new-session -d -s "$C_SESSION" \
-      "RUN_ISSUES_AUTO=1 '$ORCH' --continue '$CONTINUE_DIR' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
-  done < <(scan_answered "$REPO_PATH")
-
-  # Find the candidate issue using gh inside the repo.
-  ISSUE_NUM=$(
-    cd "$REPO_PATH"
-    extra=""
-    if [ -n "$LABELS_CSV" ]; then
-      IFS=','
-      for label in $LABELS_CSV; do
-        [ -n "$label" ] || continue
-        extra+=" label:\"$label\""
-      done
-    fi
-    # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
-    # no longer accepts standalone --sort/--order flags on `issue list`.
-    gh issue list \
-      --search "is:open no:assignee -label:blocked -label:waiting -label:wip -label:$RUN_ISSUES_CLEAN_LABEL sort:created-asc$extra" \
-      --limit 1 \
-      --json number \
-      --jq '.[0].number // empty' 2>/dev/null || true
-  )
-
-  if [ -z "$ISSUE_NUM" ]; then
-    continue
-  fi
-
-  SESSION="run-issues-${ISSUE_NUM}"
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "$(date -u +%FT%TZ) poller: session $SESSION already running" >> "$LOG"
-    continue
-  fi
-
-  # Re-check cap before spawning (another iteration may have started one).
-  # See the note at the first ACTIVE assignment for why the fallback is outside
-  # the command substitution.
-  ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
-  if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
-    echo "$(date -u +%FT%TZ) poller: hit cap during loop ($ACTIVE/$GLOBAL_MAX)" >> "$LOG"
-    break
-  fi
-
-  echo "$(date -u +%FT%TZ) poller: launching $SESSION for repo=$REPO_PATH issue=$ISSUE_NUM" >> "$LOG"
-
-  tmux new-session -d -s "$SESSION" \
-    "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto RUN_ISSUES_LABELS_CSV='$LABELS_CSV' '$ORCH' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+    # Pass --remote to the orchestrator so it threads the right remote through
+    # every gh call, git push, fetch, and lock — the entire (issue → PR) chain
+    # routes to the source org.
+    tmux new-session -d -s "$SESSION" \
+      "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto RUN_ISSUES_LABELS_CSV='$LABELS_CSV' '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+  done
 done < <(jq -c '.repos[]?' "$WATCHLIST")
