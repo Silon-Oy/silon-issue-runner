@@ -54,6 +54,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/pr-watch-lib.sh"
 # shellcheck source=lib/claude-call.sh
 . "$SCRIPT_DIR/lib/claude-call.sh"
+# shellcheck source=lib/github-app-auth.sh
+# Opt-in GitHub App identity (same env vars as the orchestrator). gha_with_token
+# is a pass-through when App mode is off, so wrapping every gh call here is
+# regression-free for repos that don't configure the App.
+#
+# The watcher SHOULD use the same env file (~/.config/run-issues/env) as the
+# orchestrator: it's a LaunchAgent that does not inherit the interactive shell,
+# so we source the machine-local env if present — mirroring orchestrate.sh's
+# source_machine_env. (We do not factor this into a shared helper yet because
+# orchestrate.sh's version logs via its own `log` and we want the watcher's
+# behaviour identical without coupling the two.)
+RUN_ISSUES_ENV_FILE="${RUN_ISSUES_ENV_FILE:-$HOME/.config/run-issues/env}"
+if [ -f "$RUN_ISSUES_ENV_FILE" ]; then
+  set +eu
+  # shellcheck disable=SC1090
+  . "$RUN_ISSUES_ENV_FILE"
+  set -eu
+fi
+# shellcheck source=lib/github-app-auth.sh
+. "$SCRIPT_DIR/lib/github-app-auth.sh"
 
 PR_WATCH_AUTO="${PR_WATCH_AUTO:-0}"
 PR_WATCH_ENABLE_CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-0}"
@@ -168,7 +188,7 @@ watch_one() {
   local pr_json
   if ! pr_json=$(
         cd "$REPO_ROOT"
-        gh pr view "$pr_num" \
+        gha_with_token gh pr view "$pr_num" \
           --json state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName 2>/dev/null
       ); then
     log "gh pr view failed for PR #$pr_num"
@@ -219,7 +239,8 @@ watch_one() {
 
   # ----- P6: Merge --------------------------------------------------------
   log "merging PR #$pr_num (--rebase --delete-branch)"
-  if ! ( cd "$REPO_ROOT" && gh pr merge "$pr_num" --rebase --delete-branch ); then
+  # Merge as the App so the "Merged by" attribution on the PR is <app>[bot].
+  if ! ( cd "$REPO_ROOT" && gha_with_token gh pr merge "$pr_num" --rebase --delete-branch ); then
     log "merge failed for PR #$pr_num"
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
       state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=merge_failed"
@@ -324,12 +345,32 @@ pr_resolve() {
 
   # Fetch first so a network/auth failure is distinguishable from a conflict
   # (transient — retry next poll, do not claim a conflict or comment).
-  if ! ( cd "$worktree" && git fetch origin "$base_ref" --quiet ); then
-    log "git fetch origin $base_ref failed for PR #$pr_num — retrying next poll"
-    [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
-      state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
-    return 4
+  # When App mode is on we pass the App token via http.extraheader so the
+  # fetch credential matches the eventual push credential (otherwise a repo
+  # configured to only accept the App's PAT-equivalent would refuse fetch).
+  local _watch_auth_header=""
+  local _h=""
+  if _h=$(gha_git_push_header 2>/dev/null); then
+    _watch_auth_header="$_h"
   fi
+  _h=""
+  if [ -n "$_watch_auth_header" ]; then
+    if ! ( cd "$worktree" && git -c "http.extraheader=$_watch_auth_header" fetch origin "$base_ref" --quiet ); then
+      log "git fetch origin $base_ref failed for PR #$pr_num — retrying next poll"
+      [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
+      _watch_auth_header=""
+      return 4
+    fi
+  else
+    if ! ( cd "$worktree" && git fetch origin "$base_ref" --quiet ); then
+      log "git fetch origin $base_ref failed for PR #$pr_num — retrying next poll"
+      [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
+      return 4
+    fi
+  fi
+  _watch_auth_header=""
 
   # Attempt the rebase INSIDE the feature worktree, never on the base branch.
   local rebase_rc=0
@@ -435,7 +476,27 @@ _pr_publish_and_revalidate() {
   local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="${6:-main}"
 
   log "rebase landed — force-pushing $branch (--force-with-lease) and revalidating CI"
-  if ! ( cd "$worktree" && git push --force-with-lease origin "$branch" ); then
+  # Same token-via-extraheader pattern as the orchestrator's push. The header
+  # is captured to a local and never echoed; --force-with-lease still consults
+  # the local ref the worktree fetched, so there is no extra leak surface.
+  local _pub_auth_header=""
+  local _h2=""
+  if _h2=$(gha_git_push_header 2>/dev/null); then
+    _pub_auth_header="$_h2"
+  fi
+  _h2=""
+  local push_ok=0
+  if [ -n "$_pub_auth_header" ]; then
+    if ( cd "$worktree" && git -c "http.extraheader=$_pub_auth_header" push --force-with-lease origin "$branch" ); then
+      push_ok=1
+    fi
+  else
+    if ( cd "$worktree" && git push --force-with-lease origin "$branch" ); then
+      push_ok=1
+    fi
+  fi
+  _pub_auth_header=""
+  if [ "$push_ok" = "0" ]; then
     log "force-push failed for PR #$pr_num after rebase"
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
       state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=push_failed"
@@ -458,7 +519,7 @@ _pr_publish_and_revalidate() {
     "PR-valvoja rebasesi haaran \`$branch\` \`origin/$base_ref\`:n päälle (konfliktit ratkaistiin AI:lla, jos niitä oli), mutta **CI ei vihreytynyt** uudelleenajossa." \
     "Haara on pushattu rebasetussa tilassa — tarkista CI-lokit ja ratkaisun oikeellisuus worktreessä \`$worktree\`." \
     "PR:ää **ei mergetty**. Korjaa ja merkkaa PR uudelleen, tai aja valvoja uudelleen.")
-  ( cd "$REPO_ROOT" && printf '%s' "$body" | gh pr comment "$pr_num" --body-file - ) || \
+  ( cd "$REPO_ROOT" && printf '%s' "$body" | gha_with_token gh pr comment "$pr_num" --body-file - ) || \
     log "failed to post ci-red comment on PR #$pr_num"
   return 6
 }
@@ -485,7 +546,7 @@ _pr_abort_to_human() {
     "Rebase peruttiin (\`git rebase --abort\`), joten haara \`$branch\` on ennallaan." \
     "Ratkaise konflikti manuaalisesti worktreessä \`$worktree\`, pushaa, ja merkkaa PR uudelleen." \
     "(AI-konfliktinratkaisu on päällä \`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1\` — tämä konflikti vaati ihmisen.)")
-  ( cd "$REPO_ROOT" && printf '%s' "$body" | gh pr comment "$pr_num" --body-file - ) || \
+  ( cd "$REPO_ROOT" && printf '%s' "$body" | gha_with_token gh pr comment "$pr_num" --body-file - ) || \
     log "failed to post conflict comment on PR #$pr_num"
 }
 
@@ -499,7 +560,7 @@ pr_wait_ci_green() {
   local i=0 out rc
   while [ "$i" -lt "$max_polls" ]; do
     set +e
-    out=$( cd "$REPO_ROOT" && gh pr checks "$pr_num" 2>/dev/null )
+    out=$( cd "$REPO_ROOT" && gha_with_token gh pr checks "$pr_num" 2>/dev/null )
     rc=$?
     set -e
     # gh pr checks: rc 0 = all passed, 8 = some pending, non-zero/other = failure.
