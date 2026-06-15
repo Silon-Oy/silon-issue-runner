@@ -27,6 +27,13 @@ RUN_ISSUES_CLAUDE_TIMEOUT="${RUN_ISSUES_CLAUDE_TIMEOUT:-3600}"
 # the SC2086 disables below.
 RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-npx --no-install @anthropic-ai/claude-code}"
 
+# Optional model override. When set, passes --model <value> to the claude CLI.
+# Without this the CLI uses its configured default (currently claude-fable-5).
+# Set in ~/.config/run-issues/env to pin to a stable model and prevent a
+# single model's availability window from stalling the factory for 3600 s.
+# Example: RUN_ISSUES_CLAUDE_MODEL=claude-opus-4-8
+RUN_ISSUES_CLAUDE_MODEL="${RUN_ISSUES_CLAUDE_MODEL:-}"
+
 # Path to a `timeout` binary. macOS ships `gtimeout` via coreutils;
 # fall back to a no-op wrapper that just exec's the command if no
 # timeout is available.
@@ -57,15 +64,18 @@ call_claude() {
   local timeout_prefix
   timeout_prefix=$(_resolve_timeout)
 
+  local model_flag=""
+  [ -n "$RUN_ISSUES_CLAUDE_MODEL" ] && model_flag="--model $RUN_ISSUES_CLAUDE_MODEL"
+
   local rc=0
   if [ -n "$timeout_prefix" ]; then
     # shellcheck disable=SC2086
-    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   else
     printf '[claude-call %s] WARNING: no timeout binary available (timeout/gtimeout), claude calls may hang indefinitely — install coreutils (brew install coreutils)\n' \
       "$(date -u +%FT%TZ)" >&2
     # shellcheck disable=SC2086
-    $RUN_ISSUES_CLAUDE_CMD --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    $RUN_ISSUES_CLAUDE_CMD $model_flag --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   fi
 
   printf '%s\n' "$rc" > "$exit_file"
