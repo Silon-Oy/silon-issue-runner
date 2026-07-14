@@ -74,7 +74,9 @@ while IFS= read -r repo_json; do
   REPO_TAG=$(basename "$REPO_PATH" | tr -c '[:alnum:]_' '_')
   SESSION="pr-watch-${REPO_TAG}"
 
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
+  # `=` forces an exact tmux target match; without it e.g. `pr-watch-customer-c`
+  # prefix-matches `pr-watch-customer-c_erp` and one repo blocks the other.
+  if tmux has-session -t "=$SESSION" 2>/dev/null; then
     echo "$(date -u +%FT%TZ) pr-watch-poller: session $SESSION already running" >> "$LOG"
     continue
   fi

@@ -198,9 +198,11 @@ finalize_stalled() {
   local suffix sess
   suffix=$(session_suffix "$remote_in_run" "$issue")
   for sess in "run-issues-${suffix}" "run-issues-restart-${suffix}" "run-issues-continue-${suffix}" "run-issues-clean-${suffix}"; do
-    if tmux has-session -t "$sess" 2>/dev/null; then
+    # `=` forces an exact tmux target match; without it `run-issues-3` prefix-
+    # matches `run-issues-34` and we would kill an unrelated running session.
+    if tmux has-session -t "=$sess" 2>/dev/null; then
       echo "$(date -u +%FT%TZ) poller: killing stalled tmux session $sess" >> "$LOG"
-      tmux kill-session -t "$sess" 2>/dev/null || true
+      tmux kill-session -t "=$sess" 2>/dev/null || true
     fi
   done
 
@@ -518,7 +520,7 @@ while IFS= read -r repo_json; do
       CLEAN_REPO="${clean_line#* }"
       CL_SUFFIX=$(session_suffix "$REMOTE" "$CLEAN_ISSUE")
       CL_SESSION="run-issues-clean-${CL_SUFFIX}"
-      if tmux has-session -t "$CL_SESSION" 2>/dev/null; then
+      if tmux has-session -t "=$CL_SESSION" 2>/dev/null; then
         echo "$(date -u +%FT%TZ) poller: clean session $CL_SESSION already running" >> "$LOG"
         continue
       fi
@@ -539,7 +541,7 @@ while IFS= read -r repo_json; do
       RESTART_DIR="${restart_line#* }"
       R_SUFFIX=$(session_suffix "$REMOTE" "$RESTART_ISSUE")
       R_SESSION="run-issues-restart-${R_SUFFIX}"
-      if tmux has-session -t "$R_SESSION" 2>/dev/null; then
+      if tmux has-session -t "=$R_SESSION" 2>/dev/null; then
         echo "$(date -u +%FT%TZ) poller: restart session $R_SESSION already running" >> "$LOG"
         continue
       fi
@@ -560,7 +562,7 @@ while IFS= read -r repo_json; do
       CONTINUE_DIR="${continue_line#* }"
       C_SUFFIX=$(session_suffix "$REMOTE" "$CONTINUE_ISSUE")
       C_SESSION="run-issues-continue-${C_SUFFIX}"
-      if tmux has-session -t "$C_SESSION" 2>/dev/null; then
+      if tmux has-session -t "=$C_SESSION" 2>/dev/null; then
         echo "$(date -u +%FT%TZ) poller: continue session $C_SESSION already running" >> "$LOG"
         continue
       fi
@@ -610,7 +612,7 @@ while IFS= read -r repo_json; do
 
     NEW_SUFFIX=$(session_suffix "$REMOTE" "$ISSUE_NUM")
     SESSION="run-issues-${NEW_SUFFIX}"
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
+    if tmux has-session -t "=$SESSION" 2>/dev/null; then
       echo "$(date -u +%FT%TZ) poller: session $SESSION already running" >> "$LOG"
       continue
     fi
