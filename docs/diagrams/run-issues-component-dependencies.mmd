@@ -14,6 +14,7 @@ flowchart TB
         CLEAN["cleanup-run.sh<br/>(DB drop + archive + worktree<br/>+ branch + run-dir + lock<br/>+ gh assignee teardown)"]
         PRWATCH["pr-watch.sh<br/>9-state PR watcher (Phase 2)"]
         PRLIB["lib/pr-watch-lib.sh<br/>(pr_decide classification)"]
+        UNBLOCK["unblock-issues.sh<br/>(auto-unblock pass:<br/>native blocked_by → blocked label)"]
     end
 
     subgraph Libraries["claude/scripts/run-issues/lib/"]
@@ -68,6 +69,11 @@ flowchart TB
     CLEAN_CMD --> CLEAN
     PR_CMD --> PRWATCH
     PR_POLL --> PRWATCH
+    %% pr-watch-poller.sh runs the auto-unblock pass as its own per-repo pass on
+    %% every tick, before scanning for mergeable PRs and independent of the
+    %% pr-watch spawn/cap logic. Non-fatal (|| true), idempotent.
+    PR_POLL -. "auto-unblock pass<br/>(every tick, per repo)" .-> UNBLOCK
+    UNBLOCK --> GH
 
     CLEAN -. reads .-> L_STATE
     CLEAN --> GH
