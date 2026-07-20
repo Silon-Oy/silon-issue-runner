@@ -112,7 +112,7 @@ FAIL=0
 expect_rc() {  # <want> <label>
   if [ "$RC" = "$1" ]; then echo "PASS: $2 (rc=$RC)"; else echo "FAIL: $2 — want rc=$1 got $RC"; FAIL=1; fi
 }
-calls_have()    { grep -q -- "$1" "$CALLS"; }
+calls_have()    { grep -qF -- "$1" "$CALLS"; }
 expect_call()   { if calls_have "$1"; then echo "PASS: $2"; else echo "FAIL: $2 — '$1' not in calls"; FAIL=1; fi; }
 expect_nocall() { if calls_have "$1"; then echo "FAIL: $2 — '$1' WAS called"; FAIL=1; else echo "PASS: $2"; fi; }
 
@@ -121,7 +121,7 @@ R=$(mk_repo); mk_run "$R" 11 "blocked"
 run_ac 0 "$R" 11
 expect_rc 0 "A success exit 0"
 expect_call "issue close 11" "A closes issue"
-expect_call "remove-label auto-clean" "A removes auto-clean label"
+expect_call "labels/auto-clean" "A removes auto-clean label"
 
 echo "=== Case B: lock held ==="
 R=$(mk_repo); mk_run "$R" 12 "blocked"
@@ -136,8 +136,8 @@ echo "=== Case C: all completed ==="
 R=$(mk_repo); mk_run "$R" 13 "completed"
 run_ac 0 "$R" 13
 expect_rc 4 "C all-completed exit 4"
-expect_call "add-label auto-clean-skipped" "C adds auto-clean-skipped"
-expect_nocall "remove-label auto-clean " "C does NOT remove auto-clean"
+expect_call "labels[]=auto-clean-skipped" "C adds auto-clean-skipped"
+expect_nocall "labels/auto-clean" "C does NOT remove auto-clean"
 expect_nocall "issue close 13" "C does not close issue"
 
 echo "=== Case F: mixed (1 completed + 1 non-completed) ==="
@@ -148,8 +148,8 @@ mk_run "$R" 16 "completed" "a"
 mk_run "$R" 16 "blocked"   "b"
 run_ac 0 "$R" 16
 expect_rc 4 "F mixed exit 4 (completed>0 short-circuits)"
-expect_call "add-label auto-clean-skipped" "F adds auto-clean-skipped"
-expect_nocall "remove-label auto-clean " "F does NOT remove auto-clean"
+expect_call "labels[]=auto-clean-skipped" "F adds auto-clean-skipped"
+expect_nocall "labels/auto-clean" "F does NOT remove auto-clean"
 expect_nocall "cleanup-run --issue 16" "F does NOT run teardown"
 expect_nocall "issue close 16" "F does not close issue"
 
@@ -157,7 +157,7 @@ echo "=== Case D: no run-dirs (cross-machine) ==="
 R=$(mk_repo)   # no runs at all
 run_ac 0 "$R" 14
 expect_rc 5 "D no-rundirs exit 5"
-expect_call "add-label auto-clean-skipped" "D adds auto-clean-skipped"
+expect_call "labels[]=auto-clean-skipped" "D adds auto-clean-skipped"
 expect_nocall "issue close 14" "D does not close issue"
 
 echo "=== Case E: cleanup fails ==="

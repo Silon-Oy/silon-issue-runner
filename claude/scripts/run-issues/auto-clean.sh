@@ -73,6 +73,10 @@ done
 . "$SCRIPT_DIR/lib/locking.sh"
 # shellcheck source=lib/issue.sh
 . "$SCRIPT_DIR/lib/issue.sh"
+# labels.sh provides labels_add / labels_remove / labels_ensure — REST-based
+# label writes that avoid the read:project scope `gh issue edit` requires.
+# shellcheck source=lib/labels.sh
+. "$SCRIPT_DIR/lib/labels.sh"
 
 # Resolve owner/repo for --repo routing on the closing gh calls. Empty -> use
 # gh's cwd resolution (origin default). For non-origin a resolution failure is
@@ -100,17 +104,12 @@ add_skipped_label() {
     log "[dry] add label $SKIPPED_LABEL to #$ISSUE_NUM"
     return 0
   fi
-  local repo_args=""
-  [ -n "$OWNER_REPO" ] && repo_args="--repo $OWNER_REPO"
-  # shellcheck disable=SC2086
   (
     cd "$REPO_ROOT"
-    gh label create "$SKIPPED_LABEL" $repo_args \
-      --color "ededed" \
-      --description "auto-clean skipped this issue; needs human attention" \
-      >/dev/null 2>&1 || true
-    gh issue edit "$ISSUE_NUM" $repo_args --add-label "$SKIPPED_LABEL" >/dev/null 2>&1 || true
-  )
+    labels_ensure "$OWNER_REPO" "$SKIPPED_LABEL" "ededed" \
+      "auto-clean skipped this issue; needs human attention" || true
+    labels_add "$OWNER_REPO" "$ISSUE_NUM" "$SKIPPED_LABEL" || true
+  ) 2>&1 | while IFS= read -r l; do log "$l"; done || true
 }
 
 # ---------- 1. lock ----------
@@ -256,11 +255,10 @@ Olennaiset artefaktit on arkistoitu hakemistoon \`.claude/run-issues-archive/\`.
   || log "summary comment post failed (non-fatal)"
 
 # Remove the trigger label so a reopened issue is not immediately re-cleaned.
-# shellcheck disable=SC2086
 (
   cd "$REPO_ROOT"
-  gh issue edit "$ISSUE_NUM" $REPO_ARGS --remove-label "$RUN_ISSUES_CLEAN_LABEL" >/dev/null 2>&1 || true
-)
+  labels_remove "$OWNER_REPO" "$ISSUE_NUM" "$RUN_ISSUES_CLEAN_LABEL" || true
+) 2>&1 | while IFS= read -r l; do log "$l"; done || true
 
 log "done: issue #$ISSUE_NUM remote=$REMOTE_NAME cleaned and closed"
 exit 0

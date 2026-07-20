@@ -37,6 +37,12 @@ mkdir -p "$REPO/.git"
 # shellcheck source=lib/git-remote.sh
 . "$GIT_REMOTE_LIB"
 
+# finalize_stalled attaches the needs-human label through lib/labels.sh. We
+# extract function bodies rather than sourcing poller.sh, so its own source
+# block never runs — pull the lib in here or the label calls are undefined.
+# shellcheck source=lib/labels.sh
+. "$HERE/../lib/labels.sh"
+
 # Extract function bodies from poller.sh. The awk pattern walks from each
 # function header to its closing brace at column 0, mirroring the harness
 # used by test-poller-scan-timeout.sh. We need scan_stalled, finalize_stalled,
@@ -202,7 +208,7 @@ grep -q '"event":"stalled_finalized"' "$RD_STALE/state.jsonl" \
   || { echo "FAIL finalize: no stalled_finalized event"; FAIL=1; }
 
 # 4. needs-human label added; comment posted.
-grep -q "add-label needs-human" "$GH_LOG" \
+grep -qF "labels[]=needs-human" "$GH_LOG" \
   || { echo "FAIL finalize: needs-human label not attempted"; FAIL=1; }
 grep -q "issue comment" "$GH_LOG" \
   || { echo "FAIL finalize: situation comment not posted"; FAIL=1; }

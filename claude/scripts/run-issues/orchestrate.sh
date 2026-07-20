@@ -191,6 +191,8 @@ source "$SCRIPT_DIR/lib/claude-call.sh"
 source "$SCRIPT_DIR/lib/hook-runner.sh"
 # shellcheck source=lib/env-bootstrap.sh
 source "$SCRIPT_DIR/lib/env-bootstrap.sh"
+# shellcheck source=lib/labels.sh
+source "$SCRIPT_DIR/lib/labels.sh"
 # shellcheck source=lib/github-app-auth.sh
 # Sourced AFTER source_machine_env (below) populates env vars. We require the
 # file to exist; the helper guards every side effect on gha_enabled, so loading
@@ -1163,20 +1165,37 @@ _gh_for_labels() {
   esac
 }
 
+# lib/labels.sh routes every label write through this same App-aware wrapper.
+# Label mutations go via the REST API rather than `gh issue/pr edit`, which
+# demands the read:project OAuth scope and failed silently for weeks — see the
+# header of lib/labels.sh.
+LABELS_GH_FN=_gh_for_labels
+
+# _log_label_err — pipe target for label helpers: forward their diagnostics
+# into the run log instead of /dev/null. Label management stays best-effort
+# (every call site ends in `|| true`, since set -e + pipefail would otherwise
+# turn a cosmetic label failure into a dead run), but "best-effort" must not
+# mean "silent" — that is exactly how the read:project breakage hid for five
+# weeks across 16 runs.
+_log_label_err() {
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    log "$line"
+  done
+}
+
 # _add_waiting_label / _remove_waiting_label — best-effort label management for
 # the awaiting_clarification state. The `waiting` label keeps pick_oldest_unassigned
 # and the poller from re-picking the issue while it waits for maintainer's reply (both
 # exclude -label:waiting). Failures are non-fatal.
 _add_waiting_label() {
-  # shellcheck disable=SC2046
-  ( cd "$REPO_ROOT" && _gh_for_labels label create waiting $(_repo_args "$OWNER_REPO") --color FBCA04 \
-      --description "Odottaa ihmisen vastausta — automaattinen ajo jatkaa kommentista" >/dev/null 2>&1 ) || true
-  # shellcheck disable=SC2046
-  ( cd "$REPO_ROOT" && _gh_for_labels issue edit "$ISSUE_NUM" $(_repo_args "$OWNER_REPO") --add-label waiting >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && labels_ensure "$OWNER_REPO" waiting FBCA04 \
+      "Odottaa ihmisen vastausta — automaattinen ajo jatkaa kommentista" ) 2>&1 | _log_label_err || true
+  ( cd "$REPO_ROOT" && labels_add "$OWNER_REPO" "$ISSUE_NUM" waiting ) 2>&1 | _log_label_err || true
 }
 _remove_waiting_label() {
-  # shellcheck disable=SC2046
-  ( cd "$REPO_ROOT" && _gh_for_labels issue edit "$ISSUE_NUM" $(_repo_args "$OWNER_REPO") --remove-label waiting >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && labels_remove "$OWNER_REPO" "$ISSUE_NUM" waiting ) 2>&1 | _log_label_err || true
 }
 
 # _finalize_awaiting_clarification — shared NEEDS_CLARIFICATION terminal path.
@@ -1204,11 +1223,9 @@ _finalize_awaiting_clarification() {
 # env-bootstrap gate, which posts its own log-mode situation comment but still
 # needs the same hand-off signal.
 _add_needs_human_label() {
-  # shellcheck disable=SC2046
-  ( cd "$REPO_ROOT" && _gh_for_labels label create needs-human $(_repo_args "$OWNER_REPO") --color B60205 \
-      --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
-  # shellcheck disable=SC2046
-  ( cd "$REPO_ROOT" && _gh_for_labels issue edit "$ISSUE_NUM" $(_repo_args "$OWNER_REPO") --add-label needs-human >/dev/null 2>&1 ) || true
+  ( cd "$REPO_ROOT" && labels_ensure "$OWNER_REPO" needs-human B60205 \
+      "Vaatii ihmisen — automaattinen ajo ei onnistunut" ) 2>&1 | _log_label_err || true
+  ( cd "$REPO_ROOT" && labels_add "$OWNER_REPO" "$ISSUE_NUM" needs-human ) 2>&1 | _log_label_err || true
 }
 
 # _hand_to_human <message> [<artifact-file>] — best-effort: post a full
@@ -1259,22 +1276,34 @@ EOF
     return 0
   fi
 
+  # The PR URL names its own repo and number, which beats cwd inference: it is
+  # correct even when OWNER_REPO is empty (origin runs leave it so on purpose).
+  # If the URL is not parseable we fall back to OWNER_REPO / cwd inference.
+  local pr_repo pr_num
+  pr_repo=$(labels_owner_repo_from_url "$pr")
+  pr_num=$(labels_number_from_url "$pr")
+  [ -n "$pr_repo" ] || pr_repo="$OWNER_REPO"
+  [ -n "$pr_num" ] || pr_num="$pr"
+
   # Best-effort: ensure each label exists in the target repo before adding it.
   local lbl
   while IFS= read -r lbl; do
     [ -n "$lbl" ] || continue
-    # shellcheck disable=SC2046
-    ( cd "$REPO_ROOT" && _gh_for_labels label create "$lbl" $(_repo_args "$OWNER_REPO") >/dev/null 2>&1 ) || true
+    ( cd "$REPO_ROOT" && labels_ensure "$pr_repo" "$lbl" ) 2>&1 | _log_label_err || true
   done <<EOF
 $(printf '%s' "$matched" | tr ',' '\n')
 EOF
 
-  # shellcheck disable=SC2046
-  if ( cd "$REPO_ROOT" && _gh_for_labels pr edit "$pr" $(_repo_args "$OWNER_REPO") --add-label "$matched" >/dev/null 2>&1 ); then
+  local add_err add_rc=0
+  add_err=$( ( cd "$REPO_ROOT" && labels_add "$pr_repo" "$pr_num" "$matched" ) 2>&1 >/dev/null ) || add_rc=$?
+  if [ "$add_rc" -eq 0 ]; then
     log "propagate_pr_labels: added [$matched] to PR (issue #$ISSUE_NUM)"
     state_event "$RUN_DIR" "pr_labels_propagated" "labels=$matched"
   else
-    log "propagate_pr_labels: 'gh pr edit --add-label $matched' failed (non-fatal — PR already created)"
+    # Log the CAUSE, not just the fact. The silent-failure mode this replaces
+    # cost five weeks of un-merged PRs.
+    log "propagate_pr_labels: adding [$matched] to PR failed (non-fatal — PR already created): $add_err"
+    state_event "$RUN_DIR" "pr_labels_propagation_failed" "labels=$matched" || true
   fi
 }
 

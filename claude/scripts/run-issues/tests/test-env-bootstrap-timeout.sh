@@ -139,7 +139,7 @@ RE_A=$(jq -r '.blocked_reason' "$RD_A/run.json")
   || { echo "FAIL (a): implementer invoked despite bootstrap timeout (budget spent)"; FAIL=1; }
 [ -f "$RD_A/env-bootstrap.log" ] \
   || { echo "FAIL (a): env-bootstrap.log not written"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" \
+grep -qF 'labels[]=needs-human' "$GH_LOG" \
   || { echo "FAIL (a): needs-human label not attempted"; FAIL=1; }
 grep -q 'issue comment' "$GH_LOG" \
   || { echo "FAIL (a): situation comment not posted to issue"; FAIL=1; }

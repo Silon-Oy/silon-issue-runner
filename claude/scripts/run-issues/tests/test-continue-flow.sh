@@ -148,7 +148,7 @@ set -e
 echo "--- (b) round++ + PROCEED (rc=$RC_B) ---"; echo "$OUT_B" | tail -4
 [ "$(jq -r '.clarification_round' "$RD_B/run.json")" = "2" ] || { echo "FAIL (b): round not incremented to 2 (got $(jq -r '.clarification_round' "$RD_B/run.json"))"; FAIL=1; }
 grep -q '"event":"continue_attempt"' "$RD_B/state.jsonl" || { echo "FAIL (b): no continue_attempt event"; FAIL=1; }
-grep -q 'remove-label waiting' "$GH_LOG" || { echo "FAIL (b): waiting label not removed on PROCEED"; FAIL=1; }
+grep -qF 'labels/waiting' "$GH_LOG" || { echo "FAIL (b): waiting label not removed on PROCEED"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (b) round incremented before claude, PROCEED removed waiting"
 
 # === (c) no reply (race) -> re-park, no increment, exit 0 ==================
@@ -179,7 +179,7 @@ echo "--- (d) corrupt worktree (rc=$RC_D) ---"; echo "$OUT_D" | tail -3
 [ "$RC_D" = "0" ] || { echo "FAIL (d): expected exit 0, got $RC_D"; FAIL=1; }
 [ "$(jq -r '.status' "$RD_D/run.json")" = "blocked" ] || { echo "FAIL (d): status not blocked"; FAIL=1; }
 [ "$(jq -r '.blocked_reason' "$RD_D/run.json")" = "continue_worktree_corrupt" ] || { echo "FAIL (d): wrong reason"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (d): needs-human not attempted"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (d): needs-human not attempted"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (d) corrupt worktree -> blocked + needs-human + exit 0"
 
 echo "----------------------------------------"

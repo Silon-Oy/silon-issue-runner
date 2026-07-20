@@ -201,7 +201,7 @@ RE_C=$(jq -r '.blocked_reason' "$RD_C/run.json")
 [ "$RE_C" = "provision_test_env_failed" ] || { echo "FAIL (c): blocked_reason='$RE_C'"; FAIL=1; }
 [ ! -f "$SENTINEL" ] || { echo "FAIL (c): implementer invoked despite provision failure"; FAIL=1; }
 [ -f "$RD_C/provision-test-env.log" ] || { echo "FAIL (c): provision-test-env.log not written"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (c): needs-human label not attempted"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (c): needs-human label not attempted"; FAIL=1; }
 grep -q 'issue comment' "$GH_LOG" || { echo "FAIL (c): situation comment not posted"; FAIL=1; }
 grep -q '"event":"provision_test_env_failed"' "$RD_C/state.jsonl" \
   || { echo "FAIL (c): no provision_test_env_failed event"; FAIL=1; }

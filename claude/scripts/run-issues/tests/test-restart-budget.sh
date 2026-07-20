@@ -121,7 +121,7 @@ ST_B=$(jq -r '.status' "$RD2/run.json")
 RE_B=$(jq -r '.blocked_reason' "$RD2/run.json")
 [ "$ST_B" = "timed_out" ] || { echo "FAIL (b): status='$ST_B'"; FAIL=1; }
 [ "$RE_B" = "timeout_budget_exhausted" ] || { echo "FAIL (b): reason='$RE_B'"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (b): needs-human label not attempted"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (b): needs-human label not attempted"; FAIL=1; }
 [ "$(jq -r '.retry_count' "$RD2/run.json")" = "1" ] || { echo "FAIL (b): retry_count changed despite exhaustion"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (b) budget exhausted -> timed_out + needs-human + exit 0"
 
@@ -145,7 +145,7 @@ ST_C=$(jq -r '.status' "$RD3/run.json")
 RE_C=$(jq -r '.blocked_reason' "$RD3/run.json")
 [ "$ST_C" = "blocked" ] || { echo "FAIL (c): status='$ST_C'"; FAIL=1; }
 [ "$RE_C" = "restart_worktree_corrupt" ] || { echo "FAIL (c): reason='$RE_C'"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (c): needs-human not attempted"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (c): needs-human not attempted"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (c) corrupt worktree -> blocked + needs-human + exit 0"
 
 # === (d) poller second-timeout: restart proceeds, claude times out AGAIN ===
@@ -189,7 +189,7 @@ RT_D=$(jq -r '.retry_count' "$RD4/run.json")
 [ "$ST_D" = "timed_out" ] || { echo "FAIL (d): status='$ST_D'"; FAIL=1; }
 [ "$RT_D" = "1" ] || { echo "FAIL (d): retry_count='$RT_D' (want 1)"; FAIL=1; }
 [ "$RE_D" = "timeout_budget_exhausted" ] || { echo "FAIL (d): reason='$RE_D' (want budget-exhausted from finalize_timeout)"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (d): needs-human label NOT attempted on second timeout (the wedge bug)"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (d): needs-human label NOT attempted on second timeout (the wedge bug)"; FAIL=1; }
 grep -q '"event":"handed_to_human"' "$RD4/state.jsonl" || { echo "FAIL (d): no handed_to_human event"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (d) second timeout via rc-path -> needs-human + exit 7"
 
@@ -219,7 +219,7 @@ echo "--- (e) first timeout, no hand-off (rc=$RC_E) ---"; echo "$OUT_E" | tail -
 [ "$RC_E" = "7" ] || { echo "FAIL (e): expected exit 7, got $RC_E"; FAIL=1; }
 [ "$(jq -r '.status' "$RD5/run.json")" = "timed_out" ] || { echo "FAIL (e): status not timed_out"; FAIL=1; }
 [ "$(jq -r '.retry_count' "$RD5/run.json")" = "0" ] || { echo "FAIL (e): retry_count moved off 0 on first timeout"; FAIL=1; }
-if grep -q 'add-label needs-human' "$GH_LOG"; then echo "FAIL (e): needs-human labelled on FIRST timeout (premature hand-off)"; FAIL=1; fi
+if grep -qF 'labels[]=needs-human' "$GH_LOG"; then echo "FAIL (e): needs-human labelled on FIRST timeout (premature hand-off)"; FAIL=1; fi
 [ "$FAIL" = "0" ] && echo "PASS (e) first timeout -> timed_out, NO needs-human (poller will restart)"
 
 echo "----------------------------------------"

@@ -107,6 +107,14 @@ if [ -f "$LOCKING_LIB" ]; then
   . "$LOCKING_LIB"
 fi
 
+# labels.sh owns label writes (REST, no read:project scope needed). Sourced
+# best-effort like the libs above so a missing file degrades rather than dies.
+LABELS_LIB="$SCRIPT_DIR/lib/labels.sh"
+if [ -f "$LABELS_LIB" ]; then
+  # shellcheck source=lib/labels.sh
+  . "$LABELS_LIB"
+fi
+
 # ---------- helpers ----------
 
 # archive_run <run-id> <run-dir> — copy essential artefacts to
@@ -226,8 +234,11 @@ cleanup_run() {
       # Drop the needs-human label so the issue re-enters auto-run pickup once
       # unassigned. Without this the poll re-surfaces the issue as no:assignee
       # but the stale label lingers. Best-effort: do_or_dry swallows the
-      # non-fatal failure when the label is absent.
-      do_or_dry "unlabel" gh issue edit "$issue_num" $repo_args --remove-label needs-human
+      # non-fatal failure when the label is absent (the API answers 404).
+      # Label writes go through lib/labels.sh: `gh issue edit --remove-label`
+      # needs the read:project scope, which is how this silently no-op'd for
+      # weeks elsewhere in the pipeline.
+      do_or_dry "unlabel" labels_remove "$owner_repo" "$issue_num" needs-human
     )
   fi
 

@@ -108,8 +108,14 @@ echo "--- (a) default config output (rc=$RC_A) ---"; echo "$OUT_A" | tail -3
 [ "$RC_A" = "0" ] || { echo "FAIL (a): expected exit 0, got $RC_A"; FAIL=1; }
 ST_A=$(jq -r '.status' "$RD/run.json")
 [ "$ST_A" = "completed" ] || { echo "FAIL (a): status='$ST_A' (want completed)"; FAIL=1; }
-grep -qE '^pr edit .* --add-label auto-merge$' "$GH_LOG" \
-  || { echo "FAIL (a): no 'gh pr edit --add-label auto-merge' call"; cat "$GH_LOG"; FAIL=1; }
+grep -qF 'api --method POST repos/acme/widgets/issues/42/labels' "$GH_LOG" \
+  || { echo "FAIL (a): no REST label call against the PR"; cat "$GH_LOG"; FAIL=1; }
+grep -qF 'labels[]=auto-merge' "$GH_LOG" \
+  || { echo "FAIL (a): auto-merge not in the label payload"; cat "$GH_LOG"; FAIL=1; }
+# The scope-fragile path must not come back: `gh pr edit` needs read:project
+# and silently no-op'd on 16 production runs (customer-c-erp#40).
+grep -qE 'pr edit|issue edit' "$GH_LOG" \
+  && { echo "FAIL (a): used gh pr/issue edit instead of the REST endpoint"; cat "$GH_LOG"; FAIL=1; }
 grep -q '"event":"pr_labels_propagated"' "$RD/state.jsonl" \
   || { echo "FAIL (a): no pr_labels_propagated event"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (a): auto-merge propagated to PR + event recorded"
@@ -124,8 +130,8 @@ set -e
 echo "--- (b) no-label output (rc=$RC_B) ---"; echo "$OUT_B" | tail -3
 
 [ "$RC_B" = "0" ] || { echo "FAIL (b): expected exit 0, got $RC_B"; FAIL=1; }
-if grep -qE 'pr edit .* --add-label' "$GH_LOG"; then
-  echo "FAIL (b): unexpected add-label call when issue has no propagatable label"; cat "$GH_LOG"; FAIL=1
+if grep -qE 'labels\[\]=|/labels' "$GH_LOG"; then
+  echo "FAIL (b): unexpected label call when issue has no propagatable label"; cat "$GH_LOG"; FAIL=1
 fi
 [ "$FAIL" = "$PREV_FAIL" ] && echo "PASS (b): no add-label call when issue lacks auto-merge"
 
@@ -140,10 +146,12 @@ set -e
 echo "--- (c) multi-label output (rc=$RC_C) ---"; echo "$OUT_C" | tail -3
 
 [ "$RC_C" = "0" ] || { echo "FAIL (c): expected exit 0, got $RC_C"; FAIL=1; }
-# Both present labels combined; configured-but-absent `release` filtered out.
-grep -qE '^pr edit .* --add-label auto-merge,priority$' "$GH_LOG" \
-  || { echo "FAIL (c): expected combined '--add-label auto-merge,priority'"; cat "$GH_LOG"; FAIL=1; }
-if grep -qE 'add-label[^$]*release' "$GH_LOG"; then
+# Both present labels ride in ONE call; configured-but-absent `release` filtered out.
+ADD_CALLS=$(grep -c 'issues/42/labels' "$GH_LOG")
+[ "$ADD_CALLS" = "1" ] || { echo "FAIL (c): expected 1 combined label call, got $ADD_CALLS"; cat "$GH_LOG"; FAIL=1; }
+grep -qF 'labels[]=auto-merge' "$GH_LOG" && grep -qF 'labels[]=priority' "$GH_LOG" \
+  || { echo "FAIL (c): expected both auto-merge and priority in the payload"; cat "$GH_LOG"; FAIL=1; }
+if grep -qF 'labels[]=release' "$GH_LOG"; then
   echo "FAIL (c): absent label 'release' was added"; FAIL=1
 fi
 [ "$FAIL" = "$PREV_FAIL" ] && echo "PASS (c): multiple labels combined into one call, absent label filtered"

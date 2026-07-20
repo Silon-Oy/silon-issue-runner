@@ -102,7 +102,7 @@ else
     echo "FAIL (a): worktree was created despite stale-base block"; FAIL=1
   fi
   [ -f "$RD_A/origin-fetch.log" ] || { echo "FAIL (a): origin-fetch.log not written"; FAIL=1; }
-  grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (a): needs-human label not attempted"; FAIL=1; }
+  grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (a): needs-human label not attempted"; FAIL=1; }
   grep -q 'issue comment' "$GH_LOG" || { echo "FAIL (a): situation comment not posted"; FAIL=1; }
 fi
 [ "$FAIL" = "0" ] && echo "PASS (a) S4 fetch fail -> blocked/origin_fetch_failed + needs-human + no worktree + exit 5"

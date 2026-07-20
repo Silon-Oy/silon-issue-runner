@@ -78,6 +78,13 @@ LIB_GIT_REMOTE="${DOTFILES}/claude/scripts/run-issues/lib/git-remote.sh"
 # shellcheck source=lib/git-remote.sh
 [ -f "$LIB_GIT_REMOTE" ] && . "$LIB_GIT_REMOTE"
 
+# labels_add / labels_ensure live in lib/labels.sh — REST-based label writes
+# that do not need the read:project OAuth scope `gh issue edit` demands.
+# Pure functions; safe to source.
+LIB_LABELS="${DOTFILES}/claude/scripts/run-issues/lib/labels.sh"
+# shellcheck source=lib/labels.sh
+[ -f "$LIB_LABELS" ] && . "$LIB_LABELS"
+
 # _iso_to_epoch <iso-utc-ts> — convert an ISO-8601 Zulu timestamp (the format
 # state.sh writes: YYYY-MM-DDTHH:MM:SSZ) to Unix epoch seconds. Empty string on
 # parse failure (callers treat this as "can't compare, leave it alone"). macOS
@@ -217,9 +224,15 @@ finalize_stalled() {
   # Best-effort label + comment via gh. We change into the repo (from run.json)
   # so gh resolves the right repo even from the poller's cwd.
   if [ -n "$repo" ]; then
-    ( cd "$repo" && gh label create needs-human --color B60205 \
-        --description "Vaatii ihmisen — automaattinen ajo ei onnistunut" >/dev/null 2>&1 ) || true
-    ( cd "$repo" && gh issue edit "$issue" --add-label needs-human >/dev/null 2>&1 ) || true
+    # Diagnostics from the label helpers go to $LOG, not /dev/null: a silent
+    # best-effort label write is how the read:project scope breakage stayed
+    # invisible for five weeks. (poller.sh logs by appending to $LOG — there
+    # is no log() function here, and `log` is a macOS binary.)
+    ( cd "$repo" && labels_ensure "" needs-human B60205 \
+        "Vaatii ihmisen — automaattinen ajo ei onnistunut" ) 2>&1 \
+        | sed "s/^/$(date -u +%FT%TZ) poller: /" >> "$LOG" || true
+    ( cd "$repo" && labels_add "" "$issue" needs-human ) 2>&1 \
+        | sed "s/^/$(date -u +%FT%TZ) poller: /" >> "$LOG" || true
 
     # Write the comment body to a temp file (heredoc inside $(...) has fragile
     # parser interactions with bash's case-statement-aware tokenizer; the temp

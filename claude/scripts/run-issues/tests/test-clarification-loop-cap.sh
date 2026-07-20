@@ -109,8 +109,8 @@ ST=$(jq -r '.status' "$RD/run.json")
 RE=$(jq -r '.blocked_reason' "$RD/run.json")
 [ "$ST" = "blocked" ] || { echo "FAIL: status='$ST' (want blocked)"; FAIL=1; }
 [ "$RE" = "clarification_loop_exhausted" ] || { echo "FAIL: reason='$RE'"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL: needs-human label not attempted"; FAIL=1; }
-grep -q 'remove-label waiting' "$GH_LOG" || { echo "FAIL: waiting label not removed"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL: needs-human label not attempted"; FAIL=1; }
+grep -qF 'labels/waiting' "$GH_LOG" || { echo "FAIL: waiting label not removed"; FAIL=1; }
 [ ! -s "$CLAUDE_LOG" ] || { echo "FAIL: claude was invoked despite cap (loop not short-circuited)"; FAIL=1; }
 [ "$(jq -r '.clarification_round' "$RD/run.json")" = "3" ] || { echo "FAIL: round changed at cap"; FAIL=1; }
 

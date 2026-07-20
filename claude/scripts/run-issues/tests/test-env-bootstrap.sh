@@ -190,7 +190,7 @@ RE_C=$(jq -r '.blocked_reason' "$RD_C/run.json")
 [ "$RE_C" = "env_bootstrap_failed" ] || { echo "FAIL (c): blocked_reason='$RE_C'"; FAIL=1; }
 [ ! -f "$SENTINEL" ] || { echo "FAIL (c): implementer was invoked despite bootstrap failure (budget spent)"; FAIL=1; }
 [ -f "$RD_C/env-bootstrap.log" ] || { echo "FAIL (c): env-bootstrap.log not written"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (c): needs-human label not attempted"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (c): needs-human label not attempted"; FAIL=1; }
 grep -q 'issue comment' "$GH_LOG" || { echo "FAIL (c): situation comment not posted to issue"; FAIL=1; }
 grep -q '"event":"env_bootstrap_failed"' "$RD_C/state.jsonl" \
   || { echo "FAIL (c): no env_bootstrap_failed event"; FAIL=1; }
@@ -281,7 +281,7 @@ RE_E=$(jq -r '.blocked_reason' "$RD_E/run.json")
 [ "$RE_E" = "env_bootstrap_failed" ] || { echo "FAIL (e): blocked_reason='$RE_E'"; FAIL=1; }
 [ ! -f "$SENTINEL" ] || { echo "FAIL (e): implementer invoked despite composer failure (budget spent)"; FAIL=1; }
 [ -f "$RD_E/env-bootstrap-composer.log" ] || { echo "FAIL (e): composer log not written"; FAIL=1; }
-grep -q 'add-label needs-human' "$GH_LOG" || { echo "FAIL (e): needs-human label not attempted"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (e): needs-human label not attempted"; FAIL=1; }
 grep -q '"event":"env_bootstrap_failed"' "$RD_E/state.jsonl" \
   || { echo "FAIL (e): no env_bootstrap_failed event"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (e) composer install failure -> blocked/env_bootstrap_failed + needs-human + exit 5"
