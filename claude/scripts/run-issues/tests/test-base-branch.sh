@@ -169,6 +169,24 @@ esac
 SH
 chmod +x "$BIN/gh"
 
+# --- claude mock that CANNOT resolve the conflict -------------------------
+# This case is about the rebase TARGET (origin/twenty vs origin/main), not
+# about conflict resolution; the conflict is only the vehicle that makes the
+# target observable in the output and the PR comment. So the agent must fail
+# deterministically. Without this mock the test invoked the REAL Claude CLI:
+# when the agent happened to resolve the conflict the run ended rc=0 and the
+# case failed, making it flaky AND slow AND token-burning on every suite run.
+# Same shape as test-pr-watch-conflict-abort.sh's mock.
+CLAUDE_MOCK="$BIN/claude-mock"
+cat > "$CLAUDE_MOCK" <<'SH'
+#!/usr/bin/env bash
+# Give up without touching the conflicted files or continuing the rebase —
+# the watcher must detect the unclean state, abort, and report rc=6.
+echo "CONFLICT_RESOLUTION_RESULT: UNRESOLVED — mock cannot resolve"
+exit 0
+SH
+chmod +x "$CLAUDE_MOCK"
+
 # shellcheck source=../lib/state.sh
 . "$STATE_LIB"
 set +e   # state.sh re-enables -e
@@ -184,6 +202,7 @@ OUT_G=$(
   PATH="$BIN:$PATH" \
   RUN_ISSUES_LOCK_ROOT="$WORK/locks-g" \
   PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1 \
+  RUN_ISSUES_CLAUDE_CMD="$CLAUDE_MOCK" \
   "$PRWATCH" "$G_REPO" 999 2>&1
 )
 RC_G=$?
