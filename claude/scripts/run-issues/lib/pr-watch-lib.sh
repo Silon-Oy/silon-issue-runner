@@ -90,6 +90,26 @@ pr_decide() {
   esac
 }
 
+# should_close_linked_issue <base_ref> <default_branch>
+#
+# Decides whether the PR-watcher must EXPLICITLY close the PR's linked issue
+# after a successful merge. GitHub's native `Closes #N` closing keyword only
+# fires when a PR merges into the repo's DEFAULT branch; when the orchestrator
+# targets a non-default base_branch (e.g. a "twenty" integration branch) the
+# linked issue is left open and we must close it ourselves.
+#
+# Pure + side-effect-free (mirrors pr_decide / detect_answer / parse_marker):
+#   rc 0  — close explicitly: base_ref != default_branch, both known.
+#   rc 1  — do NOT close: base == default (GitHub's keyword handles it), or
+#           either argument empty (FAIL-SAFE — never risk a wrong close when the
+#           base or default branch is unknown; preserve the current behaviour).
+should_close_linked_issue() {
+  local base_ref="${1:-}" default_branch="${2:-}"
+  [ -n "$base_ref" ] || return 1
+  [ -n "$default_branch" ] || return 1
+  [ "$base_ref" != "$default_branch" ]
+}
+
 # pr_ci_state <pr-view-json> — prints GREEN / RED / PENDING.
 #
 # statusCheckRollup entries come in two shapes:

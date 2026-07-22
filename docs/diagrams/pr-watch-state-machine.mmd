@@ -36,7 +36,10 @@ stateDiagram-v2
     P7_PostMerge --> MIGRATE_FAIL: script exit != 0
 
     P8_Finalize: P8 Finalize\nstate_finalize merged + pr_merged event\n(BEFORE cleanup — invariant I4)
-    P8_Finalize --> P9_Cleanup
+    P8_Finalize --> P8b_CloseIssue
+
+    P8b_CloseIssue: P8b CloseLinkedIssue\nshould_close_linked_issue(baseRef, defaultBranch)\nexplicit gh issue close iff base != default\n(remote op — BEFORE host gate; best-effort)
+    P8b_CloseIssue --> P9_Cleanup
 
     P9_Cleanup: P9 Cleanup\nhost gate: local cleanup only if\nrun.json.host == hostname -s\nelse print ssh hint
     P9_Cleanup --> DONE

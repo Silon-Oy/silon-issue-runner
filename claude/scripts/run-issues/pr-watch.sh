@@ -277,6 +277,16 @@ watch_one() {
     state_event "$run_dir" "pr_merged" "pr=$pr_num"
   fi
 
+  # ----- P8b: Close linked issue when base != default branch --------------
+  # GitHub's native `Closes #N` closing keyword only fires when a PR merges
+  # into the repo's DEFAULT branch. When the orchestrator targets a non-default
+  # base_branch (e.g. a "twenty" integration branch), merging the PR leaves the
+  # linked issue OPEN. Close it explicitly. This is a REMOTE operation, so it
+  # runs BEFORE the P9 host gate — the issue must close regardless of which
+  # machine ran the job (cross-machine runs return early below). Best-effort:
+  # a failure here never changes the merge outcome.
+  maybe_close_linked_issue "$pr_num" "$issue_num" "$pr_json" "$run_dir"
+
   # ----- P9: Cleanup (host gate; decision 4) ------------------------------
   local run_host=""
   [ -n "$rid" ] && run_host=$(run_field "$rid" '.host')
@@ -299,6 +309,61 @@ watch_one() {
   fi
 
   _release
+  return 0
+}
+
+# maybe_close_linked_issue <pr-number> <issue-number> <pr-json> <run-dir>
+# Best-effort explicit close of the PR's linked issue after a successful merge,
+# for the case GitHub's native `Closes #N` keyword cannot cover: a PR merged
+# into a NON-default base branch. Decision is delegated to the pure, unit-tested
+# should_close_linked_issue (lib/pr-watch-lib.sh).
+#
+# Guarantees (all fail-safe — never a wrong close, never affects the merge):
+#   - empty issue_num                     -> skip (nothing linked / no run-dir).
+#   - default branch cannot be determined -> skip (fetch/auth failure).
+#   - base == default                     -> skip (GitHub already closes it).
+#   - `gh issue close` failure            -> log only (already-closed issue is a
+#                                            harmless no-op here too).
+# Uses gha_with_token so the close shows the App identity when configured
+# (pass-through otherwise).
+maybe_close_linked_issue() {
+  local pr_num="$1" issue_num="$2" pr_json="$3" run_dir="$4"
+
+  if [ -z "$issue_num" ]; then
+    log "PR #$pr_num has no linked issue number — skipping explicit close"
+    return 0
+  fi
+
+  local base_ref
+  base_ref=$(jq -r '.baseRefName // empty' <<<"$pr_json")
+
+  # Resolve the repo default branch once (no per-PR repetition needed here —
+  # one PR per call). Fail-safe: any failure or empty result -> do not close.
+  local repo_json default_branch
+  if ! repo_json=$( cd "$REPO_ROOT" && gha_with_token gh repo view --json defaultBranchRef 2>/dev/null ); then
+    log "could not fetch default branch (gh repo view failed) — NOT closing issue #$issue_num (fail-safe)"
+    return 0
+  fi
+  default_branch=$(jq -r '.defaultBranchRef.name // empty' <<<"$repo_json")
+  if [ -z "$default_branch" ]; then
+    log "empty default branch in gh output — NOT closing issue #$issue_num (fail-safe)"
+    return 0
+  fi
+
+  if ! should_close_linked_issue "$base_ref" "$default_branch"; then
+    log "PR #$pr_num base '$base_ref' == default '$default_branch' — GitHub closes issue #$issue_num natively; no explicit close"
+    return 0
+  fi
+
+  log "closing issue #$issue_num explicitly (PR #$pr_num base '$base_ref' != default '$default_branch')"
+  local body
+  body="Suljettu automaattisesti PR #$pr_num mergen jälkeen — base=\`$base_ref\` ei ole default-haara (\`$default_branch\`), joten GitHubin closing keyword ei laukennut."
+  if ( cd "$REPO_ROOT" && gha_with_token gh issue close "$issue_num" --comment "$body" ); then
+    [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+      state_event "$run_dir" "linked_issue_closed" "issue=$issue_num" "base=$base_ref" "default=$default_branch"
+  else
+    log "gh issue close failed for issue #$issue_num (best-effort — merge unaffected)"
+  fi
   return 0
 }
 
