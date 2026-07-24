@@ -35,7 +35,10 @@ lopussa). Jos konfigia ei ole, vaihe 0 päättelee järkevän fallbackin.
    cat "$REPO_ROOT/.claude/refresh.json" 2>/dev/null || echo "EI-KONFIGIA"
    ```
 
-   - Jos JSON luettiin → se on **CONFIG**. Käytä sen `start`, `services`, `buildHints`.
+   - Jos JSON luettiin → se on **CONFIG**. Käytä sen `start`, `services`, `buildHints` ja
+     (jos kenttä on) `migrations`. Jos `CONFIG.migrations` on määritelty, aseta
+     `MIGRATIONS_CONFIGURED=1` — se ratkaisee kumpi vaihe omistaa migraatiot (PHASE 3c
+     omistaa, PHASE 3a ohitetaan).
    - Jos `EI-KONFIGIA` → **FALLBACK-tila**:
      - Lue `$REPO_ROOT/package.json` ja päättele `start`-komento `scripts`-lohkosta
        järjestyksessä `dev` → `start` → `serve` (ensimmäinen löytyvä voittaa).
@@ -79,8 +82,9 @@ echo "BEFORE=$BEFORE BRANCH=$BRANCH BEHIND=$BEHIND"
 ```
 
 - Jos `BEHIND == 0` → repo on jo ajan tasalla, **ei pull-diffiä eikä PHASE 3:n buildeja**.
-  **Hyppää suoraan PHASE 3a:han** — pending-migraatiotarkistus ja gitignore-huolto (PHASE 3b)
-  ajetaan silti aina, vaikka mitään ei pullattu.
+  **Hyppää suoraan PHASE 3a:han** — pending-migraatiot (PHASE 3a *tai* PHASE 3c) ja
+  gitignore-huolto (PHASE 3b) ajetaan silti aina, vaikka mitään ei pullattu: koodi voi olla
+  kantaa edellä ilman että tämä komento pullaisi.
 - Muuten pullaa fast-forward-only:
 
   ```bash
@@ -123,8 +127,9 @@ Fallback-tilassa (ei CONFIG) käytä vain yllä olevia yleissääntöjä.
 > **Migraatioita ei sovelleta tässä vaiheessa.** Pull-diffissä näkyvä uusi
 > `prisma/migrations/<...>/`-kansio **ei** enää laukaise `migrate deploy`ta täällä — se on
 > väärä signaali (diff kertoo *tuliko* migraatio, ei *onko kanta ajan tasalla*). Migraatiot
-> hoitaa **PHASE 3a**, joka tarkistaa kannan todellisen tilan ja ajaa `migrate deploy`n
-> **kerran** riippumatta siitä näkyikö migraatio tämän ajon diffissä.
+> hoitaa **PHASE 3a** (Prisma-autodetektio) tai **PHASE 3c** (`CONFIG.migrations`) — kumpikin
+> tarkistaa kannan todellisen tilan ja soveltaa pendingit **kerran** riippumatta siitä
+> näkyikö migraatio tämän ajon diffissä.
 
 Raportoi **jokaisesta** ajetusta buildista mitä ajettiin ja **miksi** (mikä muuttunut
 tiedosto laukaisi sen). Jos jokin build **failaa** → tulosta sen stderr ja **STOP**
@@ -140,15 +145,23 @@ paikalliseen kantaan; jos `BEHIND == 0`, pull-diff ei näytä sitä lainkaan. Oi
 **tila, ei tapahtuma**: onko kannassa kaikki migraatiot sovellettuna.
 
 Tämä vaihe ajetaan siksi **aina** — myös kun `BEHIND == 0` (kuten PHASE 3b) — ja aina
-**ennen PHASE 4:ää**. Se on migraatioiden **ainoa** soveltaja (PHASE 3 ei enää aja
-`migrate deploy`ta), joten sama migraatio ei sovelleta kahdesti.
+**ennen PHASE 4:ää**. PHASE 3 ei enää aja `migrate deploy`ta, joten sama migraatio ei
+sovelleta kahdesti.
+
+> **Omistajuus — PHASE 3a vs. PHASE 3c:** jos `CONFIG.migrations` on määritelty, **ohita koko
+> PHASE 3a** — silloin migraatiot omistaa **PHASE 3c** (config-vetoinen, ORM-agnostinen).
+> PHASE 3a on nollakonfiguraation Prisma-polku repoille, joilla `migrations`-lohkoa ei ole.
+> Vaiheet ovat toisensa poissulkevat, joten migraatioita ei yritetä soveltaa kahdesti.
 
 **Autodetektio (ei konfigimuutosta olemassa oleviin `refresh.json`-tiedostoihin):** aja
-vaihe vain jos repo-juuressa on Prisma-skeema. Muuten **ohita hiljaa** — ei virhettä, ei
-mainintaa raportissa.
+vaihe vain jos `CONFIG.migrations` **puuttuu** ja repo-juuressa on Prisma-skeema. Muuten
+**ohita hiljaa** — ei virhettä, ei mainintaa raportissa.
 
 ```bash
-if [ ! -f "$REPO_ROOT/prisma/schema.prisma" ]; then
+# MIGRATIONS_CONFIGURED=1 jos CONFIG.migrations on määritelty (→ PHASE 3c omistaa).
+if [ "$MIGRATIONS_CONFIGURED" = 1 ]; then
+  echo "PHASE-3a: CONFIG.migrations määritelty — PHASE 3c omistaa migraatiot, ohitetaan"
+elif [ ! -f "$REPO_ROOT/prisma/schema.prisma" ]; then
   echo "PHASE-3a: ei prisma/schema.prisma — ohitetaan hiljaa"
 else
   echo "PHASE-3a: prisma/schema.prisma löytyi — tarkistetaan migraatiotila"
@@ -252,6 +265,79 @@ echo "GI_ADDED=[$GI_ADDED]"
 Jos `GI_ADDED` on ei-tyhjä → huomioi PHASE 6:n raportissa, että `.gitignore` sai uusia
 rivejä ja ne kannattaa committaa. **Älä committaa automaattisesti.** (Seuraava ajo ei
 pysähdy tähän, koska PHASE 1 sietää pelkkää `.gitignore`-muutosta.)
+
+---
+
+## PHASE 3c — Pending-migraatiot (ajetaan aina)
+
+`/refresh` on **"täsmää kanta koodin skeemaan"** -komento, ei vain *"sovella se mitä tässä
+pullissa tuli"*. Migraatiot voivat päätyä työpuuhun **ohi komennon oman pullin**: manuaalinen
+merge/rebase/checkout, `/run-issues`-orkestraattori, cherry-pick tai paikallisesti generoitu
+migraatio. Kaikissa näissä `BEHIND == 0` voi olla tosi vaikka **koodi on kantaa edellä** —
+skeemariippuvaiset endpointit kaatuvat silloin ajossa (esim. `SQLITE_ERROR: no such column`).
+Siksi pending-migraatioiden sovellus ajetaan **aina** — myös kun `BEHIND == 0` — ja **ennen
+PHASE 5:tä** (dev-serverin käynnistystä), jottei dev nouse migratoimattoman kannan päälle.
+
+Vaihe ajetaan **vain jos** `CONFIG.migrations` on määritelty (valinnainen kenttä). Ilman
+sitä tämä vaihe on **no-op** — täysi taaksepäinyhteensopivuus repoille, jotka nojaavat
+PHASE 3a:n Prisma-autodetektioon tai eivät migratoi lainkaan. Kun kenttä **on** määritelty,
+PHASE 3c on migraatioiden ainoa soveltaja ja **PHASE 3a ohitetaan** (ks. sen
+omistajuushuomio) — sama migraatio ei siis sovelleta kahdesti.
+
+**Repo-agnostisuus:** `check`- ja `apply`-komennot tulevat **kokonaan**
+`CONFIG.migrations`-kentästä — komento ei ole kovakoodattu mihinkään ORM:ään. Sovelluskomento
+itse hoitaa oikean Node-ABI:n (`nvm use` → oikea `better-sqlite3`-binääri), ORM-valinnan
+(Drizzle `db:migrate` / Prisma `migrate deploy` / muu) ja schema-polun. Aja komennot
+repo-juuressa **login-shellissä** (`bash -lc`), jotta `nvm` ja projektin `node_modules/.bin`
+latautuvat.
+
+**Päätöspuu — check-then-apply (robustein), fallback always-apply:**
+
+- Jos `CONFIG.migrations.check` on määritelty → aja se **ensin**. Exit-koodi ratkaisee:
+  - **exit 0** = pendingiä on → aja `apply`.
+  - **exit ≠ 0** = ei sovellettavaa (tai kanta ei ole tavoitettavissa, esim. Postgres alhaalla)
+    → **skip apply siististi**, ei muutosyritystä, ei STOP. `check` on siten myös suojaportti,
+    joka estää turhan sovellusyrityksen alhaalla olevaa kantaa vasten.
+- Jos `CONFIG.migrations.check` **puuttuu** → fallback **always-apply**: aja `apply` suoraan.
+  Nojaa siihen että sovelluskomento on **idempotentti** (Drizzlen `db:migrate` ja Prisman
+  `migrate deploy` soveltavat vain pendingit, turvallinen re-run). Riski: kannan pitää olla
+  pystyssä joka ajossa (ok SQLitelle jonka kanta on tiedosto; Postgresille suosittele `check`).
+
+```bash
+# CHECK ja APPLY luetaan CONFIG.migrations-kentästä (CHECK voi olla tyhjä).
+CHECK='...'   # CONFIG.migrations.check tai tyhjä
+APPLY='...'   # CONFIG.migrations.apply
+
+RUN_APPLY=1
+if [ -n "$CHECK" ]; then
+  if (cd "$REPO_ROOT" && bash -lc "$CHECK"); then
+    echo "MIGRATIONS_PENDING=1"; RUN_APPLY=1
+  else
+    echo "MIGRATIONS_PENDING=0 (check exit≠0 → ei sovelleta)"; RUN_APPLY=0
+  fi
+fi
+
+if [ "$RUN_APPLY" = 1 ]; then
+  if (cd "$REPO_ROOT" && bash -lc "$APPLY"); then
+    echo "MIGRATIONS_APPLIED=1"
+    SCHEMA_CHANGED=1
+  else
+    echo "MIGRATION_FAILED — STOP ennen PHASE 5:tä"
+    # STOP — ks. alla
+  fi
+fi
+```
+
+**Jos `apply` failaa** (rc ≠ 0 — esim. dev-kanta alhaalla always-apply-tilassa, tai varsinainen
+migraatiovirhe) → tulosta komennon stderr ja **STOP ennen PHASE 5:tä**, täsmälleen kuten
+PHASE 3:n build-fail-käytäntö. Älä käynnistä dev-serveriä migratoimattoman kannan päälle.
+Neuvo tarkistamaan että kanta on pystyssä (Postgres: `pnpm db:up`; SQLite: tiedosto-oikeudet).
+
+**Jos migraatioita sovellettiin, aseta `SCHEMA_CHANGED=1`** — sama signaali kuin PHASE 3a:lla,
+jotta PHASE 4b käynnistää jo pyörivän dev-serverin uudelleen eikä se jää vanhentuneen
+skeema- tai client-tilan varaan.
+
+Raportoi PHASE 6:ssa sovellettiinko migraatioita ja millä komennolla.
 
 ---
 
@@ -444,6 +530,9 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
    pending-migraatiot (`migrate deploy`) ja/tai Prisma Client regeneroitiin (`db:generate`),
    mainitse se tässä samalla tavalla kuin muut buildit — myös silloin kun migraatio ei
    näkynyt tämän ajon pull-diffissä (tai mitään ei pullattu).
+2b. **Pending-migraatiot (PHASE 3c)**: jos repolla on `CONFIG.migrations`, kerro
+   sovellettiinko `apply`-komento vai ohitettiinko se (`check` totesi ei pendingiä). Tämä on
+   PHASE 3a:n Prisma-polun vaihtoehto — kumpikin ajetaan myös kun `BEHIND == 0`.
 3. **Uudelleenkäynnistys**: jos PHASE 4b ajettiin, kerro että käynnissä ollut dev-server
    pysäytettiin ja käynnistettiin uudelleen vanhentuneen Prisma Clientin takia (vanha
    PID → uusi `DEV_PID`), ja että se ajaa nyt taustalla.
@@ -480,6 +569,30 @@ Repo-juuren `.claude/refresh.json` ohjaa tätä komentoa. Kentät:
   - `whenChanged` *(string, glob)* — tiedostopolku/glob, jonka muutos diffissä laukaisee.
   - `run` *(string)* — ajettava komento.
   - `note` *(string, valinnainen)* — lisähuomio maintainerlle (esim. milloin harkita migraatiota).
+- **`migrations`** *(object, valinnainen)* — pending-migraatioiden sovellus, jonka PHASE 3c
+  ajaa **aina** (myös kun `BEHIND == 0`), riippumatta siitä pullasiko komento. Repo-agnostinen:
+  komennot annetaan tässä, ei kovakoodattuna ORM:ään. Kentät:
+  - `apply` *(string, pakollinen)* — komento joka soveltaa pending-migraatiot. **Oltava
+    idempotentti** (soveltaa vain pendingit, turvallinen re-run). Ajetaan repo-juuressa
+    login-shellissä, joten se voi hoitaa `nvm use`:n oikean Node-ABI:n varmistamiseksi. Esim.
+    `"source ~/.nvm/nvm.sh && nvm use >/dev/null && npm run db:migrate"`.
+  - `check` *(string, valinnainen)* — komento joka päättää onko sovellettavaa: **exit 0** =
+    pendingiä on → `apply` ajetaan; **exit ≠ 0** = ei mitään (tai kanta ei tavoitettavissa) →
+    `apply` ohitetaan siististi ilman muutosyritystä. Ilman `check`:iä fallback on **always-apply**
+    (`apply` ajetaan aina; nojaa idempotenssiin). Suositeltu erityisesti Postgresille, jotta
+    alhaalla oleva kanta ei aiheuta STOP:ia joka `/refresh`-ajossa.
+  - `note` *(string, valinnainen)* — vapaa muistiinpano (esim. idempotenssin peruste).
+
+  Jos `migrations` on määritelty, **PHASE 3a:n Prisma-autodetektio ohitetaan kokonaan**
+  kaksinkertaisen sovelluksen välttämiseksi — PHASE 3c omistaa silloin migraatiot. Esim.:
+
+  ```jsonc
+  "migrations": {
+    // Aja PHASE 3c:ssä AINA (BEHIND-tilasta riippumatta).
+    "apply": "source ~/.nvm/nvm.sh && nvm use >/dev/null && npm run db:migrate",
+    "note": "db:migrate on idempotentti — soveltaa vain pendingit, turvallinen re-run"
+  }
+  ```
 
 ---
 
@@ -512,8 +625,9 @@ varmista että kukin pätee yhä:
    `SCHEMA_CHANGED=1`, ja jos dev-server pyöri jo tästä reposta, käynnistää sen uudelleen
    (PHASE 4b), jottei jää vanhentuneen Prisma Clientin varaan. Migraatio sovelletaan
    **kerran** (PHASE 3 ei enää aja `migrate deploy`ta). Jos dev-kanta on alhaalla, komento
-   pysähtyy ja neuvoo `pnpm db:up`. Repo ilman `prisma/schema.prisma` ohittaa PHASE 3a:n
-   hiljaa — ei virhettä eikä mainintaa raportissa.
+   pysähtyy ja neuvoo `pnpm db:up`. Repo ilman `prisma/schema.prisma` — tai repo jolla on
+   `CONFIG.migrations` (silloin PHASE 3c omistaa migraatiot, ks. skenaario 10) — ohittaa
+   PHASE 3a:n hiljaa: ei virhettä eikä mainintaa raportissa.
 8. **gitignore-huolto on idempotentti.** PHASE 3b varmistaa että `.claude/refresh-dev.log`
    (aina) ja `.claude/refresh.json` (jos olemassa eikä trackattu) ovat ignorattuja. Kun
    rivit ovat jo olemassa → ei muutosta eikä likaista työpuuta. Trackattua `refresh.json`:ia
@@ -524,3 +638,12 @@ varmista että kukin pätee yhä:
    tuota `command not found`). Jos käynnistys epäonnistuu (prosessi kuolee heti tai loki
    sisältää `command not found`), komento tulostaa lokin hännän ja pysähtyy **ennen** 45 s
    health-pollia — ei odota turhaan.
+10. **Koodi edellä kantaa + `BEHIND == 0` → pending-migraatiot sovelletaan silti.** Kun
+   migraatiot ovat päätyneet työpuuhun ohi komennon oman pullin (manuaalinen merge/checkout,
+   `/run-issues`, cherry-pick tms.) ja `origin/main == HEAD` (`BEHIND == 0`), komento **ei**
+   hyppää dev-serverin käynnistykseen kanta koodia jäljessä. Jos repolla on
+   `CONFIG.migrations`, PHASE 3c ajaa sen (check-then-apply, fallback always-apply) ja
+   soveltaa pendingit **ennen PHASE 5:tä**, joten `gift_message`-tyyppinen `no such column`
+   -500 ei toistu; ilman konfigia sama tehtävä on PHASE 3a:n Prisma-autodetektiolla
+   (skenaario 7). Jos `apply` failaa (esim. dev-kanta alhaalla always-apply-tilassa) →
+   komento pysähtyy PHASE 3c:ssä eikä käynnistä dev-serveriä.
