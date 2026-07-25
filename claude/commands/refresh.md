@@ -78,8 +78,9 @@ BEHIND=$(git -C "$REPO_ROOT" rev-list --count "HEAD..origin/$BRANCH")
 echo "BEFORE=$BEFORE BRANCH=$BRANCH BEHIND=$BEHIND"
 ```
 
-- Jos `BEHIND == 0` → repo on jo ajan tasalla. **Hyppää suoraan PHASE 3b:hen** (ei buildeja,
-  mutta gitignore-huolto ajetaan silti).
+- Jos `BEHIND == 0` → repo on jo ajan tasalla, **ei pull-diffiä eikä PHASE 3:n buildeja**.
+  **Hyppää suoraan PHASE 3a:han** — pending-migraatiotarkistus ja gitignore-huolto (PHASE 3b)
+  ajetaan silti aina, vaikka mitään ei pullattu.
 - Muuten pullaa fast-forward-only:
 
   ```bash
@@ -114,39 +115,95 @@ Aja komennot repo-juuressa, esim. `(cd "$REPO_ROOT" && pnpm install)`.
 |---|---|
 | `pnpm-lock.yaml` | `pnpm install` |
 | `apps/*/package.json` | `pnpm install` (jos ei jo ajettu lockfilen takia) |
-| `prisma/migrations/` sai uuden kansion (näkyy diffissä uutena `prisma/migrations/<...>/`-polkuna) | **aja migraatiot automaattisesti**, ks. alla — aseta `SCHEMA_CHANGED=1` |
 | `prisma/schema.prisma` | `pnpm db:generate` (regeneroi Prisma Client) — aseta `SCHEMA_CHANGED=1` |
 | vain `.ts` / `.tsx` (lähdekoodi) | ei buildia — dev-server (Vite/tsx watch) hoitaa hot-reloadin |
 
 Fallback-tilassa (ei CONFIG) käytä vain yllä olevia yleissääntöjä.
 
+> **Migraatioita ei sovelleta tässä vaiheessa.** Pull-diffissä näkyvä uusi
+> `prisma/migrations/<...>/`-kansio **ei** enää laukaise `migrate deploy`ta täällä — se on
+> väärä signaali (diff kertoo *tuliko* migraatio, ei *onko kanta ajan tasalla*). Migraatiot
+> hoitaa **PHASE 3a**, joka tarkistaa kannan todellisen tilan ja ajaa `migrate deploy`n
+> **kerran** riippumatta siitä näkyikö migraatio tämän ajon diffissä.
+
+Raportoi **jokaisesta** ajetusta buildista mitä ajettiin ja **miksi** (mikä muuttunut
+tiedosto laukaisi sen). Jos jokin build **failaa** → tulosta sen stderr ja **STOP**
+(älä käynnistä dev-serveriä rikkinäisen riippuvuustilan päälle).
+
+---
+
+## PHASE 3a — Pending-migraatioiden tarkistus (ajetaan aina)
+
+Diff kertoo vain *tuliko* migraatio tässä pullissa — ei sitä *onko paikallinen kanta ajan
+tasalla*. Migraatio on voinut tulla repoon aiemmassa commitissa mutta jäädä soveltamatta
+paikalliseen kantaan; jos `BEHIND == 0`, pull-diff ei näytä sitä lainkaan. Oikea kysymys on
+**tila, ei tapahtuma**: onko kannassa kaikki migraatiot sovellettuna.
+
+Tämä vaihe ajetaan siksi **aina** — myös kun `BEHIND == 0` (kuten PHASE 3b) — ja aina
+**ennen PHASE 4:ää**. Se on migraatioiden **ainoa** soveltaja (PHASE 3 ei enää aja
+`migrate deploy`ta), joten sama migraatio ei sovelleta kahdesti.
+
+**Autodetektio (ei konfigimuutosta olemassa oleviin `refresh.json`-tiedostoihin):** aja
+vaihe vain jos repo-juuressa on Prisma-skeema. Muuten **ohita hiljaa** — ei virhettä, ei
+mainintaa raportissa.
+
+```bash
+if [ ! -f "$REPO_ROOT/prisma/schema.prisma" ]; then
+  echo "PHASE-3a: ei prisma/schema.prisma — ohitetaan hiljaa"
+else
+  echo "PHASE-3a: prisma/schema.prisma löytyi — tarkistetaan migraatiotila"
+fi
+```
+
+(Monorepo, jossa `prisma/`-kansio ei ole repo-juuressa → autodetektio ei osu; tämä on
+hyväksytty rajaus, samoin kuin PHASE 3:n yleissäännöt olettavat juuritason lockfilet.)
+
+Kun skeema löytyi, tarkista kannan tila. Aja **`migrate status`** repo-juuressa:
+
+```bash
+MIGRATE_STATUS=$(cd "$REPO_ROOT" && pnpm prisma migrate status --schema=./prisma/schema.prisma 2>&1)
+MIGRATE_RC=$?
+printf '%s\n' "$MIGRATE_STATUS"
+echo "MIGRATE_RC=$MIGRATE_RC"
+```
+
+Tulkitse tuloste (päätöspuu — `migrate status` palauttaa rc≠0 sekä pending-migraatioista
+että yhteysvirheestä, joten teksti ratkaisee):
+
+- Tuloste sisältää **`Database schema is up to date`** → kanta on ajan tasalla, **ei
+  toimenpiteitä**. Etene PHASE 3b:hen (`SCHEMA_CHANGED` jää asettamatta).
+- Tuloste viittaa **yhteysvirheeseen** (kanta alhaalla — esim. `Can't reach database
+  server`, `P1001`, `ECONNREFUSED`) → tulosta virhe, huomauta että **`pnpm db:up`**
+  käynnistää PostgreSQL-kontin, ja **STOP**. Älä käynnistä dev-serveriä migratoimattoman
+  kannan päälle (sama käytös kuin PHASE 3:n aiemmalla db-down-ohjeella).
+- Muuten (**pending-migraatioita on** — esim. `Following migrations have not yet been
+  applied`) → sovella ne, ks. alla.
+
 ### Migraatiot — `migrate deploy`, ei `migrate dev`
 
-Kun pull tuo **uuden migraatiokansion**, migraatio on jo *luotu* originissa ja paikallisesti
-pitää vain *soveltaa* se. Aja **`prisma migrate deploy`** — ei `pnpm db:migrate`
-(= `prisma migrate dev`). Ero on kriittinen:
+Migraatio on jo *luotu* originissa ja paikallisesti pitää vain *soveltaa* se. Aja
+**`prisma migrate deploy`** — ei `pnpm db:migrate` (= `prisma migrate dev`). Ero on
+kriittinen:
 
 - `migrate deploy` soveltaa vain pending-migraatiot non-interaktiivisesti. Ei koskaan
   resetoi kantaa, ei kysy, ei luo uusia migraatioita. Tämä on automaattiajolle turvallinen.
 - `migrate dev` on tarkoitettu migraatioiden *luomiseen* kehityksessä ja **voi resetoida
   kannan** jos se havaitsee driftin — destruktiivista automaattiajossa.
 
+Aja `migrate deploy`, sitten `db:generate` (tässä järjestyksessä — `migrate deploy` **ei**
+regeneroi Prisma Clientiä), ja aseta `SCHEMA_CHANGED=1`:
+
 ```bash
-(cd "$REPO_ROOT" && pnpm prisma migrate deploy --schema=./prisma/schema.prisma)
+(cd "$REPO_ROOT" && pnpm prisma migrate deploy --schema=./prisma/schema.prisma) \
+  && (cd "$REPO_ROOT" && pnpm db:generate)
+SCHEMA_CHANGED=1
 ```
 
-`migrate deploy` **ei** regeneroi Prisma Clientiä (toisin kuin `migrate dev`), joten
-**aja `pnpm db:generate` aina** kun migraatio sovellettiin tai `schema.prisma` muuttui.
-Järjestys: ensin `migrate deploy`, sitten `db:generate`. Aseta molemmissa `SCHEMA_CHANGED=1`
-(PHASE 4 tarvitsee tätä päättääkseen tarvitseeko käynnissä oleva API uudelleenkäynnistyksen).
-
-**Jos dev-kanta ei ole pystyssä**, `migrate deploy` failaa yhteysvirheeseen. Tulosta virhe,
-huomauta että `pnpm db:up` käynnistää PostgreSQL-kontin, ja **STOP** — älä käynnistä
-dev-serveriä migratoimattoman kannan päälle.
-
-Raportoi **jokaisesta** ajetusta buildista mitä ajettiin ja **miksi** (mikä muuttunut
-tiedosto laukaisi sen). Jos jokin build **failaa** → tulosta sen stderr ja **STOP**
-(älä käynnistä dev-serveriä rikkinäisen riippuvuustilan päälle).
+`SCHEMA_CHANGED=1` saa PHASE 4:n käynnistämään käynnissä olevan dev-serverin uudelleen
+(PHASE 4b) — `tsx watch` ei seuraa `node_modules/.prisma/`-muutoksia, joten pelkkä
+migraatio + generate ei riitä käynnissä olevalle prosessille. Jos `migrate deploy` tai
+`db:generate` **failaa** → tulosta stderr ja **STOP** (älä käynnistä dev-serveriä
+rikkinäisen kantatilan päälle).
 
 ---
 
@@ -286,19 +343,56 @@ Kun portit ovat vapaat → etene PHASE 5:een (normaali taustakäynnistys + healt
 
 Käynnistä `start`-komento niin että se **jää eloon** työkalukutsun palatessa.
 
-**Kun ajat tämän itse Bash-työkalulla**, käytä Bash-työkalun `run_in_background: true`
--moodia, tai jos ajat etualalla, käytä `setsid` + `disown` -kuoritekniikkaa niin ettei
-prosessi kuole kun työkalukutsu palaa:
+**Ensisijainen tapa — Bash-työkalun `run_in_background: true` -moodi.** Aja start-komento
+Bash-työkalulla `run_in_background: true` -parametrilla ja ohjaa tuloste lokiin **komennon
+sisällä**, jotta `.claude/refresh-dev.log` säilyy raportoitavana polkuna. Tämä on
+alustariippumaton eikä nojaa util-linuxin `setsid`iin (jota macOS:ssä ei ole):
 
 ```bash
-cd "$REPO_ROOT" && setsid nohup pnpm dev > "$REPO_ROOT/.claude/refresh-dev.log" 2>&1 &
+cd "$REPO_ROOT" && pnpm dev > "$REPO_ROOT/.claude/refresh-dev.log" 2>&1
+```
+
+(Korvaa `pnpm dev` CONFIG.start-arvolla. `run_in_background: true` pitää prosessin elossa
+työkalukutsun palatessa; loki menee aina `$REPO_ROOT/.claude/refresh-dev.log`-tiedostoon.
+Ota talteen työkalun palauttama taustatehtävän tunniste elossaolotarkistusta varten.)
+
+**Etualan fallback** (jos et voi käyttää `run_in_background`-moodia). `setsid` **ei kuulu
+macOS:n perusasennukseen** — älä käytä sitä ehdoitta (`command not found` → dev-server ei
+käynnisty). Pelkkä `nohup … & disown` riittää macOS:llä; `setsid` lisätään vain
+saatavuustarkistuksen takaa:
+
+```bash
+command -v setsid >/dev/null 2>&1 && SETSID=setsid || SETSID=""
+cd "$REPO_ROOT" && $SETSID nohup pnpm dev > "$REPO_ROOT/.claude/refresh-dev.log" 2>&1 &
 DEV_PID=$!
 disown "$DEV_PID" 2>/dev/null || true
 echo "DEV_PID=$DEV_PID LOG=$REPO_ROOT/.claude/refresh-dev.log"
 ```
 
-(Korvaa `pnpm dev` CONFIG.start-arvolla. Loki menee aina
-`$REPO_ROOT/.claude/refresh-dev.log`-tiedostoon.)
+**Elossaolotarkistus ennen health-pollia.** Käynnistys voi epäonnistua hiljaa: `&`-taustaan
+ajettu rivi (tai `run_in_background`-tehtävä) "onnistuu" heti vaikka komento ei löytyisi, ja
+vasta 45 s health-poll paljastaisi ettei mitään käynnistynyt. Tarkista siksi **ennen**
+pollia että prosessi on elossa eikä loki sisällä käynnistysvirhettä — jos kuollut, tulosta
+lokin häntä ja **STOP heti**, älä odota 45 s turhaan:
+
+```bash
+sleep 1
+DEAD=0
+# Etualan fallback: DEV_PID asetettu → tarkista prosessi. run_in_background-moodissa
+# käytä sen sijaan työkalun palauttamaa taustatehtävän tilaa (completed/failed = kuollut).
+if [ -n "$DEV_PID" ] && ! kill -0 "$DEV_PID" 2>/dev/null; then DEAD=1; fi
+# Molemmissa moodeissa: käynnistysvirhe lokissa on varma kuolleen prosessin signaali.
+if grep -qE 'command not found|Cannot find module|No such file|EADDRINUSE' \
+     "$REPO_ROOT/.claude/refresh-dev.log" 2>/dev/null; then DEAD=1; fi
+echo "DEAD=$DEAD"
+```
+
+Jos `DEAD=1` (tai `run_in_background`-tehtävä on jo päättynyt) → tulosta lokin häntä ja
+**STOP**, älä etene health-polliin:
+
+```bash
+tail -40 "$REPO_ROOT/.claude/refresh-dev.log"
+```
 
 **Health-poll** — odota kunkin palvelun terveeksi tuloa enintään ~45 s, pollaten 1 s
 välein. Käytä CONFIG.services[].healthPath:ia. Jos healthPath ei ole `/`, palvelu
@@ -346,8 +440,10 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
 
 1. **Pull-yhteenveto**: oltiinko ajan tasalla vai pullattiinko, BRANCH, BEFORE→AFTER
    (lyhyet hashit), montako committia.
-2. **Ajetut buildit + syyt**: lista (komento ← laukaiseva tiedosto). Jos migraatioita
-   sovellettiin (`migrate deploy`) ja/tai Prisma Client regeneroitiin, mainitse se tässä.
+2. **Ajetut buildit + syyt**: lista (komento ← laukaiseva tiedosto). Jos PHASE 3a sovelsi
+   pending-migraatiot (`migrate deploy`) ja/tai Prisma Client regeneroitiin (`db:generate`),
+   mainitse se tässä samalla tavalla kuin muut buildit — myös silloin kun migraatio ei
+   näkynyt tämän ajon pull-diffissä (tai mitään ei pullattu).
 3. **Uudelleenkäynnistys**: jos PHASE 4b ajettiin, kerro että käynnissä ollut dev-server
    pysäytettiin ja käynnistettiin uudelleen vanhentuneen Prisma Clientin takia (vanha
    PID → uusi `DEV_PID`), ja että se ajaa nyt taustalla.
@@ -389,7 +485,7 @@ Repo-juuren `.claude/refresh.json` ohjaa tätä komentoa. Kentät:
 
 ## Verifiointi — savutestiskenaariot (regressiosuoja)
 
-Nämä kuusi skenaariota dokumentoivat odotetun käytöksen. Jos muutat tätä komentoa,
+Nämä skenaariot dokumentoivat odotetun käytöksen. Jos muutat tätä komentoa,
 varmista että kukin pätee yhä:
 
 1. **Likainen työpuu → STOP.** Jos `git status --porcelain` palauttaa rivejä, komento
@@ -408,12 +504,23 @@ varmista että kukin pätee yhä:
 6. **Ei konfigia → fallback + varoitus.** Ilman `.claude/refresh.json`:ia komento
    päättelee `start`-komennon `package.json`:n skripteistä (dev→start→serve) ja
    lockfilestä, ja **varoittaa** raportissa että ajetaan ilman konfigia.
-7. **Uusi migraatio → migrate deploy + generate (+ restart jos käynnissä).** Kun pull
-   tuo uuden `prisma/migrations/<...>/`-kansion, komento ajaa `prisma migrate deploy`
-   (**ei** `migrate dev`) ja `pnpm db:generate`. Jos dev-server pyöri jo tästä reposta,
-   se käynnistetään uudelleen (PHASE 4b), jottei jää vanhentuneen Prisma Clientin varaan.
-   Jos dev-kanta on alhaalla, komento pysähtyy ja neuvoo `pnpm db:up`.
+7. **Pending-migraatio → migrate deploy + generate (myös ilman pullia).** PHASE 3a ajaa
+   `prisma migrate status`in **aina** kun `prisma/schema.prisma` on repo-juuressa — myös
+   kun `BEHIND == 0` eikä mitään pullattu. Jos kanta ei ole ajan tasalla — vaikka migraatio
+   olisi tullut repoon aiemmassa commitissa eikä näy tämän ajon diffissä — komento ajaa
+   `prisma migrate deploy` (**ei** `migrate dev`) ja `pnpm db:generate`, asettaa
+   `SCHEMA_CHANGED=1`, ja jos dev-server pyöri jo tästä reposta, käynnistää sen uudelleen
+   (PHASE 4b), jottei jää vanhentuneen Prisma Clientin varaan. Migraatio sovelletaan
+   **kerran** (PHASE 3 ei enää aja `migrate deploy`ta). Jos dev-kanta on alhaalla, komento
+   pysähtyy ja neuvoo `pnpm db:up`. Repo ilman `prisma/schema.prisma` ohittaa PHASE 3a:n
+   hiljaa — ei virhettä eikä mainintaa raportissa.
 8. **gitignore-huolto on idempotentti.** PHASE 3b varmistaa että `.claude/refresh-dev.log`
    (aina) ja `.claude/refresh.json` (jos olemassa eikä trackattu) ovat ignorattuja. Kun
    rivit ovat jo olemassa → ei muutosta eikä likaista työpuuta. Trackattua `refresh.json`:ia
    ei ignoroida. Pelkkä `.gitignore`-muutos ei laukaise PHASE 1:n STOP:ia seuraavalla ajolla.
+9. **setsid-vapaa käynnistys + elossaolotarkistus.** PHASE 5:n ensisijainen käynnistystapa
+   on Bash-työkalun `run_in_background: true` -moodi eikä käytä `setsid`iä; etualan fallback
+   toimii macOS:llä sellaisenaan (`setsid` vain saatavuustarkistuksen takaa, kopioi–liitä ei
+   tuota `command not found`). Jos käynnistys epäonnistuu (prosessi kuolee heti tai loki
+   sisältää `command not found`), komento tulostaa lokin hännän ja pysähtyy **ennen** 45 s
+   health-pollia — ei odota turhaan.
