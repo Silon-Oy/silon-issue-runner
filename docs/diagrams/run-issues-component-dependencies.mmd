@@ -55,13 +55,15 @@ flowchart TB
     POLL --> ORCH
     %% poller.sh also restarts timed_out runs: scan_timed_out reads each
     %% run.json (status=timed_out, retry_count<MAX, host gate) and launches
-    %% orchestrate.sh --restart <run-dir> in a run-issues-restart-<N> tmux session.
+    %% orchestrate.sh --restart <run-dir> in a run-issues-restart-<suffix> tmux
+    %% session, where <suffix> = session_suffix(remote, issue, repo_slug) — the
+    %% repo slug is read from the run's own run.json (issue #67), never re-derived.
     POLL -. "--restart timed_out runs<br/>(scan_timed_out)" .-> ORCH
     %% poller.sh also continues awaiting_clarification runs: scan_answered reads
     %% each local run.json (status=awaiting_clarification, round<MAX, host gate),
     %% then for those runs only calls gh (lib/issue.sh: parse_marker/detect_answer)
     %% to find maintainer's reply, and launches orchestrate.sh --continue <run-dir> in a
-    %% run-issues-continue-<issue> tmux session.
+    %% run-issues-continue-<suffix> tmux session (same repo-namespaced suffix).
     POLL -. "--continue answered runs<br/>(scan_answered)" .-> ORCH
     POLL -. reads run.json .-> L_STATE
     POLL -. "parse_marker / detect_answer" .-> L_ISSUE

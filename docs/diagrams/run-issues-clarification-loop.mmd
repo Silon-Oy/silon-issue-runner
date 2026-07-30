@@ -27,7 +27,7 @@ sequenceDiagram
         Poller->>Poller: scan_answered: local awaiting_clarification run?<br/>(host == hostname -s, round < MAX)
         Poller->>GH: fetch_issue_json + parse_marker + detect_answer(T)
         alt reply found & round < MAX_CLARIFICATIONS
-            Poller->>Orch: tmux run-issues-continue-<issue>:<br/>orchestrate.sh --continue <run-dir>
+            Poller->>Orch: tmux run-issues-continue-<repo-slug>-<issue>:<br/>orchestrate.sh --continue <run-dir>
             Orch->>Orch: lock + validate worktree<br/>clarification_round++ (before claude)
             Orch->>GH: read reply → CLARIFICATION_CONTEXT
             Orch->>Orch: S6 run_cycle_review (enriched context)

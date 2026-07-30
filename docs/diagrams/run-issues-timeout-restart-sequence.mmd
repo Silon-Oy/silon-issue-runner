@@ -24,7 +24,7 @@ sequenceDiagram
     Note over Poller: Next poll (≤5 min)
     Poller->>State: scan_timed_out (status=timed_out,<br/>retry_count<MAX, host==this)
     State-->>Poller: issue + run-dir
-    Poller->>Orch: orchestrate.sh --restart <run-dir><br/>(tmux run-issues-restart-<N>)
+    Poller->>Orch: orchestrate.sh --restart <run-dir><br/>(tmux run-issues-restart-<repo-slug>-<N>)
 
     Orch->>State: validate status==timed_out, retry_count<MAX
     alt budget left and worktree OK

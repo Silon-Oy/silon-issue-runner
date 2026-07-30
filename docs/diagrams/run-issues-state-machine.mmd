@@ -144,7 +144,8 @@ stateDiagram-v2
     %% embeds an awaiting-answer marker (ts). poller.sh's scan_answered (host gate,
     %% round < MAX_CLARIFICATIONS) detects maintainer's reply by timestamp (detect_answer:
     %% createdAt > marker ts AND body lacks the run-issues: token) and launches
-    %% orchestrate.sh --continue <run-dir> in a run-issues-continue-<issue> session.
+    %% orchestrate.sh --continue <run-dir> in a run-issues-continue-<suffix> session
+    %% (<suffix> carries the run's repo slug, issue #67).
     %% --continue re-runs S6 (run_cycle_review) with CLARIFICATION_CONTEXT built from
     %% the reply; clarification_round is incremented BEFORE the claude call.
     S_AwaitingClarification --> S_ContinueLoad: --continue (reply found, round < MAX)
