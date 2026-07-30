@@ -392,6 +392,14 @@ IS_CONTINUE=0
 # from cwd (which is wrong for non-origin remotes). Empty -> gh's legacy
 # cwd-based resolution (origin); full backward compatibility.
 OWNER_REPO=""
+# REPO_SLUG is the repo component of this run's identity (issue #67): the
+# filename-safe slug of `owner/repo` (fallback: repo dir basename). It is part
+# of the lock name, run-id, branch and tmux session so two repos' issue #42
+# cannot collide in the global lock/tmux namespaces. Persisted to run.json as
+# `repo_slug`, and read back verbatim by --resume/--restart/--continue: a run
+# created before #67 has no such field, keeps REPO_SLUG empty, and therefore
+# keeps the legacy names it was started with for its whole life.
+REPO_SLUG=""
 
 # Retry budget: how many auto-restarts a single timed-out run may receive.
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
@@ -470,7 +478,7 @@ cleanup_on_exit() {
   # label + assignee, not the per-machine advisory lock, so --continue re-takes
   # the lock cleanly. The GitHub assignee remains in place as the durable claim.
   if [ "$LOCK_HELD" = "1" ] && [ -n "$ISSUE_NUM" ] && [ "$rc" != "10" ]; then
-    unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" || true
+    unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG" || true
   fi
   exit "$rc"
 }
@@ -497,14 +505,32 @@ resolve_owner_repo() {
   log "remote: routing gh via --repo $OWNER_REPO (remote=$REMOTE_NAME)"
 }
 
+# resolve_repo_slug — derive REPO_SLUG from REPO_ROOT + REMOTE_NAME (issue #67).
+# Called only on the NEW-run path: resume/restart/continue read the slug from
+# run.json instead, so a run's identity never changes under it (a remote URL
+# edit mid-run must not rename the lock the run is holding).
+#
+# Unlike resolve_owner_repo this is never fatal: repo_slug falls back to the repo
+# dir basename, and an empty result simply means legacy naming.
+resolve_repo_slug() {
+  REPO_SLUG=$(repo_slug "$REPO_ROOT" "$REMOTE_NAME")
+  if [ -n "$REPO_SLUG" ]; then
+    log "repo: identity namespaced as '$REPO_SLUG' (remote=$REMOTE_NAME)"
+  else
+    log "WARNING: could not derive a repo slug for $REPO_ROOT — falling back to legacy (repo-agnostic) naming"
+  fi
+}
+
 # ===========================================================================
 # Phase A: pick → cycle-review
 # ===========================================================================
 phase_a() {
   load_repo_timeout "$REPO_ROOT"
   # Resolve OWNER_REPO from REMOTE_NAME up front so every subsequent gh call
-  # can route via `gh --repo` for non-origin remotes (multi-org support).
+  # can route via `gh --repo` for non-origin remotes (multi-org support), and
+  # REPO_SLUG so lock / run-id / branch / tmux naming is repo-namespaced.
   resolve_owner_repo
+  resolve_repo_slug
 
   # ---------- S1: pick issue ----------
   log "S1_PickIssue (remote=$REMOTE_NAME)"
@@ -522,10 +548,12 @@ phase_a() {
   fi
 
   # Snapshot issue payload — used now for branch name and later (incl. resume).
-  # Run-id is namespaced by remote for non-origin so the same issue number on
-  # two orgs gets distinct run-dirs (e.g. `<ts>-customer-d-issue-5` vs `<ts>-issue-5`).
+  # Run-id is namespaced by repo AND remote so the same issue number in two
+  # repos / two orgs gets distinct run-dirs, branches, locks and tmux sessions
+  # (e.g. `<ts>-silon-oy-flow-issue-5` vs `<ts>-silon-oy-customer-a-report-issue-5`).
+  # One label feeds all of them so the four derivations cannot drift apart.
   local id_label
-  id_label=$(remote_label "$REMOTE_NAME" "$ISSUE_NUM")
+  id_label=$(remote_label "$REMOTE_NAME" "$ISSUE_NUM" "$REPO_SLUG")
   RUN_ID="$(date +%Y%m%d-%H%M%S)-${id_label}"
   RUN_DIR="$REPO_ROOT/.claude/run-issues/$RUN_ID"
   mkdir -p "$RUN_DIR"
@@ -541,6 +569,11 @@ phase_a() {
   state_init "$RUN_DIR" "$RUN_ID" "$REPO_ROOT" "$ISSUE_NUM"
   state_set "$RUN_DIR" "remote" "$REMOTE_NAME"
   [ -n "$OWNER_REPO" ] && state_set "$RUN_DIR" "owner_repo" "$OWNER_REPO"
+  # repo_slug is the durable record of this run's naming generation: present =>
+  # repo-namespaced names (post-#67), absent => legacy names. Every teardown path
+  # (poller finalize_stalled, cleanup-run.sh, auto-clean.sh) reads it back so it
+  # releases the lock this run actually holds — and no other repo's.
+  [ -n "$REPO_SLUG" ] && state_set "$RUN_DIR" "repo_slug" "$REPO_SLUG"
   enter_state "S1_PickIssue"
   state_event "$RUN_DIR" "issue_picked" "issue_number=$ISSUE_NUM" "title=$ISSUE_TITLE" "remote=$REMOTE_NAME"
 
@@ -552,7 +585,7 @@ phase_a() {
   # ---------- S2: lock ----------
   enter_state "S2_Lock"
   log "S2_Lock issue=$ISSUE_NUM remote=$REMOTE_NAME"
-  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME"; then
+  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"; then
     log "lock held by another runner; exiting"
     state_finalize "$RUN_DIR" "lost_race" "lock_held"
     exit 3
@@ -795,6 +828,11 @@ resume_load_state() {
   # Multi-remote: empty -> "origin" (legacy run.json predating the field).
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
+  # Repo namespacing (issue #67): read the slug back verbatim and do NOT
+  # re-derive it. Absent field = a run created before #67, whose lock, branch
+  # and tmux session all carry the legacy repo-agnostic names; keeping the slug
+  # empty means we address exactly those names instead of orphaning them.
+  REPO_SLUG=$(jq -r '.repo_slug // ""' "$rj")
 
   if [ -z "$REPO_ROOT" ] || [ -z "$ISSUE_NUM" ] || [ -z "$WORKTREE_PATH" ]; then
     echo "orchestrate: incomplete run.json (missing repo/issue_number/worktree_path)" >&2
@@ -846,6 +884,11 @@ restart_load_state() {
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
+  # Repo namespacing (issue #67): read the slug back verbatim and do NOT
+  # re-derive it. Absent field = a run created before #67, whose lock, branch
+  # and tmux session all carry the legacy repo-agnostic names; keeping the slug
+  # empty means we address exactly those names instead of orphaning them.
+  REPO_SLUG=$(jq -r '.repo_slug // ""' "$rj")
   local prior_status retry_count
   prior_status=$(jq -r '.status // ""' "$rj")
   retry_count=$(jq -r '.retry_count // 0' "$rj")
@@ -867,7 +910,7 @@ restart_load_state() {
   fi
 
   # Take the per-issue lock for the duration of the restart.
-  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME"; then
+  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"; then
     log "restart: lock held by another runner for issue #$ISSUE_NUM — skipping"
     exit 3
   fi
@@ -970,6 +1013,11 @@ continue_load_state() {
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
+  # Repo namespacing (issue #67): read the slug back verbatim and do NOT
+  # re-derive it. Absent field = a run created before #67, whose lock, branch
+  # and tmux session all carry the legacy repo-agnostic names; keeping the slug
+  # empty means we address exactly those names instead of orphaning them.
+  REPO_SLUG=$(jq -r '.repo_slug // ""' "$rj")
   local prior_status round
   prior_status=$(jq -r '.status // ""' "$rj")
   round=$(jq -r '.clarification_round // 0' "$rj")
@@ -991,7 +1039,7 @@ continue_load_state() {
   fi
 
   # Take the per-issue lock for the duration of the continue.
-  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME"; then
+  if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"; then
     log "continue: lock held by another runner for issue #$ISSUE_NUM — skipping"
     exit 3
   fi
