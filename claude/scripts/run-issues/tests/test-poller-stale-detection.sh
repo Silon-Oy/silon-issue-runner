@@ -71,6 +71,13 @@ RUN_ISSUES_LOCK_ROOT="$WORK/locks"
 
 # Mock tmux: track sessions and kill-calls. has-session returns 0 only for
 # names previously "created" via touching a file in $WORK/tmux-sessions/.
+#
+# poller.sh addresses sessions with an EXACT target: `-t "=<name>"` (the leading
+# `=` is tmux syntax for "the session literally named <name>", added in d137b20
+# to stop `run-issues-3` from prefix-matching `run-issues-34`). The mock must
+# model that syntax, so it strips a leading `=` before the filesystem lookup —
+# otherwise it searches for a file named `=run-issues-100`, never matches, and
+# kill-session is never issued.
 mkdir -p "$WORK/tmux-sessions"
 TMUX_LOG="$WORK/tmux-calls.log"
 mkdir -p "$WORK/bin"
@@ -80,12 +87,12 @@ echo "\$*" >> "$TMUX_LOG"
 case "\$1" in
   has-session)
     shift; while [ "\$1" != "-t" ] && [ \$# -gt 0 ]; do shift; done
-    name="\$2"
+    name="\${2#=}"   # strip tmux's exact-match '=' prefix
     [ -f "$WORK/tmux-sessions/\$name" ]
     ;;
   kill-session)
     shift; while [ "\$1" != "-t" ] && [ \$# -gt 0 ]; do shift; done
-    name="\$2"
+    name="\${2#=}"   # strip tmux's exact-match '=' prefix
     rm -f "$WORK/tmux-sessions/\$name"
     ;;
   *) exit 0 ;;
