@@ -14,6 +14,15 @@
 # the same lock. Origin keeps the legacy `issue-<N>.lock` shape so existing
 # locks are not orphaned by the upgrade.
 #
+# Portability: this package targets macOS in practice (the lock root defaults to
+# ~/Library/Application Support and the pollers run as macOS LaunchAgents), so
+# "macOS-only" would be a defensible scope. Even so, the mtime read is done
+# through the portable `_lock_mtime` helper (uname-branched `stat`, mirroring
+# orchestrate.sh and github-app-auth.sh) rather than left latent — a bare
+# `stat -f` would misbehave under GNU coreutils, and the sibling call sites
+# already handle both platforms, so this keeps the codebase internally
+# consistent at no extra cost.
+#
 # This file is sourced by orchestrate.sh; do not execute top-level work.
 
 set -euo pipefail
@@ -28,6 +37,38 @@ _LOCKING_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RUN_ISSUES_LOCK_ROOT="${RUN_ISSUES_LOCK_ROOT:-${HOME}/Library/Application Support/run-issues/locks}"
 RUN_ISSUES_LOCK_STALE_SECS="${RUN_ISSUES_LOCK_STALE_SECS:-86400}" # 24h
+
+# Logger — best-effort: reuse the caller's `log` function when defined
+# (orchestrate.sh), otherwise fall back to a date-prefixed stderr line so a
+# silent stat failure still leaves a diagnostic trail. Same pattern as
+# github-app-auth.sh's `_gha_log`.
+_locking_log() {
+  if declare -F log >/dev/null 2>&1; then
+    log "locking: $*"
+  else
+    printf '[locking %s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2
+  fi
+}
+
+# _lock_mtime <dir> — prints the directory's mtime as epoch seconds on success,
+# prints nothing and returns non-zero on failure. The `stat` format flag is not
+# portable: BSD/macOS uses `stat -f <fmt>` while GNU coreutils uses
+# `stat -c <fmt>` (and reads `-f` as --file-system, a different operation).
+# Branch on `uname -s` like the sibling call sites (orchestrate.sh:325-329,
+# github-app-auth.sh:126-129) so the read is correct on both platforms.
+_lock_mtime() {
+  local dir="$1" mtime
+  if [ "$(uname -s)" = "Darwin" ]; then
+    mtime=$(stat -f %m "$dir" 2>/dev/null) || return 1
+  else
+    mtime=$(stat -c %Y "$dir" 2>/dev/null) || return 1
+  fi
+  # Guard against a successful stat that somehow yields non-numeric output.
+  case "$mtime" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$mtime"
+}
 
 # _lock_dir <issue-num> [<remote>]
 # Prints the absolute lock directory path. The remote argument is optional and
@@ -59,7 +100,16 @@ lock_issue() {
   # Lock exists — check staleness via directory mtime.
   if [ -d "$dir" ]; then
     local mtime now age
-    mtime=$(stat -f %m "$dir" 2>/dev/null || echo 0)
+    # Conservative fallback: if the mtime cannot be read for ANY reason (stat
+    # error, permissions, directory removed in a race), do NOT treat the lock
+    # as stale. A lock system must default to "someone else holds it" under
+    # uncertainty — the aggressive `mtime=0` fallback made `age` enormous and
+    # stole a live run's lock the moment `stat` hiccuped (issue #66). Refuse to
+    # steal and leave a diagnostic line so the silent failure is visible.
+    if ! mtime=$(_lock_mtime "$dir"); then
+      _locking_log "WARNING: cannot read mtime of lock dir $dir — treating as held (not stealing)"
+      return 1
+    fi
     now=$(date +%s)
     age=$(( now - mtime ))
     if [ "$age" -gt "$RUN_ISSUES_LOCK_STALE_SECS" ]; then
