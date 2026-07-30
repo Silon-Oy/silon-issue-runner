@@ -71,9 +71,10 @@ LIB_STATE="${DOTFILES}/claude/scripts/run-issues/lib/state.sh"
 # shellcheck source=lib/state.sh
 [ -f "$LIB_STATE" ] && . "$LIB_STATE"
 
-# remote_label / resolve_remote_to_owner_repo live in lib/git-remote.sh. Used by
-# the (repo × remote) iteration to derive owner/repo for `gh --repo` routing and
-# tmux session / lock naming. Pure functions; safe to source.
+# remote_label / session_suffix / repo_slug / resolve_remote_to_owner_repo live
+# in lib/git-remote.sh. Used by the (repo × remote) iteration to derive owner/repo
+# for `gh --repo` routing and the repo-namespaced tmux session / lock names.
+# Pure functions; safe to source.
 LIB_GIT_REMOTE="${DOTFILES}/claude/scripts/run-issues/lib/git-remote.sh"
 # shellcheck source=lib/git-remote.sh
 [ -f "$LIB_GIT_REMOTE" ] && . "$LIB_GIT_REMOTE"
@@ -96,6 +97,30 @@ _iso_to_epoch() {
   date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" "+%s" 2>/dev/null \
     || date -u -d "$ts" "+%s" 2>/dev/null \
     || printf ''
+}
+
+# _running_session_name <prefix> <remote> <repo-slug> <issue>
+# Prints the name of an existing tmux session for this (repo, remote, issue) and
+# returns 0, or returns 1 when none is running.
+#
+# Two names are probed (issue #67): the repo-namespaced one this poller version
+# spawns, and the legacy repo-agnostic one a session started by the PREVIOUS
+# version still carries. Missing the legacy name would be the worst possible
+# failure of the rollout — the poller would consider the issue free, take a
+# repo-namespaced lock nobody else holds, and run a SECOND orchestrator against
+# a live run. `=` forces an exact tmux target match so `run-issues-3` cannot
+# prefix-match `run-issues-34`.
+_running_session_name() {
+  local prefix="$1" remote="$2" slug="$3" issue="$4"
+  local s name
+  for s in "$(session_suffix "$remote" "$issue" "$slug")" "$(session_suffix "$remote" "$issue")"; do
+    name="${prefix}${s}"
+    if tmux has-session -t "=$name" 2>/dev/null; then
+      printf '%s' "$name"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # scan_stalled <repo-path> — prints "<issue-number> <run-dir>" lines for runs
@@ -180,13 +205,18 @@ finalize_stalled() {
   local rj="$run_dir/run.json"
   [ -f "$rj" ] || return 0
 
-  local current_state repo host_in_run remote_in_run
+  local current_state repo host_in_run remote_in_run slug_in_run
   current_state=$(jq -r '.current_state // "unknown"' "$rj" 2>/dev/null || echo "unknown")
   repo=$(jq -r '.repo // empty' "$rj" 2>/dev/null || echo "")
   host_in_run=$(jq -r '.host // empty' "$rj" 2>/dev/null || echo "")
   # Multi-remote (issue #53): empty -> "origin" (legacy run.json predating the
   # field). The remote drives tmux session naming and lock teardown below.
   remote_in_run=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
+  # Repo namespacing (issue #67): the slug RECORDED BY THIS RUN, not one derived
+  # here. That distinction is the whole fix for cross-repo lock theft — we
+  # release exactly the lock this run holds. Empty = pre-#67 run holding the
+  # legacy repo-agnostic lock.
+  slug_in_run=$(jq -r '.repo_slug // ""' "$rj" 2>/dev/null || echo "")
   # Defense in depth: scan_stalled host-gates, but a misalignment between
   # caller and helper would otherwise let us tap a foreign session.
   if [ -n "$host_in_run" ] && [ "$host_in_run" != "$THIS_HOST" ]; then
@@ -197,14 +227,29 @@ finalize_stalled() {
 
   echo "$(date -u +%FT%TZ) poller: STALLED issue=#${issue} remote=${remote_in_run} state=${current_state} run_dir=${run_dir} — killing tmux sessions and finalizing blocked/${reason}" >> "$LOG"
 
-  # Kill any tmux session for this issue. There is exactly one orchestrator per
-  # (remote, issue) pair (the per-issue lock guarantees it), but it could carry
-  # any of four prefixes depending on how it was launched. The suffix shape
-  # depends on the remote (origin keeps the legacy `<N>`; others use
-  # `<remote>-issue-<N>`), so derive it from session_suffix.
-  local suffix sess
-  suffix=$(session_suffix "$remote_in_run" "$issue")
-  for sess in "run-issues-${suffix}" "run-issues-restart-${suffix}" "run-issues-continue-${suffix}" "run-issues-clean-${suffix}"; do
+  # Kill any tmux session for this run. There is exactly one orchestrator per
+  # (repo, remote, issue) triple (the per-issue lock guarantees it), but it could
+  # carry any of four prefixes depending on how it was launched. The suffix shape
+  # depends on the remote and the repo slug, so derive it from session_suffix.
+  #
+  # A pre-#67 run gets a second suffix probed: its ORIGINAL session carries the
+  # legacy repo-agnostic name, but if this poller version restarted/continued it,
+  # the newer session carries the repo-namespaced one. Both must die or the run
+  # keeps holding a GLOBAL_MAX slot. For a post-#67 run only its own name is
+  # touched — that is what keeps another repo's identically-numbered session safe.
+  local suffix suffix_alt sess
+  suffix=$(session_suffix "$remote_in_run" "$issue" "$slug_in_run")
+  suffix_alt=""
+  if [ -z "$slug_in_run" ] && [ -n "$repo" ]; then
+    suffix_alt=$(session_suffix "$remote_in_run" "$issue" "$(repo_slug "$repo" "$remote_in_run")")
+    [ "$suffix_alt" = "$suffix" ] && suffix_alt=""
+  fi
+  for sess in "run-issues-${suffix}" "run-issues-restart-${suffix}" \
+              "run-issues-continue-${suffix}" "run-issues-clean-${suffix}" \
+              ${suffix_alt:+"run-issues-${suffix_alt}"} \
+              ${suffix_alt:+"run-issues-restart-${suffix_alt}"} \
+              ${suffix_alt:+"run-issues-continue-${suffix_alt}"} \
+              ${suffix_alt:+"run-issues-clean-${suffix_alt}"}; do
     # `=` forces an exact tmux target match; without it `run-issues-3` prefix-
     # matches `run-issues-34` and we would kill an unrelated running session.
     if tmux has-session -t "=$sess" 2>/dev/null; then
@@ -259,11 +304,16 @@ finalize_stalled() {
   fi
 
   # Release the per-issue advisory lock (its owner is dead). Same path shape as
-  # lib/locking.sh; idempotent — a missing lock is fine. Lock name uses the
-  # remote-namespaced label (origin keeps the legacy `issue-<N>` shape).
+  # lib/locking.sh; idempotent — a missing lock is fine.
+  #
+  # The label is built from the run's OWN recorded identity (repo slug + remote),
+  # so this removes exactly the lock this run holds. Deriving the label from the
+  # issue number alone was cross-repo lock theft (issue #67): finalizing a
+  # stalled run in repo A deleted repo B's LIVE lock for the same issue number,
+  # after which the next poller cycle could start a second run for B.
   local lock_root="${RUN_ISSUES_LOCK_ROOT:-${HOME}/Library/Application Support/run-issues/locks}"
   local lock_label
-  lock_label=$(remote_label "$remote_in_run" "$issue")
+  lock_label=$(remote_label "$remote_in_run" "$issue" "$slug_in_run")
   rm -rf "${lock_root}/${lock_label}.lock" 2>/dev/null || true
 
   return 0
@@ -524,19 +574,23 @@ while IFS= read -r repo_json; do
       fi
     fi
 
-    # Session suffix (origin keeps the legacy `<N>` shape so existing sessions
-    # are not orphaned; non-origin remotes get `<remote>-issue-<N>`).
+    # Repo component of every name spawned below (issue #67). Derived per
+    # (repo × remote) so two repos' issue #42 get distinct tmux sessions and
+    # distinct locks, and can therefore run in parallel within GLOBAL_MAX
+    # instead of the second one being skipped every cycle as a "duplicate".
+    REPO_SLUG=$(repo_slug "$REPO_PATH" "$REMOTE")
+
     # ----- Clean labelled issues FIRST (before restart/continue/pick) --------
     while IFS= read -r clean_line; do
       [ -n "$clean_line" ] || continue
       CLEAN_ISSUE="${clean_line%% *}"
       CLEAN_REPO="${clean_line#* }"
-      CL_SUFFIX=$(session_suffix "$REMOTE" "$CLEAN_ISSUE")
-      CL_SESSION="run-issues-clean-${CL_SUFFIX}"
-      if tmux has-session -t "=$CL_SESSION" 2>/dev/null; then
-        echo "$(date -u +%FT%TZ) poller: clean session $CL_SESSION already running" >> "$LOG"
+      if EXISTING=$(_running_session_name "run-issues-clean-" "$REMOTE" "$REPO_SLUG" "$CLEAN_ISSUE"); then
+        echo "$(date -u +%FT%TZ) poller: clean session $EXISTING already running" >> "$LOG"
         continue
       fi
+      CL_SUFFIX=$(session_suffix "$REMOTE" "$CLEAN_ISSUE" "$REPO_SLUG")
+      CL_SESSION="run-issues-clean-${CL_SUFFIX}"
       ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
       if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
         echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring clean of issue $CLEAN_ISSUE (remote=$REMOTE)" >> "$LOG"
@@ -552,12 +606,12 @@ while IFS= read -r repo_json; do
       [ -n "$restart_line" ] || continue
       RESTART_ISSUE="${restart_line%% *}"
       RESTART_DIR="${restart_line#* }"
-      R_SUFFIX=$(session_suffix "$REMOTE" "$RESTART_ISSUE")
-      R_SESSION="run-issues-restart-${R_SUFFIX}"
-      if tmux has-session -t "=$R_SESSION" 2>/dev/null; then
-        echo "$(date -u +%FT%TZ) poller: restart session $R_SESSION already running" >> "$LOG"
+      if EXISTING=$(_running_session_name "run-issues-restart-" "$REMOTE" "$REPO_SLUG" "$RESTART_ISSUE"); then
+        echo "$(date -u +%FT%TZ) poller: restart session $EXISTING already running" >> "$LOG"
         continue
       fi
+      R_SUFFIX=$(session_suffix "$REMOTE" "$RESTART_ISSUE" "$REPO_SLUG")
+      R_SESSION="run-issues-restart-${R_SUFFIX}"
       ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
       if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
         echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring restart of issue $RESTART_ISSUE (remote=$REMOTE)" >> "$LOG"
@@ -573,12 +627,12 @@ while IFS= read -r repo_json; do
       [ -n "$continue_line" ] || continue
       CONTINUE_ISSUE="${continue_line%% *}"
       CONTINUE_DIR="${continue_line#* }"
-      C_SUFFIX=$(session_suffix "$REMOTE" "$CONTINUE_ISSUE")
-      C_SESSION="run-issues-continue-${C_SUFFIX}"
-      if tmux has-session -t "=$C_SESSION" 2>/dev/null; then
-        echo "$(date -u +%FT%TZ) poller: continue session $C_SESSION already running" >> "$LOG"
+      if EXISTING=$(_running_session_name "run-issues-continue-" "$REMOTE" "$REPO_SLUG" "$CONTINUE_ISSUE"); then
+        echo "$(date -u +%FT%TZ) poller: continue session $EXISTING already running" >> "$LOG"
         continue
       fi
+      C_SUFFIX=$(session_suffix "$REMOTE" "$CONTINUE_ISSUE" "$REPO_SLUG")
+      C_SESSION="run-issues-continue-${C_SUFFIX}"
       ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
       if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
         echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring continue of issue $CONTINUE_ISSUE (remote=$REMOTE)" >> "$LOG"
@@ -623,12 +677,16 @@ while IFS= read -r repo_json; do
       continue
     fi
 
-    NEW_SUFFIX=$(session_suffix "$REMOTE" "$ISSUE_NUM")
-    SESSION="run-issues-${NEW_SUFFIX}"
-    if tmux has-session -t "=$SESSION" 2>/dev/null; then
-      echo "$(date -u +%FT%TZ) poller: session $SESSION already running" >> "$LOG"
+    # The duplicate-suppression check is repo-scoped (issue #67): before the fix
+    # this compared `run-issues-<N>` across every repo, so repo B's issue #42 was
+    # skipped with a log line that looked like normal duplicate suppression for
+    # as long as repo A's issue #42 ran — silent starvation, invisible in the log.
+    if EXISTING=$(_running_session_name "run-issues-" "$REMOTE" "$REPO_SLUG" "$ISSUE_NUM"); then
+      echo "$(date -u +%FT%TZ) poller: session $EXISTING already running (repo=$REPO_PATH issue=$ISSUE_NUM)" >> "$LOG"
       continue
     fi
+    NEW_SUFFIX=$(session_suffix "$REMOTE" "$ISSUE_NUM" "$REPO_SLUG")
+    SESSION="run-issues-${NEW_SUFFIX}"
 
     # Re-check cap before spawning.
     ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0

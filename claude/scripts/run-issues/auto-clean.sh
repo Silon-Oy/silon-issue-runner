@@ -92,6 +92,11 @@ case "$REMOTE_NAME" in
     ;;
 esac
 
+# Repo component of the advisory lock (issue #67): the lock is a global
+# namespace, so it must be repo-scoped or a teardown here would block (or steal
+# from) another repo's run with the same issue number.
+REPO_SLUG=$(repo_slug "$REPO_ROOT" "$REMOTE_NAME")
+
 CLEANUP="$SCRIPT_DIR/cleanup-run.sh"
 RUNS_DIR="$REPO_ROOT/.claude/run-issues"
 
@@ -113,10 +118,10 @@ add_skipped_label() {
 }
 
 # ---------- 1. lock ----------
-# Acquire the per-issue lock BEFORE any teardown. The lock is namespaced by
-# remote so customer-d#5 and Silon-Oy#5 hold distinct locks and never block each
-# other.
-if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME"; then
+# Acquire the per-issue lock BEFORE any teardown. The lock is namespaced by repo
+# AND remote so customer-d#5, Silon-Oy#5 and another repo's #5 hold distinct locks and
+# never block each other.
+if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"; then
   log "lock held for issue #$ISSUE_NUM (remote=$REMOTE_NAME) — a run is in progress; will retry later"
   exit 3
 fi
@@ -170,7 +175,7 @@ Issueen on lisätty label \`$SKIPPED_LABEL\` jotta auto-clean ei poimi sitä uud
       || log "comment post failed (non-fatal)"
   fi
   add_skipped_label
-  unlock_issue "$ISSUE_NUM" "$REMOTE_NAME"
+  unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"
   exit 5
 fi
 
@@ -198,7 +203,7 @@ Issueen on lisätty label \`$SKIPPED_LABEL\` jotta auto-clean ei poimi sitä uud
       || log "comment post failed (non-fatal)"
   fi
   add_skipped_label
-  unlock_issue "$ISSUE_NUM" "$REMOTE_NAME"
+  unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"
   exit 4
 fi
 
@@ -220,7 +225,7 @@ if [ "$cleanup_rc" -ne 0 ]; then
   log "cleanup-run.sh failed (rc=$cleanup_rc) for issue #$ISSUE_NUM"
   # cleanup-run.sh may or may not have removed the lock depending on where it
   # failed; unlock_issue is idempotent so this is safe either way.
-  unlock_issue "$ISSUE_NUM" "$REMOTE_NAME"
+  unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"
   exit 6
 fi
 

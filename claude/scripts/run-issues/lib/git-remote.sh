@@ -12,13 +12,31 @@
 # `git remote get-url`), so the parsing functions can be unit-tested offline.
 # Sourced by orchestrate.sh, poller.sh, and the test harness; no top-level work.
 #
-# Backward compatibility:
-#   - When the remote is "origin", every identifier collapses to the legacy
-#     shape (issue-N.lock, run-issues-N tmux session, <ts>-issue-N run-id,
-#     auto-run/issue-N-<slug> branch) so existing runs and locks are not
-#     orphaned by the upgrade. Only non-origin remotes get the <remote>- prefix.
+# Repo component (issue #67):
+#   The isolation key of a run is (repo, remote, issue) — NOT (remote, issue).
+#   Studio's watchlist carries a dozen repos, so two repos' issue #42 used to
+#   collide on the same lock (`issue-42.lock`) and the same tmux session
+#   (`run-issues-42`): the poller starved the second repo silently, and
+#   finalize_stalled could delete a live run's lock in a DIFFERENT repo. The
+#   repo component is therefore part of every derived identifier, and it is
+#   derived here so lock / run-id / branch / tmux naming cannot drift apart.
+#
+# Backward compatibility (two layers, both deliberate):
+#   - Remote: when the remote is "origin", the remote part of every identifier
+#     collapses to the legacy shape; only non-origin remotes get the <remote>-
+#     infix (issue #53).
+#   - Repo: the repo component is an OPTIONAL third argument. Omit it and the
+#     function returns exactly the pre-#67 name. Callers that own a run pass the
+#     slug recorded in run.json — which is empty for runs created before #67, so
+#     an in-flight run keeps the names it was started with for its whole life
+#     (its lock and tmux session stay reachable; nothing is orphaned).
 
 set -euo pipefail
+
+# Upper bound for the repo component. Repo names are short in practice; the cap
+# only bounds pathological input so lock dirs, tmux session names and git branch
+# names stay readable and well inside filesystem / git ref limits.
+RUN_ISSUES_REPO_SLUG_MAX="${RUN_ISSUES_REPO_SLUG_MAX:-40}"
 
 # parse_owner_repo_from_remote_url <url>
 # Prints "owner/repo" on stdout for a github.com remote URL, or empty on a
@@ -100,35 +118,97 @@ resolve_remote_to_owner_repo() {
   printf '%s' "$owner_repo"
 }
 
-# remote_label <remote> <issue-number>
+# slugify_repo_component <string>
+# Normalises an arbitrary string into a filename-, tmux- and git-ref-safe token:
+# lowercase, every run of non-alphanumerics collapsed to a single `-`, no
+# leading/trailing `-`, capped at RUN_ISSUES_REPO_SLUG_MAX characters.
+#
+# Why each rule is load-bearing:
+#   - `owner/repo` contains `/`, which cannot go into a directory name.
+#   - tmux rejects `.` and `:` in session names, and repo names contain dots in
+#     practice (`foo.dev`), so the whitelist approach is safer than a blocklist.
+#   - lowercase: macOS filesystems are case-insensitive by default while Linux
+#     is not, so `Silon-Oy-x` vs `silon-oy-x` would be one lock dir on one
+#     platform and two on the other. Folding removes the divergence.
+# Uses `tr`/`sed`/`cut` rather than bash 4 `${x,,}` — macOS ships bash 3.2.
+slugify_repo_component() {
+  printf '%s' "${1:-}" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/[^a-z0-9][^a-z0-9]*/-/g' -e 's/^-*//' -e 's/-*$//' \
+    | cut -c "1-${RUN_ISSUES_REPO_SLUG_MAX}" \
+    | sed -e 's/-*$//'
+}
+
+# repo_slug <repo-root> [<remote>]
+# Prints the deterministic repo component for a run's identity, or empty when
+# neither source is available. Never fails (rc=0) — callers treat an empty slug
+# as "legacy naming", which is a valid state, not an error.
+#
+# Source preference:
+#   1. `owner/repo` from the remote URL — this is the identity of the GitHub
+#      issue namespace, so it is the semantically correct key: two clones of the
+#      same owner/repo SHOULD share a lock, and two different repos never should.
+#   2. basename of the repo root — fallback for a clone with no (parseable)
+#      remote, e.g. the test fixtures and purely local repos.
+repo_slug() {
+  local repo="${1:-}"
+  local remote="${2:-origin}"
+  [ -n "$repo" ] || { printf ''; return 0; }
+  local owner_repo=""
+  owner_repo=$(resolve_remote_to_owner_repo "$repo" "$remote" 2>/dev/null) || owner_repo=""
+  local raw="$owner_repo"
+  [ -n "$raw" ] || raw="$(basename "$repo")"
+  slugify_repo_component "$raw"
+}
+
+# remote_label <remote> <issue-number> [<repo-slug>]
 # The canonical "namespaced issue label" used to derive lock dirs, run-ids and
 # branches. Centralising the rule here is what makes backward compatibility for
-# the origin remote a one-line invariant.
-#   origin: "issue-<N>"
-#   other:  "<remote>-issue-<N>"
+# the origin remote and for pre-#67 runs a one-line invariant.
+#   no slug, origin: "issue-<N>"                     (legacy, pre-#53)
+#   no slug, other:  "<remote>-issue-<N>"            (legacy, pre-#67)
+#   slug, origin:    "<repo-slug>-issue-<N>"
+#   slug, other:     "<repo-slug>-<remote>-issue-<N>"
 remote_label() {
   local remote="$1"
   local n="$2"
+  local slug="${3:-}"
+  local base
   case "$remote" in
-    origin|"") printf 'issue-%s' "$n" ;;
-    *)         printf '%s-issue-%s' "$remote" "$n" ;;
+    origin|"") base="issue-$n" ;;
+    *)         base="$remote-issue-$n" ;;
   esac
+  if [ -n "$slug" ]; then
+    printf '%s-%s' "$slug" "$base"
+  else
+    printf '%s' "$base"
+  fi
 }
 
-# session_suffix <remote> <issue-number>
-# Tmux session name suffix. UNLIKE remote_label, origin emits just "<N>" so the
-# legacy session names (`run-issues-<N>`, `run-issues-restart-<N>`, …) are
-# preserved exactly — changing them would orphan any session currently running
-# on Studio. Non-origin remotes get the namespaced form. The poller's
-# `tmux ls | grep '^run-issues-'` cap counter matches both shapes, so capacity
+# session_suffix <remote> <issue-number> [<repo-slug>]
+# Tmux session name suffix. UNLIKE remote_label, the no-slug origin case emits
+# just "<N>" so the legacy session names (`run-issues-<N>`,
+# `run-issues-restart-<N>`, …) are reproducible exactly — the poller checks for
+# them during the transition window so a session started by the previous poller
+# version is still recognised as running. The poller's
+# `tmux ls | grep '^run-issues-'` cap counter matches every shape, so capacity
 # accounting is unaffected.
-#   origin: "<N>"               -> session `run-issues-<N>`
-#   other:  "<remote>-issue-<N>" -> session `run-issues-<remote>-issue-<N>`
+#   no slug, origin: "<N>"                      -> `run-issues-<N>`
+#   no slug, other:  "<remote>-issue-<N>"       -> `run-issues-<remote>-issue-<N>`
+#   slug, origin:    "<repo-slug>-<N>"          -> `run-issues-<repo-slug>-<N>`
+#   slug, other:     "<repo-slug>-<remote>-issue-<N>"
 session_suffix() {
   local remote="$1"
   local n="$2"
+  local slug="${3:-}"
+  local base
   case "$remote" in
-    origin|"") printf '%s' "$n" ;;
-    *)         printf '%s-issue-%s' "$remote" "$n" ;;
+    origin|"") base="$n" ;;
+    *)         base="$remote-issue-$n" ;;
   esac
+  if [ -n "$slug" ]; then
+    printf '%s-%s' "$slug" "$base"
+  else
+    printf '%s' "$base"
+  fi
 }

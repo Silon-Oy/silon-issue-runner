@@ -27,7 +27,8 @@
 #   5. DB clone         (best-effort drop via db-clone.sh cleanup; non-fatal)
 #   6. Archive          (essential artefacts copied to .claude/run-issues-archive/<run-id>/)
 #   7. Run-dir          (rm -rf .claude/run-issues/<run-id>)
-#   8. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/issue-N.lock)
+#   8. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/<repo-slug>-issue-N.lock;
+#                        the name comes from the run's own run.json identity)
 
 set -euo pipefail
 
@@ -202,7 +203,7 @@ cleanup_run() {
     return 1
   fi
 
-  local status issue_num branch worktree_path db_clone provision_env remote owner_repo
+  local status issue_num branch worktree_path db_clone provision_env remote owner_repo run_slug
   status=$(run_field "$rid" '.status')
   issue_num=$(run_field "$rid" '.issue_number')
   branch=$(run_field "$rid" '.branch')
@@ -213,6 +214,9 @@ cleanup_run() {
   remote=$(run_field "$rid" '.remote')
   [ -n "$remote" ] || remote="origin"
   owner_repo=$(run_field "$rid" '.owner_repo')
+  # Repo namespacing (issue #67): the slug this run recorded. Empty = a run
+  # created before #67, whose lock carries the legacy repo-agnostic name.
+  run_slug=$(run_field "$rid" '.repo_slug')
 
   if [ "$status" = "completed" ] && [ "$FORCE" != "1" ]; then
     printf 'SKIP %s — status=completed (PR likely open; pass --force to clean anyway)\n' "$rid"
@@ -302,13 +306,31 @@ cleanup_run() {
   do_or_dry "run-dir" rm -rf "$run_dir"
 
   if [ -n "$issue_num" ]; then
-    local lock_dir
-    lock_dir="$(_lock_dir "$issue_num" "$remote")"
-    if [ -d "$lock_dir" ]; then
-      do_or_dry "lock" rm -rf "$lock_dir"
-    else
-      printf '  lock: %s not held\n' "$(basename "$lock_dir" .lock)"
+    # Remove the lock this run actually holds — derived from its OWN recorded
+    # identity (repo slug + remote), never rebuilt from the issue number alone.
+    local lock_dirs=()
+    lock_dirs+=("$(_lock_dir "$issue_num" "$remote" "$run_slug")")
+
+    # A pre-#67 run records no slug, so the line above targets its legacy
+    # repo-agnostic lock. But a NEW-code caller that handed this teardown to us
+    # (auto-clean.sh takes the per-issue lock before delegating) holds the
+    # repo-namespaced name, which would then leak. Add it: removing a
+    # repo-namespaced lock is safe by construction — it can only belong to this
+    # repo, so there is no cross-repo theft in either direction.
+    if [ -z "$run_slug" ]; then
+      local derived_slug
+      derived_slug=$(repo_slug "$REPO_ROOT" "$remote")
+      [ -n "$derived_slug" ] && lock_dirs+=("$(_lock_dir "$issue_num" "$remote" "$derived_slug")")
     fi
+
+    local lock_dir
+    for lock_dir in "${lock_dirs[@]}"; do
+      if [ -d "$lock_dir" ]; then
+        do_or_dry "lock" rm -rf "$lock_dir"
+      else
+        printf '  lock: %s not held\n' "$(basename "$lock_dir" .lock)"
+      fi
+    done
   fi
 }
 

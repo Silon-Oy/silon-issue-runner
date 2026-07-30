@@ -162,15 +162,25 @@ watch_one() {
   [ -n "$rid" ] || rid=$(discover_runid_for_pr "$pr_num")
   local run_dir=""
   local issue_num=""
+  # The lock this PR's run holds is namespaced by (repo, remote, issue), so the
+  # watcher MUST address it with the run's own recorded identity. Locking with a
+  # bare issue number would take a DIFFERENT directory than the orchestrator's,
+  # silently breaking the mutual exclusion these two rely on (issues #53, #67).
+  # Both fields are absent on legacy runs, which correctly yields the legacy name.
+  local run_remote="origin"
+  local run_slug=""
   if [ -n "$rid" ]; then
     run_dir="$RUNS_DIR/$rid"
     issue_num=$(run_field "$rid" '.issue_number')
+    run_remote=$(run_field "$rid" '.remote')
+    [ -n "$run_remote" ] || run_remote="origin"
+    run_slug=$(run_field "$rid" '.repo_slug')
   fi
 
   # ----- P2: Lock (reuse per-issue lock; PR work and orchestration share it)
   local locked=0
   if [ -n "$issue_num" ]; then
-    if lock_issue "$issue_num"; then
+    if lock_issue "$issue_num" "$run_remote" "$run_slug"; then
       locked=1
     else
       log "lock held for issue #$issue_num — another run owns it; skipping PR #$pr_num"
@@ -178,7 +188,7 @@ watch_one() {
     fi
   fi
   # Always release the lock on the way out of this PR.
-  _release() { [ "$locked" = "1" ] && unlock_issue "$issue_num" || true; }
+  _release() { [ "$locked" = "1" ] && unlock_issue "$issue_num" "$run_remote" "$run_slug" || true; }
 
   if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
     state_event "$run_dir" "pr_watch_started" "pr=$pr_num"
