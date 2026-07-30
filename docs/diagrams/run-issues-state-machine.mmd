@@ -116,9 +116,14 @@ stateDiagram-v2
     %% last event ts is older than RUN_ISSUES_STALE_AFTER (default 3600s). The
     %% threshold MUST exceed the longest legitimate single-phase claude call so
     %% a slow-but-progressing run is not killed mid-flight. finalize_stalled
-    %% kills the tmux session (run-issues-<N> / run-issues-restart-<N> /
-    %% run-issues-continue-<N>), finalizes blocked/stalled_in_<current_state>,
+    %% kills the tmux session (run-issues-<suffix> / run-issues-restart-<suffix>
+    %% / run-issues-continue-<suffix>, where <suffix> carries the run's repo slug
+    %% per issue #67), finalizes blocked/stalled_in_<current_state>,
     %% adds needs-human, posts a situation comment, releases the advisory lock.
+    %% The session names AND the lock label come from the run's own recorded
+    %% identity (run.json .repo_slug + .remote), so finalizing a stalled run in
+    %% repo A can never kill repo B's session or delete B's lock for the same
+    %% issue number (issue #67 cross-repo lock theft).
     %% awaiting_review and awaiting_clarification are NEVER stalled (documented
     %% human-wait contract). The sweep runs BEFORE the ACTIVE-cap check so a
     %% fully wedged GLOBAL_MAX (issue #49 root cause) can never short-circuit
