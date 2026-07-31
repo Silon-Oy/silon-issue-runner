@@ -1,0 +1,60 @@
+%% Author: Strategist
+%% Created: 2026-07-31
+%% Topic: claude-issue-runner -paketin polkusidonnat: repo-juuri, dotfiles-submodule, ~/.claude-symlinkit, LaunchAgentit
+%% Task: issue #3 — polkuvalinta A/B/C ja sen vaikutus olemassa oleviin viittauksiin
+
+flowchart TB
+    subgraph PKG["claude-issue-runner (paketti) — rakenne C"]
+        R["repo-juuri = run-issues-sisalto<br/>orchestrate.sh, poller.sh, lib/, prompts/, tests/"]
+        AG["agents/ (4 kpl)"]
+        CM["commands/ (6 kpl)"]
+        DOC["docs/diagrams/ (7 .mmd)"]
+        EX["examples/run-issues-watchlist.example.json"]
+        PL["com.claude-issue-runner.*.plist (2 kpl)"]
+        INS["install.sh (#4)"]
+    end
+
+    subgraph DF["~/dotfiles (maintainern ymparisto)"]
+        SUB["claude/scripts/run-issues<br/>= SUBMODULE-mount (#8, pinnattu)"]
+        WL["machine-studio/run-issues-watchlist.json<br/>(jaa dotfilesiin, maintainern sisalto)"]
+        SYNC["sync.sh:101 — glob com.*.plist<br/>VAIN dotfiles-juuresta"]
+        DFINS["install.sh:85-89 — hakemistosymlink<br/>claude/scripts"]
+    end
+
+    subgraph HOME["~/.claude ja ~/Library"]
+        SCR["~/.claude/scripts -> dotfiles/claude/scripts"]
+        CAG["~/.claude/agents/ (oikea hakemisto, #5)"]
+        CCM["~/.claude/commands/ (oikea hakemisto, #5)"]
+        LA["~/Library/LaunchAgents/"]
+    end
+
+    subgraph REF["Viittaukset jotka EIVAT saa rikkoutua"]
+        V1["commands/{run-issues,cleanup-run,pr-watch}.md<br/>$HOME/.claude/scripts/run-issues/..."]
+        V2["prompts/02-implementer.md:86<br/>source $HOME/.claude/scripts/run-issues/lib/hook-runner.sh"]
+        V3["poller.sh:27,57,62-85<br/>$HOME/dotfiles/claude/scripts/run-issues/..."]
+        V4["com.*.plist:12<br/>$HOME/dotfiles/claude/scripts/run-issues/poller.sh"]
+    end
+
+    R -->|"submodule add"| SUB
+    AG -->|"per-tiedosto-symlink #4"| CAG
+    CM -->|"per-tiedosto-symlink #4"| CCM
+    PL -->|"deploy opt-in #4"| LA
+    INS -.->|"omistaa"| CAG
+    INS -.->|"omistaa"| CCM
+    INS -.->|"omistaa"| LA
+
+    DFINS --> SCR
+    SUB --> SCR
+    SYNC -.->|"EI NAE submodulen sisaltoa — I2"| PL
+
+    SCR --> V1
+    SCR --> V2
+    SUB --> V3
+    SUB --> V4
+    WL -.->|"luetaan ajossa"| V3
+    EX -.->|"skeeman dokumentaatio"| WL
+
+    classDef risk fill:#ffe0e0,stroke:#c00,stroke-width:2px
+    classDef ok fill:#e0ffe0,stroke:#0a0
+    class SYNC,V4 risk
+    class R,SUB ok
