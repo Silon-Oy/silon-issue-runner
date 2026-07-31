@@ -25,14 +25,14 @@ Sisältö:
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
 unblock-issues.sh              install.sh             provision-test-env.README.md
-lib/       14 bash-moduulia (ks. §6)
+lib/       15 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
 tests/     plain-bash-testipaketti, ajuri run-all.sh
 db-clone/  opt-in-tietokantakloonaus
 agents/    Claude-agenttimäärittelyt (architect, developer, reviewer, refactorer)
 commands/  slash-komennot (run-issues, cleanup-run, pr-watch, refresh, factory-*)
 docs/diagrams/  mermaid-kaaviot (.mmd)
-examples/  run-issues-watchlist.example.json
+examples/  run-issues-watchlist.example.json, run-issues-poller.env.example
 com.claude-issue-runner.run-issues-poller.plist
 com.claude-issue-runner.pr-watch-poller.plist
 .gitignore
@@ -56,8 +56,10 @@ Issue #3 tarjosi kaksi vaihtoehtoa, ja kumpikin hylättiin mitatun tuloksen peru
 
 A ja B rikkoisivat jokaisen viittauksen, joka osoittaa polkuun `…/run-issues/<skripti>`:
 kolme slash-komentoa (`commands/{run-issues,cleanup-run,pr-watch}.md`),
-`prompts/02-implementer.md`, molemmat LaunchAgent-plistit ja `poller.sh`:n omat
-`${DOTFILES}/claude/scripts/run-issues/…`-polut. Rakenne C säilyttää ne kaikki sanatarkasti.
+`prompts/02-implementer.md` ja molemmat LaunchAgent-plistit. Rakenne C säilyttää ne kaikki
+sanatarkasti. Pollerit resolvoivat omat riippuvuutensa `SCRIPT_DIR`istä (#6), joten ne
+selviäisivät siirrosta itsekseen — mutta juuri siksi paketin juuri _on_ se hakemisto, johon
+plistien ohjelmapolku osoittaa.
 
 Siirto oli mahdollinen ilman koodimuutoksia, koska jokainen suoritettava skripti ja testi
 resolvoi riippuvuutensa oman sijaintinsa suhteen (`SCRIPT_DIR` / `HERE`) eikä yksikään nouse
@@ -196,6 +198,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
+| `poller-config.sh` | Pollerien host-portti ja watchlistin resolvointi puhtaina funktioina. Erillinen lib siksi, että molemmat pollerit tarvitsevat saman päätöksen ja se on testattava **sourcaamalla** — poller itse exittaa source-hetkellä vieraalla koneella |
 | `pr-watch-lib.sh` | PR:n luokittelu- ja merge-päätöslogiikka (irrotettu testattavaksi) |
 | `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, doctor-komento (#7) tekee samasta lähteestä fataalin |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
@@ -233,8 +236,29 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
+| `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | Konekohtaisen konfiguraation tiedosto |
+| `RUN_ISSUES_POLLER_HOSTS` | *(sisäänrakennettu legacy-lista, ks. §12)* | Pilkuin/välilyönnein eroteltuja glob-kuvioita, verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0 luomatta mitään |
+| `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku. Asetettuna se on **ainoa** ehdokas — osumaton override on virhe, ei fallback |
+| `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Kaikkien neljän lokitiedoston hakemisto per poller (`.log`, `.runs.log`, `.stdout.log`, `.stderr.log`) |
+| `RUN_ISSUES_HOME` | *(pollerin oma `SCRIPT_DIR`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Luetaan vain ympäristöstä |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Liveness-raja: vanhempi ajo tapetaan ja finalisoidaan `blocked/stalled_in_<state>`. **Täytyy** ylittää pisin laillinen yksivaiheinen claude-kutsu |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee `auto-clean.sh`:n |
+
+Watchlistin resolvointijärjestys ilman overridea: `$HOME/.config/run-issues/watchlist.json` →
+`$HOME/dotfiles/machine-studio/run-issues-watchlist.json`. Jälkimmäinen on **vain fallback**
+(ks. §12); ensisijainen polku ei koskaan ole dotfiles-puu.
+
+**Toimituskanava.** launchd ei anna agentille omaa ympäristöä, eivätkä login-tiedostot sisällä
+mitään run-issues-kohtaista, joten LaunchAgent-ajossa — ainoassa tuotantotilassa —
+`poller.env` on ainoa kanava, jolla kone voi konfiguroida pollerinsa. Se **sourcetaan**, joten
+**tiedosto voittaa ympäristömuuttujan**. Poikkeuksia kaksi, molemmat rakenteellisia:
+`RUN_ISSUES_HOME` ja `RUN_ISSUES_POLLER_ENV_FILE` resolvoidaan ennen sourcea, joten ne
+luetaan vain ympäristöstä. Malli: `examples/run-issues-poller.env.example`.
+
+**Pollerit eivät lue `$HOME/.config/run-issues/env`-tiedostoa.** Se sisältää salaisuuksia,
+jotka `orchestrate.sh` ja `pr-watch.sh` sourceavat itse. Poller ei tarvitse niistä yhtäkään ja
+lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
+`tests/test-poller-config.sh` vartioi tätä.
 
 ### PR-vahti
 
@@ -343,9 +367,20 @@ tila: mitään ei aja kahteen kertaan. Ks. `docs/diagrams/launchagent-migration-
 Uusien agenttien **deploy on paketin oman `install.sh`:n vastuulla**, ei dotfilesin
 `sync.sh`:n: `sync.sh` globaa plistit vain dotfilesin juuresta eikä siis näe submodulen sisällä
 olevia tiedostoja. Konventio itsessään säilyy — `Label` == tiedostonimi ilman `.plist`,
-`plutil -lint` porttina, `$HOME` literaalina plistissä (laajenee, koska komento ajetaan
-`/bin/bash -l -c` -kääreen läpi). `tests/test-package-layout.sh` vartioi `Label`-invarianttia,
+`plutil -lint` porttina. `tests/test-package-layout.sh` vartioi `Label`-invarianttia,
 joka on nyt kantava: asentaja johtaa tulostamansa `launchctl`-labelin tiedostonimestä.
+
+**`$HOME` laajenee plistissä vain `ProgramArguments`issa**, koska laajennuksen tekee
+`/bin/bash -l -c` -kääre, ei launchd. `StandardOutPath` ja `StandardErrorPath` ovat launchd:n
+omia avaimia eikä se laajenna niissä mitään, joten literaali `$HOME` osuisi hakemistoon jonka
+nimi kirjaimellisesti on `$HOME`. Siksi plisteissä **ei ole näitä avaimia lainkaan** (#6):
+poller omistaa kaikki neljä lokipolkuaan itse ja ohjaa oman stdout/stderrinsä
+`$RUN_ISSUES_LOG_DIR`-hakemistoon, jolloin yksi muuttuja siirtää ne kaikki. Vaihtoehto olisi
+ollut materialisoida plist polut valmiiksi laajennettuina (näin dotfilesin `sync.sh` tekee),
+mutta se rikkoisi asentajan omistajuuspredikaatin: `install.sh` tunnistaa omansa siitä että
+kohde on **symlinkki paketin juuren sisään** (INV-OWN), eikä materialisoidussa kopiossa ole
+sellaista merkkiä. `tests/test-package-layout.sh` vartioi molempia invariantteja: loki-avaimia
+ei ole, ja ohjelmapolku on `$HOME/.claude/scripts/run-issues/…`.
 
 `install.sh --with-launchagents` deployaa **vain tiedostot** (symlinkkeinä pakettiin, jotta ne
 päivittyvät sen mukana) ja tulostaa `launchctl`-komennot ajettaviksi. Se **ei kutsu
@@ -355,20 +390,36 @@ idempotentti uudelleenohjatun `$HOME`:n alla, joten kutsua ei voisi testata; ja 
 jota skripti ei voi päättää käyttäjän puolesta.
 
 Ennen deployta asentaja lukee plistin `ProgramArguments`-taulukon viimeisen alkion, laajentaa
-`$HOME`:n ja tarkistaa että ohjelma on suoritettavissa. **Jos ei ole, deploy kieltäytyy
+`$HOME`:n ja tarkistaa että ohjelma resolvoituu. **Jos ei resolvoidu, deploy kieltäytyy
 (exit 2).** Rikkinäisen agentin asentaminen olisi asentamatta jättämistä pahempaa: launchd
-lataisi sen, epäonnistuisi joka `StartInterval`-tikillä eikä raportoisi mitään. Ks. §12 —
-plistien polut ovat toistaiseksi dotfiles-sidonnaisia.
+lataisi sen, epäonnistuisi joka `StartInterval`-tikillä eikä raportoisi mitään.
+
+"Resolvoituu" on tässä laajempi kuin `[ -x ]`: suunnittelu ja soveltaminen ovat eri vaiheet
+(INV-OWN, seuraus 2), joten puhtaalla koneella plistin ohjelmapolun luova `scripts`-sidonta on
+tarkistushetkellä vasta suunnitelmarivi. Tiukka `[ -x ]` kieltäytyisi siis **aina**, myös
+ajolla joka on juuri suunnittelemassa polun. `program_resolves` hyväksyy siksi myös
+`SCRIPTS_BINDING_TARGET`in kautta resolvoituvan polun — mutta vain plistien oman
+`$CLAUDE_HOME/scripts/run-issues/`-prefiksin osalta; kaikki muu putoaa kieltäytymiseen.
+Tämä tekee `main()`:n järjestyksestä (`plan_scripts_binding` ennen `plan_launchagents`)
+kantavan, ja `tests/test-install-launchagents.sh` vartioi sitä assertoimalla että deployn
+jälkeen ohjelmapolku on oikeasti suoritettavissa.
 
 ## 12. Tunnetut avoimet asiat
 
-- **Plistien polut eivät ole siirrettäviä → #6.** `ProgramArguments` osoittaa polkuun
-  `$HOME/dotfiles/claude/scripts/run-issues/…`, samoin `poller.sh`:n ja `pr-watch-poller.sh`:n
-  omat `${DOTFILES}`-polut. Ne resolvoituvat oikein tässä asennusmallissa, mutta ovat
-  dotfiles-sidonnaisia: ilman dotfilesia asennettuna ne eivät osu. Polkujen
-  parametrisointi on #6. Toistaiseksi `install.sh --with-launchagents` **kieltäytyy**
-  deployaamasta plistiä, jonka polku ei kohdekoneella resolvoidu (ks. §11) — vika ei siis
-  pääse koneelle hiljaisena, mutta puhtaalla koneella pollereita ei saa käyntiin ennen #6:tta.
+- **`POLLER_HOSTS_LEGACY_DEFAULT` on taaksepäin-yhteensopivuusshim.** `lib/poller-config.sh`
+  sisältää sisäänrakennetun oletuslistan niistä konenimistä, joilla pollerit ajoivat ennen kuin
+  host-portista tuli konfiguroitava. Se on tietoinen poikkeus §1:n lupaukseen "ei
+  henkilökohtaista konfiguraatiota": ilman sitä nykyinen auto-run-kone pysähtyisi sillä
+  hetkellä kun #6 mergetään, mikä oli epicin nimenomainen ei-tavoite. Poistetaan sinä päivänä
+  kun kyseinen kone asettaa `RUN_ISSUES_POLLER_HOSTS`:n omaan `poller.env`iinsä.
+  `tests/test-poller-config.sh` pinnaa listan sisällön, jotta muutos siihen on päätös eikä
+  vahinko.
+- **Dotfiles-fallbackit säilyvät legacynä.** Kaksi polkua etsitään yhä vanhasta
+  `~/dotfiles`-puusta, jos ensisijainen ei osu: watchlist molemmissa pollereissa ja
+  `unblock-issues.sh` `pr-watch-poller.sh`:ssä. Molemmat kulkevat yhden nimetyn muuttujan
+  (`LEGACY_DOTFILES_DIR`) kautta, jotta "riippuuko tämä yhä vanhasta rakenteesta?" on yhden
+  rivin kysymys. Poistettavissa kun kyseisen koneen watchlist on siirretty polkuun
+  `~/.config/run-issues/watchlist.json`.
 - **`~/.claude/agents` ja `~/.claude/commands` hakemistosymlinkkeinä → #5.** Niin kauan kuin
   dotfiles symlinkkaa koko hakemiston, `install.sh` kieltäytyy (exit 2). Korjaus on
   dotfiles-repon puolella eikä kuulu tähän pakettiin.
@@ -380,7 +431,7 @@ plistien polut ovat toistaiseksi dotfiles-sidonnaisia.
   `orchestrate.sh`:ssa. Jälkimmäiset jätettiin koskematta, koska ne ovat orkestraattorin
   kuumalla polulla; yhdistäminen kuuluu omaan muutokseensa.
 - **`unblock-issues.sh`:n haarautunut resolvointi.** `pr-watch-poller.sh` etsii skriptin
-  ensisijaisesti paketista (`${SCRIPT_DIR}/unblock-issues.sh`) ja vasta sitten vanhasta
+  ensisijaisesti paketista (`${RUN_ISSUES_HOME}/unblock-issues.sh`) ja vasta sitten vanhasta
   dotfiles-polusta. Kummankin haaran kattavaa testiä ei ole — se vaatisi resolvoinnin
   irrottamisen omaksi funktiokseen. Nyt testataan vain, että ensisijainen polku osuu.
 - **`commands/factory-run.md` viittaa puuttuvaan skriptiin.** Ohje kehottaa ajamaan

@@ -1,5 +1,5 @@
 {
-  "_comment": "Example watchlist for poller.sh / pr-watch-poller.sh. Copy to a private location (the pollers read $HOME/dotfiles/machine-studio/run-issues-watchlist.json) and replace every <placeholder>. JSON has no comment syntax — the _comment key is the convention used instead.",
+  "_comment": "Example watchlist for poller.sh / pr-watch-poller.sh. Copy to $HOME/.config/run-issues/watchlist.json and replace every <placeholder>. Lookup order: RUN_ISSUES_WATCHLIST if set (and then it is the ONLY candidate — a missing file is an error, never a fallback), else $HOME/.config/run-issues/watchlist.json, else the legacy $HOME/dotfiles/machine-studio/run-issues-watchlist.json. JSON has no comment syntax — the _comment key is the convention used instead.",
   "default_labels": ["auto-run"],
   "global_max_concurrent": 2,
   "repos": [
