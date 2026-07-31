@@ -8,7 +8,7 @@
 # `gh issue view --json assignees`.
 #
 # Run directly:
-#   bash claude/scripts/run-issues/lib/issue.test.sh
+#   bash lib/issue.test.sh
 
 set -uo pipefail
 
