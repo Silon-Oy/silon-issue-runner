@@ -24,8 +24,8 @@ Sisältö:
 ```
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
-unblock-issues.sh              provision-test-env.README.md
-lib/       13 bash-moduulia (ks. §6)
+unblock-issues.sh              install.sh             provision-test-env.README.md
+lib/       14 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
 tests/     plain-bash-testipaketti, ajuri run-all.sh
 db-clone/  opt-in-tietokantakloonaus
@@ -78,11 +78,61 @@ paketin repo-juuri
 
 `agents/` ja `commands/` päätyvät tässä ketjussa polkuun `~/.claude/scripts/run-issues/…`,
 mikä ei riitä: Claude Code lukee ne hakemistoista `~/.claude/agents/` ja `~/.claude/commands/`.
-Paketin oma `install.sh` (#4) symlinkkaa ne sinne **per tiedosto**, jotta muiden lähteiden
+Paketin oma `install.sh` symlinkkaa ne sinne **per tiedosto**, jotta muiden lähteiden
 agentit ja komennot eivät korvaudu.
 
 Submodule pinnataan tiettyyn committiin: dotfilesin `git pull` ei siis koskaan päivitä
 orkestraattoria vahingossa, vaan päivitys on eksplisiittinen toimenpide.
+
+### `install.sh`
+
+```bash
+bash install.sh [--dry-run] [--with-launchagents] [--quiet]
+```
+
+Asentajan koko ongelma on **omistajuus jaetussa nimiavaruudessa**: `~/.claude/agents/` ja
+`~/.claude/commands/` ovat hakemistoja, joihin useampi lähde kirjoittaa. Siitä seuraa yksi
+invariantti, josta kaikki muu johdetaan:
+
+> **INV-OWN** — asentaja saa luoda, korvata tai poistaa vain polun, joka **puuttuu** tai on
+> **symlink, jonka kohde resolvoituu paketin juuren sisään**. Kaikki muu on vierasta ja
+> koskematonta.
+
+Kolme johdannaista, jotka kannattaa lukea kieltoina:
+
+1. **Omistajuus luetaan levyltä, ei manifestista.** Manifest voi vanhentua ja antaisi silloin
+   poisto-oikeuden tiedostoon, jota paketti ei enää toimita — mahdollisesti sellaiseen, jota se
+   ei koskaan toimittanut. Symlinkin kohde ei voi valehdella.
+2. **Suunnittelu ja soveltaminen ovat eri vaiheet.** Kaikki tarkistukset ajetaan ensin, mitään
+   ei kirjoiteta; yksikin kieltäytyminen ⇒ nolla muutosta. Tarkista-ja-kirjoita samassa
+   silmukassa jättäisi puun puoliksi asennetuksi, kun toinen hakemisto osoittautuu vieraaksi —
+   juuri se hiljainen osittaisvirhe, jonka takia asentaja on olemassa.
+3. **Asentaja ei kutsu `launchctl`ia.** Ks. §11.
+
+Kolme vastuuta:
+
+| Kohde | Toimenpide |
+|---|---|
+| `~/.claude/agents/`, `~/.claude/commands/` | Per-tiedosto-symlink jokaiselle paketin `*.md`-tiedostolle. Lähdejoukko on glob, ei kovakoodattu lista — uusi agentti tulee asennukseen pelkällä nimeämisellä. Paketin omistamat symlinkit, joita paketti ei enää toimita, siivotaan (prune). |
+| `~/.claude/scripts/run-issues` | **Ehdollinen** sidonta: jos polku jo toimii (`orchestrate.sh` suoritettavissa), se jätetään rauhaan riippumatta siitä kuka sen tarjoaa — tämä on maintainern dotfiles+submodule-tapaus ja **no-op**. Jos polkua ei ole ja paketti voi omistaa sen, luodaan symlink paketin juureen — tämä on puhtaan koneen tapaus, jossa slash-komennot muuten osoittaisivat olemattomaan skriptiin. Vieraaseen puuhun ei kirjoiteta. |
+| `~/Library/LaunchAgents/` | Vain `--with-launchagents`. Ks. §11. |
+
+Exit-koodit (oma avaruus, ei sekoiteta §5:n orkestraattorikoodeihin):
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Onnistui (tai `--dry-run` valmis) |
+| 1 | Käyttövirhe (tuntematon lippu) |
+| 2 | **Kieltäydytty — mitään ei muutettu.** Kohdepolku on jonkun muun omistama |
+| 3 | Apply epäonnistui kesken (odottamaton tiedostojärjestelmävirhe); uusi ajo konvergoi |
+| 4 | Valmis, mutta vieras tiedosto varjostaa paketin toimittamaa nimeä — mitään ei ylikirjoitettu |
+
+Yleisin kieltäytyminen on `~/.claude/agents` **hakemistosymlinkkinä** (dotfilesin
+jakoa edeltävä muoto): asentaja kertoo mitä pitää tehdä eikä kirjoita mitään. Hakemistojen
+jakaminen per-tiedosto-symlinkeiksi on dotfiles-repon puolen työ (#5).
+
+Riippuvuustarkistus (`lib/preflight.sh`) on asentajassa **neuvoa-antava**: puuttuva `gh` tai
+`jq` ei estä symlinkkien luontia, koska työkalut voi asentaa jälkikäteen.
 
 ## 4. Tilakone
 
@@ -147,6 +197,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `pr-watch-lib.sh` | PR:n luokittelu- ja merge-päätöslogiikka (irrotettu testattavaksi) |
+| `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, doctor-komento (#7) tekee samasta lähteestä fataalin |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
@@ -196,6 +247,18 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `PR_WATCH_CONFLICT_TIMEOUT` | `1800` | Konfliktinratkaisun aikakatto |
 | `PR_WATCH_CI_MAX_POLLS` | `40` | CI-odotuksen kierrosten määrä |
 | `PR_WATCH_CI_POLL_SECS` | `15` | CI-odotuksen kierrosväli (40 × 15 s = 10 min) |
+
+### Asennin
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_CLAUDE_HOME` | `$HOME/.claude` | Kohdehakemisto, johon agentit ja komennot linkitetään |
+| `RUN_ISSUES_LAUNCH_AGENTS_DIR` | `$HOME/Library/LaunchAgents` | Plistien kohdehakemisto (`--with-launchagents`) |
+
+Molemmat ovat olemassa yhtä syytä varten: **testit eivät saa koskea oikeaan
+`~/.claude`-hakemistoon**, koska sitä ajaa poller samalla koneella. Jokainen asentajan polku
+johdetaan `$HOME`:sta tai näistä overrideista — tildelaajennusta ei käytetä missään, jotta
+`HOME=$(mktemp -d)` todella pitää.
 
 ### GitHub App (opt-in, ks. §8)
 
@@ -277,22 +340,45 @@ rm -f ~/Library/LaunchAgents/com.maintainer.pr-watch-poller.plist
 Välitilassa (bootout tehty, bootstrap tekemättä) auto-run on pysähdyksissä. Se on turvallinen
 tila: mitään ei aja kahteen kertaan. Ks. `docs/diagrams/launchagent-migration-states.mmd`.
 
-Uusien agenttien **deploy on paketin oman `install.sh`:n vastuulla (#4)**, ei dotfilesin
+Uusien agenttien **deploy on paketin oman `install.sh`:n vastuulla**, ei dotfilesin
 `sync.sh`:n: `sync.sh` globaa plistit vain dotfilesin juuresta eikä siis näe submodulen sisällä
 olevia tiedostoja. Konventio itsessään säilyy — `Label` == tiedostonimi ilman `.plist`,
 `plutil -lint` porttina, `$HOME` literaalina plistissä (laajenee, koska komento ajetaan
-`/bin/bash -l -c` -kääreen läpi).
+`/bin/bash -l -c` -kääreen läpi). `tests/test-package-layout.sh` vartioi `Label`-invarianttia,
+joka on nyt kantava: asentaja johtaa tulostamansa `launchctl`-labelin tiedostonimestä.
+
+`install.sh --with-launchagents` deployaa **vain tiedostot** (symlinkkeinä pakettiin, jotta ne
+päivittyvät sen mukana) ja tulostaa `launchctl`-komennot ajettaviksi. Se **ei kutsu
+`launchctl`ia itse**, kolmesta syystä: launchd mutatoi elävää käyttäjäsessiota; se ei ole
+idempotentti uudelleenohjatun `$HOME`:n alla, joten kutsua ei voisi testata; ja yllä kuvattu
+`com.maintainer.*` → `com.claude-issue-runner.*` -migraatio vaatii kertaluontoisen harkitun bootoutin,
+jota skripti ei voi päättää käyttäjän puolesta.
+
+Ennen deployta asentaja lukee plistin `ProgramArguments`-taulukon viimeisen alkion, laajentaa
+`$HOME`:n ja tarkistaa että ohjelma on suoritettavissa. **Jos ei ole, deploy kieltäytyy
+(exit 2).** Rikkinäisen agentin asentaminen olisi asentamatta jättämistä pahempaa: launchd
+lataisi sen, epäonnistuisi joka `StartInterval`-tikillä eikä raportoisi mitään. Ks. §12 —
+plistien polut ovat toistaiseksi dotfiles-sidonnaisia.
 
 ## 12. Tunnetut avoimet asiat
 
-- **Plist-deploy → #4.** Dotfilesin `sync.sh` ei näe submodulen sisältöä, joten LaunchAgentien
-  asennus siirtyy paketin omalle `install.sh`:lle. Epicin #8 sisältää tästä virheellisen
-  oletuksen.
 - **Plistien polut eivät ole siirrettäviä → #6.** `ProgramArguments` osoittaa polkuun
   `$HOME/dotfiles/claude/scripts/run-issues/…`, samoin `poller.sh`:n ja `pr-watch-poller.sh`:n
   omat `${DOTFILES}`-polut. Ne resolvoituvat oikein tässä asennusmallissa, mutta ovat
   dotfiles-sidonnaisia: ilman dotfilesia asennettuna ne eivät osu. Polkujen
-  parametrisointi on #6.
+  parametrisointi on #6. Toistaiseksi `install.sh --with-launchagents` **kieltäytyy**
+  deployaamasta plistiä, jonka polku ei kohdekoneella resolvoidu (ks. §11) — vika ei siis
+  pääse koneelle hiljaisena, mutta puhtaalla koneella pollereita ei saa käyntiin ennen #6:tta.
+- **`~/.claude/agents` ja `~/.claude/commands` hakemistosymlinkkeinä → #5.** Niin kauan kuin
+  dotfiles symlinkkaa koko hakemiston, `install.sh` kieltäytyy (exit 2). Korjaus on
+  dotfiles-repon puolella eikä kuulu tähän pakettiin.
+- **`install.sh --uninstall` puuttuu.** Paketin omistamien symlinkkien poisto on tehtävä
+  käsin. Omistajuuspredikaatti (symlinkin kohde paketin juuren sisällä) riittäisi sellaisenaan
+  toteutukseen.
+- **`timeout`/`gtimeout`-resolvointi on kolmessa paikassa.** `lib/preflight.sh`:n
+  `preflight_timeout_bin` duplikoi logiikan, joka on jo `lib/claude-call.sh`:ssa ja
+  `orchestrate.sh`:ssa. Jälkimmäiset jätettiin koskematta, koska ne ovat orkestraattorin
+  kuumalla polulla; yhdistäminen kuuluu omaan muutokseensa.
 - **`unblock-issues.sh`:n haarautunut resolvointi.** `pr-watch-poller.sh` etsii skriptin
   ensisijaisesti paketista (`${SCRIPT_DIR}/unblock-issues.sh`) ja vasta sitten vanhasta
   dotfiles-polusta. Kummankin haaran kattavaa testiä ei ole — se vaatisi resolvoinnin
