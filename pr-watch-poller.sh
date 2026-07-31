@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# pr-watch-poller.sh — Studio-only auto-poller for the Phase 2 PR watcher.
+# pr-watch-poller.sh — host-gated auto-poller for the Phase 2 PR watcher.
 #
-# Iterates the watchlist (machine-studio/run-issues-watchlist.json) and, for
-# each repo, runs pr-watch.sh in scan mode inside a DETACHED tmux session.
+# Iterates the watchlist (RUN_ISSUES_WATCHLIST, else
+# $HOME/.config/run-issues/watchlist.json, else the legacy dotfiles path) and,
+# for each repo, runs pr-watch.sh in scan mode inside a DETACHED tmux session.
 # scan mode is itself idempotent and per-issue locked, so spawning is cheap
 # and safe to repeat.
 #
@@ -13,22 +14,62 @@
 
 set -euo pipefail
 
-# Studio-only guard. Bail out silently on any other host so that accidentally
-# running the LaunchAgent on the laptop does nothing.
-HOST=$(hostname -s)
-case "$HOST" in
-  *host-a*|*host-a*|maintainers-host-a*) : ;;
-  *) exit 0 ;;
-esac
+# --- Configuration resolution ------------------------------------------------
+# Mirrors poller.sh; the order is documented in
+# docs/diagrams/poller-config-resolution.mmd.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOTFILES="${HOME}/dotfiles"
-WATCHLIST="${DOTFILES}/machine-studio/run-issues-watchlist.json"
-PRWATCH="${DOTFILES}/claude/scripts/run-issues/pr-watch.sh"
-LOG="${HOME}/Library/Logs/pr-watch-poller.log"
+
+# The package root. Read from the environment ONLY (never from poller.env),
+# because it must be known before any file is sourced. A test injection point,
+# not user configuration — in normal use SCRIPT_DIR is already correct.
+RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
+
+# shellcheck source=lib/poller-config.sh
+. "${RUN_ISSUES_HOME}/lib/poller-config.sh"
+
+# Machine configuration; the pollers' only channel under launchd, which hands
+# an agent no environment of its own. Sourced, so the FILE WINS over an
+# inherited environment variable. Deliberately not ~/.config/run-issues/env:
+# that file holds secrets a poller has no use for.
+POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-${HOME}/.config/run-issues/poller.env}"
+if [ -f "$POLLER_ENV_FILE" ]; then
+  set +eu
+  # shellcheck disable=SC1090
+  . "$POLLER_ENV_FILE"
+  set -eu
+fi
+
+# Host gate. Bail out silently on a machine that was never configured to run
+# the pollers, before any path is created — an unknown host must not so much as
+# make a log directory.
+HOST=$(hostname -s)
+poller_host_allowed "$HOST" "${RUN_ISSUES_POLLER_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+mkdir -p "$LOG_DIR"
+LOG="${LOG_DIR}/pr-watch-poller.log"
+RUNS_LOG="${LOG_DIR}/pr-watch-poller.runs.log"
+
+# The plists carry no StandardOutPath/StandardErrorPath keys, because launchd
+# performs no variable expansion in them. The poller therefore owns all four of
+# its log paths itself. Not on a TTY: a manual run must still print.
+if [ ! -t 1 ]; then
+  exec >>"${LOG_DIR}/pr-watch-poller.stdout.log" 2>>"${LOG_DIR}/pr-watch-poller.stderr.log"
+fi
+
+# The pre-package layout. A fallback only — never a primary path.
+LEGACY_DOTFILES_DIR="${HOME}/dotfiles"
+
+PRWATCH="${RUN_ISSUES_HOME}/pr-watch.sh"
+
+WATCHLIST_CONFIG="${HOME}/.config/run-issues/watchlist.json"
+WATCHLIST_LEGACY="${LEGACY_DOTFILES_DIR}/machine-studio/run-issues-watchlist.json"
+WATCHLIST_TRIED="${RUN_ISSUES_WATCHLIST:-${WATCHLIST_CONFIG}, ${WATCHLIST_LEGACY}}"
 
 # Hard requirements; bail fast if anything is missing.
-[ -f "$WATCHLIST" ] || { echo "$(date -u +%FT%TZ) pr-watch-poller: watchlist missing at $WATCHLIST" >> "$LOG"; exit 0; }
+WATCHLIST=$(poller_resolve_watchlist "${RUN_ISSUES_WATCHLIST:-}" "$WATCHLIST_CONFIG" "$WATCHLIST_LEGACY") \
+  || { echo "$(date -u +%FT%TZ) pr-watch-poller: watchlist missing, tried: $WATCHLIST_TRIED" >> "$LOG"; exit 0; }
 [ -x "$PRWATCH" ]   || { echo "$(date -u +%FT%TZ) pr-watch-poller: pr-watch.sh not executable at $PRWATCH" >> "$LOG"; exit 0; }
 command -v gh >/dev/null     || { echo "$(date -u +%FT%TZ) pr-watch-poller: gh not in PATH" >> "$LOG"; exit 0; }
 command -v jq >/dev/null     || { echo "$(date -u +%FT%TZ) pr-watch-poller: jq not in PATH" >> "$LOG"; exit 0; }
@@ -56,13 +97,13 @@ GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 # pre-package layout. A missing script remains a silent no-op via the guard
 # below — which is exactly why the package-local path must come first: a wrong
 # path here disables the unblock pass without any error surfacing.
-UNBLOCK="${SCRIPT_DIR}/unblock-issues.sh"
-[ -x "$UNBLOCK" ] || UNBLOCK="${DOTFILES}/claude/scripts/unblock-issues.sh"
+UNBLOCK="${RUN_ISSUES_HOME}/unblock-issues.sh"
+[ -x "$UNBLOCK" ] || UNBLOCK="${LEGACY_DOTFILES_DIR}/claude/scripts/unblock-issues.sh"
 if [ -x "$UNBLOCK" ]; then
   while IFS= read -r unblock_repo_json; do
     up=$(jq -r '.path // empty' <<<"$unblock_repo_json")
     [ -n "$up" ] && [ -d "$up/.git" ] || continue
-    ( cd "$up" && "$UNBLOCK" >> "${HOME}/Library/Logs/pr-watch-poller.runs.log" 2>&1 ) || true
+    ( cd "$up" && "$UNBLOCK" >> "$RUNS_LOG" 2>&1 ) || true
   done < <(jq -c '.repos[]?' "$WATCHLIST")
 fi
 
@@ -117,5 +158,5 @@ while IFS= read -r repo_json; do
   echo "$(date -u +%FT%TZ) pr-watch-poller: launching $SESSION for repo=$REPO_PATH" >> "$LOG"
 
   tmux new-session -d -s "$SESSION" \
-    "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' '$PRWATCH' '$REPO_PATH' scan 2>&1 | tee -a '${HOME}/Library/Logs/pr-watch-poller.runs.log'"
+    "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' '$PRWATCH' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
 done < <(jq -c '.repos[]?' "$WATCHLIST")

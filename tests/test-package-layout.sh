@@ -73,10 +73,10 @@ if [ -x "$ROOT/unblock-issues.sh" ]; then
 else
   echo "FAIL: unblock-issues.sh missing or not executable at the package root"; FAIL=1
 fi
-if grep -q 'UNBLOCK="\${SCRIPT_DIR}/unblock-issues.sh"' "$ROOT/pr-watch-poller.sh"; then
+if grep -q 'UNBLOCK="\${RUN_ISSUES_HOME}/unblock-issues.sh"' "$ROOT/pr-watch-poller.sh"; then
   echo "PASS: pr-watch-poller.sh prefers the package-local unblock-issues.sh"
 else
-  echo "FAIL: pr-watch-poller.sh does not resolve unblock-issues.sh via SCRIPT_DIR"
+  echo "FAIL: pr-watch-poller.sh does not resolve unblock-issues.sh via RUN_ISSUES_HOME"
   echo "      (the [ -x ] guard makes a wrong path a silent no-op)"
   FAIL=1
 fi
