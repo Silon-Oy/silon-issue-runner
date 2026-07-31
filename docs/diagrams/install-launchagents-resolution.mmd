@@ -1,0 +1,40 @@
+%% Author: Architect
+%% Created: 2026-07-31
+%% Topic: install.sh --with-launchagents: ohjelmapolun resolvointi suunnittelu- ja apply-vaiheiden yli
+%% Task: issue #6 — plistien polkuparametrisointi ja INV-OWN-yhteensopiva deploy
+
+sequenceDiagram
+    autonumber
+    participant U as Kayttaja
+    participant M as install.sh main()
+    participant B as plan_scripts_binding
+    participant L as plan_launchagents
+    participant A as apply_plan
+    participant FS as Tiedostojarjestelma
+
+    U->>M: install.sh --with-launchagents
+    M->>B: suunnittele $CLAUDE_HOME/scripts/run-issues
+    B->>FS: [ -x bind/orchestrate.sh ]?
+    alt polku toimii jo (maintainern dotfiles+submodule)
+        B-->>M: plan_add skip + SCRIPTS_BINDING_TARGET = real
+    else puhdas kone
+        B-->>M: plan_add mkdir + link (EI VIELA KIRJOITETTU)
+        B-->>M: SCRIPTS_BINDING_TARGET = PKG_ROOT
+    end
+
+    M->>L: suunnittele plistit
+    L->>FS: plist_program -> $HOME/.claude/scripts/run-issues/poller.sh
+    L->>FS: [ -x program ]?
+    Note over L,FS: Puhtaalla koneella EI — sidonta on vasta suunniteltu.<br/>Tama on I7/D5: tiukka -x kieltaytyisi aina.
+    L->>L: program_resolves: SCRIPTS_BINDING_TARGET/<rel> suoritettava?
+    alt resolvoituu suunnitelman jalkeen
+        L-->>M: plan_add link plist -> LAUNCH_AGENTS_DIR (symlink, INV-OWN sailyy)
+    else ei resolvoidu (esim. RUN_ISSUES_CLAUDE_HOME muualla)
+        L-->>M: refuse -> exit 2, NOLLA muutosta
+    end
+
+    M->>A: apply (vain jos ei kieltaytymisia)
+    A->>FS: mkdir + ln -s (sidonta ENNEN plisteja — plan-jarjestys)
+    A->>FS: ln -s plist
+    M->>U: tulosta launchctl bootout/bootstrap + host-gate-huomautus
+    Note over M,U: install.sh EI kutsu launchctlia (CLAUDE.md §11)

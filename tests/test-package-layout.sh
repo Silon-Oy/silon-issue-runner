@@ -73,10 +73,10 @@ if [ -x "$ROOT/unblock-issues.sh" ]; then
 else
   echo "FAIL: unblock-issues.sh missing or not executable at the package root"; FAIL=1
 fi
-if grep -q 'UNBLOCK="\${SCRIPT_DIR}/unblock-issues.sh"' "$ROOT/pr-watch-poller.sh"; then
+if grep -q 'UNBLOCK="\${RUN_ISSUES_HOME}/unblock-issues.sh"' "$ROOT/pr-watch-poller.sh"; then
   echo "PASS: pr-watch-poller.sh prefers the package-local unblock-issues.sh"
 else
-  echo "FAIL: pr-watch-poller.sh does not resolve unblock-issues.sh via SCRIPT_DIR"
+  echo "FAIL: pr-watch-poller.sh does not resolve unblock-issues.sh via RUN_ISSUES_HOME"
   echo "      (the [ -x ] guard makes a wrong path a silent no-op)"
   FAIL=1
 fi
@@ -105,6 +105,27 @@ for p in "${PLISTS[@]}"; do
       echo "      the launchctl label from the filename)"
       FAIL=1
     fi
+    # launchd expands no variables in StandardOutPath / StandardErrorPath, so a
+    # literal $HOME in them would write to a directory of that name. The
+    # pollers redirect their own stdout/stderr instead, which is also what puts
+    # all four log paths under RUN_ISSUES_LOG_DIR.
+    for key in StandardOutPath StandardErrorPath; do
+      if plutil -extract "$key" raw -o - "$ROOT/$p" >/dev/null 2>&1; then
+        echo "FAIL: $p carries a $key key that launchd cannot expand"; FAIL=1
+      else
+        echo "PASS: $p has no $key key"
+      fi
+    done
+    # install.sh's scripts binding is what makes this path exist on a machine
+    # without dotfiles; a plist pointing anywhere else could not be deployed.
+    argc=$(plutil -extract ProgramArguments raw -o - "$ROOT/$p" 2>/dev/null)
+    prog=$(plutil -extract "ProgramArguments.$((argc - 1))" raw -o - "$ROOT/$p" 2>/dev/null)
+    case "$prog" in
+      '$HOME/.claude/scripts/run-issues/'*)
+        echo "PASS: $p runs a program under the installer's scripts binding" ;;
+      *)
+        echo "FAIL: $p runs '$prog', outside \$HOME/.claude/scripts/run-issues/"; FAIL=1 ;;
+    esac
   else
     echo "SKIP: plutil not available — plist lint/Label check skipped"
   fi

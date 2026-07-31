@@ -1,0 +1,48 @@
+%% Author: Architect
+%% Created: 2026-07-31
+%% Topic: Pollerien konfiguraation resolvointijarjestys ja toimituskanava
+%% Task: issue #6 — polkuparametrisointi (RUN_ISSUES_HOME, WATCHLIST, LOG_DIR, POLLER_HOSTS)
+
+flowchart TB
+    START["launchd: /bin/bash -l -c<br/>$HOME/.claude/scripts/run-issues/poller.sh"]
+
+    S1["1. SCRIPT_DIR = dirname BASH_SOURCE"]
+    S2["2. RUN_ISSUES_HOME = env tai SCRIPT_DIR<br/>(vain ymparistosta — testien injektiopiste)"]
+    S3["3. source lib/poller-config.sh<br/>(vartioimaton — puuttuva lib = kaatuminen, ei hiljainen degradaatio)"]
+    S4["4. source RUN_ISSUES_POLLER_ENV_FILE<br/>oletus $HOME/.config/run-issues/poller.env<br/>TIEDOSTO VOITTAA ymparistomuuttujan"]
+    S5{"5. poller_host_allowed HOST<br/>RUN_ISSUES_POLLER_HOSTS<br/>tai POLLER_HOSTS_LEGACY_DEFAULT"}
+    NOOP["exit 0 — mitaan ei kirjoiteta,<br/>ei edes lokihakemistoa"]
+    S6["6. LOG_DIR = RUN_ISSUES_LOG_DIR tai $HOME/Library/Logs<br/>mkdir -p; ei-TTY: exec >> stdout.log 2>> stderr.log"]
+    S7{"7. poller_resolve_watchlist"}
+    S8["8. ORCH / PRWATCH / AUTO_CLEAN / lib-sourcet<br/>= RUN_ISSUES_HOME/..."]
+    RUN["Ajo: scan_stalled -> cap -> repos x remotes -> tmux"]
+
+    WLE["RUN_ISSUES_WATCHLIST<br/>AINOA ehdokas jos asetettu"]
+    WLC["$HOME/.config/run-issues/watchlist.json"]
+    WLL["LEGACY_DOTFILES_DIR/machine-studio/<br/>run-issues-watchlist.json<br/>(maintainern nykytila)"]
+    WLMISS["exit 0 + loki nimeaa KAIKKI ehdokkaat"]
+
+    SECRET["$HOME/.config/run-issues/env<br/>SALAISUUDET"]
+    CHILD["orchestrate.sh / pr-watch.sh<br/>sourceavat salaisuudet ITSE"]
+
+    START --> S1 --> S2 --> S3 --> S4 --> S5
+    S5 -->|"ei tasmaa"| NOOP
+    S5 -->|"tasmaa"| S6 --> S7
+    S7 --> WLE
+    S7 --> WLC
+    S7 --> WLL
+    S7 -->|"ei yhtaan"| WLMISS
+    WLE --> S8
+    WLC --> S8
+    WLL --> S8
+    S8 --> RUN
+    RUN -->|tmux new-session| CHILD
+    SECRET --> CHILD
+    SECRET -.->|"EI KYTKENTAA — pollerit eivat<br/>lue salaisuuksia (paatos D1)"| S4
+
+    classDef legacy fill:#fff8e0,stroke:#c90
+    classDef safe fill:#e0ffe0,stroke:#0a0
+    classDef stop fill:#ffe0e0,stroke:#c00
+    class WLL legacy
+    class S2,S3,S4,S6,S8,CHILD safe
+    class NOOP,WLMISS,SECRET stop

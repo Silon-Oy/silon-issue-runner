@@ -8,8 +8,9 @@ flowchart TB
         R["repo-juuri = run-issues-sisalto<br/>orchestrate.sh, poller.sh, lib/, prompts/, tests/"]
         AG["agents/ (4 .md)"]
         CM["commands/ (6 .md)"]
-        DOC["docs/diagrams/ (10 .mmd)"]
+        DOC["docs/diagrams/ (12 .mmd)"]
         EX["examples/run-issues-watchlist.example.json"]
+        EX2["examples/run-issues-poller.env.example"]
         PL["com.claude-issue-runner.*.plist (2 kpl)"]
         INS["install.sh + lib/preflight.sh"]
     end
@@ -31,8 +32,8 @@ flowchart TB
     subgraph REF["Viittaukset jotka EIVAT saa rikkoutua"]
         V1["commands/{run-issues,cleanup-run,pr-watch}.md<br/>$HOME/.claude/scripts/run-issues/..."]
         V2["prompts/02-implementer.md:86<br/>source $HOME/.claude/scripts/run-issues/lib/hook-runner.sh"]
-        V3["poller.sh:25-27<br/>$HOME/dotfiles/claude/scripts/run-issues/..."]
-        V4["com.*.plist:12<br/>$HOME/dotfiles/claude/scripts/run-issues/poller.sh"]
+        V3["poller.sh: RUN_ISSUES_HOME (= SCRIPT_DIR)<br/>+ watchlist/log/host env-resolvointi"]
+        V4["com.*.plist:12<br/>$HOME/.claude/scripts/run-issues/poller.sh"]
     end
 
     R -->|"A: submodule add"| SUB
@@ -50,15 +51,14 @@ flowchart TB
 
     SCR --> V1
     SCR --> V2
-    SUB --> V3
-    SUB --> V4
-    WL -.->|"luetaan ajossa"| V3
+    SCR --> V3
+    SCR --> V4
+    WL -.->|"luetaan ajossa — vain fallback (#6)"| V3
     EX -.->|"skeeman dokumentaatio"| WL
+    EX2 -.->|"host/log/watchlist-konfiguraatio (#6)"| V3
 
     SYNC -.->|"EI NAE submodulen sisaltoa — ratkaistu #4:ssa"| PL
-    V4 -.->|"ei resolvoidu ilman dotfilesia -> #6<br/>install.sh KIELTAYTYY deployaamasta"| INS
+    V4 -->|"resolvoituu install.sh:n sidonnan kautta (#6)"| SCR
 
-    classDef risk fill:#ffe0e0,stroke:#c00,stroke-width:2px
     classDef ok fill:#e0ffe0,stroke:#0a0
-    class V4,V3 risk
-    class R,SUB,SCR,INS ok
+    class R,SUB,SCR,INS,V3,V4 ok

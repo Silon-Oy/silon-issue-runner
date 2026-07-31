@@ -3,12 +3,14 @@
 #
 # Two properties are being protected here.
 #
-# The plists' ProgramArguments point at $HOME/dotfiles/claude/scripts/
-# run-issues/<poller>.sh, which resolves only in maintainer's install model; making
-# those paths portable is a separate issue. Until then the installer must
-# refuse to deploy an agent whose program does not exist, because launchd would
-# happily load it and fail on every StartInterval tick — a broken agent that
-# reports nothing.
+# The plists' ProgramArguments point at $HOME/.claude/scripts/run-issues/
+# <poller>.sh — the path the installer's own scripts binding provides. That
+# binding is planned in the same run that deploys the plists and applied only
+# afterwards, so case 4 is the one that proves the installer looks at the
+# binding it is about to create rather than at the empty disk in front of it.
+# Where the program genuinely will not resolve, the installer must refuse:
+# launchd would load a broken agent and fail on every StartInterval tick
+# without reporting anything.
 #
 # The installer must also never call launchctl. launchd mutates a live user
 # session, so a test could not undo it, and the com.maintainer ->
@@ -19,8 +21,8 @@
 # Cases:
 #   1. Without the flag: no LaunchAgents work at all
 #   2. Without plutil: the suite skips (macOS-only machinery)
-#   3. With the flag but an unresolvable program path: exit 2, nothing deployed
-#   4. With the flag and a resolvable program path: both plists symlinked
+#   3. With the flag but a binding built somewhere else: exit 2, nothing deployed
+#   4. With the flag on a clean home: both plists symlinked, program resolves
 #   5. launchctl is never invoked; the commands are printed instead
 #
 # Run: bash tests/test-install-launchagents.sh
@@ -57,29 +59,24 @@ exit 0
 EOF
 chmod +x "$WORK/bin/launchctl"
 
-run_install() {
-  local home="$1"; shift
+# run_install_at <fake-home> <claude-home> [args...]
+run_install_at() {
+  local home="$1" claude_home="$2"; shift 2
   HOME="$home" \
   PATH="$WORK/bin:$PATH" \
-  RUN_ISSUES_CLAUDE_HOME="$home/.claude" \
+  RUN_ISSUES_CLAUDE_HOME="$claude_home" \
   RUN_ISSUES_LAUNCH_AGENTS_DIR="$home/Library/LaunchAgents" \
   bash "$INSTALL" "$@"
 }
 
-# make_pollers <fake-home> — recreate the dotfiles path the plists encode.
-make_pollers() {
-  local home="$1" d="$1/dotfiles/claude/scripts/run-issues" f
-  mkdir -p "$d"
-  for f in poller.sh pr-watch-poller.sh; do
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$d/$f"
-    chmod +x "$d/$f"
-  done
+run_install() {
+  local home="$1"; shift
+  run_install_at "$home" "$home/.claude" "$@"
 }
 
 # ---- Case 1: no flag, no LaunchAgents work ----
 H1="$WORK/home1"
 mkdir -p "$H1/Library"
-make_pollers "$H1"
 out1=$(run_install "$H1" 2>&1)
 rc1=$?
 if [ "$rc1" -eq 0 ]; then
@@ -95,10 +92,13 @@ else
   echo "FAIL: case1 default install touched $H1/Library/LaunchAgents"; FAIL=1
 fi
 
-# ---- Case 3: flag set, program path does not resolve ----
+# ---- Case 3: flag set, the binding is built outside the plists' path ----
+# RUN_ISSUES_CLAUDE_HOME points somewhere the plists do not reference, so this
+# run's scripts binding cannot make $HOME/.claude/scripts/run-issues/poller.sh
+# executable. Deploying anyway would install an agent that fails on every tick.
 H3="$WORK/home3"
 mkdir -p "$H3/Library"
-out3=$(run_install "$H3" --with-launchagents 2>&1)
+out3=$(run_install_at "$H3" "$H3/elsewhere" --with-launchagents 2>&1)
 rc3=$?
 if [ "$rc3" -eq 2 ]; then
   echo "PASS: case3 unresolvable program path refuses with exit 2"
@@ -107,15 +107,15 @@ else
   printf '%s\n' "$out3" | sed 's/^/      /'
   FAIL=1
 fi
-if printf '%s\n' "$out3" | grep -qF "$H3/dotfiles/claude/scripts/run-issues/poller.sh"; then
+if printf '%s\n' "$out3" | grep -qF "$H3/.claude/scripts/run-issues/poller.sh"; then
   echo "PASS: case3 refusal names the unresolvable program path"
 else
   echo "FAIL: case3 refusal does not name the program path"; FAIL=1
 fi
-if printf '%s\n' "$out3" | grep -q '#6'; then
-  echo "PASS: case3 refusal points at the path-parametrisation issue"
+if printf '%s\n' "$out3" | grep -q 'RUN_ISSUES_CLAUDE_HOME'; then
+  echo "PASS: case3 refusal names the knob that would make the path resolve"
 else
-  echo "FAIL: case3 refusal does not reference issue #6"; FAIL=1
+  echo "FAIL: case3 refusal does not say how to make the program resolve"; FAIL=1
 fi
 if [ -z "$(find "$H3/Library" -name 'com.claude-issue-runner.*' 2>/dev/null)" ]; then
   echo "PASS: case3 no plist was deployed"
@@ -123,10 +123,12 @@ else
   echo "FAIL: case3 deployed a plist despite refusing"; FAIL=1
 fi
 
-# ---- Case 4: flag set, program path resolves ----
+# ---- Case 4: flag set on a clean home ----
+# No dotfiles tree, no .claude tree: the plists' program is provided by the
+# scripts binding this same run plans. This is the clean-machine case the
+# deploy exists for.
 H4="$WORK/home4"
 mkdir -p "$H4/Library"
-make_pollers "$H4"
 out4=$(run_install "$H4" --with-launchagents 2>&1)
 rc4=$?
 if [ "$rc4" -eq 0 ]; then
@@ -145,6 +147,20 @@ for p in $PLISTS; do
     FAIL=1
   fi
 done
+# The probe that produced this whole change: the deploy must leave the plists'
+# program actually executable. Planning the binding and deploying the plists
+# happen in one run but in two passes, and only this assertion keeps that
+# ordering dependency visible.
+if [ -x "$H4/.claude/scripts/run-issues/poller.sh" ]; then
+  echo "PASS: case4 the deployed plist's program is executable afterwards"
+else
+  echo "FAIL: case4 $H4/.claude/scripts/run-issues/poller.sh is not executable"; FAIL=1
+fi
+if printf '%s\n' "$out4" | grep -q 'RUN_ISSUES_POLLER_HOSTS'; then
+  echo "PASS: case4 the instructions mention the host gate"
+else
+  echo "FAIL: case4 the instructions do not mention the host gate"; FAIL=1
+fi
 if printf '%s\n' "$out4" | grep -q 'launchctl bootstrap'; then
   echo "PASS: case4 prints the launchctl bootstrap command"
 else

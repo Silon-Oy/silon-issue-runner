@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# poller.sh — Studio-only auto-run poller for /run-issues.
+# poller.sh — host-gated auto-run poller for /run-issues.
 #
-# Iterates the watchlist (machine-studio/run-issues-watchlist.json), and
+# Iterates the watchlist (RUN_ISSUES_WATCHLIST, else
+# $HOME/.config/run-issues/watchlist.json, else the legacy dotfiles path), and
 # for each repo with at least one unclaimed issue that matches the
 # configured labels, launches a DETACHED tmux session running
 # `orchestrate.sh` in auto mode.
@@ -14,21 +15,71 @@
 
 set -euo pipefail
 
-# Studio-only guard. Bail out silently on any other host so that
-# accidentally pushing the LaunchAgent to the laptop does nothing.
-HOST=$(hostname -s)
-case "$HOST" in
-  *host-a*|*host-a*|maintainers-host-a*) : ;;
-  *) exit 0 ;;
-esac
+# --- Configuration resolution ------------------------------------------------
+# The order below is load-bearing and documented in
+# docs/diagrams/poller-config-resolution.mmd.
 
-DOTFILES="${HOME}/dotfiles"
-WATCHLIST="${DOTFILES}/machine-studio/run-issues-watchlist.json"
-ORCH="${DOTFILES}/claude/scripts/run-issues/orchestrate.sh"
-LOG="${HOME}/Library/Logs/run-issues-poller.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The package root. Read from the environment ONLY (never from poller.env),
+# because it must be known before any file is sourced. It exists as a test
+# injection point, the way RUN_ISSUES_CLAUDE_HOME does for install.sh — in
+# normal use SCRIPT_DIR is already correct and nobody needs to set this.
+RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
+
+# shellcheck source=lib/poller-config.sh
+. "${RUN_ISSUES_HOME}/lib/poller-config.sh"
+
+# Machine configuration. launchd hands an agent no environment of its own and
+# the login files hold nothing run-issues-specific, so this file is the only
+# channel through which a machine can configure its pollers. It is sourced, so
+# the FILE WINS over an inherited environment variable — the same idiom
+# pr-watch.sh uses for its own env file.
+#
+# Deliberately not ~/.config/run-issues/env: that file holds secrets, which the
+# orchestrator and the watcher source themselves. A poller needs none of them,
+# and it logs copiously.
+POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-${HOME}/.config/run-issues/poller.env}"
+if [ -f "$POLLER_ENV_FILE" ]; then
+  set +eu
+  # shellcheck disable=SC1090
+  . "$POLLER_ENV_FILE"
+  set -eu
+fi
+
+# Host gate. Bail out silently on a machine that was never configured to run
+# the pollers, so that deploying the LaunchAgent somewhere else does nothing.
+# This runs BEFORE any path is created: an unknown host must not so much as
+# make a log directory.
+HOST=$(hostname -s)
+THIS_HOST="$HOST"
+poller_host_allowed "$HOST" "${RUN_ISSUES_POLLER_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+mkdir -p "$LOG_DIR"
+LOG="${LOG_DIR}/run-issues-poller.log"
+RUNS_LOG="${LOG_DIR}/run-issues-poller.runs.log"
+
+# The plists carry no StandardOutPath/StandardErrorPath keys, because launchd
+# performs no variable expansion in them. The poller therefore owns all four of
+# its log paths itself. Not on a TTY: a manual run must still print.
+if [ ! -t 1 ]; then
+  exec >>"${LOG_DIR}/run-issues-poller.stdout.log" 2>>"${LOG_DIR}/run-issues-poller.stderr.log"
+fi
+
+# The pre-package layout. A fallback only — never a primary path — so that a
+# machine whose watchlist still lives in the dotfiles tree keeps working.
+LEGACY_DOTFILES_DIR="${HOME}/dotfiles"
+
+ORCH="${RUN_ISSUES_HOME}/orchestrate.sh"
+
+WATCHLIST_CONFIG="${HOME}/.config/run-issues/watchlist.json"
+WATCHLIST_LEGACY="${LEGACY_DOTFILES_DIR}/machine-studio/run-issues-watchlist.json"
+WATCHLIST_TRIED="${RUN_ISSUES_WATCHLIST:-${WATCHLIST_CONFIG}, ${WATCHLIST_LEGACY}}"
 
 # Hard requirements; bail fast if anything is missing.
-[ -f "$WATCHLIST" ] || { echo "$(date -u +%FT%TZ) poller: watchlist missing at $WATCHLIST" >> "$LOG"; exit 0; }
+WATCHLIST=$(poller_resolve_watchlist "${RUN_ISSUES_WATCHLIST:-}" "$WATCHLIST_CONFIG" "$WATCHLIST_LEGACY") \
+  || { echo "$(date -u +%FT%TZ) poller: watchlist missing, tried: $WATCHLIST_TRIED" >> "$LOG"; exit 0; }
 [ -x "$ORCH" ]      || { echo "$(date -u +%FT%TZ) poller: orchestrator not executable at $ORCH" >> "$LOG"; exit 0; }
 command -v gh >/dev/null     || { echo "$(date -u +%FT%TZ) poller: gh not in PATH" >> "$LOG"; exit 0; }
 command -v jq >/dev/null     || { echo "$(date -u +%FT%TZ) poller: jq not in PATH" >> "$LOG"; exit 0; }
@@ -41,7 +92,6 @@ fi
 
 GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 DEFAULT_LABELS=$(jq -r '(.default_labels // ["auto-run"]) | join(",")' "$WATCHLIST")
-THIS_HOST=$(hostname -s)
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
 RUN_ISSUES_MAX_CLARIFICATIONS="${RUN_ISSUES_MAX_CLARIFICATIONS:-3}"
 RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
@@ -54,37 +104,43 @@ RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
 # timeout (after which it finalizes via finalize_timeout and writes an event,
 # resetting the staleness clock).
 RUN_ISSUES_STALE_AFTER="${RUN_ISSUES_STALE_AFTER:-3600}"
-AUTO_CLEAN="${DOTFILES}/claude/scripts/run-issues/auto-clean.sh"
+AUTO_CLEAN="${RUN_ISSUES_HOME}/auto-clean.sh"
+
+# The four libs below are sourced UNGUARDED on purpose. A `[ -f ] && .` guard
+# does not abort under `set -e`, so a lib that failed to resolve used to make
+# the poller run on without parse_marker, state_finalize, session_suffix or
+# labels_add, and surface as `command not found` deep inside a scan. Sourcing
+# unguarded fails where the fault actually is.
 
 # parse_marker / detect_answer / fetch_issue_json live in lib/issue.sh; the
 # poller needs them for scan_answered. Sourcing is safe — lib/issue.sh only
 # defines functions, no top-level work.
-LIB_ISSUE="${DOTFILES}/claude/scripts/run-issues/lib/issue.sh"
+LIB_ISSUE="${RUN_ISSUES_HOME}/lib/issue.sh"
 # shellcheck source=lib/issue.sh
-[ -f "$LIB_ISSUE" ] && . "$LIB_ISSUE"
+. "$LIB_ISSUE"
 
 # state_finalize / state_event are sourced from lib/state.sh — finalize_stalled
 # writes run.json + state.jsonl directly (the orchestrator process is dead by
 # the time we tap the session, so there is no other code path to delegate to).
 # Pure functions, no top-level work, safe to source.
-LIB_STATE="${DOTFILES}/claude/scripts/run-issues/lib/state.sh"
+LIB_STATE="${RUN_ISSUES_HOME}/lib/state.sh"
 # shellcheck source=lib/state.sh
-[ -f "$LIB_STATE" ] && . "$LIB_STATE"
+. "$LIB_STATE"
 
 # remote_label / session_suffix / repo_slug / resolve_remote_to_owner_repo live
 # in lib/git-remote.sh. Used by the (repo × remote) iteration to derive owner/repo
 # for `gh --repo` routing and the repo-namespaced tmux session / lock names.
 # Pure functions; safe to source.
-LIB_GIT_REMOTE="${DOTFILES}/claude/scripts/run-issues/lib/git-remote.sh"
+LIB_GIT_REMOTE="${RUN_ISSUES_HOME}/lib/git-remote.sh"
 # shellcheck source=lib/git-remote.sh
-[ -f "$LIB_GIT_REMOTE" ] && . "$LIB_GIT_REMOTE"
+. "$LIB_GIT_REMOTE"
 
 # labels_add / labels_ensure live in lib/labels.sh — REST-based label writes
 # that do not need the read:project OAuth scope `gh issue edit` demands.
 # Pure functions; safe to source.
-LIB_LABELS="${DOTFILES}/claude/scripts/run-issues/lib/labels.sh"
+LIB_LABELS="${RUN_ISSUES_HOME}/lib/labels.sh"
 # shellcheck source=lib/labels.sh
-[ -f "$LIB_LABELS" ] && . "$LIB_LABELS"
+. "$LIB_LABELS"
 
 # _iso_to_epoch <iso-utc-ts> — convert an ISO-8601 Zulu timestamp (the format
 # state.sh writes: YYYY-MM-DDTHH:MM:SSZ) to Unix epoch seconds. Empty string on
@@ -297,7 +353,7 @@ finalize_stalled() {
       echo
       echo "Pollerin liveness-tarkistus havaitsi että rakenteinen etenemistila (\`state.jsonl\`-aikaleima) ei ole liikahtanut yli ${stale_after_log}s. Tmux-sessio tapettiin ja ajo viimeisteltiin \`blocked\`-tilaan, jotta yksittäinen jumi-ajo ei tukkisi \`GLOBAL_MAX\`-kapasiteettia loputtomiin (issue #49)."
       echo
-      echo "Siivoa ajo Studiolla: \`ssh studio '~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes'\` ja aja issue tarvittaessa uudelleen."
+      echo "Siivoa ajo koneella \`${THIS_HOST}\`: \`~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes\` ja aja issue tarvittaessa uudelleen."
     } > "$body_file"
     ( cd "$repo" && gh issue comment "$issue" --body-file "$body_file" >/dev/null 2>&1 ) || true
     rm -f "$body_file"
@@ -598,7 +654,7 @@ while IFS= read -r repo_json; do
       fi
       echo "$(date -u +%FT%TZ) poller: cleaning $CL_SESSION for repo=$CLEAN_REPO issue=$CLEAN_ISSUE remote=$REMOTE" >> "$LOG"
       tmux new-session -d -s "$CL_SESSION" \
-        "'$AUTO_CLEAN' --repo '$CLEAN_REPO' --issue '$CLEAN_ISSUE' --remote '$REMOTE' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+        "'$AUTO_CLEAN' --repo '$CLEAN_REPO' --issue '$CLEAN_ISSUE' --remote '$REMOTE' 2>&1 | tee -a '$RUNS_LOG'"
     done < <(scan_clean "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
     # ----- Restart timed-out runs FIRST (before picking new issues) ----------
@@ -619,7 +675,7 @@ while IFS= read -r repo_json; do
       fi
       echo "$(date -u +%FT%TZ) poller: restarting $R_SESSION for run=$RESTART_DIR remote=$REMOTE" >> "$LOG"
       tmux new-session -d -s "$R_SESSION" \
-        "RUN_ISSUES_AUTO=1 '$ORCH' --restart '$RESTART_DIR' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+        "RUN_ISSUES_AUTO=1 '$ORCH' --restart '$RESTART_DIR' 2>&1 | tee -a '$RUNS_LOG'"
     done < <(scan_timed_out "$REPO_PATH" "$REMOTE")
 
     # ----- Continue answered clarifications --------------------------------
@@ -640,7 +696,7 @@ while IFS= read -r repo_json; do
       fi
       echo "$(date -u +%FT%TZ) poller: continuing $C_SESSION for run=$CONTINUE_DIR remote=$REMOTE" >> "$LOG"
       tmux new-session -d -s "$C_SESSION" \
-        "RUN_ISSUES_AUTO=1 '$ORCH' --continue '$CONTINUE_DIR' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+        "RUN_ISSUES_AUTO=1 '$ORCH' --continue '$CONTINUE_DIR' 2>&1 | tee -a '$RUNS_LOG'"
     done < <(scan_answered "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
     # ----- Pick a new candidate issue (per remote) -------------------------
@@ -701,6 +757,6 @@ while IFS= read -r repo_json; do
     # every gh call, git push, fetch, and lock — the entire (issue → PR) chain
     # routes to the source org.
     tmux new-session -d -s "$SESSION" \
-      "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto RUN_ISSUES_LABELS_CSV='$LABELS_CSV' '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '${HOME}/Library/Logs/run-issues-poller.runs.log'"
+      "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto RUN_ISSUES_LABELS_CSV='$LABELS_CSV' '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '$RUNS_LOG'"
   done
 done < <(jq -c '.repos[]?' "$WATCHLIST")
