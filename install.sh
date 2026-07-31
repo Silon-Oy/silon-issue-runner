@@ -217,6 +217,64 @@ plan_link_dir() {
   fi
 }
 
+# plan_scripts_binding — make $CLAUDE_HOME/scripts/run-issues resolve to this
+# package.
+#
+# The slash commands and prompts/02-implementer.md invoke
+# "$HOME/.claude/scripts/run-issues/<script>" by absolute path. In the dotfiles
+# install model that path already exists (dotfiles symlinks the whole scripts
+# tree and the package is mounted inside it as a submodule); on any other
+# machine nothing creates it, and a clean clone would install slash commands
+# pointing at a script that is not there.
+#
+# The binding is therefore conditional, never unconditional: if the path
+# already works it is left alone whoever provides it, and it is only created
+# where the package can own it outright.
+plan_scripts_binding() {
+  local scripts_dir="$CLAUDE_HOME/scripts"
+  local bind="$scripts_dir/run-issues"
+  local real
+
+  # Already usable — including the dotfiles + submodule shape, where the path
+  # is provided through a directory symlink this package must not touch.
+  if [ -x "$bind/orchestrate.sh" ]; then
+    real="$(resolve_dir "$bind" 2>/dev/null || true)"
+    if [ "$real" = "$PKG_ROOT" ]; then
+      plan_add skip "$bind already resolves to this package"
+    else
+      plan_add skip "$bind is provided by another package instance"
+      warn "$bind resolves to ${real:-an unreadable path}, not $PKG_ROOT; left untouched"
+    fi
+    return 0
+  fi
+
+  if [ ! -e "$scripts_dir" ] && [ ! -L "$scripts_dir" ]; then
+    plan_add mkdir "$scripts_dir"
+    plan_add link "$PKG_ROOT" "$bind"
+    return 0
+  fi
+
+  # A directory symlink here belongs to whoever created it, and the run-issues
+  # path behind it does not work — writing into it would place this package's
+  # binding inside a foreign tree.
+  if [ -L "$scripts_dir" ]; then
+    refuse "$scripts_dir is a directory symlink -> $(readlink "$scripts_dir") but does not provide run-issues/orchestrate.sh. Fix that tree, or replace the symlink with a real directory and re-run install.sh."
+    return 0
+  fi
+  if [ ! -d "$scripts_dir" ]; then
+    refuse "$scripts_dir exists but is not a directory. Move it aside, then re-run install.sh."
+    return 0
+  fi
+
+  if is_pkg_owned_link "$bind"; then
+    plan_add relink "$PKG_ROOT" "$bind"
+  elif [ -e "$bind" ] || [ -L "$bind" ]; then
+    refuse "$bind exists and is not owned by this package. Move it aside, then re-run install.sh."
+  else
+    plan_add link "$PKG_ROOT" "$bind"
+  fi
+}
+
 print_plan() {
   local entry action a b
   [ "${#PLAN[@]}" -gt 0 ] || return 0
@@ -340,6 +398,7 @@ main() {
   for d in $LINKED_DIRS; do
     plan_link_dir "$d"
   done
+  plan_scripts_binding
 
   # The refusal gate sits between planning and applying: no refusal can ever
   # coexist with a partial write.

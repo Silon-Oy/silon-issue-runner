@@ -94,9 +94,23 @@ for d in agents commands; do
 done
 
 if [ -d "$H1/.claude/agents" ] && [ ! -L "$H1/.claude/agents" ]; then
-  echo "PASS: case1 ~/.claude/agents is a real directory, not a directory symlink"
+  echo "PASS: case1 \$HOME/.claude/agents is a real directory, not a directory symlink"
 else
-  echo "FAIL: case1 ~/.claude/agents is not a real directory"; FAIL=1
+  echo "FAIL: case1 \$HOME/.claude/agents is not a real directory"; FAIL=1
+fi
+
+# ---- Case 2: the scripts binding the slash commands depend on ----
+# commands/{run-issues,cleanup-run,pr-watch}.md and prompts/02-implementer.md
+# all invoke "$HOME/.claude/scripts/run-issues/<script>". On maintainer's machine
+# dotfiles creates that path; on any other machine nothing does, so a clean
+# clone would install commands pointing at a script that does not exist. This
+# assertion is the acceptance criterion "clone -> install.sh -> /run-issues
+# works" reduced to something a test can check.
+if [ -x "$H1/.claude/scripts/run-issues/orchestrate.sh" ]; then
+  echo "PASS: case2 \$HOME/.claude/scripts/run-issues/orchestrate.sh is reachable"
+else
+  echo "FAIL: case2 the slash commands' script path does not resolve after install"
+  FAIL=1
 fi
 
 # ---- Case 3: a foreign file survives byte-identically ----
