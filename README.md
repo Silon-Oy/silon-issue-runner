@@ -527,7 +527,3 @@ testit voi ajaa samalla koneella jolla poller pyörii.
 - [`docs/diagrams/`](docs/diagrams) — mermaid-kaaviot tilakoneista, poluista ja
   konfiguraation resolvoinnista.
 - [`examples/`](examples) — watchlistin ja `poller.env`:n itsedokumentoivat mallit.
-
-Silonin sisäinen Notion-käyttöohje (Työohjeet → AI → Claude Code → Issue-pohjainen
-kehitysworkflow) kuvaa saman workflow'n organisaation näkökulmasta. Linkkiä ei ole tässä
-tiedostossa, koska pääsy siihen ei ole kaikilla tämän repon lukijoilla.
