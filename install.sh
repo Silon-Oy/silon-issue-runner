@@ -464,19 +464,23 @@ apply_plan() {
 # Reporting
 # ---------------------------------------------------------------------------
 
+# The reason a tool is needed is written here (it is installer-specific), while
+# the command that installs it comes from preflight_install_hint — the same
+# source the orchestrator's S0 gate quotes, so a user who reads one message and
+# then hits the other is told to type the same thing.
 report_preflight() {
   local tb
   log "dependencies (advisory — a missing tool never blocks the install):"
-  log "  $(preflight_report_tool git required 'needed to update the package (submodule pin)' || true)"
-  log "  $(preflight_report_tool gh required 'GitHub CLI — orchestrate.sh and pr-watch.sh depend on it' || true)"
-  log "  $(preflight_report_tool jq required 'JSON handling in orchestrate.sh, poller.sh and pr-watch.sh' || true)"
-  log "  $(preflight_report_tool npx required 'the default RUN_ISSUES_CLAUDE_CMD invokes the Claude CLI via npx' || true)"
-  log "  $(preflight_report_tool tmux optional 'only the pollers need it' || true)"
+  log "  $(preflight_report_tool git required "needed to update the package (submodule pin); install: $(preflight_install_hint git)" || true)"
+  log "  $(preflight_report_tool gh required "GitHub CLI — orchestrate.sh and pr-watch.sh depend on it; install: $(preflight_install_hint gh)" || true)"
+  log "  $(preflight_report_tool jq required "JSON handling in orchestrate.sh, poller.sh and pr-watch.sh; install: $(preflight_install_hint jq)" || true)"
+  log "  $(preflight_report_tool npx required "the default RUN_ISSUES_CLAUDE_CMD invokes the Claude CLI via npx; install: $(preflight_install_hint npx)" || true)"
+  log "  $(preflight_report_tool tmux optional "only the pollers need it; install: $(preflight_install_hint tmux)" || true)"
   tb="$(preflight_timeout_bin)"
   if [ -n "$tb" ]; then
     log "  ok: $tb"
   else
-    log "  MISSING (optional): timeout/gtimeout — claude calls would run unbounded"
+    log "  MISSING (optional): timeout/gtimeout — claude calls would run unbounded; install: $(preflight_install_hint timeout)"
   fi
 }
 

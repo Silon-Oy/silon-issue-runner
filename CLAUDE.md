@@ -141,6 +141,12 @@ Riippuvuustarkistus (`lib/preflight.sh`) on asentajassa **neuvoa-antava**: puutt
 Lähde: `orchestrate.sh` (otsikkokommentti + `enter_state`-kutsut) ja
 `docs/diagrams/run-issues-state-machine.mmd`.
 
+**S0 Preflight** — pakollisten riippuvuuksien portti ennen S1:tä (git, gh, jq, gh-kirjautuminen,
+claude-CLI). Puute ⇒ exit 8 ennen kuin mitään on lukittu, claimattu tai luotu; stderr-viesti
+nimeää korjauskomennon. Puuttuva timeout-binääri on vain varoitus (ajo jatkuu kuten ennenkin).
+Portti on top-levelissä, joten se koskee kaikkia neljää moodia (start / `--resume` / `--restart` /
+`--continue`). Ohitus: `RUN_ISSUES_SKIP_PREFLIGHT=1`.
+
 **Vaihe A** — S1 PickIssue → S2 Lock → S3 Claim → S4 Worktree → S5 DBClone → S6 CycleReview
 
 **Review-portti (S7)** — auto-tilassa päätös tehdään in-process; interaktiivisessa tilassa
@@ -180,6 +186,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | 5 | Estynyt ennen implementeriä tai siinä — db-clone, S7b tai S7c epäonnistui, tai implementer palautti BLOCKED |
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) timeouttasi — ajo finalisoitu `timed_out`, kelpaa `--restart`iin |
+| 8 | Puuttuva pakollinen riippuvuus — S0-preflight-portti pysäytti ajon ennen S1:tä (ei lukkoa, ei claimia, ei run-diriä); stderr-viesti nimeää korjauskomennon |
 | 10 | Odottaa ihmisen katselmointia — jatka `--resume` |
 | 11 | Odottaa tarkennusta — cycle review palautti NEEDS_CLARIFICATION; ajo finalisoitu `awaiting_clarification`, pollerin `scan_answered` jatkaa `--continue`lla |
 
@@ -200,7 +207,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `poller-config.sh` | Pollerien host-portti ja watchlistin resolvointi puhtaina funktioina. Erillinen lib siksi, että molemmat pollerit tarvitsevat saman päätöksen ja se on testattava **sourcaamalla** — poller itse exittaa source-hetkellä vieraalla koneella |
 | `pr-watch-lib.sh` | PR:n luokittelu- ja merge-päätöslogiikka (irrotettu testattavaksi) |
-| `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, doctor-komento (#7) tekee samasta lähteestä fataalin |
+| `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, orkestraattorin S0-portti (#7) tekee samasta lähteestä fataalin (exit 8). Korjauskomennot tulevat yhdestä lähteestä (`preflight_install_hint`) |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
@@ -231,6 +238,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `RUN_ISSUES_MAX_IMAGE_BYTES` | `10485760` | Yksittäisen kuvan kokokatto |
 | `RUN_ISSUES_IMAGE_TIMEOUT` | `60` | Kuvalatauksen timeout |
 | `RUN_ISSUES_REPO_SLUG_MAX` | `40` | Repo-slugin pituuskatto ajotunnisteissa |
+| `RUN_ISSUES_SKIP_PREFLIGHT` | `0` | `1` = ohita S0-portti. Hätävara: portti ei saa koskaan olla syy siihen, ettei ajo käynnisty toimivalla koneella |
 
 ### Poller
 

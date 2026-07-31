@@ -1,6 +1,10 @@
 %% /run-issues orchestrator — state machine
 %% Source of truth for orchestrate.sh control flow. Update both together.
 %%
+%% S0 is a dependency gate: every entry path passes it before any side effect,
+%% so a missing tool is reported as a missing tool instead of resurfacing later
+%% as a stuck implementer.
+%%
 %% Two-phase resume-capable machine:
 %%   Phase A (S1..S6) runs from start. Review gate (S7) either decides
 %%   automatically (RUN_ISSUES_AUTO=1) and continues to Phase B in the
@@ -11,8 +15,20 @@
 stateDiagram-v2
     [*] --> S0_Idle
 
+    %% ----- S0: preflight dependency gate (issue #7) -----
+    %% Top level, AFTER ensure_node_runtime (nvm PATH) and source_machine_env
+    %% (GITHUB_TOKEN / RUN_ISSUES_CLAUDE_CMD) and BEFORE the MODE dispatch, so it
+    %% guards start / --resume / --restart / --continue alike and cannot leave a
+    %% run-dir, lock, claim or worktree behind. Required: git, gh, jq, gh auth
+    %% token (offline; NOT `gh auth status`, which would call the API), claude
+    %% CLI (--version probe only when RUN_ISSUES_CLAUDE_CMD is the default npx
+    %% form). timeout/gtimeout is a warning only — behaviour must not change.
+    %% RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses.
+    S0_Idle --> S0_Preflight: trigger (cmd or poller)
+    S0_Preflight --> [*]: missing required dependency (rc=8, fix command on stderr)
+
     %% ----- Phase A: pick → cycle-review -----
-    S0_Idle --> S1_PickIssue: trigger (cmd or poller)
+    S0_Preflight --> S1_PickIssue: all required present
     S1_PickIssue --> S2_Lock: candidate found
     S1_PickIssue --> [*]: no candidate (rc=2)
 

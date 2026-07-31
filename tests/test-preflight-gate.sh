@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# test-preflight-gate.sh — the S0 dependency gate in orchestrate.sh (issue #7).
+#
+# The invariant: a missing dependency must be reported AS a missing dependency,
+# before the run has taken a lock, claimed the issue or created a run dir. Until
+# the gate existed, an absent claude CLI surfaced as "the implementer got stuck"
+# — a diagnosis pointing at the wrong subsystem, posted on the issue after the
+# side effects had already happened.
+#
+# Cases:
+#   B1  overridden RUN_ISSUES_CLAUDE_CMD that does not exist -> exit 8 + fix cmd
+#   B2  gh present but not authenticated -> exit 8 + `gh auth login`
+#   B3  default (npx) claude command whose package is absent (npx exits 127) —
+#       the production failure mode that `command -v npx` cannot see
+#   C   after B1-B3: no run dir, no lock, no worktree, no issue assignment
+#   B4  a complete environment -> the gate is transparent (run proceeds to the
+#       normal "no candidate issue" exit 2)
+#   B5  RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses the gate even when claude is broken
+#   B6  GitHub App mode downgrades the missing personal login to a warning
+#
+# B1 also pins the counterpart of the probe/have split: an overridden claude
+# command must be tested for existence only, never executed. Executing it would
+# make the gate fire calls the caller never asked for — the concrete regression
+# that a naive `$RUN_ISSUES_CLAUDE_CMD --version` caused in the mocked runs of
+# test-clarification-loop-cap.sh and test-restart-budget.sh.
+#
+# Offline and machine-independent: gh, npx and the claude CLI are PATH stubs,
+# HOME is a throwaway dir (so the machine-local env file is never sourced) and
+# the lock root is redirected into the work dir.
+#
+# Run: bash tests/test-preflight-gate.sh
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH="$HERE/../orchestrate.sh"
+
+WORK=$(mktemp -d -t preflight-gate.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+FAIL=0
+ok()   { echo "PASS $1"; }
+bad()  { echo "FAIL $1"; FAIL=1; }
+
+BIN="$WORK/bin"
+mkdir -p "$BIN"
+GH_LOG="$WORK/gh.log"
+: > "$GH_LOG"
+
+# gh stub: records argv, answers `auth token` with $GH_AUTH_RC (so a test can
+# simulate a machine that never ran `gh auth login`) and returns an empty issue
+# list, i.e. "no candidate".
+cat > "$BIN/gh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$GH_LOG"
+if [ "\${1:-}" = "auth" ] && [ "\${2:-}" = "token" ]; then
+  [ "\${GH_AUTH_RC:-0}" = "0" ] && printf 'gho_stubtoken\n'
+  exit "\${GH_AUTH_RC:-0}"
+fi
+exit 0
+SH
+chmod +x "$BIN/gh"
+
+# A working claude CLI and a working npx (individual cases override npx).
+printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/claude"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/npx"
+chmod +x "$BIN/claude" "$BIN/npx"
+
+npx_exits() {  # npx_exits <code>
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$BIN/npx"
+  chmod +x "$BIN/npx"
+}
+
+# The target repo. orchestrate.sh requires a .git dir; no remote is needed
+# because gh is stubbed.
+REPO="$WORK/repo"
+git init -q "$REPO"
+
+export HOME="$WORK/home"
+mkdir -p "$HOME"
+export PATH="$BIN:$PATH"
+export RUN_ISSUES_LOCK_ROOT="$WORK/locks"
+export RUN_ISSUES_AUTO=1
+
+RC=0
+ERR="$WORK/err.txt"
+run_orch() {  # run_orch <args...> — records rc in $RC and stderr in $ERR
+  "$ORCH" "$@" >/dev/null 2>"$ERR"
+  RC=$?
+}
+
+says() {  # says <needle> <tag>
+  if grep -qF -- "$1" "$ERR"; then
+    ok "$2"
+  else
+    bad "$2 — stderr was: $(tr '\n' '|' < "$ERR")"
+  fi
+}
+
+rc_is() {  # rc_is <expected> <tag>
+  if [ "$RC" -eq "$1" ]; then
+    ok "$2"
+  else
+    bad "$2 — expected exit $1, got $RC"
+  fi
+}
+
+rc_is_not() {  # rc_is_not <unexpected> <tag>
+  if [ "$RC" -ne "$1" ]; then
+    ok "$2"
+  else
+    bad "$2 — exit $RC was not supposed to happen"
+  fi
+}
+
+# --- B1: an overridden claude command that does not exist ------------------
+export RUN_ISSUES_CLAUDE_CMD="$WORK/no-such-claude"
+run_orch "$REPO" 42
+rc_is 8 "B1 missing claude CLI exits 8"
+says 'npm i -g @anthropic-ai/claude-code' "B1 names the fix command"
+says 'nothing was locked, claimed or created' "B1 states that no work started"
+
+# --- B2: gh present but not authenticated ---------------------------------
+export RUN_ISSUES_CLAUDE_CMD="$BIN/claude"
+GH_AUTH_RC=1 run_orch "$REPO" 42
+rc_is 8 "B2 unauthenticated gh exits 8"
+says 'gh auth login' "B2 names the fix command"
+
+# --- B3: default npx invocation, package not installed --------------------
+# The package-missing case: npx itself resolves, so only running it reveals the
+# failure. This is the exact chain that used to end in a wrong issue comment.
+unset RUN_ISSUES_CLAUDE_CMD
+npx_exits 127
+run_orch "$REPO" 42
+rc_is 8 "B3 default command with a missing package exits 8"
+says '@anthropic-ai/claude-code' "B3 names the missing package"
+npx_exits 0
+
+# --- C: a failed gate leaves nothing behind -------------------------------
+if [ -d "$REPO/.claude/run-issues" ]; then
+  bad "C a failed gate created a run dir"
+else
+  ok "C no run dir was created"
+fi
+if [ -d "$RUN_ISSUES_LOCK_ROOT" ] && [ -n "$(ls -A "$RUN_ISSUES_LOCK_ROOT" 2>/dev/null)" ]; then
+  bad "C a failed gate left a lock: $(ls -A "$RUN_ISSUES_LOCK_ROOT")"
+else
+  ok "C no lock was taken"
+fi
+wt_count=$(git -C "$REPO" worktree list | wc -l | tr -d ' ')
+if [ "$wt_count" = "1" ]; then
+  ok "C no worktree was created"
+else
+  bad "C worktree list has $wt_count entries"
+fi
+if grep -qE -- '--add-assignee|issue edit' "$GH_LOG"; then
+  bad "C the issue was claimed: $(grep -E -- '--add-assignee|issue edit' "$GH_LOG")"
+else
+  ok "C the issue was never claimed"
+fi
+
+# --- B4: a complete environment — the gate must be transparent ------------
+export RUN_ISSUES_CLAUDE_CMD="$BIN/claude"
+run_orch "$REPO" poll
+rc_is 2 "B4 a healthy environment reaches the normal poll exit (no candidate issue)"
+says 'S0_Preflight ok' "B4 the gate reports itself once"
+if [ -d "$REPO/.claude/run-issues" ]; then
+  bad "B4 poll with no candidate created a run dir"
+else
+  ok "B4 poll with no candidate created no run dir"
+fi
+
+# --- B5: the escape hatch -------------------------------------------------
+# The gate must never be the reason a machine cannot start a run: a broken
+# claude command plus RUN_ISSUES_SKIP_PREFLIGHT=1 reaches the normal flow.
+export RUN_ISSUES_CLAUDE_CMD="$WORK/no-such-claude"
+RUN_ISSUES_SKIP_PREFLIGHT=1 run_orch "$REPO" poll
+rc_is 2 "B5 RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses the gate"
+says 'S0_Preflight skipped' "B5 the bypass is logged"
+
+# --- B6: GitHub App mode downgrades the gh-auth finding -------------------
+# In App mode the runs authenticate with an installation token, so a missing
+# personal login must not be fatal.
+export RUN_ISSUES_CLAUDE_CMD="$BIN/claude"
+PEM="$WORK/app.pem"
+printf 'not-a-real-key\n' > "$PEM"
+chmod 600 "$PEM"
+GH_AUTH_RC=1 \
+RUN_ISSUES_GITHUB_APP_ID=1 \
+RUN_ISSUES_GITHUB_APP_INSTALLATION_ID=2 \
+RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$PEM" \
+  run_orch "$REPO" poll
+rc_is_not 8 "B6 App mode does not make a missing personal login fatal"
+says 'WARNING' "B6 the finding is reported as a warning"
+says 'gh auth login' "B6 the warning still carries the fix command"
+
+echo "----------------------------------------"
+[ "$FAIL" -eq 0 ] && echo "preflight-gate: all passed" || echo "preflight-gate: FAILURES"
+[ "$FAIL" -eq 0 ]

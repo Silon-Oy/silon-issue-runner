@@ -16,6 +16,15 @@
 # finalizes the run as blocked/env_bootstrap_failed and hands it to a human
 # instead of letting the implementer burn its whole timeout budget silently.
 #
+# S0 (preflight gate) runs before the MODE dispatch, so all four entry paths
+# (start, --resume, --restart, --continue) are guarded alike. Its position is
+# forced by three constraints: it must run AFTER ensure_node_runtime (a poller
+# launches this script in a tmux server without the interactive nvm PATH, so an
+# earlier npx check would report a false negative on every poller run) and AFTER
+# source_machine_env (which may supply GITHUB_TOKEN and RUN_ISSUES_CLAUDE_CMD),
+# but BEFORE phase_a — which creates the run dir before taking the lock, so any
+# later gate would leave state behind on a failure.
+#
 # S7c (provision-test-env) is an opt-in, target-repo-owned hook that provisions
 # whatever external resources a run's tests need (a migrated test database,
 # Redis, …) with run-id isolation, and injects their addresses as KEY=VALUE env
@@ -36,6 +45,8 @@
 #                           created PR, if present on the issue (default
 #                           "auto-merge"). Enables the autoflow chain
 #                           issue -> PR -> pr-watch auto-merge.
+#   RUN_ISSUES_SKIP_PREFLIGHT  "1" = skip the S0 dependency gate (escape hatch;
+#                           the gate must never be the reason a run cannot start)
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
@@ -49,6 +60,9 @@
 #   6   PR open failed
 #   7   implementer (S8) timed out — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
+#   8   missing required dependency — the S0 preflight gate refused to start the
+#       run; nothing was locked, claimed or created. The stderr message names
+#       the missing tool AND its fix command.
 #  10   awaiting human review — invoke --resume to continue
 #  11   awaiting clarification — cycle review returned NEEDS_CLARIFICATION; the
 #       run is finalized as awaiting_clarification with the waiting label and an
@@ -187,6 +201,8 @@ source "$SCRIPT_DIR/lib/gitignore.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/claude-call.sh
 source "$SCRIPT_DIR/lib/claude-call.sh"
+# shellcheck source=lib/preflight.sh
+source "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=lib/hook-runner.sh
 source "$SCRIPT_DIR/lib/hook-runner.sh"
 # shellcheck source=lib/env-bootstrap.sh
@@ -344,6 +360,78 @@ source_machine_env() {
   set -eu
 }
 source_machine_env
+
+# ---------- S0: preflight dependency gate (issue #7) ----------
+# A missing external dependency used to be diagnosed as something else entirely:
+# an absent claude CLI made npx exit 127, which left an empty cycle-review output,
+# which became an UNKNOWN decision, which finally posted "the implementer got
+# stuck" on the issue — after the run had already taken a lock, claimed the issue
+# and created a worktree. This gate moves the observation forward in time to the
+# last moment at which nothing has happened yet.
+#
+# Placement is forced (see the header): after ensure_node_runtime and
+# source_machine_env, before the MODE dispatch and therefore before phase_a
+# creates the run dir.
+#
+# All output goes through log() to stderr. The poller pipes this script through
+# `tee`, so stderr is the only channel that reaches the runs log — and `tee`
+# swallows the exit code, which makes the message itself the diagnosis.
+preflight_gate() {
+  if [ "${RUN_ISSUES_SKIP_PREFLIGHT:-0}" = "1" ]; then
+    log "S0_Preflight skipped (RUN_ISSUES_SKIP_PREFLIGHT=1)"
+    return 0
+  fi
+
+  # Probing only the default invocation is what keeps the gate honest: an
+  # overridden RUN_ISSUES_CLAUDE_CMD is the user's own driver, and running
+  # `--version` on it would both guess its flags and fire a call the caller
+  # never asked for.
+  local mode="have"
+  if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
+    mode="probe"
+  fi
+
+  local findings="" rc=0
+  # shellcheck disable=SC2086
+  findings=$(preflight_gate_report "$mode" $RUN_ISSUES_CLAUDE_CMD) || rc=$?
+
+  # gh authentication is policy, not a fact about a tool, so it lives here
+  # rather than in the pure module. `gh auth token` is deliberate: `gh auth
+  # status` calls the API, which would make a network outage a new way for a
+  # run to fail to start. Token validity and scopes are a deeper check that
+  # belongs to an explicit doctor command, not to a per-run gate.
+  if preflight_have gh && ! gh auth token >/dev/null 2>&1; then
+    local auth_hint
+    auth_hint="$(preflight_install_hint gh-auth)"
+    if gha_enabled; then
+      # In App mode the runs authenticate with an installation token, so a
+      # missing personal login only affects remotes the App does not cover.
+      findings="${findings}${findings:+$'\n'}MISSING (optional): gh auth — ${auth_hint} (GitHub App mode is enabled; personal login is only needed for non-App remotes)"
+    else
+      findings="${findings}${findings:+$'\n'}MISSING (required): gh auth — ${auth_hint}"
+      rc=2
+    fi
+  fi
+
+  local line
+  if [ "$rc" -eq 2 ]; then
+    log "S0_Preflight FAILED — required dependencies missing; nothing was locked, claimed or created:"
+    while IFS= read -r line; do
+      [ -n "$line" ] && log "  $line"
+    done <<< "$findings"
+    log "fix the above and re-run (exit 8)"
+    exit 8
+  fi
+
+  if [ -n "$findings" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && log "WARNING: $line"
+    done <<< "$findings"
+  fi
+  log "S0_Preflight ok (claude check: $mode)"
+  return 0
+}
+preflight_gate
 
 # ---------- globals (populated as we progress; also restored on resume) ----------
 ISSUE_NUM=""

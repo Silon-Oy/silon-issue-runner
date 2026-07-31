@@ -57,3 +57,100 @@ preflight_report_tool() {
   fi
   return 1
 }
+
+# preflight_install_hint <key> — echo the fix command for a dependency.
+#   key = git | gh | jq | npx | claude | gh-auth | timeout | tmux
+# Returns 1 without output for an unknown key.
+# Single source of truth for fix commands: install.sh reports them advisorily
+# and the orchestrator's S0 gate prints them fatally, so a wording change must
+# not have to be repeated in two files. A `case` (not an associative array)
+# keeps this working on the bash 3.2 that ships with macOS.
+preflight_install_hint() {
+  case "$1" in
+    git)     printf 'brew install git\n' ;;
+    gh)      printf 'brew install gh\n' ;;
+    jq)      printf 'brew install jq\n' ;;
+    npx)     printf 'brew install node (or nvm install --lts)\n' ;;
+    claude)  printf 'npm i -g @anthropic-ai/claude-code\n' ;;
+    gh-auth) printf 'gh auth login\n' ;;
+    timeout) printf 'brew install coreutils\n' ;;
+    tmux)    printf 'brew install tmux\n' ;;
+    *)       return 1 ;;
+  esac
+}
+
+# preflight_probe_claude <cmd-token...> — run `<cmd-token...> --version` and
+# return its exit code (0 usable, 127 missing, 124 wedged). Prints nothing.
+#
+# The only function in this module that EXECUTES the probed command, and it
+# earns that exception: the default invocation `npx --no-install
+# @anthropic-ai/claude-code` exits 127 when the package is not installed even
+# though `npx` itself is on PATH, so `command -v` cannot see the failure that
+# actually breaks a run. stdin is closed so a CLI that decides to prompt cannot
+# hang the caller, and the timeout binary (when present) bounds the call.
+preflight_probe_claude() {
+  local tb
+  tb=$(preflight_timeout_bin)
+  if [ -n "$tb" ]; then
+    "$tb" 20 "$@" --version >/dev/null 2>&1 </dev/null
+  else
+    "$@" --version >/dev/null 2>&1 </dev/null
+  fi
+}
+
+# preflight_gate_report <mode> <claude-cmd-token...>
+#   mode = probe | have
+# Prints ONLY findings (one per line, preflight_report_tool's format) so that a
+# silent result means "nothing to report". Returns:
+#   0 — no required dependency is missing (optional findings may still print)
+#   2 — at least one required dependency is missing
+#
+# The mode argument encodes who owns the claude command. `probe` is for the
+# default npx invocation, whose silent 127 is the failure this gate exists to
+# catch. `have` is for a user-supplied RUN_ISSUES_CLAUDE_CMD: an override is an
+# explicit claim about a private driver whose `--version` semantics we must not
+# guess (and must not execute — a mock would see an uninstrumented call).
+#
+# Severity is a fact of the dependency, not of the caller: git/gh/jq/claude are
+# required because no run can complete without them, while a missing timeout
+# binary only degrades claude calls to unbounded — behaviour that predates this
+# gate and must not become fatal.
+preflight_gate_report() {
+  local mode="$1"
+  shift
+
+  local fatal=0 cmd line rc
+
+  for cmd in git gh jq; do
+    rc=0
+    line=$(preflight_report_tool "$cmd" required "$(preflight_install_hint "$cmd")") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf '%s\n' "$line"
+      fatal=1
+    fi
+  done
+
+  if [ "$mode" = "probe" ]; then
+    if ! preflight_have npx; then
+      printf 'MISSING (required): npx — %s\n' "$(preflight_install_hint npx)"
+      fatal=1
+    elif ! preflight_probe_claude "$@"; then
+      printf 'MISSING (required): @anthropic-ai/claude-code — %s\n' "$(preflight_install_hint claude)"
+      fatal=1
+    fi
+  else
+    rc=0
+    line=$(preflight_report_tool "${1:-}" required "$(preflight_install_hint claude)") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf '%s\n' "$line"
+      fatal=1
+    fi
+  fi
+
+  if [ -z "$(preflight_timeout_bin)" ]; then
+    printf 'MISSING (optional): timeout/gtimeout — %s\n' "$(preflight_install_hint timeout)"
+  fi
+
+  [ "$fatal" -eq 0 ] || return 2
+  return 0
+}

@@ -15,7 +15,8 @@
 #   1  usage error
 #   3  per-issue lock held by another run — safe to retry on a later tick
 #   4  any completed run exists (PR likely open) — labelled auto-clean-skipped
-#   5  no local run-dirs for this issue (likely cross-machine) — ssh hint posted
+#   5  no local run-dirs for this issue (likely cross-machine) — machine-agnostic
+#      cleanup hint posted
 #   6  cleanup-run.sh teardown failed
 #
 # Loop guard: on the non-cleanable terminal cases (4 and 5) we add the

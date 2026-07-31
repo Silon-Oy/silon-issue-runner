@@ -5,10 +5,10 @@ description: Siivoa keskenjääneen /run-issues-ajon worktree, branch, run-dir, 
 
 # /cleanup-run
 
-Helper-skripti `/run-issues`-orkestraattorin keskenjääneiden ajojen siivoukseen. Aja **kohderepon juuressa** ja **ajokoneella** — worktree, run-dir ja lukko sijaitsevat sillä koneella, jossa ajo tapahtui. Autoflow-ajot ajetaan Studiolla, joten niiden siivous on tehtävä siellä:
+Helper-skripti `/run-issues`-orkestraattorin keskenjääneiden ajojen siivoukseen. Aja **kohderepon juuressa** ja **ajokoneella** — worktree, run-dir ja lukko sijaitsevat sillä koneella, jossa ajo tapahtui. Jos ajo tehtiin toisella koneella (esim. poller-koneella), ota siihen ensin yhteys ja aja siivous siellä:
 
 ```bash
-ssh studio '~/.claude/scripts/run-issues/cleanup-run.sh --issue <N> --force --yes'
+"$HOME/.claude/scripts/run-issues/cleanup-run.sh" --issue <N> --force --yes
 ```
 
 ## Yleisimmät käyttötavat
