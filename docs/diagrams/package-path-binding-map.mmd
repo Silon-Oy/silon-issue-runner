@@ -1,28 +1,28 @@
-%% Author: Strategist
+%% Author: Architect
 %% Created: 2026-07-31
-%% Topic: claude-issue-runner -paketin polkusidonnat: repo-juuri, dotfiles-submodule, ~/.claude-symlinkit, LaunchAgentit
-%% Task: issue #3 — polkuvalinta A/B/C ja sen vaikutus olemassa oleviin viittauksiin
+%% Topic: claude-issue-runner -paketin polkusidonnat install.sh:n jalkeen
+%% Task: issue #4 — install.sh sitoo agents/, commands/ ja scripts/run-issues -polut
 
 flowchart TB
     subgraph PKG["claude-issue-runner (paketti) — rakenne C"]
         R["repo-juuri = run-issues-sisalto<br/>orchestrate.sh, poller.sh, lib/, prompts/, tests/"]
-        AG["agents/ (4 kpl)"]
-        CM["commands/ (6 kpl)"]
-        DOC["docs/diagrams/ (9 .mmd)"]
+        AG["agents/ (4 .md)"]
+        CM["commands/ (6 .md)"]
+        DOC["docs/diagrams/ (10 .mmd)"]
         EX["examples/run-issues-watchlist.example.json"]
         PL["com.claude-issue-runner.*.plist (2 kpl)"]
-        INS["install.sh (#4)"]
+        INS["install.sh + lib/preflight.sh"]
     end
 
-    subgraph DF["~/dotfiles (maintainern ymparisto)"]
+    subgraph DF["~/dotfiles (maintainern ymparisto — VAIHTOEHTO A)"]
         SUB["claude/scripts/run-issues<br/>= SUBMODULE-mount (#8, pinnattu)"]
-        WL["machine-studio/run-issues-watchlist.json<br/>(jaa dotfilesiin, maintainern sisalto)"]
-        SYNC["sync.sh:101 — glob com.*.plist<br/>VAIN dotfiles-juuresta"]
-        DFINS["install.sh:85-89 — hakemistosymlink<br/>claude/scripts"]
+        WL["machine-studio/run-issues-watchlist.json"]
+        SYNC["sync.sh:101 — glob com.*.plist VAIN dotfiles-juuresta"]
+        DFINS["install.sh:85-89 — hakemistosymlink claude/scripts"]
     end
 
     subgraph HOME["~/.claude ja ~/Library"]
-        SCR["~/.claude/scripts -> dotfiles/claude/scripts"]
+        SCR["~/.claude/scripts/run-issues<br/>A: dotfiles-symlinkin kautta<br/>B: install.sh:n oma symlink -> PKG_ROOT"]
         CAG["~/.claude/agents/ (oikea hakemisto, #5)"]
         CCM["~/.claude/commands/ (oikea hakemisto, #5)"]
         LA["~/Library/LaunchAgents/"]
@@ -31,21 +31,22 @@ flowchart TB
     subgraph REF["Viittaukset jotka EIVAT saa rikkoutua"]
         V1["commands/{run-issues,cleanup-run,pr-watch}.md<br/>$HOME/.claude/scripts/run-issues/..."]
         V2["prompts/02-implementer.md:86<br/>source $HOME/.claude/scripts/run-issues/lib/hook-runner.sh"]
-        V3["poller.sh:27,57,62-85<br/>$HOME/dotfiles/claude/scripts/run-issues/..."]
+        V3["poller.sh:25-27<br/>$HOME/dotfiles/claude/scripts/run-issues/..."]
         V4["com.*.plist:12<br/>$HOME/dotfiles/claude/scripts/run-issues/poller.sh"]
     end
 
-    R -->|"submodule add"| SUB
-    AG -->|"per-tiedosto-symlink #4"| CAG
-    CM -->|"per-tiedosto-symlink #4"| CCM
-    PL -->|"deploy opt-in #4"| LA
-    INS -.->|"omistaa"| CAG
-    INS -.->|"omistaa"| CCM
-    INS -.->|"omistaa"| LA
+    R -->|"A: submodule add"| SUB
+    R -->|"B: install.sh symlink (puhdas kone)"| SCR
+    AG -->|"per-tiedosto-symlink"| CAG
+    CM -->|"per-tiedosto-symlink"| CCM
+    PL -->|"symlink, opt-in --with-launchagents"| LA
+    INS -.->|"omistaa (INV-OWN)"| CAG
+    INS -.->|"omistaa (INV-OWN)"| CCM
+    INS -.->|"omistaa (INV-OWN)"| SCR
+    INS -.->|"omistaa (INV-OWN)"| LA
 
     DFINS --> SCR
     SUB --> SCR
-    SYNC -.->|"EI NAE submodulen sisaltoa — I2"| PL
 
     SCR --> V1
     SCR --> V2
@@ -54,7 +55,10 @@ flowchart TB
     WL -.->|"luetaan ajossa"| V3
     EX -.->|"skeeman dokumentaatio"| WL
 
+    SYNC -.->|"EI NAE submodulen sisaltoa — ratkaistu #4:ssa"| PL
+    V4 -.->|"ei resolvoidu ilman dotfilesia -> #6<br/>install.sh KIELTAYTYY deployaamasta"| INS
+
     classDef risk fill:#ffe0e0,stroke:#c00,stroke-width:2px
     classDef ok fill:#e0ffe0,stroke:#0a0
-    class SYNC,V4 risk
-    class R,SUB ok
+    class V4,V3 risk
+    class R,SUB,SCR,INS ok
