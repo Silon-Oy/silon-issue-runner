@@ -27,7 +27,7 @@ FAIL=0
 EXPECTED_FILES=(
   orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh
   cleanup-run.sh auto-clean.sh unblock-issues.sh
-  .gitignore
+  .gitignore CLAUDE.md
 )
 EXPECTED_DIRS=(lib prompts tests db-clone agents commands docs/diagrams examples)
 
