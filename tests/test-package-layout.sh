@@ -26,7 +26,7 @@ FAIL=0
 # ---- Case 1: expected entries ----
 EXPECTED_FILES=(
   orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh
-  cleanup-run.sh auto-clean.sh unblock-issues.sh
+  cleanup-run.sh auto-clean.sh unblock-issues.sh install.sh
   .gitignore CLAUDE.md
 )
 EXPECTED_DIRS=(lib prompts tests db-clone agents commands docs/diagrams examples)
@@ -45,7 +45,7 @@ for d in "${EXPECTED_DIRS[@]}"; do
     echo "FAIL: root dir missing: $d"; FAIL=1
   fi
 done
-for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh unblock-issues.sh; do
+for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh unblock-issues.sh install.sh; do
   if [ -x "$ROOT/$s" ]; then
     echo "PASS: executable: $s"
   else
