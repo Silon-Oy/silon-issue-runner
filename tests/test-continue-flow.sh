@@ -51,6 +51,14 @@ exit 0
 SH
 chmod +x "$BIN/gh"
 
+# The S0 gate requires RUN_ISSUES_CLAUDE_CMD to resolve at startup, so the mock
+# has to exist before the FIRST orchestrator run — including case (a), which is
+# rejected at the status gate long before any claude call. Exiting 127
+# reproduces the absent-binary behaviour that case relied on; the later cases
+# overwrite this with responding mocks.
+printf '#!/usr/bin/env bash\nexit 127\n' > "$BIN/claude"
+chmod +x "$BIN/claude"
+
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"
 # shellcheck source=lib/issue.sh
