@@ -25,7 +25,13 @@ RUN_ISSUES_CLAUDE_TIMEOUT="${RUN_ISSUES_CLAUDE_TIMEOUT:-3600}"
 # safety). Tests override this with a mock binary on PATH.
 # NOTE: deliberately word-split at the call site (multi-token command), hence
 # the SC2086 disables below.
-RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-npx --no-install @anthropic-ai/claude-code}"
+#
+# The default is a named constant because it is the seam the S0 preflight gate
+# uses to tell "the user accepted our invocation" from "the user supplied their
+# own driver". Only the former may be probed with --version: an override is an
+# explicit claim about a private command whose flags we must not guess.
+RUN_ISSUES_CLAUDE_CMD_DEFAULT='npx --no-install @anthropic-ai/claude-code'
+RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-$RUN_ISSUES_CLAUDE_CMD_DEFAULT}"
 
 # Optional model override. When set, passes --model <value> to the claude CLI.
 # Without this the CLI uses its configured default (currently claude-fable-5).
