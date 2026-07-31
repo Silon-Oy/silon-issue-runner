@@ -25,6 +25,7 @@ Sisältö:
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
 unblock-issues.sh              install.sh             provision-test-env.README.md
+README.md                      CLAUDE.md
 lib/       15 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
 tests/     plain-bash-testipaketti, ajuri run-all.sh
@@ -445,5 +446,16 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
 - **`commands/factory-run.md` viittaa puuttuvaan skriptiin.** Ohje kehottaa ajamaan
   `templates/factory-init.sh`-skriptin; tiedostoa ei ole tässä repossa. Joko se jäi pois
   siirrosta (#2) tai viittaus on vanhentunut.
-- **`README.md` puuttuu → #9.** Tämä tiedosto palvelee agenttia; ihmiselle suunnattu
-  asennus- ja käyttöohje on vielä kirjoittamatta.
+- **Työnjako `README.md` ↔ tämä tiedosto.** `README.md` on ihmiselle (asennus, turvamalli,
+  perehdytys), tämä tiedosto agentille (täysi tekninen referenssi). Ympäristömuuttujien täysi
+  lista on §7:ssä; README listaa niistä vain asennus- ja konfigurointiaikaisen osajoukon ja
+  viittaa tänne. Jos fakta muuttuu, **tämä tiedosto on lähde**. `tests/test-readme.sh` vartioi
+  README:n rakennetta ja johtaa exit-koodiodotuksensa suoraan skripteistä, joten uusi
+  exit-koodi ilman README-riviä on punainen testi.
+- **"maintainer" on kovakoodattu prompteihin ja komentoihin.** Nimi esiintyy seitsemässä tiedostossa
+  (`prompts/`, `commands/`, `agents/`). Parametrisointi `{{HUMAN}}`-muuttujaksi kattaisi vain
+  `prompts/`-hakemiston, koska `render_prompt` ei koske `commands/`- eikä `agents/`-tiedostoihin
+  — ne lukee Claude Code suoraan levyltä. Puoliksi parametrisoitu järjestelmä olisi huonompi
+  kuin kumpikaan puhdas vaihtoehto, joten #9 jätti tämän tietoisesti tekemättä. Toiminnallista
+  vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei nimellä
+  (`lib/issue.sh`).
