@@ -54,6 +54,10 @@ DRY_RUN=0
 QUIET=0
 WITH_LAUNCHAGENTS=0
 
+# The directory $CLAUDE_HOME/scripts/run-issues resolves to once this run's
+# plan has been applied. Set by plan_scripts_binding; empty until then.
+SCRIPTS_BINDING_TARGET=""
+
 TAB=$'\t'
 PLAN=()
 REFUSALS=()
@@ -249,8 +253,10 @@ plan_scripts_binding() {
     real="$(resolve_dir "$bind" 2>/dev/null || true)"
     if [ "$real" = "$PKG_ROOT" ]; then
       plan_add skip "$bind already resolves to this package"
+      SCRIPTS_BINDING_TARGET="$PKG_ROOT"
     else
       plan_add skip "$bind is provided by another package instance"
+      SCRIPTS_BINDING_TARGET="$real"
       warn "$bind resolves to ${real:-an unreadable path}, not $PKG_ROOT; left untouched"
     fi
     return 0
@@ -259,6 +265,7 @@ plan_scripts_binding() {
   if [ ! -e "$scripts_dir" ] && [ ! -L "$scripts_dir" ]; then
     plan_add mkdir "$scripts_dir"
     plan_add link "$PKG_ROOT" "$bind"
+    SCRIPTS_BINDING_TARGET="$PKG_ROOT"
     return 0
   fi
 
@@ -276,10 +283,12 @@ plan_scripts_binding() {
 
   if is_pkg_owned_link "$bind"; then
     plan_add relink "$PKG_ROOT" "$bind"
+    SCRIPTS_BINDING_TARGET="$PKG_ROOT"
   elif [ -e "$bind" ] || [ -L "$bind" ]; then
     refuse "$bind exists and is not owned by this package. Move it aside, then re-run install.sh."
   else
     plan_add link "$PKG_ROOT" "$bind"
+    SCRIPTS_BINDING_TARGET="$PKG_ROOT"
   fi
 }
 
@@ -297,6 +306,29 @@ plist_program() {
   raw="$(plutil -extract "ProgramArguments.$((count - 1))" raw -o - "$plist" 2>/dev/null)" || return 1
   raw="${raw//\$HOME/$HOME}"
   printf '%s' "${raw%% *}"
+}
+
+# program_resolves <program> — true when <program> is executable now, or when
+# the scripts binding this run has already planned would make it executable.
+#
+# Planning and applying are separate passes (INV-OWN, consequence 2), so on a
+# clean machine the binding that provides the plists' program exists only as a
+# plan entry at this point. A plain [ -x ] test would therefore refuse every
+# time, including the run that is about to create the very path it demands.
+#
+# Only the plists' own program prefix is forgiven; anything outside
+# $CLAUDE_HOME/scripts/run-issues/ is not this run's to promise, so it falls
+# through to a refusal — the safe direction.
+program_resolves() {
+  local program="$1" prefix="$CLAUDE_HOME/scripts/run-issues/" rel
+  [ -x "$program" ] && return 0
+  [ -n "$SCRIPTS_BINDING_TARGET" ] || return 1
+  case "$program" in
+    "$prefix"*) rel="${program#"$prefix"}" ;;
+    *)          return 1 ;;
+  esac
+  [ -n "$rel" ] || return 1
+  [ -x "$SCRIPTS_BINDING_TARGET/$rel" ]
 }
 
 # plan_launchagents — opt-in deploy of the poller plists.
@@ -331,8 +363,8 @@ plan_launchagents() {
       refuse "$name: could not read ProgramArguments; refusing to deploy an agent whose program is unknown."
       continue
     fi
-    if [ ! -x "$program" ]; then
-      refuse "$name: its program $program does not exist or is not executable. The plists still hard-code the dotfiles layout; path parametrisation is issue #6. Refusing to deploy an agent that could only fail silently."
+    if ! program_resolves "$program"; then
+      refuse "$name: its program $program is not executable and this install does not provide it. Run install.sh so that $CLAUDE_HOME/scripts/run-issues resolves to this package, or point RUN_ISSUES_CLAUDE_HOME at the home the plists reference. Refusing to deploy an agent that could only fail silently."
       continue
     fi
 
@@ -370,6 +402,10 @@ print_launchagent_instructions() {
     log "  launchctl bootout   gui/$uid/$label   # only if that label is loaded"
     log "  launchctl bootstrap gui/$uid $path"
   done
+  log ""
+  log "The pollers are host-gated: unless this machine matches the built-in"
+  log "default host list, set RUN_ISSUES_POLLER_HOSTS in"
+  log "$HOME/.config/run-issues/poller.env or they will no-op on every tick."
 }
 
 print_plan() {
@@ -496,6 +532,10 @@ main() {
   for d in $LINKED_DIRS; do
     plan_link_dir "$d"
   done
+  # Order matters: plan_scripts_binding publishes SCRIPTS_BINDING_TARGET, which
+  # plan_launchagents needs to decide whether the plists' program will resolve
+  # once this plan is applied. Reversing the two would refuse every deploy on a
+  # machine that does not already have the binding.
   plan_scripts_binding
   if [ "$WITH_LAUNCHAGENTS" -eq 1 ]; then
     plan_launchagents
