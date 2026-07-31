@@ -45,17 +45,20 @@ PKG_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # that the test suite can run against a throwaway home on the very machine
 # whose live $HOME/.claude the pollers use.
 CLAUDE_HOME="${RUN_ISSUES_CLAUDE_HOME:-$HOME/.claude}"
+LAUNCH_AGENTS_DIR="${RUN_ISSUES_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 
 # Directories whose contents this package owns file by file.
 LINKED_DIRS="agents commands"
 
 DRY_RUN=0
 QUIET=0
+WITH_LAUNCHAGENTS=0
 
 TAB=$'\t'
 PLAN=()
 REFUSALS=()
 CONFLICTS=()
+LAUNCH_LABELS=()
 
 usage() {
   cat <<'EOF'
@@ -65,13 +68,18 @@ Links this package's agents and slash commands into $HOME/.claude, file by
 file, so that they coexist with assets from other sources.
 
 Options:
-  --dry-run    Print the plan and exit without writing anything
-  --quiet      Suppress progress output; warnings, conflicts, refusals and the
-               summary are always printed
-  -h, --help   Show this help
+  --dry-run             Print the plan and exit without writing anything
+  --with-launchagents   Also deploy the poller LaunchAgent plists. Opt-in: the
+                        plists are only useful on a machine that runs the
+                        pollers. install.sh deploys the files only — the
+                        launchctl commands are printed for you to run.
+  --quiet               Suppress progress output; warnings, conflicts,
+                        refusals and the summary are always printed
+  -h, --help            Show this help
 
 Environment:
   RUN_ISSUES_CLAUDE_HOME         default: $HOME/.claude
+  RUN_ISSUES_LAUNCH_AGENTS_DIR   default: $HOME/Library/LaunchAgents
 
 Exit codes:
   0  success (or --dry-run completed)
@@ -275,6 +283,95 @@ plan_scripts_binding() {
   fi
 }
 
+# plist_program <plist> — echo the program the agent would execute, with a
+# literal $HOME expanded the way launchd's `/bin/bash -l -c` wrapper does.
+# ProgramArguments is ["/bin/bash", "-l", "-c", "<command>"], so the command is
+# the last element and the program is its first word.
+plist_program() {
+  local plist="$1" count raw
+  count="$(plutil -extract ProgramArguments raw -o - "$plist" 2>/dev/null)" || return 1
+  case "$count" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$count" -gt 0 ] || return 1
+  raw="$(plutil -extract "ProgramArguments.$((count - 1))" raw -o - "$plist" 2>/dev/null)" || return 1
+  raw="${raw//\$HOME/$HOME}"
+  printf '%s' "${raw%% *}"
+}
+
+# plan_launchagents — opt-in deploy of the poller plists.
+#
+# Deploying an agent whose program does not exist is worse than not deploying
+# it: launchd loads it, fails on every StartInterval tick and reports nothing
+# back. So an unresolvable path is a refusal, not a warning.
+plan_launchagents() {
+  local plist name program dst
+
+  if ! preflight_have plutil; then
+    refuse "plutil is not available — LaunchAgents are macOS-only. Drop --with-launchagents on this machine."
+    return 0
+  fi
+  if [ ! -d "$(dirname "$LAUNCH_AGENTS_DIR")" ]; then
+    refuse "$(dirname "$LAUNCH_AGENTS_DIR") does not exist — LaunchAgents are macOS-only. Drop --with-launchagents on this machine."
+    return 0
+  fi
+  if [ -e "$LAUNCH_AGENTS_DIR" ] && [ ! -d "$LAUNCH_AGENTS_DIR" ]; then
+    refuse "$LAUNCH_AGENTS_DIR exists but is not a directory."
+    return 0
+  fi
+  [ -d "$LAUNCH_AGENTS_DIR" ] || plan_add mkdir "$LAUNCH_AGENTS_DIR"
+
+  for plist in "$PKG_ROOT"/com.claude-issue-runner.*.plist; do
+    [ -e "$plist" ] || continue
+    name="$(basename "$plist")"
+    dst="$LAUNCH_AGENTS_DIR/$name"
+
+    program="$(plist_program "$plist" || true)"
+    if [ -z "$program" ]; then
+      refuse "$name: could not read ProgramArguments; refusing to deploy an agent whose program is unknown."
+      continue
+    fi
+    if [ ! -x "$program" ]; then
+      refuse "$name: its program $program does not exist or is not executable. The plists still hard-code the dotfiles layout; path parametrisation is issue #6. Refusing to deploy an agent that could only fail silently."
+      continue
+    fi
+
+    if is_pkg_owned_link "$dst"; then
+      if [ "$(resolve_link_target "$dst")" = "$plist" ]; then
+        plan_add skip "$dst already links to this package"
+      else
+        plan_add relink "$plist" "$dst"
+      fi
+    elif [ -e "$dst" ] || [ -L "$dst" ]; then
+      # Someone else's plist under our filename: leave it, and do not print
+      # launchctl instructions that would load it.
+      conflict "$dst is owned by another source; left untouched"
+      continue
+    else
+      plan_add link "$plist" "$dst"
+    fi
+
+    # launchd identifies an agent by Label, and tests/test-package-layout.sh
+    # holds Label == filename stem, so the stem is a safe source here.
+    LAUNCH_LABELS+=("${name%.plist}$TAB$dst")
+  done
+}
+
+print_launchagent_instructions() {
+  local entry label path uid
+  [ "${#LAUNCH_LABELS[@]}" -gt 0 ] || return 0
+  uid="$(id -u)"
+  log ""
+  log "LaunchAgent plists are in place. Loading them is left to you on purpose:"
+  log "launchd identifies an agent by its Label, not its filename, so a running"
+  log "agent with the same label must be booted out first (CLAUDE.md, §11)."
+  for entry in "${LAUNCH_LABELS[@]}"; do
+    IFS="$TAB" read -r label path <<<"$entry"
+    log "  launchctl bootout   gui/$uid/$label   # only if that label is loaded"
+    log "  launchctl bootstrap gui/$uid $path"
+  done
+}
+
 print_plan() {
   local entry action a b
   [ "${#PLAN[@]}" -gt 0 ] || return 0
@@ -376,9 +473,10 @@ print_summary() {
 parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
-      --dry-run) DRY_RUN=1 ;;
-      --quiet)   QUIET=1 ;;
-      -h|--help) usage; exit 0 ;;
+      --dry-run)           DRY_RUN=1 ;;
+      --with-launchagents) WITH_LAUNCHAGENTS=1 ;;
+      --quiet)             QUIET=1 ;;
+      -h|--help)           usage; exit 0 ;;
       *)
         err "unknown option: $1"
         usage >&2
@@ -399,6 +497,9 @@ main() {
     plan_link_dir "$d"
   done
   plan_scripts_binding
+  if [ "$WITH_LAUNCHAGENTS" -eq 1 ]; then
+    plan_launchagents
+  fi
 
   # The refusal gate sits between planning and applying: no refusal can ever
   # coexist with a partial write.
@@ -410,6 +511,7 @@ main() {
 
   if [ "$DRY_RUN" -eq 1 ]; then
     print_plan
+    print_launchagent_instructions
     print_conflicts
     print_summary
     exit 0
@@ -420,6 +522,7 @@ main() {
     exit 3
   fi
 
+  print_launchagent_instructions
   print_conflicts
   print_summary
 
