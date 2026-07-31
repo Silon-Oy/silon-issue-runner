@@ -14,6 +14,10 @@
 #   3. The legacy default is evaluated against this machine without crashing
 #   4. The legacy default's contents (the non-regression invariant)
 #   5. poller_resolve_watchlist: precedence, and no fallback for an override
+#   6. Path hygiene: no absolute user paths, no tilde expansion in code
+#   7. The dotfiles tree appears only as a named fallback
+#   8. The pollers never source the secrets env file
+#   9. examples/run-issues-poller.env.example documents real variables only
 #
 # Run: bash tests/test-poller-config.sh
 
@@ -140,6 +144,94 @@ if [ "$rc" -eq 1 ] && [ -z "$got" ]; then
   ok "case5 no candidate at all returns 1 and prints nothing"
 else
   bad "case5 no-candidate case returned rc=$rc, got='$got'"
+fi
+
+# ---- Case 6: path hygiene in both pollers ----
+POLLERS=("$ROOT/poller.sh" "$ROOT/pr-watch-poller.sh")
+
+for f in "${POLLERS[@]}"; do
+  if hits=$(grep -n '/Users/' "$f" 2>/dev/null); then
+    bad "case6 $(basename "$f") hard-codes an absolute user path:"
+    printf '%s\n' "$hits" | sed 's/^/      /'
+  else
+    ok "case6 $(basename "$f") has no hard-coded /Users/ path"
+  fi
+done
+
+# A tilde is resolved from the passwd database, not from $HOME, so in code it
+# would escape the redirected home the tests rely on — and, worse, the home the
+# operator actually configured. Two exemptions, both about text rather than
+# paths: comment lines, and lines the poller PRINTS for a human to paste into
+# their own shell, where `~/...` is the correct thing to show.
+for f in "${POLLERS[@]}"; do
+  hits=$(grep -nE '(^|[^"'"'"'$[:alnum:]_])~/' "$f" 2>/dev/null \
+         | grep -vE '^[0-9]+:[[:space:]]*#' \
+         | grep -vE '^[0-9]+:[[:space:]]*(echo|printf)[[:space:]]')
+  if [ -n "$hits" ]; then
+    bad "case6 $(basename "$f") expands a tilde in code:"
+    printf '%s\n' "$hits" | sed 's/^/      /'
+  else
+    ok "case6 $(basename "$f") expands no tilde outside comments and printed text"
+  fi
+done
+
+# ---- Case 7: the dotfiles tree is a fallback, never a primary path ----
+# Every dotfiles-derived path must go through the one named variable, so that
+# "does this still depend on the pre-package layout?" is a single-line answer.
+for f in "${POLLERS[@]}"; do
+  hits=$(grep -n 'dotfiles' "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#')
+  count=$(printf '%s' "$hits" | grep -c . )
+  if [ "$count" -eq 1 ] && printf '%s' "$hits" | grep -q 'LEGACY_DOTFILES_DIR="\${HOME}/dotfiles"'; then
+    ok "case7 $(basename "$f") reaches the dotfiles tree only via LEGACY_DOTFILES_DIR"
+  else
+    bad "case7 $(basename "$f") references dotfiles outside the named fallback:"
+    printf '%s\n' "$hits" | sed 's/^/      /'
+  fi
+done
+
+# ---- Case 8: the pollers never read the secrets env file ----
+# ~/.config/run-issues/env holds tokens and app keys. orchestrate.sh and
+# pr-watch.sh source it themselves because they need them; a poller does not,
+# and it logs copiously. The word boundary keeps RUN_ISSUES_POLLER_ENV_FILE —
+# the pollers' own, secret-free channel — from matching.
+for f in "${POLLERS[@]}"; do
+  if hits=$(grep -nE '(^|[^A-Z_])RUN_ISSUES_ENV_FILE' "$f" 2>/dev/null); then
+    bad "case8 $(basename "$f") reaches for the secrets env file:"
+    printf '%s\n' "$hits" | sed 's/^/      /'
+  else
+    ok "case8 $(basename "$f") does not read the secrets env file"
+  fi
+done
+
+# ---- Case 9: the example env file documents variables that exist ----
+# An example is the only documentation an operator reads before editing, and a
+# variable named there that nothing reads is indistinguishable from a working
+# setting that silently does nothing.
+EXAMPLE="$ROOT/examples/run-issues-poller.env.example"
+if [ ! -f "$EXAMPLE" ]; then
+  bad "case9 examples/run-issues-poller.env.example is missing"
+else
+  ok "case9 examples/run-issues-poller.env.example exists"
+
+  if hits=$(grep -n '/Users/' "$EXAMPLE" 2>/dev/null); then
+    bad "case9 the example hard-codes an absolute user path:"
+    printf '%s\n' "$hits" | sed 's/^/      /'
+  else
+    ok "case9 the example has no hard-coded /Users/ path"
+  fi
+
+  unknown=""
+  while IFS= read -r var; do
+    [ -n "$var" ] || continue
+    if ! grep -q "$var" "${POLLERS[@]}" "$LIB" 2>/dev/null; then
+      unknown="$unknown $var"
+    fi
+  done < <(grep -oE 'RUN_ISSUES_[A-Z0-9_]+' "$EXAMPLE" | sort -u)
+  if [ -n "$unknown" ]; then
+    bad "case9 the example names variables nothing reads:$unknown"
+  else
+    ok "case9 every variable the example names is read by a poller or the lib"
+  fi
 fi
 
 echo "----------------------------------------"
