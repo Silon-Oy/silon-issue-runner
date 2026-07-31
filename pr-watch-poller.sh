@@ -21,6 +21,7 @@ case "$HOST" in
   *) exit 0 ;;
 esac
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOTFILES="${HOME}/dotfiles"
 WATCHLIST="${DOTFILES}/machine-studio/run-issues-watchlist.json"
 PRWATCH="${DOTFILES}/claude/scripts/run-issues/pr-watch.sh"
@@ -48,7 +49,15 @@ GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 # untouched. Runs every tick independently of the pr-watch spawn/cap logic, so a
 # merge that closes a blocker is reflected within ~StartInterval. Non-fatal: a
 # failure in one repo must not abort the poller.
-UNBLOCK="${DOTFILES}/claude/scripts/unblock-issues.sh"
+#
+# unblock-issues.sh ships inside this package (repo root), so prefer the
+# package-local copy: it keeps working wherever the package is mounted. The
+# legacy dotfiles sibling path stays as a fallback for installs still on the
+# pre-package layout. A missing script remains a silent no-op via the guard
+# below — which is exactly why the package-local path must come first: a wrong
+# path here disables the unblock pass without any error surfacing.
+UNBLOCK="${SCRIPT_DIR}/unblock-issues.sh"
+[ -x "$UNBLOCK" ] || UNBLOCK="${DOTFILES}/claude/scripts/unblock-issues.sh"
 if [ -x "$UNBLOCK" ]; then
   while IFS= read -r unblock_repo_json; do
     up=$(jq -r '.path // empty' <<<"$unblock_repo_json")

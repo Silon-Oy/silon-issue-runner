@@ -2,7 +2,7 @@
 # Unit tests for render_prompt — guards against recursive placeholder
 # substitution (issue #1) and verifies multi-line / glob / undefined-key
 # behaviour. Run directly:
-#   bash claude/scripts/run-issues/lib/render-prompt.test.sh
+#   bash lib/render-prompt.test.sh
 
 set -uo pipefail
 

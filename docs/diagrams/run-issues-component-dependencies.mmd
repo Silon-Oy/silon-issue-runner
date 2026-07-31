@@ -17,7 +17,7 @@ flowchart TB
         UNBLOCK["unblock-issues.sh<br/>(auto-unblock pass:<br/>native blocked_by → blocked label)"]
     end
 
-    subgraph Libraries["claude/scripts/run-issues/lib/"]
+    subgraph Libraries["lib/"]
         L_LOCK["locking.sh"]
         L_ISSUE["issue.sh"]
         L_WT["worktree.sh"]
