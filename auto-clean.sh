@@ -153,21 +153,25 @@ done
 
 if [ "$total" -eq 0 ]; then
   # Cross-machine fallback: this issue has no run-dirs on this host. The
-  # resources (if any) live on another machine. Post an ssh hint and mark the
-  # issue auto-clean-skipped so we stop re-emitting it.
+  # resources (if any) live on another machine. Post a hint and mark the issue
+  # auto-clean-skipped so we stop re-emitting it.
+  #
+  # The hint names no machine on purpose. This branch runs precisely because
+  # there is no run.json here to read a host from, so any machine name would be
+  # a guess dressed up as instruction.
   log "no local run-dirs for issue #$ISSUE_NUM (remote=$REMOTE_NAME, cross-machine?)"
   if [ "$DRY_RUN" = "1" ]; then
-    log "[dry] would post cross-machine ssh hint + label $SKIPPED_LABEL"
+    log "[dry] would post cross-machine cleanup hint + label $SKIPPED_LABEL"
   else
     comment_issue "$REPO_ROOT" "$ISSUE_NUM" \
 "## auto-clean: ei paikallisia ajoresursseja
 
 Tällä koneella (\`$(hostname -s)\`) ei löytynyt issueen #$ISSUE_NUM liittyviä run-direjä (remote \`$REMOTE_NAME\`). Resurssit ovat todennäköisesti toisella koneella.
 
-Aja siivous siellä:
+Aja siivous sillä koneella, jolla ajo tehtiin (ota siihen tarvittaessa ensin yhteys):
 
 \`\`\`bash
-ssh studio '~/.claude/scripts/run-issues/cleanup-run.sh --issue $ISSUE_NUM --force --yes'
+~/.claude/scripts/run-issues/cleanup-run.sh --issue $ISSUE_NUM --force --yes
 \`\`\`
 
 Issueen on lisätty label \`$SKIPPED_LABEL\` jotta auto-clean ei poimi sitä uudelleen." \
