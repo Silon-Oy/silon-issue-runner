@@ -1,0 +1,43 @@
+%% Author: Architect
+%% Created: 2026-07-31
+%% Topic: install.sh -- plan/apply-erottelu ja kieltaytymisportit
+%% Task: issue #4 — paketin oma asennin, INV-OWN-invariantti
+
+flowchart TB
+    START(["install.sh [--dry-run] [--with-launchagents]"]) --> ARGS{"argumentit ok?"}
+    ARGS -->|ei| E1["exit 1 — usage"]
+    ARGS -->|kylla| PRE["report_preflight<br/>lib/preflight.sh — NEUVOA-ANTAVA<br/>puuttuva tyokalu ei koskaan estä asennusta"]
+
+    PRE --> P1["plan_link_dir agents"]
+    P1 --> P2["plan_link_dir commands"]
+    P2 --> P3["plan_scripts_binding"]
+    P3 --> P4{"--with-launchagents?"}
+    P4 -->|ei| GATE
+    P4 -->|kylla| P5["plan_launchagents<br/>plutil-extract + $HOME-laajennus + [ -x ]"]
+    P5 --> GATE{"REFUSALS tyhja?"}
+
+    GATE -->|ei| E2["tulosta KAIKKI refusalit<br/>exit 2 — MITAAN EI MUUTETTU"]
+    GATE -->|kylla| DRY{"--dry-run?"}
+    DRY -->|kylla| PP["print_plan<br/>exit 0"]
+    DRY -->|ei| APPLY["apply_plan<br/>mkdir / link / relink / unlink"]
+    APPLY -->|fs-virhe| E3["exit 3 — uusi ajo konvergoi"]
+    APPLY --> SUM["print_summary + launchctl-ohjeet"]
+    SUM --> C{"konflikteja?"}
+    C -->|ei| OK["exit 0"]
+    C -->|kylla| E4["exit 4 — vieraat tiedostot koskematta"]
+
+    subgraph INV["INV-OWN — jokaisen plan-funktion sisainen ehto"]
+        I1["kirjoita VAIN jos: polku puuttuu<br/>TAI on symlink jonka kohde on $PKG_ROOT:n sisalla"]
+        I2["vieras tiedosto -> CONFLICT, ei ylikirjoitusta, asennus jatkuu"]
+        I3["hakemistosymlink kohteessa -> REFUSAL (korjaus #5)"]
+    end
+
+    P1 -.-> INV
+    P2 -.-> INV
+    P3 -.-> INV
+    P5 -.-> INV
+
+    classDef refuse fill:#ffe0e0,stroke:#c00,stroke-width:2px
+    classDef ok fill:#e0ffe0,stroke:#0a0
+    class E2,E3,I3 refuse
+    class OK,PP ok
