@@ -13,7 +13,7 @@
 #   3. unblock-issues.sh resolves package-locally from pr-watch-poller.sh
 #   4. Plists: new names only, Label == filename
 #   5. Diagram references resolve and no .mmd is empty
-#   6. CLAUDE.md exists at the root
+#   6. CLAUDE.md and README.md exist at the root
 #
 # Run: bash tests/test-package-layout.sh
 
@@ -27,7 +27,7 @@ FAIL=0
 EXPECTED_FILES=(
   orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh
   cleanup-run.sh auto-clean.sh unblock-issues.sh install.sh
-  .gitignore CLAUDE.md
+  .gitignore CLAUDE.md README.md
 )
 EXPECTED_DIRS=(lib prompts tests db-clone agents commands docs/diagrams examples)
 
