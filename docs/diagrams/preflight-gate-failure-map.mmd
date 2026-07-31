@@ -1,0 +1,50 @@
+%% Author: GoodReason cycle (Strategist analysis, verified against implementation)
+%% Created: 2026-07-31
+%% Topic: Missing-dependency failure paths and where the preflight gate cuts them
+%% Task: issue #7 — preflight gate before S1
+%%
+%% Companion to run-issues-state-machine.mmd. That diagram shows WHERE S0 sits;
+%% this one shows WHY it has to exist: each missing dependency used to surface
+%% as a diagnosis pointing at an unrelated subsystem, and always after the run
+%% had already claimed the issue and created a worktree.
+flowchart TD
+    START([orchestrate.sh start]) --> NODE[ensure_node_runtime<br/>orchestrate.sh:297-315<br/>sources nvm for poller/tmux launches]
+    NODE --> ENV[source_machine_env<br/>orchestrate.sh:335-361<br/>may set GITHUB_TOKEN + RUN_ISSUES_CLAUDE_CMD]
+    ENV --> GATE{{"S0 preflight gate<br/>orchestrate.sh:379-434 — sits HERE:<br/>after nvm + env, before any side effect"}}
+
+    GATE -->|all deps present| A1[phase_a S1 PickIssue<br/>orchestrate.sh:647-650<br/>mkdir RUN_DIR + fetch_issue_json]
+    GATE -->|missing required dep| FAIL[["exit 8 + fix command to stderr<br/>no run-dir, no lock, no claim, no worktree"]]
+
+    A1 --> A2[S2 Lock<br/>orchestrate.sh:675]
+    A2 --> A3[S3 Claim]
+    A3 --> A4[S4 Worktree]
+    A4 --> A6[S6 CycleReview]
+    A6 --> A8[S8 Implementer]
+
+    subgraph TODAY ["Misdiagnosis paths the gate closes"]
+        direction TB
+        MJQ["jq missing"] --> MJQ2["orchestrate.sh:650 jq -r '.title' dies<br/>= looks like an issue-parsing bug"]
+        MCL["claude-CLI missing"] --> MCL2["npx --no-install -> rc 127<br/>claude-call.sh:33"]
+        MCL2 --> MCL3["empty .out -> CR_DECISION empty<br/>orchestrate.sh:836 -> UNKNOWN"]
+        MCL3 --> MCL4["orchestrate.sh:1797 BLOCKED*|'' branch<br/>-> exit 5 + WRONG issue comment:<br/>'implementer jäi jumiin'"]
+        MGH["gh auth missing"] --> MGH2["fails at S1/S3 with a raw gh error<br/>= looks like a permissions bug"]
+    end
+
+    A1 -.blocked by.-> MJQ
+    A1 -.blocked by.-> MGH
+    A6 -.blocked by.-> MCL
+    A8 -.blocked by.-> MCL
+
+    GATE -.->|"cuts all three chains<br/>BEFORE any side effect"| TODAY
+
+    subgraph WARN ["Warning only — behaviour must NOT change"]
+        TMO["timeout/gtimeout absent<br/>preflight_timeout_bin -> ''"] --> TMO2["claude-call.sh:81 warns,<br/>run continues unbounded"]
+    end
+    GATE -.-> WARN
+
+    classDef bad fill:#ffe0e0,stroke:#c00
+    classDef good fill:#e0ffe0,stroke:#0a0
+    classDef warn fill:#fff6d0,stroke:#c90
+    class MJQ2,MCL2,MCL3,MCL4,MGH2 bad
+    class GATE,FAIL good
+    class TMO,TMO2 warn

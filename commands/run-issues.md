@@ -38,6 +38,7 @@ echo "ORCHESTRATE_EXIT=$RC"
 | 2 | Ei kandidaatti-issueta poll-tilassa | Tulosta "Ei avoimia auto-run-issueita" ja lopeta. |
 | 3 | Lock/claim race hävitty | Joku toinen runner ajaa samaa issueta. Lopeta hiljaa. |
 | 4,5,6 | Vaihe blocked / virhe | Lue tuoreimman ajon `state.jsonl` viimeinen rivi, tulosta `blocked_reason`. |
+| 8 | Puuttuva riippuvuus — mitään ei aloitettu | Tulosta orkestraattorin virheviesti **sellaisenaan**; se sisältää korjauskomennon. Älä tulosta usagea. |
 | 1 | Käyttövirhe | Tulosta usage. |
 
 ## 3. Review gate (vain jos RC=10)
