@@ -435,10 +435,19 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
 - **`install.sh --uninstall` puuttuu.** Paketin omistamien symlinkkien poisto on tehtävä
   käsin. Omistajuuspredikaatti (symlinkin kohde paketin juuren sisällä) riittäisi sellaisenaan
   toteutukseen.
-- **`timeout`/`gtimeout`-resolvointi on kolmessa paikassa.** `lib/preflight.sh`:n
-  `preflight_timeout_bin` duplikoi logiikan, joka on jo `lib/claude-call.sh`:ssa ja
-  `orchestrate.sh`:ssa. Jälkimmäiset jätettiin koskematta, koska ne ovat orkestraattorin
-  kuumalla polulla; yhdistäminen kuuluu omaan muutokseensa.
+- **`docs/diagrams/*.mmd`-syntaksilla ei ole vartijaa, ja 5/13 diagrammia ei tällä
+  hetkellä parsiudu.** Issue #12:n valinnainen osa (`tests/test-diagrams.sh`, mmdc-pohjainen
+  SKIP-konvention mukainen syntaksitesti) jätettiin **tietoisesti tekemättä**: sen premissi
+  (diagrammit ovat valideja) osoittautui vääräksi. mermaid-cli 11.16.0:lla kaatuvat
+  `preflight-gate-failure-map`, `run-issues-auto-clean-flow` (tyhjä `%%`-erotinrivi ennen
+  deklaraatiota — mermaidin kommenttistrippausregex vaatii `[^\n]+` `%%`:n jälkeen),
+  `run-issues-component-dependencies` (lainaamaton `.` dotted-nuolen labelissa
+  `reads run.json`, rivi ~69), sekä `pr-watch-state-machine` ja
+  `run-issues-timeout-restart-sequence` (vähemmän ilmeinen state/sequence-bodyn syntaksi,
+  paikannus vaatii bisektoinnin). Vartija + näiden 5 diagrammin korjaus on oma
+  dokumentaatiohygienian muutoksensa, joka ei kuulunut #12:n δψ-refaktorointiin ja ansaitsee
+  oman katselmuksensa. Rikkinäinen diagrammi renderöityy tyhjäksi, joten korjaus on puhdasta
+  parannusta — mutta label-uudelleensanoitus muuttaa dokumentaation sisältöä.
 - **`unblock-issues.sh`:n haarautunut resolvointi.** `pr-watch-poller.sh` etsii skriptin
   ensisijaisesti paketista (`${RUN_ISSUES_HOME}/unblock-issues.sh`) ja vasta sitten vanhasta
   dotfiles-polusta. Kummankin haaran kattavaa testiä ei ole — se vaatisi resolvoinnin
