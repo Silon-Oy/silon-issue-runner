@@ -1542,11 +1542,13 @@ RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT="${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT:-1200}"
 # _resolve_timeout. Prints the `timeout --kill-after=60 N` prefix, or empty if
 # neither timeout nor gtimeout is available (then the install runs unbounded,
 # which is the pre-fix behaviour — we WARN once to make the gap visible).
+# Binary selection is delegated to preflight_timeout_bin (preflight.sh, sourced
+# at the top of this script) so timeout/gtimeout detection lives in one place.
 _resolve_env_bootstrap_timeout() {
-  if command -v timeout >/dev/null 2>&1; then
-    printf 'timeout --kill-after=60 %s' "$RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    printf 'gtimeout --kill-after=60 %s' "$RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT"
+  local tb
+  tb=$(preflight_timeout_bin)
+  if [ -n "$tb" ]; then
+    printf '%s --kill-after=60 %s' "$tb" "$RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT"
   else
     printf ''
   fi

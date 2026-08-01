@@ -10,6 +10,17 @@
 
 set -euo pipefail
 
+# preflight_timeout_bin (the single source of truth for timeout/gtimeout
+# selection) lives in preflight.sh. Source it if it is not already loaded so
+# this module stays self-contained when sourced on its own (unit tests, tools);
+# orchestrate.sh sources both and the guard makes the second load a no-op.
+if ! declare -F preflight_timeout_bin >/dev/null 2>&1; then
+  _claude_call_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=preflight.sh
+  . "$_claude_call_lib_dir/preflight.sh"
+  unset _claude_call_lib_dir
+fi
+
 # Hard wall-clock budget per claude invocation. 60 minutes accommodates
 # implementer cycles in slower repos (e.g. pnpm monorepos whose verification
 # step builds + runs tests) that otherwise time out on the first attempt and
@@ -42,15 +53,16 @@ RUN_ISSUES_CLAUDE_MODEL="${RUN_ISSUES_CLAUDE_MODEL:-}"
 
 # Path to a `timeout` binary. macOS ships `gtimeout` via coreutils;
 # fall back to a no-op wrapper that just exec's the command if no
-# timeout is available.
+# timeout is available. Binary selection is delegated to preflight_timeout_bin
+# (preflight.sh) so timeout/gtimeout detection lives in exactly one place.
 # --kill-after=60 escalates to SIGKILL 60s after the initial SIGTERM if the
 # child ignores TERM, so a wedged claude process is reaped deterministically
 # and `timeout` still reports rc=124.
 _resolve_timeout() {
-  if command -v timeout >/dev/null 2>&1; then
-    printf 'timeout --kill-after=60 %s' "$RUN_ISSUES_CLAUDE_TIMEOUT"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    printf 'gtimeout --kill-after=60 %s' "$RUN_ISSUES_CLAUDE_TIMEOUT"
+  local tb
+  tb=$(preflight_timeout_bin)
+  if [ -n "$tb" ]; then
+    printf '%s --kill-after=60 %s' "$tb" "$RUN_ISSUES_CLAUDE_TIMEOUT"
   else
     printf '' # no-op
   fi

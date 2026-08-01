@@ -77,13 +77,22 @@ WATCHLIST_CONFIG="${HOME}/.config/run-issues/watchlist.json"
 WATCHLIST_LEGACY="${LEGACY_DOTFILES_DIR}/machine-studio/run-issues-watchlist.json"
 WATCHLIST_TRIED="${RUN_ISSUES_WATCHLIST:-${WATCHLIST_CONFIG}, ${WATCHLIST_LEGACY}}"
 
+# preflight_have is the shared command-presence probe (lib/preflight.sh) behind
+# the gh/jq/tmux checks below, so tool detection lives in one place. Sourced
+# here — after the host gate, right before its first use — and unguarded like
+# the poller's other libs: a lib that failed to resolve must fail loudly, not
+# limp on with `command not found` deep inside a scan. Pure functions, no
+# top-level work.
+# shellcheck source=lib/preflight.sh
+. "${RUN_ISSUES_HOME}/lib/preflight.sh"
+
 # Hard requirements; bail fast if anything is missing.
 WATCHLIST=$(poller_resolve_watchlist "${RUN_ISSUES_WATCHLIST:-}" "$WATCHLIST_CONFIG" "$WATCHLIST_LEGACY") \
   || { echo "$(date -u +%FT%TZ) poller: watchlist missing, tried: $WATCHLIST_TRIED" >> "$LOG"; exit 0; }
 [ -x "$ORCH" ]      || { echo "$(date -u +%FT%TZ) poller: orchestrator not executable at $ORCH" >> "$LOG"; exit 0; }
-command -v gh >/dev/null     || { echo "$(date -u +%FT%TZ) poller: gh not in PATH" >> "$LOG"; exit 0; }
-command -v jq >/dev/null     || { echo "$(date -u +%FT%TZ) poller: jq not in PATH" >> "$LOG"; exit 0; }
-command -v tmux >/dev/null   || { echo "$(date -u +%FT%TZ) poller: tmux not in PATH" >> "$LOG"; exit 0; }
+preflight_have gh     || { echo "$(date -u +%FT%TZ) poller: gh not in PATH" >> "$LOG"; exit 0; }
+preflight_have jq     || { echo "$(date -u +%FT%TZ) poller: jq not in PATH" >> "$LOG"; exit 0; }
+preflight_have tmux   || { echo "$(date -u +%FT%TZ) poller: tmux not in PATH" >> "$LOG"; exit 0; }
 
 if ! jq -e . "$WATCHLIST" >/dev/null 2>&1; then
   echo "$(date -u +%FT%TZ) poller: watchlist is not valid JSON" >> "$LOG"
