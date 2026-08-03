@@ -287,14 +287,15 @@ watch_one() {
     state_event "$run_dir" "pr_merged" "pr=$pr_num"
   fi
 
-  # ----- P8b: Close linked issue when base != default branch --------------
-  # GitHub's native `Closes #N` closing keyword only fires when a PR merges
-  # into the repo's DEFAULT branch. When the orchestrator targets a non-default
-  # base_branch (e.g. a "twenty" integration branch), merging the PR leaves the
-  # linked issue OPEN. Close it explicitly. This is a REMOTE operation, so it
-  # runs BEFORE the P9 host gate — the issue must close regardless of which
-  # machine ran the job (cross-machine runs return early below). Best-effort:
-  # a failure here never changes the merge outcome.
+  # ----- P8b: Close linked issue (always, if still OPEN) ------------------
+  # GitHub's native `Closes #N` keyword only fires when a PR merges into the
+  # DEFAULT branch AND its body carries the keyword. An agent-authored PR (no
+  # keyword) or a non-default base can drop either condition, leaving the merged
+  # work open as an issue the poller could re-pick. Close it explicitly whenever
+  # it is still OPEN. This is a REMOTE operation, so it runs BEFORE the P9 host
+  # gate — the issue must close regardless of which machine ran the job
+  # (cross-machine runs return early below). Best-effort: a failure here never
+  # changes the merge outcome.
   maybe_close_linked_issue "$pr_num" "$issue_num" "$pr_json" "$run_dir"
 
   # ----- P9: Cleanup (host gate; decision 4) ------------------------------
@@ -323,17 +324,21 @@ watch_one() {
 }
 
 # maybe_close_linked_issue <pr-number> <issue-number> <pr-json> <run-dir>
-# Best-effort explicit close of the PR's linked issue after a successful merge,
-# for the case GitHub's native `Closes #N` keyword cannot cover: a PR merged
-# into a NON-default base branch. Decision is delegated to the pure, unit-tested
-# should_close_linked_issue (lib/pr-watch-lib.sh).
+# Best-effort explicit close of the PR's linked issue after a successful merge.
+# GitHub's native `Closes #N` keyword only fires when the PR merges into the
+# DEFAULT branch AND the body carries the keyword; an agent-authored PR (missing
+# keyword) or a non-default base can drop either condition, leaving the merged
+# work open as an issue that the poller could then re-pick. So we close ALWAYS —
+# but only if the issue is still OPEN, because in the common path GitHub already
+# closed it natively seconds earlier and a redundant automated comment (or, worse,
+# an unexpected reopen/close interaction) must be avoided. The OPEN decision is
+# delegated to the pure, unit-tested should_close_linked_issue (lib/pr-watch-lib.sh).
 #
 # Guarantees (all fail-safe — never a wrong close, never affects the merge):
-#   - empty issue_num                     -> skip (nothing linked / no run-dir).
-#   - default branch cannot be determined -> skip (fetch/auth failure).
-#   - base == default                     -> skip (GitHub already closes it).
-#   - `gh issue close` failure            -> log only (already-closed issue is a
-#                                            harmless no-op here too).
+#   - empty issue_num             -> skip (nothing linked).
+#   - issue state cannot be read  -> skip (fetch/auth failure — fail-safe).
+#   - issue not OPEN              -> skip (GitHub already closed it natively).
+#   - `gh issue close` failure    -> log only (merge outcome unaffected).
 # Uses gha_with_token so the close shows the App identity when configured
 # (pass-through otherwise).
 maybe_close_linked_issue() {
@@ -344,33 +349,28 @@ maybe_close_linked_issue() {
     return 0
   fi
 
+  # Read the issue's current state. Fail-safe: any failure or empty result ->
+  # do not close (a failed fetch must never trigger a close).
+  local issue_json issue_state
+  if ! issue_json=$( cd "$REPO_ROOT" && gha_with_token gh issue view "$issue_num" --json state 2>/dev/null ); then
+    log "could not read state for issue #$issue_num (gh issue view failed) — NOT closing (fail-safe)"
+    return 0
+  fi
+  issue_state=$(jq -r '.state // empty' <<<"$issue_json")
+
+  if ! should_close_linked_issue "$issue_state"; then
+    log "issue #$issue_num is '${issue_state:-unknown}' (not OPEN) — GitHub closed it natively or state unavailable; no explicit close"
+    return 0
+  fi
+
   local base_ref
   base_ref=$(jq -r '.baseRefName // empty' <<<"$pr_json")
-
-  # Resolve the repo default branch once (no per-PR repetition needed here —
-  # one PR per call). Fail-safe: any failure or empty result -> do not close.
-  local repo_json default_branch
-  if ! repo_json=$( cd "$REPO_ROOT" && gha_with_token gh repo view --json defaultBranchRef 2>/dev/null ); then
-    log "could not fetch default branch (gh repo view failed) — NOT closing issue #$issue_num (fail-safe)"
-    return 0
-  fi
-  default_branch=$(jq -r '.defaultBranchRef.name // empty' <<<"$repo_json")
-  if [ -z "$default_branch" ]; then
-    log "empty default branch in gh output — NOT closing issue #$issue_num (fail-safe)"
-    return 0
-  fi
-
-  if ! should_close_linked_issue "$base_ref" "$default_branch"; then
-    log "PR #$pr_num base '$base_ref' == default '$default_branch' — GitHub closes issue #$issue_num natively; no explicit close"
-    return 0
-  fi
-
-  log "closing issue #$issue_num explicitly (PR #$pr_num base '$base_ref' != default '$default_branch')"
+  log "closing issue #$issue_num explicitly after PR #$pr_num merge (base '$base_ref')"
   local body
-  body="Suljettu automaattisesti PR #$pr_num mergen jälkeen — base=\`$base_ref\` ei ole default-haara (\`$default_branch\`), joten GitHubin closing keyword ei laukennut."
+  body="Suljettu automaattisesti PR #$pr_num mergen jälkeen, koska GitHubin closing keyword ei laukennut (joko base ei ollut default-haara tai PR-kuvauksesta puuttui sulkeva avainsana)."
   if ( cd "$REPO_ROOT" && gha_with_token gh issue close "$issue_num" --comment "$body" ); then
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
-      state_event "$run_dir" "linked_issue_closed" "issue=$issue_num" "base=$base_ref" "default=$default_branch"
+      state_event "$run_dir" "linked_issue_closed" "issue=$issue_num" "base=$base_ref"
   else
     log "gh issue close failed for issue #$issue_num (best-effort — merge unaffected)"
   fi
