@@ -201,7 +201,10 @@ jotta kaksi listaa ei ajaudu erilleen.
 | `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Salaisuustiedoston polku |
 | `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu |
 | `RUN_ISSUES_CLAUDE_TIMEOUT` | `3600` | Aikabudjetti per claude-kutsu |
-| `RUN_ISSUES_LABELS_CSV` | *(tyhjä)* | Label-suodatin poll-tilassa |
+| `RUN_ISSUES_LABELS_CSV` | *(tyhjä)* | Poimintalabelit käsiajon poll-tilassa. Kaikkien oltava issuella (6.2) |
+| `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle kopioitavat labelit (6.3) |
+| `RUN_ISSUES_MAX_RETRIES` | `1` | Montako kertaa aikakatkaistu ajo yritetään uudelleen (6.6 d) |
+| `RUN_ISSUES_MAX_CLARIFICATIONS` | `3` | Tarkennuskierrosten katto (6.6 c) |
 | `RUN_ISSUES_AUTO` | `0` | `1` = ei interaktiivisia kehotteita (ks. osio 7.3) |
 | `RUN_ISSUES_SKIP_PREFLIGHT` | `0` | `1` = ohita S0-portti. Hätävara |
 
@@ -214,6 +217,7 @@ jotta kaksi listaa ei ajaudu erilleen.
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku; asetettuna ainoa ehdokas |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Pollerien lokihakemisto |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee siivouksen |
+| `RUN_ISSUES_STALE_AFTER` | `3600` | Kuinka vanha ajo tulkitaan jumiutuneeksi ja tapetaan (6.6 f) |
 
 ### PR-vahti
 
@@ -240,44 +244,294 @@ missään.
 
 ## 6. Käyttö
 
-Slash-komennot Claude Codessa, kohderepon juuressa:
+Tämä osio on paketin käyttöohje: mistä tilasta issue lähtee liikkeelle, mitä ihminen näkee
+matkan varrella, ja mitä hän tekee kussakin tilanteessa.
 
-| Komento | Mitä tekee | Ohje |
+### 6.1 Elinkaari yhdellä silmäyksellä
+
+Automaattiajossa (poller) yksi issue kulkee tämän ketjun ilman ihmistä:
+
+| Vaihe | Kuka tekee | Mitä ihminen näkee |
 |---|---|---|
-| `/run-issues [#N]` | Ajaa orkestraattorin nimetylle issuelle tai vanhimmalle omistamattomalle | [`commands/run-issues.md`](commands/run-issues.md) |
-| `/pr-watch [#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen ajoille | [`commands/pr-watch.md`](commands/pr-watch.md) |
-| `/cleanup-run` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin ja lukon | [`commands/cleanup-run.md`](commands/cleanup-run.md) |
-| `/refresh` | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii | [`commands/refresh.md`](commands/refresh.md) |
-| `/factory-run <spec>` | Agenttitehtaan pipeline yhdelle speksille | [`commands/factory-run.md`](commands/factory-run.md) |
-| `/factory-metrics` | Näyttää agenttitehtaan ajojen mittarit | [`commands/factory-metrics.md`](commands/factory-metrics.md) |
+| Poiminta | poller / orkestraattori | issue **assignoituu** sinulle |
+| Katselmointi (S6) | Claude | ei mitään — tai tarkennuskysymys kommenttina |
+| Toteutus (S8–S9) | Claude | committeja haaralla `auto-run/<repo-slug>-issue-<N>-<slug>` |
+| PR (S11) | orkestraattori | PR, jonka rungossa on `Closes #<N>` |
+| Merge | PR-vahti | PR mergetty, **issue sulkeutuu** `Closes`-viittauksesta |
+| Siivous | PR-vahti | worktree, haara, lukko ja assignaatio poistuvat |
+
+Ihmisen tehtävä on kaksi asiaa: **kirjoittaa issue riittävän tarkasti** ja **katselmoida PR**.
+Kaikki muu ihmiskosketus (tarkennuskysymys, `needs-human`, siivous) on poikkeustilanne, jonka
+käsittely on kuvattu kohdassa 6.6.
+
+### 6.2 Milloin issue lähtee ajoon
+
+Poiminta on **yksi GitHub-haku**, ja sen ehdot ovat sanatarkasti nämä (`lib/issue.sh`
+orkestraattorille, sama lauseke `poller.sh`:ssa):
+
+```
+is:open no:assignee
+-is:blocked -label:waiting -label:wip -label:auto-clean
+label:"<jokainen konfiguroitu label>"
+sort:created-asc  →  ensimmäinen osuma
+```
+
+Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
+
+1. Issue on **avoin**.
+2. Issuella **ei ole yhtään assigneeta** — ei sinua, ei ketään muuta (ks. 6.4).
+3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa (`-is:blocked`, ks. 6.5).
+4. Issuella **ei ole** labelia `waiting`, `wip` eikä `auto-clean`.
+5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: `auto-run`).
+6. Se on vanhin ehdot täyttävä issue — **yksi issue per tikki per remote**.
+
+Viides kohta on se, joka useimmiten yllättää: **labelit yhdistyvät JA-ehdolla, eivät
+TAI-ehdolla.** Jos watchlistin `labels`-listassa on kaksi labelia, issue tarvitsee molemmat.
+Ja koska `auto-clean` on aina poissuljettu, **sen listaaminen poimintalabeliksi tekee reposta
+pysyvästi tyhjän** — haku sisältäisi silloin sekä `label:"auto-clean"` että
+`-label:auto-clean`. Tulos on nolla osumaa, eikä siitä synny virhettä eikä lokiriviä.
+
+Poimintalabelit tulevat konfiguraatiosta kolmessa portaassa: watchlistin repokohtainen
+`labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. Käsiajossa
+sama tulee muuttujasta `RUN_ISSUES_LABELS_CSV`. **Mikään labelin nimi ei ole kovakoodattu
+poimintaan** — `auto-run` on pelkkä konventio.
+
+**Nimetty ajo ohittaa poimintaehdot.** `/run-issues #N` ja `orchestrate.sh <repo> <N>` eivät
+tee hakua lainkaan, joten labelit ja avoimuus eivät estä niitä. Kohta 2 pätee silti: claim
+tarkistetaan, ja toiselle assignattu issue kaataa ajon (exit 3).
+
+**Rinnakkaisuus.** Poller ajaa kerrallaan enintään `global_max_concurrent` ajoa (watchlistin
+avain, oletus `2`) kaikkien repojen yli. Katon täyttyessä tikki kirjoittaa lokiin
+`at cap (n/m)` eikä käynnistä mitään. Sama issue ei koskaan saa kahta sessiota: duplikaatit
+karsitaan repo- ja remote-kohtaisella tmux-session nimellä.
+
+**Tikin sisäinen järjestys** (`poller.sh`, oletusväli 300 s eli 5 min): jumiutuneiden ajojen
+liveness-pyyhkäisy koko watchlistiin → `auto-clean`-siivoukset → aikakatkaistujen ajojen
+`--restart` → vastattujen tarkennusten `--continue` → **vasta viimeisenä** uuden issuen
+poiminta. Keskeneräinen työ menee siis aina uuden edelle.
+
+### 6.3 Labelit
+
+Jokainen label kuuluu tarkalleen yhteen luokkaan sen mukaan **kuka sen kirjoittaa**. Se on
+käytännössä tärkein tieto: itse lisättävää labelia ei kannata jäädä odottamaan, eikä
+automaation lisäämää labelia kannata poistaa käsin ennen kuin syy on korjattu.
+
+| Label | Kuka lisää | Kuka poistaa | Vaikutus |
+|---|---|---|---|
+| `auto-run` | **sinä** | sinä | Poimintaehto. Nimi tulee konfiguraatiosta (`default_labels` / `RUN_ISSUES_LABELS_CSV`), ei koodista |
+| `waiting` | orkestraattori, kun ajo jää odottamaan vastaustasi | orkestraattori, kun `--continue` jatkaa | Estää poiminnan sillä aikaa kun tarkennus on kesken |
+| `wip` | **sinä** | sinä | Estää poiminnan. Tarkoitettu "teen tämän itse" -merkinnäksi |
+| `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu | `cleanup-run.sh` (myös `/cleanup-run`) | **Ei estä poimintaa** — assignaatio estää. Signaali sinulle |
+| `auto-clean` | **sinä** | `auto-clean.sh` onnistuneen siivouksen jälkeen | Pyytää siivoamaan issuen ajojäänteet ja sulkemaan issuen. Ks. 6.6 h) |
+| `auto-clean-skipped` | `auto-clean.sh`, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
+| `auto-merge` | **sinä** issuelle | — | Propagoituu issuelta PR:lle, ja PR-vahti mergeää vain labeloidun PR:n |
+
+Kolme yleistä sekaannusta kannattaa erottaa heti:
+
+- **Estoa ei merkitä labelilla.** Poiminnan estää GitHubin natiivi "blocked by" -riippuvuus
+  (6.5), ei mikään label; `run.json`-status `blocked` puolestaan kertoo vain, että yksittäinen
+  ajo päättyi virheeseen. Kumpikaan ei aiheuta toista — epäonnistunut ajo **ei** estä issueta.
+- **`needs-human` ei estä poimintaa.** Se on pelkkä lippu sinulle. Uuden ajon estää
+  assignaatio, joka jää voimaan (6.4).
+- **`auto-merge` luetaan PR:ltä, ei issuelta.** Orkestraattori kopioi sen issuelta PR:lle
+  (`RUN_ISSUES_PR_LABELS_CSV`, oletus `auto-merge`). Jos lisäät labelin issuelle vasta PR:n
+  avaamisen jälkeen, se ei siirry itsestään — lisää se silloin suoraan PR:lle.
+
+Kaksi labelinimeä on vaihdettavissa ympäristömuuttujalla: `auto-clean`
+(`RUN_ISSUES_CLEAN_LABEL`) ja `auto-merge` (`PR_WATCH_MERGE_LABEL`). `waiting`, `wip`,
+`needs-human` ja `auto-clean-skipped` ovat kovakoodattuja.
+
+Automaation itsensä lisäämät labelit (`waiting`, `needs-human`, `auto-clean-skipped` sekä
+PR:lle kopioitavat) luodaan repoon tarvittaessa itsestään. **Sinun lisäämäsi labelit
+(`auto-run`, `wip`, `auto-clean`) pitää luoda repoon itse** — GitHub ei salli tuntemattoman
+labelin liittämistä.
+
+### 6.4 Issuen omistaja (assignee)
+
+Assignaatio ei ole tässä järjestelmässä kirjanpitoa vaan **varausmekanismi**. Se on ainoa
+tila, jonka kaikki koneet näkevät: paikallinen lukkohakemisto suojaa vain yhden koneen
+sisällä, GitHub-assignaatio kaikkien välillä.
+
+Kulku on kolmivaiheinen (S2 → S3): ajo ottaa paikallisen lukon, assignoi issuen itselleen,
+odottaa hetken ja **tarkistaa että on issuen ainoa assignee**. Jos assigneita on useampi,
+kaksi ajoa varasi saman issuen yhtä aikaa — tämä ajo perääntyy, poistaa oman
+assignaationsa ja exittaa koodilla 3. GitHub sallii rinnakkaiset assignaatiot, joten
+"olenko ainoa" on ainoa luotettava ratkaisija.
+
+Kolme käytännön seurausta:
+
+1. **Käsin assignattu issue ei koskaan lähde automaatioon.** Poimintahaussa on `no:assignee`.
+   Jos haluat tehdä issuen itse, assignoi se itsellesi — se on `wip`-labelia vahvempi keino.
+2. **Nimetty ajo kaatuu toisen ihmisen issueen.** `/run-issues #N` ohittaa poimintaehdot,
+   mutta claim-tarkistus huomaa toisen assigneen ja exittaa koodilla 3 ilman sivuvaikutuksia.
+3. **Assignaatio ei vapaudu itsestään, jos ajo epäonnistuu.** Se poistuu vain neljässä
+   tilanteessa: hävitty varauskilpailu, `--resume --decision CANCEL`, `cleanup-run.sh`
+   (myös `/cleanup-run`) ja PR-vahdin mergenjälkeinen siivous.
+
+Kolmas kohta on tarkoituksellinen: epäonnistunut ajo jättää issuen varatuksi, jotta poller ei
+poimi samaa issueta uudelleen ja uudelleen samaan seinään. Hinta on, että **issue palaa
+automaatioon vasta siivouksen jälkeen** (6.6 g). Jos ihmettelet miksi korjattu issue ei lähde
+liikkeelle, tarkista assignaatio ensin.
+
+### 6.5 Riippuvuudet toisiin issueihin
+
+Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as blocked by"**
+-toiminnolla — siinä kaikki. Ei labelia lisättäväksi eikä skriptiä ajettavaksi: poimintahaku
+suodattaa estetyt issuet kvalifikaattorilla `-is:blocked`, joka lukee `blocked_by`-graafin
+suoraan.
+
+- Yksi avoin estäjä riittää pitämään issuen poiminnan ulkopuolella.
+- Kun viimeinen estäjä sulkeutuu, issue vapautuu poimintaan **seuraavalla tikillä** ilman
+  mitään synkronointia — mekanismi lukee graafin joka haussa uudelleen.
+- Esto ei näy issuen labeleissa, joten sitä ei myöskään voi vahingossa poistaa labelia
+  poistamalla. Vastaavasti: jos issue ei lähde ajoon eikä yksikään estolabeli ole päällä,
+  tarkista riippuvuudet issuen omasta näkymästä.
+
+**Työjärjestys ketjun rakentamiseen:** luo issuet → merkitse riippuvuudet GitHubin omalla
+"blocked by" -toiminnolla → lisää jokaiselle `auto-run`. Automaatio etenee ketjussa yksi
+lenkki kerrallaan itsestään.
+
+Estotieto tulee GitHubin hakuindeksistä, joten se päivittyy pienellä viiveellä juuri suljetun
+estäjän jälkeen. Käytännössä viive mahtuu pollerin 5 minuutin tikkiväliin.
+
+### 6.6 Käyttötapaukset
+
+Kahdeksan tilannetta, joissa ihmistä tarvitaan tai kannattaa tietää mitä tapahtuu.
+
+**a) Tavallinen automaattiajo.** Kirjoita issue, lisää `auto-run` (ja `auto-merge`, jos
+haluat mergen ilman erillistä hyväksyntää). Poller poimii sen viiden minuutin sisällä. Saat
+PR:n, jonka rungossa on katselmoinnin ja evoluution tulokset sekä `Closes #<N>`. Jos toteutus
+jäi osittaiseksi, **PR avataan draftina** — se on tarkoituksellinen signaali, ja PR-vahti ei
+mergeä draftia.
+
+**b) Katselmointiportti käsiajossa.** Interaktiivisessa ajossa (`/run-issues #N` ilman
+auto-tilaa) orkestraattori pysähtyy katselmoinnin jälkeen ja exittaa koodilla **10**. Ajo,
+lukko ja assignaatio jäävät elämään. Jatka:
+
+```bash
+"$HOME/.claude/scripts/run-issues/orchestrate.sh" --resume <run-dir> --decision PROCEED
+"$HOME/.claude/scripts/run-issues/orchestrate.sh" --resume <run-dir> --decision CANCEL
+```
+
+`CANCEL` päättää ajon siististi, vapauttaa assignaation ja **jättää worktreen ja haaran
+paikoilleen** tarkastelua varten. Pollerin ajoissa porttia ei ole: se päättää itse.
+
+**c) Tarkennuskysymys — tärkein ihmisen vuoro.** Jos katselmointi ei saa issuesta selvää, ajo
+päättyy tilaan `awaiting_clarification`: issuelle tulee `waiting`-label ja kommentti, jossa on
+kysymys ja pyyntö vastata. Kommentissa on näkymätön tunnistemerkki, jonka aikaleima on
+vastauksen raja.
+
+Vastaa **yhdellä kommentilla**. Poimintasääntö on kolmiosainen ja tiukka:
+
+- Vain **markerin jälkeen** kirjoitetut kommentit lasketaan.
+- Niistä otetaan **vain uusin**. Jos pilkot vastauksen kolmeen kommenttiin, kaksi ensimmäistä
+  katoavat.
+- Vastaus katkaistaan **8000 merkkiin**.
+
+Sääntö on rakenteellinen, ei tyylisuositus: botti ja ihminen voivat käyttää samaa
+GitHub-tiliä, joten kirjoittaja ei kelpaa erottimeksi — vain markerin aikaleima kelpaa.
+Poller huomaa vastauksen seuraavalla tikillä, poistaa `waiting`-labelin ja jatkaa ajoa
+(`--continue`) vastaus kontekstina. Kierroksia on enintään `RUN_ISSUES_MAX_CLARIFICATIONS`
+(oletus 3); katon täytyttyä ajo päättyy tilaan `blocked/clarification_loop_exhausted` ja saa
+`needs-human`-labelin. Kaavio:
+[`docs/diagrams/run-issues-clarification-loop.mmd`](docs/diagrams/run-issues-clarification-loop.mmd).
+
+**d) Ajo aikakatkaistiin.** Yksittäinen Claude-kutsu ylitti aikabudjetin (exit 7, tila
+`timed_out`). Poller yrittää itse uudelleen `--restart`-ajolla, jossa timeout on
+`perus × (1 + yritysten määrä)` kattoon `RUN_ISSUES_CLAUDE_TIMEOUT_MAX` asti. Yrityksiä on
+`RUN_ISSUES_MAX_RETRIES` (oletus 1). Budjetin loputtua ajo jää odottamaan ihmistä. Sinä et
+tee mitään ensimmäisen aikakatkaisun jälkeen — odota yksi tikki.
+
+**e) Ajo estyi ennen toteutusta tai sen aikana** (exit 5). Syitä on viisi, ja ne erottaa
+`run.json`-statuksen syykentästä: `env_bootstrap_failed` / `env_bootstrap_timeout`
+(riippuvuuksien asennus kaatui — tyypillisesti puuttuva `GITHUB_TOKEN` yksityiselle
+riippuvuudelle), `provision_test_env_failed` (repon oma testiympäristöhook kaatui),
+db-kloonauksen virhe, tai toteuttaja palautti `BLOCKED`. Kaikissa issuelle tulee
+`needs-human`-label ja kommentti, jossa on tuloste. Korjaa syy, siivoa ajo (`/cleanup-run`) ja
+päästä issue takaisin poimintaan.
+
+**f) Ajo jäi jumiin.** Jos ajon viimeisin tapahtuma on vanhempi kuin
+`RUN_ISSUES_STALE_AFTER` (oletus 3600 s), poller tappaa sen tmux-session, merkitsee ajon
+tilaan `blocked/stalled_in_<vaihe>`, lisää `needs-human`-labelin ja kommentoi issueen. Tämä
+on turvaverkko roikkuvalle Claude-kutsulle — erityisesti jos `timeout`-binääri puuttuu
+(osio 2).
+
+**g) Issue ei lähde uudelleen liikkeelle epäonnistumisen jälkeen.** Odotettua: assignaatio on
+yhä voimassa (6.4). Siivoa ajo sillä koneella, jossa se tapahtui:
+
+```bash
+"$HOME/.claude/scripts/run-issues/cleanup-run.sh" --list          # mitä ajoja on
+"$HOME/.claude/scripts/run-issues/cleanup-run.sh" --issue <N> --yes
+```
+
+Siivous poistaa assignaation ja `needs-human`-labelin, purkaa worktreen, haaran, mahdollisen
+db-kloonin ja lukon, ja arkistoi olennaiset artefaktit hakemistoon
+`.claude/run-issues-archive/<run-id>/`. Sen jälkeen issue täyttää poimintaehdot uudelleen.
+**Valmiiksi ajettuja ajoja (`completed`) ei siivota ilman `--force`-lippua**, koska niillä on
+yleensä avoin PR.
+
+**h) Haluat siivota issuen ajojäänteet automaattisesti.** Lisää issuelle `auto-clean`-label.
+Poller huomaa sen ennen muuta työtä, ajaa siivouksen, **sulkee issuen**, poistaa labelin ja
+kommentoi yhteenvedon. Jos issuella on `completed`-ajo (todennäköisesti avoin PR) tai jos
+ajoja ei löydy tältä koneelta, siivous jättää issuen rauhaan ja lisää
+`auto-clean-skipped`-labelin, jotta se ei yritä samaa joka viides minuutti. Kaavio:
+[`docs/diagrams/run-issues-auto-clean-flow.mmd`](docs/diagrams/run-issues-auto-clean-flow.mmd).
+
+**i) PR on auki — mitä auto-merge vaatii.** PR-vahti mergeää vain, kun **kaikki kolme**
+toteutuu: PR:llä on `auto-merge`-label, CI on vihreä ja GitHub raportoi PR:n mergettäväksi.
+Draft ei ole mergettävä. Vanhentuneen tai konfliktisen PR:n rebase tehdään feature-haaran
+omassa worktreessä, ja CI on ajettava uudelleen vihreäksi ennen mergeä (osio 7.4). Mergen
+jälkeen vahti ajaa repon valinnaisen `.claude/post-merge-migrate.sh`-skriptin ja siivoaa
+ajojäänteet — mutta **vain saman koneen ajot**; muille koneille se tulostaa lokiin valmiin
+siivouskomennon.
+
+**Kuvat issuessa.** Issuen rungon ja kommenttien kuvat ladataan paikallisesti ennen ajoa,
+jotta agentti näkee ne (enintään 10 kuvaa, 10 MiB kukin). Ruutukaappaus on siis kelvollinen
+osa speksiä. Epäonnistunut lataus ei kaada ajoa — agentti jää vain ilman kuvaa.
+
+### 6.7 Slash-komennot
+
+Claude Codessa, kohderepon juuressa:
+
+| Komento | Argumentit | Mitä tekee |
+|---|---|---|
+| `/run-issues` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/run-issues.md`](commands/run-issues.md) |
+| `/pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/pr-watch.md`](commands/pr-watch.md) |
+| `/cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/cleanup-run.md`](commands/cleanup-run.md) |
+| `/refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/refresh.md`](commands/refresh.md) |
+| `/factory-run` | `<spec-polku>` | Agenttitehtaan pipeline yhdelle speksille. Ohje: [`commands/factory-run.md`](commands/factory-run.md) |
+| `/factory-metrics` | `[--all \| --last <N>]` | Näyttää agenttitehtaan ajojen mittarit. Ohje: [`commands/factory-metrics.md`](commands/factory-metrics.md) |
+
+Slash-komennot ovat ohjeita Claude Codelle, eivät skriptejä: agentti lukee ohjeen, ajaa
+tarvittavat komennot ja tulkitsee tulokset. Siksi ne toimivat vain Claude Coden sisällä —
+automaatio (poller) kutsuu skriptejä suoraan.
 
 **`/factory-run`-rajoite:** ohje kehottaa alustamaan `.factory/`-hakemiston skriptillä
 `templates/factory-init.sh`, jota **ei ole tässä repossa**. Alustus on toistaiseksi tehtävä
 käsin. Ks. [`CLAUDE.md`](CLAUDE.md) §12.
 
-### Labelit
+### 6.8 Skriptit ja apuvälineet
 
-Labelit jakautuvat **kolmeen luokkaan**, ja luokan tunteminen säästää turhan etsinnän:
+Kaikki paketin skriptit ovat ajettavissa suoraan polusta `$HOME/.claude/scripts/run-issues/`.
+Tätä tarvitset silloin, kun olet toisella koneella ssh:n päässä tai kun Claude Code ei ole
+käytettävissä.
 
-| Label | Luokka | Merkitys |
+| Skripti | Tyypillinen kutsu | Mitä tekee |
 |---|---|---|
-| `waiting`, `wip` | kovakoodattu suodatin | issue jätetään poimimatta |
-| `needs-human` | kovakoodattu | poller merkitsee ajon ihmistä vaativaksi |
-| `auto-clean` | overridattava (`RUN_ISSUES_CLEAN_LABEL`) | laukaisee ajon siivouksen |
-| `auto-merge` | overridattava (`PR_WATCH_MERGE_LABEL`) | sallii auto-mergen |
-| `auto-run` | **konfiguraatiosta** | ei ole kovakoodattu mihinkään; tulee watchlistin `default_labels`-oletuksesta tai `RUN_ISSUES_LABELS_CSV`:stä |
+| `orchestrate.sh` | `orchestrate.sh <repo> <N\|poll>` | Yksi issue → yksi PR. Muut moodit: `--resume <run-dir> --decision …`, `--restart <run-dir>`, `--continue <run-dir>`, `--remote <nimi>` |
+| `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
+| `cleanup-run.sh` | `cleanup-run.sh --issue <N> --yes` | Ajojäänteiden purku. `--list`, `--all`, `--force`, `--dry-run`, `--remote` |
+| `auto-clean.sh` | *(pollerin kutsuma)* | Label-vetoinen siivous + issuen sulkeminen. Käsin: `--repo <polku> --issue <N>` |
+| `poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin issue-automaatio |
+| `pr-watch-poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin PR-automaatio |
+| `install.sh` | `bash install.sh --dry-run` | Asennus (osio 3) |
 
-**Estot luetaan GitHubin natiivista riippuvuudesta, ei labelista.** Poimintahaku suodattaa
-estetyt issuet kvalifikaattorilla `-is:blocked`, joka lukee `blocked_by`-graafin suoraan — ei
-`blocked`-labelia eikä synkronointiskriptiä.
+Kaksi asiaa kannattaa muistaa ajaessa käsin:
 
-### Riippuvuudet toisiin issueihin
-
-Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as blocked by"**
--toiminnolla — siinä kaikki. Ei labelia lisättäväksi eikä skriptiä ajettavaksi. Poiminta
-ohittaa estetyn issuen automaattisesti, ja kun viimeinen estäjä sulkeutuu, issue vapautuu
-poimintaan sekunneissa ilman mitään synkronointia. Yksi avoin estäjä riittää pitämään issuen
-estettynä.
+- **Siivous on konekohtaista.** Worktree, run-dir ja lukko ovat sillä koneella, jossa ajo
+  tapahtui. Väärällä koneella ajettu siivous ei löydä mitään ja raportoi sen.
+- **Pollerit ovat konelukittuja.** Ne vertaavat konenimeä muuttujaan
+  `RUN_ISSUES_POLLER_HOSTS` ja exittaavat hiljaa nollalla, jos osumaa ei tule (osio 8).
 
 ---
 
@@ -403,17 +657,16 @@ Viisi asiaa, jotka selittävät ensimmäisen viikon yllätykset.
 
 ### Tarkennuskysymykseen vastataan **yhdellä** kommentilla
 
-Kun katselmointi ei ymmärrä issueta, ajo päättyy tilaan "odottaa tarkennusta" ja jättää
-issuelle kysymyksen. Kun vastaat, poller käynnistää ajon uudelleen.
+Vastauksesta poimitaan vain uusin markerin jälkeinen ei-bottikommentti, ja se katkaistaan 8000
+merkkiin. Sääntö on **rakenteellinen, ei tyylisuositus**: bot ja ihminen käyttävät samaa
+GitHub-tiliä, joten kommentin kirjoittaja ei kelpaa erottimeksi — ainoa luotettava raja on
+markerin aikaleima. Koko kulku: kohta 6.6 c).
 
-Vastauksesta poimitaan **vain uusin** ei-bottikommentti markerin jälkeen, ja se katkaistaan
-**8000 merkkiin** (`lib/issue.sh`). Jos pilkot vastauksesi kolmeen kommenttiin, kaksi
-ensimmäistä katoavat.
+### Assignaatio on varaus, ei kirjanpitoa
 
-Sääntö on **rakenteellinen, ei tyylisuositus**: bot ja ihminen käyttävät samaa GitHub-tiliä,
-joten kommentin kirjoittaja ei kelpaa erottimeksi. Ainoa luotettava raja on markerin
-aikaleima. Silmukalla on lisäksi katto: `RUN_ISSUES_MAX_CLARIFICATIONS`, oletus `3`. Kaavio:
-[`docs/diagrams/run-issues-clarification-loop.mmd`](docs/diagrams/run-issues-clarification-loop.mmd).
+Automaatio poimii vain issueita, joilla ei ole yhtään assigneeta, ja epäonnistunut ajo
+**jättää assignaationsa voimaan**. Se on tarkoituksellinen jarru: ilman sitä poller ajaisi
+saman issuen samaan seinään viiden minuutin välein. Vapautus tapahtuu siivouksessa (6.4).
 
 ### Exit-koodeja on kolme erillistä avaruutta
 
@@ -451,7 +704,45 @@ Molemmat on kirjattu tietoisiksi shimmeiksi: [`CLAUDE.md`](CLAUDE.md) §12.
 
 ## 9. Vianetsintä
 
-Kolme skriptiä, **kolme erillistä exit-koodiavaruutta**. Sama numero ei tarkoita samaa asiaa
+### Oirekartta
+
+Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
+
+| Oire | Todennäköinen syy | Korjaus |
+|---|---|---|
+| Issue ei lähde ajoon, vaikka `auto-run` on | Assignee (myös oma) estää poiminnan | Poista assignaatio tai siivoa vanha ajo: `cleanup-run.sh --issue <N> --yes` |
+| — sama, mutta assigneeta ei ole | Jokin estolabeli päällä: `waiting`, `wip`, `auto-clean` | Poista label |
+| — sama, eikä estolabeleita ole | Issue on estetty natiivilla "blocked by" -riippuvuudella — esto ei näy labeleissa (6.5) | Sulje edeltäjä tai poista riippuvuus issuen näkymästä |
+| — sama, eikä riippuvuuksia ole | Repo ei ole watchlistissä, tai poimintalabelien JA-ehto ei täyty (6.2) | Tarkista watchlist ja repon `labels`-lista |
+| Kokonainen repo ei koskaan poimi mitään | `auto-clean` on listattu poimintalabeliksi ⇒ haku on itsensä kanssa ristiriidassa | Poista se watchlistin `labels`-listasta |
+| Poller ei tee mitään eikä kerro miksi | Väärä konenimi, puuttuva `tmux`, puuttuva tai viallinen watchlist — kaikki exittaavat hiljaa nollalla | Lue pollerin loki; ks. "Mistä lokit löytyvät" |
+| Ajo alkoi mutta mitään ei tapahdu | Rinnakkaisuuskatto täynnä | Lokissa `at cap (n/m)`; nosta `global_max_concurrent` tai odota |
+| Vastasin tarkennuskysymykseen, mutta mitään ei tapahtunut | Vastaus ennen markeria, tai useampi kommentti (vain uusin luetaan) | Kirjoita vastaus uudelleen **yhtenä** kommenttina (6.6 c) |
+| PR on auki, CI vihreä, mutta ei mergeydy | `auto-merge`-label puuttuu **PR:ltä**, tai PR on draft | Lisää label PR:lle; draft merkitään valmiiksi käsin |
+| Ajo epäonnistui, korjasin syyn, issue ei palaa | Assignaatio ja `needs-human` jäivät | `/cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
+| Siivous ei löydä ajoa | Ajo tapahtui toisella koneella | Aja siivous siellä; PR-vahti tulostaa lokiin valmiin komennon |
+
+### Ajon tilat (`run.json`)
+
+`status`-kenttä kertoo, mihin yksittäinen ajo päättyi. `reason`-kenttä tarkentaa syyn.
+
+| Status | Merkitys | Mitä tapahtuu seuraavaksi |
+|---|---|---|
+| `completed` | PR avattu | PR-vahti hoitaa mergen |
+| `awaiting_review` | Katselmointiportti käsiajossa | Odottaa `--resume`-päätöstäsi |
+| `awaiting_clarification` | Katselmointi kysyi tarkennusta | Poller jatkaa, kun vastaat issueen |
+| `timed_out` | Claude-kutsu ylitti aikabudjetin | Poller yrittää `--restart`, jos budjetti riittää |
+| `blocked` | Ajo pysähtyi virheeseen | `needs-human`-label + kommentti; vaatii ihmisen |
+| `lost_race` | Toinen ajo ehti varata issuen | Ei toimenpiteitä — normaalia rinnakkaisuutta |
+| `cancelled` | Peruttu katselmointiportissa | Worktree ja haara jätettiin paikoilleen |
+
+`blocked`-tilan tavalliset syyt: `env_bootstrap_failed`, `env_bootstrap_timeout`,
+`provision_test_env_failed`, `implementer_BLOCKED`, `clarification_loop_exhausted`,
+`git_push_failed`, `pr_create_failed`, `origin_fetch_failed`, `stalled_in_<vaihe>`.
+
+### Exit-koodit
+
+Neljä skriptiä, **neljä erillistä exit-koodiavaruutta**. Sama numero ei tarkoita samaa asiaa
 eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 
 ### Orkestraattori (`orchestrate.sh`)
@@ -493,6 +784,21 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 6 | Konflikti vaatii ihmisen — AI ei ratkaissut tai CI punainen |
 | 7 | Merge-jälkeinen migraatio epäonnistui |
 
+### Label-vetoinen siivous (`auto-clean.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Siivottu, issue suljettu, `auto-clean`-label poistettu |
+| 1 | Käyttövirhe tai remotea ei voitu selvittää |
+| 3 | Issuen lukko on toisella ajolla — turvallista yrittää seuraavalla tikillä |
+| 4 | Issuella on `completed`-ajo (todennäköisesti avoin PR) — ei siivottu, `auto-clean-skipped` lisätty |
+| 5 | Tältä koneelta ei löydy ajoja tälle issuelle — `auto-clean-skipped` lisätty ja kommenttiin kirjattu konekohtainen ohje |
+| 6 | Purku (`cleanup-run.sh`) epäonnistui |
+
+Koodit 4 ja 5 eivät ole virheitä vaan **kieltäytymisiä**: siivous ei koske avoimen PR:n ajoon
+eikä arvaile toisen koneen tilaa. `auto-clean-skipped` on silmukkasuoja — poista se käsin,
+kun olet hoitanut asian, jos haluat siivouksen yrittävän uudelleen.
+
 ### Mistä lokit löytyvät
 
 - **Pollerit:** `$RUN_ISSUES_LOG_DIR` (oletus `$HOME/Library/Logs`), neljä tiedostoa per
@@ -502,12 +808,45 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
   tilannekuva) ja `state.jsonl` (append-only tapahtumaloki).
 - **Lukot:** `$HOME/Library/Application Support/run-issues/locks`.
 
+### Siivous
+
+Keskenjäänyt ajo jättää jälkeensä viisi asiaa: worktreen, paikallisen haaran, run-dirin,
+paikallisen lukon ja GitHub-assignaation (sekä mahdollisen db-kloonin ja
+`needs-human`-labelin). Kaikki puretaan yhdellä komennolla **sillä koneella, jossa ajo
+tapahtui**:
+
+```bash
+# Claude Codessa, kohderepon juuressa:
+/cleanup-run --list
+/cleanup-run --issue <N>
+
+# tai suoraan, esim. ssh:n yli poller-koneella:
+"$HOME/.claude/scripts/run-issues/cleanup-run.sh" --list
+"$HOME/.claude/scripts/run-issues/cleanup-run.sh" --issue <N> --yes
+"$HOME/.claude/scripts/run-issues/cleanup-run.sh" --issue <N> --force --yes   # myös completed-ajot
+```
+
+Kolme sääntöä:
+
+- **`--dry-run` ensin**, jos et ole varma mitä hakemistossa on. Se tulostaa jokaisen
+  toimenpiteen tekemättä mitään.
+- **`--force` vain kun PR on mergetty tai suljettu.** Ilman sitä `completed`-ajot jätetään
+  rauhaan, koska niillä on yleensä avoin PR — sen worktreen purku katkaisisi PR-vahdin työn.
+- **Olennaiset artefaktit arkistoidaan** hakemistoon `.claude/run-issues-archive/<run-id>/`
+  ennen purkua, joten siivous ei hävitä tutkittavaa jälkeä.
+
+Vaihtoehto ilman komentoriviä: lisää issuelle `auto-clean`-label, jolloin poller tekee saman
+ja sulkee issuen (6.6 h).
+
 ### Hätävarat
 
 - `RUN_ISSUES_SKIP_PREFLIGHT=1` ohittaa S0-portin. Käytä vain jos portti on väärässä — se ei
   saa koskaan olla syy siihen, ettei ajo käynnisty toimivalla koneella.
-- Keskenjäänyt ajo (worktree, haara, run-dir, lukko, assignaatio) siivotaan komennolla
-  `/cleanup-run` **sillä koneella, jossa ajo tapahtui**.
+- `RUN_ISSUES_CLAUDE_TIMEOUT` nostaa yksittäisen Claude-kutsun aikabudjettia, jos ajo
+  aikakatkeaa toistuvasti samassa vaiheessa.
+- Automaation saa kokonaan seis purkamalla LaunchAgentit
+  (`launchctl bootout gui/$(id -u)/com.claude-issue-runner.run-issues-poller` ja sama
+  `pr-watch-poller`-agentille). Kesken olevat ajot jäävät tmux-sessioihin elämään.
 
 ---
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Example watchlist for poller.sh / pr-watch-poller.sh. Copy to $HOME/.config/run-issues/watchlist.json and replace every <placeholder>. Lookup order: RUN_ISSUES_WATCHLIST if set (and then it is the ONLY candidate — a missing file is an error, never a fallback), else $HOME/.config/run-issues/watchlist.json, else the legacy $HOME/dotfiles/machine-studio/run-issues-watchlist.json. JSON has no comment syntax — the _comment key is the convention used instead.",
+  "_comment": "Example watchlist for poller.sh / pr-watch-poller.sh. Copy to $HOME/.config/run-issues/watchlist.json and replace every <placeholder>. Lookup order: RUN_ISSUES_WATCHLIST if set (and then it is the ONLY candidate — a missing file is an error, never a fallback), else $HOME/.config/run-issues/watchlist.json, else the legacy $HOME/dotfiles/machine-studio/run-issues-watchlist.json. JSON has no comment syntax — the _comment key is the convention used instead. LABEL SEMANTICS: `labels` (per repo, falling back to `default_labels`) are ANDed — an issue must carry EVERY listed label to be picked up. Listing `auto-clean`, `waiting` or `wip` here silently disables pickup for that repo: the pick query already excludes all three, so requiring one of them yields zero matches forever, with no error and no log line. See README section 6.2.",
   "default_labels": ["auto-run"],
   "global_max_concurrent": 2,
   "repos": [
@@ -9,8 +9,9 @@
       "remotes": ["origin"]
     },
     {
+      "_comment": "Multi-remote form: one clone polling two orgs. Both labels are required on the issue (AND), so this entry picks up only issues carrying BOTH auto-run and backend — narrow the scope, never widen it.",
       "path": "/Users/<you>/Projects/<fork-repo>",
-      "labels": ["auto-run", "auto-clean"],
+      "labels": ["auto-run", "backend"],
       "remotes": ["origin", "upstream"]
     }
   ]
