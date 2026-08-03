@@ -261,11 +261,23 @@ Labelit jakautuvat **kolmeen luokkaan**, ja luokan tunteminen säästää turhan
 
 | Label | Luokka | Merkitys |
 |---|---|---|
-| `blocked`, `waiting`, `wip` | kovakoodattu suodatin | issue jätetään poimimatta |
+| `waiting`, `wip` | kovakoodattu suodatin | issue jätetään poimimatta |
 | `needs-human` | kovakoodattu | poller merkitsee ajon ihmistä vaativaksi |
 | `auto-clean` | overridattava (`RUN_ISSUES_CLEAN_LABEL`) | laukaisee ajon siivouksen |
 | `auto-merge` | overridattava (`PR_WATCH_MERGE_LABEL`) | sallii auto-mergen |
 | `auto-run` | **konfiguraatiosta** | ei ole kovakoodattu mihinkään; tulee watchlistin `default_labels`-oletuksesta tai `RUN_ISSUES_LABELS_CSV`:stä |
+
+**Estot luetaan GitHubin natiivista riippuvuudesta, ei labelista.** Poimintahaku suodattaa
+estetyt issuet kvalifikaattorilla `-is:blocked`, joka lukee `blocked_by`-graafin suoraan — ei
+`blocked`-labelia eikä synkronointiskriptiä.
+
+### Riippuvuudet toisiin issueihin
+
+Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as blocked by"**
+-toiminnolla — siinä kaikki. Ei labelia lisättäväksi eikä skriptiä ajettavaksi. Poiminta
+ohittaa estetyn issuen automaattisesti, ja kun viimeinen estäjä sulkeutuu, issue vapautuu
+poimintaan sekunneissa ilman mitään synkronointia. Yksi avoin estäjä riittää pitämään issuen
+estettynä.
 
 ---
 
@@ -430,8 +442,8 @@ vaihtoehto. Ks. [`CLAUDE.md`](CLAUDE.md) §12.
 - `lib/poller-config.sh` sisältää sisäänrakennetun oletuslistan konenimistä
   (`POLLER_HOSTS_LEGACY_DEFAULT`). Aseta oma `RUN_ISSUES_POLLER_HOSTS` `poller.env`iin, niin
   lista ei koske sinua.
-- Watchlistillä ja `unblock-issues.sh`:llä on toissijainen fallback vanhaan
-  `~/dotfiles`-puuhun. Se ei laukea, jos ensisijainen polku osuu.
+- Watchlistillä on toissijainen fallback vanhaan `~/dotfiles`-puuhun. Se ei laukea, jos
+  ensisijainen polku osuu.
 
 Molemmat on kirjattu tietoisiksi shimmeiksi: [`CLAUDE.md`](CLAUDE.md) §12.
 
