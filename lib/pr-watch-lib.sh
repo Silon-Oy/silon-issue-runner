@@ -90,24 +90,26 @@ pr_decide() {
   esac
 }
 
-# should_close_linked_issue <base_ref> <default_branch>
+# should_close_linked_issue <issue_state>
 #
 # Decides whether the PR-watcher must EXPLICITLY close the PR's linked issue
-# after a successful merge. GitHub's native `Closes #N` closing keyword only
-# fires when a PR merges into the repo's DEFAULT branch; when the orchestrator
-# targets a non-default base_branch (e.g. a "twenty" integration branch) the
-# linked issue is left open and we must close it ourselves.
+# after a successful merge. The watcher closes ALWAYS, best-effort, regardless
+# of base branch: GitHub's native `Closes #N` closing keyword only fires when a
+# PR merges into the DEFAULT branch AND the body carries the keyword — and an
+# agent-authored PR (or a non-default base) can drop either condition, leaving
+# the merged work open as an issue. The one thing to avoid is closing an issue
+# that is already closed (GitHub usually closes it natively seconds earlier),
+# which would post a redundant comment. So the sole gate is the issue's state.
 #
-# Pure + side-effect-free (mirrors pr_decide / detect_answer / parse_marker):
-#   rc 0  — close explicitly: base_ref != default_branch, both known.
-#   rc 1  — do NOT close: base == default (GitHub's keyword handles it), or
-#           either argument empty (FAIL-SAFE — never risk a wrong close when the
-#           base or default branch is unknown; preserve the current behaviour).
+# Pure + side-effect-free (mirrors pr_decide / detect_answer / parse_marker);
+# the caller fetches the state (a network op) and passes it in:
+#   rc 0  — close explicitly: issue is OPEN.
+#   rc 1  — do NOT close: issue is not OPEN (already CLOSED — GitHub handled it),
+#           or the state is empty (FAIL-SAFE — a failed/unknown state fetch must
+#           never trigger a close).
 should_close_linked_issue() {
-  local base_ref="${1:-}" default_branch="${2:-}"
-  [ -n "$base_ref" ] || return 1
-  [ -n "$default_branch" ] || return 1
-  [ "$base_ref" != "$default_branch" ]
+  local issue_state="${1:-}"
+  [ "$issue_state" = "OPEN" ]
 }
 
 # pr_ci_state <pr-view-json> — prints GREEN / RED / PENDING.
