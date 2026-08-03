@@ -41,10 +41,10 @@ com.claude-issue-runner.pr-watch-poller.plist
 
 ### Miksi repo-juuri on litteä
 
-**Paketin repo-juuri _on_ submodulen mount-piste.** Epic (#1) lukitsee sidontatavan: paketti
-liitetään dotfilesiin git-submodulena polkuun `claude/scripts/run-issues`. Git mounttaa
-submodulen **repo-juuren** siihen polkuun, joten juuren sisällön on oltava täsmälleen se, mitä
-`claude/scripts/run-issues/`-hakemistossa ennen oli.
+**Paketin repo-juuri _on_ mount-piste.** Kummassakin asennusmallissa (§3) polkuun
+`~/.claude/scripts/run-issues` päätyy paketin **juuri**, ei alihakemisto: oletusmallissa
+`install.sh`:n symlinkkinä, ylläpitäjän mallissa git-submodulena dotfilesin puussa (#1).
+Juuren sisällön on siis oltava täsmälleen se, mitä tuossa hakemistossa pitää näkyä.
 
 Issue #3 tarjosi kaksi vaihtoehtoa, ja kumpikin hylättiin mitatun tuloksen perusteella
 (todennettu kertakäyttöisellä `git submodule add` -kokeella ennen siirtoa):
@@ -72,20 +72,42 @@ kaikki ulkoiset viittaukset osoittaisivat väärään paikkaan).
 
 ## 3. Asennusmalli
 
+Malleja on kaksi, ja ne eroavat vain siinä **kuka tuottaa polun
+`~/.claude/scripts/run-issues`**. Loppupää on identtinen: slash-komennot ja
+`prompts/02-implementer.md` näkevät saman polun kummassakin.
+
+**Oletus — klooni mihin tahansa + `install.sh`.** Paketilla ei ole vaadittua sijaintia
+levyllä eikä dotfiles-repoa tarvita.
+
+```
+paketin repo-juuri (klooni missä tahansa)
+  └─ install.sh: symlink → ~/.claude/scripts/run-issues
+       └─ ~/.claude/scripts/run-issues/orchestrate.sh   ← slash-komentojen polku
+```
+
+**Ylläpitäjän kone — dotfiles-submodule (#1).** Polku on olemassa jo ennen asennusta, kahden
+linkin päässä.
+
 ```
 paketin repo-juuri
   └─ git submodule → ~/dotfiles/claude/scripts/run-issues
        └─ dotfilesin hakemistosymlinkki claude/scripts → ~/.claude/scripts
-            └─ ~/.claude/scripts/run-issues/orchestrate.sh   ← slash-komentojen polku
+            └─ ~/.claude/scripts/run-issues/orchestrate.sh   ← sama polku, eri toimittaja
 ```
-
-`agents/` ja `commands/` päätyvät tässä ketjussa polkuun `~/.claude/scripts/run-issues/…`,
-mikä ei riitä: Claude Code lukee ne hakemistoista `~/.claude/agents/` ja `~/.claude/commands/`.
-Paketin oma `install.sh` symlinkkaa ne sinne **per tiedosto**, jotta muiden lähteiden
-agentit ja komennot eivät korvaudu.
 
 Submodule pinnataan tiettyyn committiin: dotfilesin `git pull` ei siis koskaan päivitä
 orkestraattoria vahingossa, vaan päivitys on eksplisiittinen toimenpide.
+
+Kahdesta mallista seuraa, ettei asentajan `scripts`-sidonta voi olla ehdoton eikä puuttua:
+submodule-mallissa polun tuottaa vieras puu, johon ei saa kirjoittaa, ja oletusmallissa mikään
+muu ei tuota sitä lainkaan. `tests/test-install-links.sh` case 2 vartioi oletusmallia (klooni →
+`install.sh` → `orchestrate.sh` suoritettavissa); sen kaatuminen tarkoittaa, että puhtaan
+koneen slash-komennot osoittavat olemattomaan skriptiin.
+
+`agents/` ja `commands/` päätyvät kummassakin ketjussa polkuun `~/.claude/scripts/run-issues/…`,
+mikä ei riitä: Claude Code lukee ne hakemistoista `~/.claude/agents/` ja `~/.claude/commands/`.
+Paketin oma `install.sh` symlinkkaa ne sinne **per tiedosto**, jotta muiden lähteiden
+agentit ja komennot eivät korvaudu.
 
 ### `install.sh`
 
@@ -117,8 +139,8 @@ Kolme vastuuta:
 | Kohde | Toimenpide |
 |---|---|
 | `~/.claude/agents/`, `~/.claude/commands/` | Per-tiedosto-symlink jokaiselle paketin `*.md`-tiedostolle. Lähdejoukko on glob, ei kovakoodattu lista — uusi agentti tulee asennukseen pelkällä nimeämisellä. Paketin omistamat symlinkit, joita paketti ei enää toimita, siivotaan (prune). |
-| `~/.claude/scripts/run-issues` | **Ehdollinen** sidonta: jos polku jo toimii (`orchestrate.sh` suoritettavissa), se jätetään rauhaan riippumatta siitä kuka sen tarjoaa — tämä on maintainern dotfiles+submodule-tapaus ja **no-op**. Jos polkua ei ole ja paketti voi omistaa sen, luodaan symlink paketin juureen — tämä on puhtaan koneen tapaus, jossa slash-komennot muuten osoittaisivat olemattomaan skriptiin. Vieraaseen puuhun ei kirjoiteta. |
-| `~/Library/LaunchAgents/` | Vain `--with-launchagents`. Ks. §11. |
+| `~/.claude/scripts/run-issues` | **Ehdollinen** sidonta: jos polku jo toimii (`orchestrate.sh` suoritettavissa), se jätetään rauhaan riippumatta siitä kuka sen tarjoaa — submodule-malli ja jokainen toistoajo osuvat tähän, ja lopputulos on **no-op**. Jos polkua ei ole ja paketti voi omistaa sen, luodaan symlink paketin juureen — tämä on oletusmalli, jossa slash-komennot muuten osoittaisivat olemattomaan skriptiin. Vieraaseen puuhun ei kirjoiteta. |
+| `~/Library/LaunchAgents/` | Vain `--with-launchagents`. Ks. §11. Deploy ei vielä käynnistä mitään: poller exittaa hiljaa 0, kunnes host-portti osuu koneen nimeen (`RUN_ISSUES_POLLER_HOSTS`, §7 ja §12). |
 
 Exit-koodit (oma avaruus, ei sekoiteta §5:n orkestraattorikoodeihin):
 
@@ -130,9 +152,11 @@ Exit-koodit (oma avaruus, ei sekoiteta §5:n orkestraattorikoodeihin):
 | 3 | Apply epäonnistui kesken (odottamaton tiedostojärjestelmävirhe); uusi ajo konvergoi |
 | 4 | Valmis, mutta vieras tiedosto varjostaa paketin toimittamaa nimeä — mitään ei ylikirjoitettu |
 
-Yleisin kieltäytyminen on `~/.claude/agents` **hakemistosymlinkkinä** (dotfilesin
-jakoa edeltävä muoto): asentaja kertoo mitä pitää tehdä eikä kirjoita mitään. Hakemistojen
-jakaminen per-tiedosto-symlinkeiksi on dotfiles-repon puolen työ (#5).
+Kieltäytyminen on ylläpitäjän koneen ilmiö, ei asennuksen normaali lopputulos: yleisin syy on
+`~/.claude/agents` **hakemistosymlinkkinä** (dotfilesin jakoa edeltävä muoto), jolloin asentaja
+kertoo mitä pitää tehdä eikä kirjoita mitään. Hakemistojen jakaminen per-tiedosto-symlinkeiksi
+on dotfiles-repon puolen työ (#5). Puhtaalla koneella hakemistot puuttuvat tai ovat tavallisia
+hakemistoja, jolloin asennus menee läpi.
 
 Riippuvuustarkistus (`lib/preflight.sh`) on asentajassa **neuvoa-antava**: puuttuva `gh` tai
 `jq` ei estä symlinkkien luontia, koska työkalut voi asentaa jälkikäteen.
