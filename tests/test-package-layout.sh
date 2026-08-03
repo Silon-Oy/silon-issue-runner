@@ -10,10 +10,9 @@
 # Cases:
 #   1. Expected entries exist at the root; shipped scripts are executable
 #   2. No claude/ directory at the root  <-- the nesting guard, see below
-#   3. unblock-issues.sh resolves package-locally from pr-watch-poller.sh
-#   4. Plists: new names only, Label == filename
-#   5. Diagram references resolve and no .mmd is empty
-#   6. CLAUDE.md and README.md exist at the root
+#   3. Plists: new names only, Label == filename
+#   4. Diagram references resolve and no .mmd is empty
+#   5. CLAUDE.md and README.md exist at the root
 #
 # Run: bash tests/test-package-layout.sh
 
@@ -26,7 +25,7 @@ FAIL=0
 # ---- Case 1: expected entries ----
 EXPECTED_FILES=(
   orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh
-  cleanup-run.sh auto-clean.sh unblock-issues.sh install.sh
+  cleanup-run.sh auto-clean.sh install.sh
   .gitignore CLAUDE.md README.md
 )
 EXPECTED_DIRS=(lib prompts tests db-clone agents commands docs/diagrams examples)
@@ -45,7 +44,7 @@ for d in "${EXPECTED_DIRS[@]}"; do
     echo "FAIL: root dir missing: $d"; FAIL=1
   fi
 done
-for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh unblock-issues.sh install.sh; do
+for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh install.sh; do
   if [ -x "$ROOT/$s" ]; then
     echo "PASS: executable: $s"
   else
@@ -67,21 +66,7 @@ else
   FAIL=1
 fi
 
-# ---- Case 3: unblock-issues.sh resolves package-locally ----
-if [ -x "$ROOT/unblock-issues.sh" ]; then
-  echo "PASS: unblock-issues.sh is executable at the package root"
-else
-  echo "FAIL: unblock-issues.sh missing or not executable at the package root"; FAIL=1
-fi
-if grep -q 'UNBLOCK="\${RUN_ISSUES_HOME}/unblock-issues.sh"' "$ROOT/pr-watch-poller.sh"; then
-  echo "PASS: pr-watch-poller.sh prefers the package-local unblock-issues.sh"
-else
-  echo "FAIL: pr-watch-poller.sh does not resolve unblock-issues.sh via RUN_ISSUES_HOME"
-  echo "      (the [ -x ] guard makes a wrong path a silent no-op)"
-  FAIL=1
-fi
-
-# ---- Case 4: plists ----
+# ---- Case 3: plists ----
 PLISTS=(
   com.claude-issue-runner.run-issues-poller.plist
   com.claude-issue-runner.pr-watch-poller.plist
@@ -137,7 +122,7 @@ else
   echo "PASS: no legacy com.maintainer.*.plist at the package root"
 fi
 
-# ---- Case 5: diagrams ----
+# ---- Case 4: diagrams ----
 if [ -f "$ROOT/docs/diagrams/pr-watch-state-machine.mmd" ]; then
   echo "PASS: pr-watch.sh's referenced diagram resolves from the package root"
 else

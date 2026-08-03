@@ -16,7 +16,7 @@ Sisältö:
 - **Orkestraattori** — `orchestrate.sh` + `lib/` + `prompts/`: yksi issue → yksi ajo → yksi PR.
 - **Pollerit** — `poller.sh`, `pr-watch-poller.sh`: LaunchAgent-vetoinen automaattiajo watchlistin repoille.
 - **PR-vahti** — `pr-watch.sh`: CI-odotus, konfliktin ratkaisu, auto-merge.
-- **Apuvälineet** — `cleanup-run.sh`, `auto-clean.sh`, `unblock-issues.sh`.
+- **Apuvälineet** — `cleanup-run.sh`, `auto-clean.sh`.
 - **Claude-integraatio** — `agents/`, `commands/` (slash-komennot), `prompts/`.
 
 ## 2. Hakemistorakenne ja polkuvalinta
@@ -24,7 +24,7 @@ Sisältö:
 ```
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
-unblock-issues.sh              install.sh             provision-test-env.README.md
+install.sh                     provision-test-env.README.md
 README.md                      CLAUDE.md
 lib/       15 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
@@ -64,7 +64,7 @@ plistien ohjelmapolku osoittaa.
 
 Siirto oli mahdollinen ilman koodimuutoksia, koska jokainen suoritettava skripti ja testi
 resolvoi riippuvuutensa oman sijaintinsa suhteen (`SCRIPT_DIR` / `HERE`) eikä yksikään nouse
-`../..`-tasolle. Ainoa poikkeus oli `pr-watch-poller.sh`:n `unblock-issues.sh`-polku — ks. §12.
+`../..`-tasolle.
 
 **Invariantti:** juuressa ei saa olla `claude/`-hakemistoa. `tests/test-package-layout.sh`
 vartioi tätä, koska rikkoutuminen olisi muuten hiljainen (paketti näyttäisi ehjältä, mutta
@@ -447,12 +447,11 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   kun kyseinen kone asettaa `RUN_ISSUES_POLLER_HOSTS`:n omaan `poller.env`iinsä.
   `tests/test-poller-config.sh` pinnaa listan sisällön, jotta muutos siihen on päätös eikä
   vahinko.
-- **Dotfiles-fallbackit säilyvät legacynä.** Kaksi polkua etsitään yhä vanhasta
-  `~/dotfiles`-puusta, jos ensisijainen ei osu: watchlist molemmissa pollereissa ja
-  `unblock-issues.sh` `pr-watch-poller.sh`:ssä. Molemmat kulkevat yhden nimetyn muuttujan
-  (`LEGACY_DOTFILES_DIR`) kautta, jotta "riippuuko tämä yhä vanhasta rakenteesta?" on yhden
-  rivin kysymys. Poistettavissa kun kyseisen koneen watchlist on siirretty polkuun
-  `~/.config/run-issues/watchlist.json`.
+- **Dotfiles-fallback säilyy legacynä.** Watchlist etsitään yhä vanhasta
+  `~/dotfiles`-puusta molemmissa pollereissa, jos ensisijainen ei osu. Polku kulkee yhden
+  nimetyn muuttujan (`LEGACY_DOTFILES_DIR`) kautta, jotta "riippuuko tämä yhä vanhasta
+  rakenteesta?" on yhden rivin kysymys. Poistettavissa kun kyseisen koneen watchlist on
+  siirretty polkuun `~/.config/run-issues/watchlist.json`.
 - **`~/.claude/agents` ja `~/.claude/commands` hakemistosymlinkkeinä → #5.** Niin kauan kuin
   dotfiles symlinkkaa koko hakemiston, `install.sh` kieltäytyy (exit 2). Korjaus on
   dotfiles-repon puolella eikä kuulu tähän pakettiin.
@@ -472,10 +471,10 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   dokumentaatiohygienian muutoksensa, joka ei kuulunut #12:n δψ-refaktorointiin ja ansaitsee
   oman katselmuksensa. Rikkinäinen diagrammi renderöityy tyhjäksi, joten korjaus on puhdasta
   parannusta — mutta label-uudelleensanoitus muuttaa dokumentaation sisältöä.
-- **`unblock-issues.sh`:n haarautunut resolvointi.** `pr-watch-poller.sh` etsii skriptin
-  ensisijaisesti paketista (`${RUN_ISSUES_HOME}/unblock-issues.sh`) ja vasta sitten vanhasta
-  dotfiles-polusta. Kummankin haaran kattavaa testiä ei ole — se vaatisi resolvoinnin
-  irrottamisen omaksi funktiokseen. Nyt testataan vain, että ensisijainen polku osuu.
+- **`-is:blocked` edellyttää github.com:ia.** Poimintahaun estosuodatin nojaa GitHubin
+  natiiviin `is:blocked`-kvalifikaattoriin. Jos ominaisuus puuttuu GitHub Enterprise
+  Serveristä, poiminta hiljenisi siellä (tuntematon negatiivinen kvalifikaattori palauttaa
+  kaikki, ei virhettä). Merkitys tälle asennukselle on nolla: kaikki repot ovat github.com:issa.
 - **`commands/factory-run.md` viittaa puuttuvaan skriptiin.** Ohje kehottaa ajamaan
   `templates/factory-init.sh`-skriptin; tiedostoa ei ole tässä repossa. Joko se jäi pois
   siirrosta (#2) tai viittaus on vanhentunut.

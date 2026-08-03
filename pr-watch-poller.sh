@@ -91,31 +91,6 @@ fi
 
 GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 
-# --- Auto-unblock pass -------------------------------------------------------
-# Before scanning for mergeable PRs, release any `blocked`-labelled issues whose
-# native blocked_by dependencies have all closed, so run-issues-poller (which
-# reads only the label, not native dependencies) picks them up next. Idempotent
-# and orphan-safe: repos that don't use native deps leave `blocked` issues
-# untouched. Runs every tick independently of the pr-watch spawn/cap logic, so a
-# merge that closes a blocker is reflected within ~StartInterval. Non-fatal: a
-# failure in one repo must not abort the poller.
-#
-# unblock-issues.sh ships inside this package (repo root), so prefer the
-# package-local copy: it keeps working wherever the package is mounted. The
-# legacy dotfiles sibling path stays as a fallback for installs still on the
-# pre-package layout. A missing script remains a silent no-op via the guard
-# below — which is exactly why the package-local path must come first: a wrong
-# path here disables the unblock pass without any error surfacing.
-UNBLOCK="${RUN_ISSUES_HOME}/unblock-issues.sh"
-[ -x "$UNBLOCK" ] || UNBLOCK="${LEGACY_DOTFILES_DIR}/claude/scripts/unblock-issues.sh"
-if [ -x "$UNBLOCK" ]; then
-  while IFS= read -r unblock_repo_json; do
-    up=$(jq -r '.path // empty' <<<"$unblock_repo_json")
-    [ -n "$up" ] && [ -d "$up/.git" ] || continue
-    ( cd "$up" && "$UNBLOCK" >> "$RUNS_LOG" 2>&1 ) || true
-  done < <(jq -c '.repos[]?' "$WATCHLIST")
-fi
-
 # Enable AI conflict resolution for every watchlist repo by default. pr-watch.sh
 # defaults this OFF (0); the poller flips it ON so that auto-merge can complete
 # through a rebase conflict without a human. Still overridable: export

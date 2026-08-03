@@ -72,7 +72,16 @@ _repo_args() {
 
 # pick_oldest_unassigned <repo-root> <labels-csv> [<owner/repo>]
 # Prints issue number on stdout, or empty string if no match.
-# labels-csv may be empty; otherwise it's filtered with -label:waiting -label:blocked -label:wip.
+# labels-csv may be empty; otherwise it's filtered with -label:waiting -is:blocked -label:wip.
+#
+# Blocked issues are excluded with GitHub's native `-is:blocked` qualifier,
+# which reads the `blocked_by` dependency graph directly — no `blocked` label
+# and no synchronising script. A single open blocker is enough to hold an issue
+# back, and closing the last blocker clears it within seconds, without any sync.
+# NOTE: an unknown negative qualifier does NOT error on GitHub — it silently
+# matches everything (measured: `-is:totallynotreal` returned all open issues),
+# so a typo here would leak blocked issues into pickup. tests/test-issue-pick.sh
+# pins the exact `-is:blocked` string for this reason.
 #
 # gh search label semantics (probed empirically against a live repo with
 # gh 2.88.0, issue #12 — see tests/test-issue-pick.sh):
@@ -96,7 +105,7 @@ pick_oldest_unassigned() {
   local clean_label="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
   # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
   # no longer accepts standalone --sort/--order flags on `issue list`.
-  local search="is:open no:assignee -label:blocked -label:waiting -label:wip -label:${clean_label} sort:created-asc"
+  local search="is:open no:assignee -is:blocked -label:waiting -label:wip -label:${clean_label} sort:created-asc"
 
   local extra=""
   if [ -n "$labels_csv" ]; then

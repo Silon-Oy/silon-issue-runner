@@ -3,8 +3,21 @@
 #
 # Verifies that pick_oldest_unassigned (lib/issue.sh) encodes a labels-CSV as
 # separate `label:"x"` terms — which gh ANDs — keeps the standing
-# -label:blocked/-label:waiting/-label:wip + is:open/no:assignee/sort filters,
+# -is:blocked/-label:waiting/-label:wip + is:open/no:assignee/sort filters,
 # and treats an empty gh result as "no candidate" (empty stdout, rc 0).
+#
+# WHY THE -is:blocked TERM IS PINNED EXACTLY, AND WHY THE TWO PICKUP SEARCHES
+# ARE ASSERTED CONGRUENT:
+#   Blocked issues are excluded with GitHub's native `-is:blocked` qualifier
+#   (reads the blocked_by graph), replacing the old blocked-label filter and its
+#   label-sync script. An UNKNOWN negative qualifier does NOT error on GitHub —
+#   it silently matches everything (measured: `-is:totallynotreal` returned all
+#   open issues). So a typo like `-is:blockd` would not fail; it would quietly
+#   leak blocked issues into pickup. The old label-based bug failed safe (picked
+#   too few, noticed at once); this one fails open, so the lost safety margin is
+#   bought back here: we pin the literal `-is:blocked` string AND assert
+#   lib/issue.sh's and poller.sh's pickup searches carry the same standing
+#   filters, so the two sources can't drift apart unnoticed.
 #
 # Two layers:
 #   1. Default (offline, deterministic): `gh` is mocked via a PATH shim that
@@ -82,12 +95,23 @@ case "$s" in
 esac
 
 # --- 2. standing filters always present ----------------------------------
-for term in 'is:open' 'no:assignee' '-label:blocked' '-label:waiting' '-label:wip' '-label:auto-clean' 'sort:created-asc'; do
+for term in 'is:open' 'no:assignee' '-is:blocked' '-label:waiting' '-label:wip' '-label:auto-clean' 'sort:created-asc'; do
   case "$s" in
     *"$term"*) : ;;
     *) fail "search missing standing filter '$term': $s" ;;
   esac
 done
+
+# --- 2a. blocked exclusion uses the exact native -is:blocked qualifier ----
+# A typo in the negative qualifier (e.g. -is:blockd) does not error on GitHub;
+# it silently matches everything, leaking blocked issues into pickup. The
+# standing-filter loop above already fails if `-is:blocked` is absent (a
+# regression to the old label form would drop it); this pins the exact spelling
+# so a near-miss typo is caught too.
+case "$s" in
+  *'-is:blocked'*) : ;;
+  *) fail "search missing exact '-is:blocked': $s" ;;
+esac
 
 # --- 3. empty labels CSV → no label: term added --------------------------
 out=$(pick_oldest_unassigned "$REPO" "")
@@ -119,6 +143,30 @@ grep -qxF -- '--repo' "$ARGV"        || fail "owner/repo split: '--repo' not a s
 grep -qxF -- 'customer-d-oy/rahti' "$ARGV" || fail "owner/repo split: 'customer-d-oy/rahti' not a standalone argv entry"
 if grep -qxF -- '--repo customer-d-oy/rahti' "$ARGV"; then
   fail "owner/repo split: IFS=',' leaked — '--repo customer-d-oy/rahti' collapsed into one argv entry"
+fi
+
+# --- 5a. lib/issue.sh and poller.sh pickup searches are congruent ---------
+# There are two parallel pickup searches — pick_oldest_unassigned (lib/issue.sh)
+# and the poller's inline pickup (poller.sh) — that MUST carry the same standing
+# filters. If one is edited and the other is not, blocked/waiting/wip issues
+# would leak into one code path only, and (see -is:blocked note above) a wrong
+# negative qualifier fails open. We extract both search literals from source,
+# normalise the clean-label variable (${clean_label} vs $RUN_ISSUES_CLEAN_LABEL)
+# and drop poller's trailing $extra, then assert the standing portions match.
+POLLER_SH="$HERE/../poller.sh"
+norm_filters() {  # read file on $1, print normalised standing-filter string
+  sed -n 's/.*local search="\([^"]*\)".*/\1/p; s/.*--search "\([^"]*\)".*/\1/p' "$1" \
+    | head -n1 \
+    | sed -e 's/\${clean_label}/CLEAN/g' \
+          -e 's/\$RUN_ISSUES_CLEAN_LABEL/CLEAN/g' \
+          -e 's/\$extra//g'
+}
+lib_filters=$(norm_filters "$ISSUE_LIB")
+poller_filters=$(norm_filters "$POLLER_SH")
+[ -n "$lib_filters" ]    || fail "congruence: could not extract lib/issue.sh search literal"
+[ -n "$poller_filters" ] || fail "congruence: could not extract poller.sh search literal"
+if [ "$lib_filters" != "$poller_filters" ]; then
+  fail "congruence: pickup searches drifted — lib=[$lib_filters] poller=[$poller_filters]"
 fi
 
 # --- 6. optional live AND/OR probe (skipped by default) ------------------
