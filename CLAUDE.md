@@ -302,6 +302,10 @@ lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
 | `PR_WATCH_LABELS_CSV` | *(tyhjä)* | Label-suodatin scan-tilassa |
 | `PR_WATCH_ENABLE_CONFLICT_RESOLUTION` | `0` (poller nostaa `1`:ksi) | AI-avusteinen rebase-konfliktin ratkaisu |
 | `PR_WATCH_CONFLICT_TIMEOUT` | `1800` | Konfliktinratkaisun aikakatto |
+| `PR_WATCH_ENABLE_CI_REPAIR` | `0` (poller nostaa `1`:ksi) | AI-avusteinen punaisen CI:n korjaus (FIX_CI, ks. §8) |
+| `PR_WATCH_MAX_CI_REPAIRS` | `1` | CI-korjauksen yrityskatto per PR (johdetaan run-dirin tapahtumalogista) |
+| `PR_WATCH_CI_REPAIR_TIMEOUT` | `1800` | CI-korjauksen claude-kutsun aikakatto |
+| `PR_WATCH_CI_LOG_MAX` | `60000` | Agentin promptiin syötettävän CI-lokiotteen kokokatto (tavua) |
 | `PR_WATCH_CI_MAX_POLLS` | `40` | CI-odotuksen kierrosten määrä |
 | `PR_WATCH_CI_POLL_SECS` | `15` | CI-odotuksen kierrosväli (40 × 15 s = 10 min) |
 
@@ -339,6 +343,20 @@ no-op, ei virhe.
 - **`PR_WATCH_ENABLE_CONFLICT_RESOLUTION`** — AI-avusteinen rebase-konfliktin ratkaisu.
   `pr-watch.sh` pitää sen pois päältä; `pr-watch-poller.sh` nostaa sen päälle watchlistin
   repoille, jotta auto-merge pääsee konfliktin läpi ilman ihmistä.
+- **`PR_WATCH_ENABLE_CI_REPAIR`** — AI-avusteinen punaisen CI:n korjaus. Kun auto-merge-PR:n
+  vaadittu check menee punaiseksi, `pr_decide` palauttaa `FIX_CI`n (vain kun tämä on `1`;
+  muuten punainen ⇒ `WAIT_CI` kuten ennen), ja `pr_fix_ci` ajaa AI-agentin
+  (`prompts/05-ci-repair.md`) **feature-worktreessä** korjaamaan todellisen virheen, pushaa,
+  ja **revalidoi CI:n** ennen mergeä. Sama koneisto kuin konfliktipolussa: jaetut seamit
+  `_pr_call_agent` + `_pr_force_push`, pakollinen CI-revalidointi turvaporttina, luovutus
+  ihmiselle (`needs-human`-label + kommentti, exit 8) jos agentti ei korjaa, ei committaa,
+  tai CI jää punaiseksi. Agentti **ei saa** viherryttää CI:tä huijaamalla (testin poisto,
+  assertion löysäys, `skip`/timeout) — tämä on promptin ja revalidoinnin vartioima ehdoton
+  rajoite. Yrityskatto `PR_WATCH_MAX_CI_REPAIRS` johdetaan run-dirin tapahtumalogista
+  (`pr_ci_repair_attempted`), koska vahti on tilaton. `pr-watch.sh` pitää tämän pois päältä;
+  `pr-watch-poller.sh` nostaa `1`:ksi watchlistin repoille. Edge-caset koodissa: `UNSTABLE`
+  (vaaditut checkit vihreitä) ei mene `FIX_CI`hin; `DIRTY`+punainen rebasetaan ensin (`pr_decide`
+  päättää `BEHIND`/`DIRTY`n ennen CI:tä), joten korjaus- ja rebase-polut eivät ketjuunnu.
 - **`lib/github-app-auth.sh`** — GitHub App -identiteetti henkilökohtaisen tokenin sijaan.
   Aktivoituu vain jos App-env-muuttujat on asetettu; muuten jokainen sivuvaikutus on vartioitu.
 

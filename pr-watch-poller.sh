@@ -99,6 +99,13 @@ GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 # though the LaunchAgent does not source the machine env file.
 CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
 
+# Likewise enable AI CI-repair for every watchlist repo by default (issue #25).
+# pr-watch.sh defaults this OFF (0); the poller flips it ON so that a red required
+# check on an auto-merge PR is fixed by an agent instead of stalling forever.
+# Same override contract: export PR_WATCH_ENABLE_CI_REPAIR=0 in poller.env to
+# disable. Rides on the per-repo command below like the conflict flag.
+CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
+
 # Count active pr-watch tmux sessions to respect the cap. The `|| ACTIVE=0`
 # fallback lives OUTSIDE the command substitution on purpose (see poller.sh
 # and issue #2): grep -c always prints a count but exits 1 on zero matches,
@@ -142,5 +149,5 @@ while IFS= read -r repo_json; do
   echo "$(date -u +%FT%TZ) pr-watch-poller: launching $SESSION for repo=$REPO_PATH" >> "$LOG"
 
   tmux new-session -d -s "$SESSION" \
-    "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' '$PRWATCH' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
+    "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' '$PRWATCH' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
 done < <(jq -c '.repos[]?' "$WATCHLIST")
