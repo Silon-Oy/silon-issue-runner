@@ -281,6 +281,78 @@ grep -q 'labels\[\]=needs-human' "$LABELS_LOG" || { echo "FAIL C: needs-human la
 [ "$FAIL_C" = "0" ] || FAIL=1
 rm -rf "$WORK_C"
 
+# ===========================================================================
+# Scenario D — agent makes NO commit: a failed attempt that consumes the cap
+# and hands to a human WITHOUT pushing or looping (edge case "korjaus ei muuta
+# mitään"). The next invocation would hit the cap; here we assert one attempt
+# was recorded, the branch was not pushed, and CI was never revalidated.
+# ===========================================================================
+echo "=== scenario D: agent made no commit ==="
+FAIL_D=0
+WORK_D=$(mktemp -d -t prwatch-cirepair-D.XXXXXX)
+read -r REPO WT ORIGIN <<<"$(build_repo "$WORK_D")"
+RD=$(seed_run "$REPO" "$WT" "20260521-1800-issue-66" "66" "666")
+
+BIN="$WORK_D/bin"; mkdir -p "$BIN"
+LABELS_LOG="$WORK_D/labels.log"; : > "$LABELS_LOG"
+COMMENT_FLAG="$WORK_D/comment_called"
+CHECKS_FLAG="$WORK_D/checks_called"
+cat > "$BIN/gh" <<SH
+#!/usr/bin/env bash
+case "\$1" in
+  api) printf '%s\n' "\$*" >> "$LABELS_LOG"; exit 0 ;;
+esac
+case "\$1 \$2" in
+  "pr view")   cat <<'JSON'
+$PR_VIEW_RED
+JSON
+    ;;
+  "run list")  echo '[{"databaseId":9003,"conclusion":"failure"}]' ;;
+  "run view")  echo "e2e failing" ;;
+  "pr checks") touch "$CHECKS_FLAG"; exit 0 ;;   # must NOT be reached
+  "pr comment") cat > /dev/null; touch "$COMMENT_FLAG" ;;
+  "pr merge")  touch "$WORK_D/merge_called" ;;
+  *) exit 0 ;;
+esac
+SH
+chmod +x "$BIN/gh"
+
+# claude mock that does nothing: no commit, clean worktree left as-is.
+CLAUDE_D="$WORK_D/bin/claude-mock"
+cat > "$CLAUDE_D" <<'SH'
+#!/usr/bin/env bash
+echo "CI_REPAIR_RESULT: UNRESOLVED — mock cannot fix"
+exit 0
+SH
+chmod +x "$CLAUDE_D"
+
+ORIGIN_TIP_BEFORE=$( git --git-dir="$ORIGIN" rev-parse feature/x )
+set +e
+OUT=$( PATH="$BIN:$PATH" \
+  RUN_ISSUES_LOCK_ROOT="$WORK_D/locks" \
+  PR_WATCH_ENABLE_CI_REPAIR=1 \
+  PR_WATCH_MAX_CI_REPAIRS=1 \
+  RUN_ISSUES_CLAUDE_CMD="$CLAUDE_D" \
+  PR_WATCH_CI_REPAIR_TIMEOUT=30 \
+  "$PRWATCH" "$REPO" 666 2>&1 )
+RC=$?
+set -e
+echo "$OUT" | sed 's/^/D| /'
+echo "D| (rc=$RC)"
+
+[ "$RC" = "8" ] || { echo "FAIL D: expected rc 8, got $RC"; FAIL_D=1; }
+[ ! -f "$WORK_D/merge_called" ] || { echo "FAIL D: merged despite no fix"; FAIL_D=1; }
+[ ! -f "$CHECKS_FLAG" ] || { echo "FAIL D: CI revalidated despite no commit (should short-circuit)"; FAIL_D=1; }
+[ "$( git --git-dir="$ORIGIN" rev-parse feature/x )" = "$ORIGIN_TIP_BEFORE" ] || { echo "FAIL D: origin branch moved despite no commit"; FAIL_D=1; }
+# Exactly one attempt recorded — the cap is consumed so the next poll won't loop.
+[ "$(grep -c '"event":"pr_ci_repair_attempted"' "$RD/state.jsonl")" = "1" ] || { echo "FAIL D: attempt not recorded exactly once"; FAIL_D=1; }
+grep -q '"event":"pr_ci_repair_committed"' "$RD/state.jsonl" && { echo "FAIL D: unexpected committed event"; FAIL_D=1; }
+grep -q '"event":"pr_ci_repair_handover"' "$RD/state.jsonl" || { echo "FAIL D: no handover event"; FAIL_D=1; }
+[ -f "$COMMENT_FLAG" ] || { echo "FAIL D: PR not commented"; FAIL_D=1; }
+[ "$FAIL_D" = "0" ] && echo "PASS D: no-commit consumed the cap, no push, no loop"
+[ "$FAIL_D" = "0" ] || FAIL=1
+rm -rf "$WORK_D"
+
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "pr-watch-ci-repair: all passed" || echo "pr-watch-ci-repair: FAILURES"
 [ "$FAIL" -eq 0 ]
