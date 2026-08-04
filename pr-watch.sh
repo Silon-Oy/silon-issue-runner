@@ -26,6 +26,26 @@
 #                                        is asked (exit 6).
 #   PR_WATCH_CONFLICT_TIMEOUT            default 1800 — wall-clock budget (s) for
 #                                        the AI conflict-resolution claude call.
+#   PR_WATCH_ENABLE_CI_REPAIR            default 0 — OFF. When 1, a green-label PR
+#                                        whose CI has gone RED is handed to an AI
+#                                        agent that fixes the REAL failure in the
+#                                        feature worktree (never main), commits,
+#                                        and the watcher revalidates CI before the
+#                                        merge. The agent may NOT cheat CI green
+#                                        (no deleting/skipping tests, no loosening
+#                                        assertions). If it cannot fix the failure
+#                                        durably, or CI stays red, the PR is handed
+#                                        to a human (exit 8). Same machinery as the
+#                                        conflict path (worktree agent + mandatory
+#                                        CI revalidation + human handover).
+#   PR_WATCH_MAX_CI_REPAIRS              default 1 — attempt cap for CI repair per
+#                                        PR, derived from the run-dir event log
+#                                        (pr_ci_repair_attempted) so it survives
+#                                        the watcher's statelessness.
+#   PR_WATCH_CI_REPAIR_TIMEOUT           default 1800 — wall-clock budget (s) for
+#                                        the AI CI-repair claude call.
+#   PR_WATCH_CI_LOG_MAX                  default 60000 — byte cap on the failed-CI
+#                                        log excerpt fed to the agent's prompt.
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
 #   PR_WATCH_LABELS_CSV                  optional scan filter (unused gate today;
 #                                        the merge label is the real gate).
@@ -42,6 +62,8 @@
 #   6  conflict needs a human (AI could not resolve / CI red — rebase aborted or
 #      left for inspection, PR commented)
 #   7  post-merge migration failed
+#   8  red CI needs a human (AI could not repair / CI stayed red / attempt cap
+#      reached — PR commented, needs-human label added)
 
 set -euo pipefail
 
@@ -54,6 +76,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/pr-watch-lib.sh"
 # shellcheck source=lib/claude-call.sh
 . "$SCRIPT_DIR/lib/claude-call.sh"
+# shellcheck source=lib/labels.sh
+# Label writes go through the REST helpers (no read:project scope needed). The
+# CI-repair human-handover attaches the needs-human label through these.
+. "$SCRIPT_DIR/lib/labels.sh"
 # shellcheck source=lib/github-app-auth.sh
 # Opt-in GitHub App identity (same env vars as the orchestrator). gha_with_token
 # is a pass-through when App mode is off, so wrapping every gh call here is
@@ -78,6 +104,10 @@ fi
 PR_WATCH_AUTO="${PR_WATCH_AUTO:-0}"
 PR_WATCH_ENABLE_CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-0}"
 PR_WATCH_CONFLICT_TIMEOUT="${PR_WATCH_CONFLICT_TIMEOUT:-1800}"
+PR_WATCH_ENABLE_CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-0}"
+PR_WATCH_MAX_CI_REPAIRS="${PR_WATCH_MAX_CI_REPAIRS:-1}"
+PR_WATCH_CI_REPAIR_TIMEOUT="${PR_WATCH_CI_REPAIR_TIMEOUT:-1800}"
+PR_WATCH_CI_LOG_MAX="${PR_WATCH_CI_LOG_MAX:-60000}"
 PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
 PR_WATCH_LABELS_CSV="${PR_WATCH_LABELS_CSV:-}"
 
@@ -207,7 +237,7 @@ watch_one() {
   fi
 
   local decision
-  decision=$(pr_decide "$pr_json" "$PR_WATCH_ENABLE_CONFLICT_RESOLUTION" "$PR_WATCH_MERGE_LABEL")
+  decision=$(pr_decide "$pr_json" "$PR_WATCH_ENABLE_CONFLICT_RESOLUTION" "$PR_WATCH_MERGE_LABEL" "$PR_WATCH_ENABLE_CI_REPAIR")
   log "PR #$pr_num classified: $decision"
   if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
     state_event "$run_dir" "pr_classified" "pr=$pr_num" "decision=$decision"
@@ -222,6 +252,16 @@ watch_one() {
       # ----- P5: Resolve (conflict-free rebase + CI revalidation) ---------
       if pr_resolve "$pr_num" "$rid" "$run_dir" "$pr_json"; then
         : # rebased + revalidated green; fall through to merge
+      else
+        local rc=$?
+        _release
+        return "$rc"
+      fi
+      ;;
+    FIX_CI)
+      # ----- P5b: Repair red CI (AI agent + mandatory CI revalidation) ----
+      if pr_fix_ci "$pr_num" "$rid" "$run_dir" "$pr_json"; then
+        : # fixed + revalidated green; fall through to merge
       else
         local rc=$?
         _release
@@ -507,11 +547,8 @@ pr_resolve_conflict_ai() {
   # watcher. We do NOT trust the agent's exit code or self-report — the
   # worktree state below is the source of truth.
   local crc=0
-  (
-    cd "$worktree" || exit 99
-    RUN_ISSUES_CLAUDE_TIMEOUT="$PR_WATCH_CONFLICT_TIMEOUT" \
-      call_claude "$ai_out_dir" "04-conflict-resolution" "$prompt_file"
-  ) || crc=$?
+  _pr_call_agent "$ai_out_dir" "$worktree" "04-conflict-resolution" "$prompt_file" \
+    "$PR_WATCH_CONFLICT_TIMEOUT" || crc=$?
   log "AI conflict-resolution call for PR #$pr_num returned rc=$crc"
 
   if _conflict_resolution_clean "$worktree" "$base_ref"; then
@@ -551,27 +588,9 @@ _pr_publish_and_revalidate() {
   local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="${6:-main}"
 
   log "rebase landed — force-pushing $branch (--force-with-lease) and revalidating CI"
-  # Same token-via-extraheader pattern as the orchestrator's push. The header
-  # is captured to a local and never echoed; --force-with-lease still consults
-  # the local ref the worktree fetched, so there is no extra leak surface.
-  local _pub_auth_header=""
-  local _h2=""
-  if _h2=$(gha_git_push_header 2>/dev/null); then
-    _pub_auth_header="$_h2"
-  fi
-  _h2=""
-  local push_ok=0
-  if [ -n "$_pub_auth_header" ]; then
-    if ( cd "$worktree" && git -c "http.extraheader=$_pub_auth_header" push --force-with-lease origin "$branch" ); then
-      push_ok=1
-    fi
+  if _pr_force_push "$worktree" "$branch"; then
+    :
   else
-    if ( cd "$worktree" && git push --force-with-lease origin "$branch" ); then
-      push_ok=1
-    fi
-  fi
-  _pub_auth_header=""
-  if [ "$push_ok" = "0" ]; then
     log "force-push failed for PR #$pr_num after rebase"
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
       state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=push_failed"
@@ -649,6 +668,225 @@ pr_wait_ci_green() {
     sleep "$interval"
   done
   return 1
+}
+
+# ===== Shared worktree-agent seams (conflict resolution + CI repair) =======
+# Both self-repair paths (P5 conflict resolution and P5b CI repair) run an AI
+# agent in the feature worktree and then force-push it. These two helpers are
+# that common mechanism, extracted so neither path copies it.
+
+# _pr_call_agent <out-dir> <worktree> <step-id> <prompt-file> <timeout-secs>
+# Runs the claude CLI with the worktree as CWD (the agent edits files + drives
+# git there) under a dedicated wall-clock budget so a wedged call can't hang the
+# watcher. Returns the agent's rc — but callers must NOT trust it: the worktree
+# / CI state is always verified independently afterwards.
+_pr_call_agent() {
+  local out_dir="$1" worktree="$2" step_id="$3" prompt_file="$4" timeout_secs="$5"
+  local crc=0
+  (
+    cd "$worktree" || exit 99
+    RUN_ISSUES_CLAUDE_TIMEOUT="$timeout_secs" \
+      call_claude "$out_dir" "$step_id" "$prompt_file"
+  ) || crc=$?
+  return "$crc"
+}
+
+# _pr_force_push <worktree> <branch> — push the branch with --force-with-lease,
+# using the App token via http.extraheader when App mode is on (same pattern as
+# the orchestrator's push; the header is captured to a local and never echoed).
+# --force-with-lease is safe for BOTH a rewritten (rebased) branch and a plain
+# fast-forward (a new CI-fix commit): it only refuses if the remote ref moved
+# unexpectedly. Returns 0 on success, 1 on failure.
+_pr_force_push() {
+  local worktree="$1" branch="$2"
+  local _hdr="" _h=""
+  if _h=$(gha_git_push_header 2>/dev/null); then _hdr="$_h"; fi
+  _h=""
+  local ok=1
+  if [ -n "$_hdr" ]; then
+    ( cd "$worktree" && git -c "http.extraheader=$_hdr" push --force-with-lease origin "$branch" ) && ok=0
+  else
+    ( cd "$worktree" && git push --force-with-lease origin "$branch" ) && ok=0
+  fi
+  _hdr=""
+  return "$ok"
+}
+
+# ----- P5b: Repair red CI --------------------------------------------------
+# CI repair is OFF by default (PR_WATCH_ENABLE_CI_REPAIR=0), in which case
+# pr_decide never returns FIX_CI and this is unreachable. When ON and a labelled
+# PR's CI has gone RED (a required/blocking check failed), we hand the failure to
+# an AI agent that fixes the REAL cause in the feature worktree (never main),
+# commits, and the watcher force-pushes + REVALIDATES CI before allowing the
+# merge — CI is the safety gate that catches a wrong or cheating "fix". The agent
+# may not delete/skip tests, loosen assertions, or otherwise fake green (enforced
+# by prompts/05-ci-repair.md + this mandatory revalidation). If it cannot fix the
+# failure durably, makes no commit, or CI stays red, the PR is handed to a human
+# (needs-human label + comment, exit 8). A durable per-PR attempt cap
+# (PR_WATCH_MAX_CI_REPAIRS, counted from the run-dir event log) bounds retries so
+# a stateless watcher cannot loop.
+#
+# Returns: 0 CI repaired + green (caller proceeds to merge)
+#          8 could not repair / CI still red / attempt cap reached (human asked)
+#          4 not actionable (no run-dir, no worktree, etc.)
+pr_fix_ci() {
+  local pr_num="$1" rid="$2" run_dir="$3" pr_json="$4"
+
+  # Durable attempt tracking needs the run-dir event log; without it we cannot
+  # bound retries across the watcher's stateless invocations, so we decline
+  # rather than risk an unbounded repair loop.
+  if [ -z "$run_dir" ] || [ ! -d "$run_dir" ]; then
+    log "no run-dir for PR #$pr_num — cannot track CI-repair attempts durably; skipping"
+    return 4
+  fi
+
+  local worktree branch
+  worktree=$(run_field "$rid" '.worktree_path')
+  branch=$(run_field "$rid" '.branch')
+  if [ -z "$worktree" ] || [ ! -d "$worktree" ]; then
+    log "no usable worktree for PR #$pr_num (worktree='$worktree') — cannot repair CI"
+    state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=no_worktree"
+    return 4
+  fi
+  if [ -z "$branch" ]; then
+    log "no branch recorded for PR #$pr_num — cannot repair CI"
+    return 4
+  fi
+
+  # Attempt cap from the durable event log (pr_ci_repair_attempted). grep -c
+  # prints a count but exits 1 on zero matches; `|| true` keeps that from
+  # tripping `set -e`, and the default handles a missing file.
+  local attempts max
+  max="$PR_WATCH_MAX_CI_REPAIRS"
+  attempts=$(grep -c '"event":"pr_ci_repair_attempted"' "$run_dir/state.jsonl" 2>/dev/null || true)
+  attempts=${attempts:-0}
+  local failed_checks
+  failed_checks=$(pr_failed_checks "$pr_json")
+  if [ "$attempts" -ge "$max" ]; then
+    log "CI-repair attempt cap reached for PR #$pr_num ($attempts/$max) — asking a human"
+    _pr_ci_handover_to_human "$pr_num" "$run_dir" "$worktree" "$failed_checks" \
+      "CI-korjauksen yrityskatto ($attempts/$max) täyttyi"
+    return 8
+  fi
+
+  local base_ref
+  base_ref=$(jq -r '.baseRefName // "main"' <<<"$pr_json")
+
+  # Best-effort failed-CI log excerpt (bounded). The agent's most reliable source
+  # is the worktree itself (it reproduces the failure locally), so an empty log
+  # here is not fatal — it just means the prompt leans on the check names + local
+  # reproduction.
+  local ci_log
+  ci_log=$(_pr_collect_ci_log "$branch")
+
+  # Record the durable spend BEFORE running the agent (mirrors the restart
+  # retry-count increment): a crash mid-repair must still count as one attempt,
+  # so a no-op or wedged agent cannot loop.
+  state_event "$run_dir" "pr_ci_repair_attempted" "pr=$pr_num" "attempt=$((attempts + 1))"
+  state_event "$run_dir" "pr_ci_repair_started" "pr=$pr_num"
+
+  local head_before
+  head_before=$( cd "$worktree" && git rev-parse HEAD 2>/dev/null || echo "" )
+
+  local prompt_file="$run_dir/05-ci-repair.prompt"
+  render_prompt "$SCRIPT_DIR/prompts/05-ci-repair.md" "$prompt_file" \
+    PR_NUMBER="$pr_num" \
+    BRANCH="$branch" \
+    BASE_REF="$base_ref" \
+    FAILED_CHECKS="${failed_checks:-（ei listattavissa — tarkista PR:n checkit）}" \
+    CI_LOG="${ci_log:-（ei saatavilla — toista virhe worktreessä ajamalla epäonnistunut check）}"
+
+  local arc=0
+  _pr_call_agent "$run_dir" "$worktree" "05-ci-repair" "$prompt_file" \
+    "$PR_WATCH_CI_REPAIR_TIMEOUT" || arc=$?
+  log "AI CI-repair call for PR #$pr_num returned rc=$arc"
+
+  # Verify the agent produced a NEW commit on a CLEAN worktree. No new commit =>
+  # a failed attempt (nothing to push, CI would not change) — hand to a human
+  # WITHOUT a pointless push. A dirty worktree must never be published either.
+  local head_after
+  head_after=$( cd "$worktree" && git rev-parse HEAD 2>/dev/null || echo "" )
+  if [ -z "$head_after" ] || [ "$head_after" = "$head_before" ]; then
+    log "CI-repair agent produced no commit for PR #$pr_num — failed attempt"
+    _pr_ci_handover_to_human "$pr_num" "$run_dir" "$worktree" "$failed_checks" \
+      "AI-agentti ei tuottanut korjaavaa committia"
+    return 8
+  fi
+  if ( cd "$worktree" && git status --porcelain 2>/dev/null | grep -q . ); then
+    log "CI-repair left the worktree dirty for PR #$pr_num — not publishing"
+    _pr_ci_handover_to_human "$pr_num" "$run_dir" "$worktree" "$failed_checks" \
+      "AI-agentti jätti työpuun likaiseksi (committaamattomia muutoksia)"
+    return 8
+  fi
+  state_event "$run_dir" "pr_ci_repair_committed" "pr=$pr_num" "head=$head_after"
+
+  # Publish + mandatory CI revalidation. CI is the real gate.
+  if ! _pr_force_push "$worktree" "$branch"; then
+    log "force-push failed after CI-repair for PR #$pr_num"
+    state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=push_failed"
+    _pr_ci_handover_to_human "$pr_num" "$run_dir" "$worktree" "$failed_checks" \
+      "korjauksen push epäonnistui"
+    return 8
+  fi
+  state_event "$run_dir" "pr_ci_repair_pushed" "pr=$pr_num"
+
+  if pr_wait_ci_green "$pr_num"; then
+    log "CI green after repair for PR #$pr_num — proceeding to merge"
+    state_event "$run_dir" "pr_ci_repaired" "pr=$pr_num"
+    return 0
+  fi
+  log "CI still red after repair for PR #$pr_num — asking a human"
+  _pr_ci_handover_to_human "$pr_num" "$run_dir" "$worktree" "$failed_checks" \
+    "korjaus ei vihreyttänyt CI:tä"
+  return 8
+}
+
+# _pr_collect_ci_log <branch> — best-effort, bounded excerpt of the most recent
+# FAILED CI run's failed-step logs on the branch. Prints empty on any failure —
+# the agent reproduces the failure in the worktree, so this is context, not a
+# hard dependency. Byte-capped by PR_WATCH_CI_LOG_MAX (mirrors the orchestrator's
+# RUN_ISSUES_SITUATION_ARTIFACT_MAX pattern) so a huge log never bloats the prompt.
+_pr_collect_ci_log() {
+  local branch="$1"
+  local run_id
+  run_id=$( cd "$REPO_ROOT" && gha_with_token gh run list --branch "$branch" \
+              --json databaseId,conclusion --limit 20 2>/dev/null \
+            | jq -r 'map(select(.conclusion == "failure")) | .[0].databaseId // empty' 2>/dev/null ) || run_id=""
+  [ -n "$run_id" ] || { printf ''; return 0; }
+  ( cd "$REPO_ROOT" && gha_with_token gh run view "$run_id" --log-failed 2>/dev/null ) \
+    | head -c "$PR_WATCH_CI_LOG_MAX" || printf ''
+}
+
+# _pr_ci_handover_to_human <pr-number> <run-dir> <worktree> <failed-checks> <why>
+# The CI-repair path's human handover: attach the needs-human label, comment the
+# PR with what was tried and which checks stayed red, and finalize the run
+# blocked. Mirrors _pr_abort_to_human but for CI repair — the branch/worktree are
+# left AS-IS for inspection (no rebase to abort), the run is marked blocked, and
+# it carries its own exit code (8) at the call site. All steps are best-effort:
+# a failed label or comment never changes the outcome.
+_pr_ci_handover_to_human() {
+  local pr_num="$1" run_dir="$2" worktree="$3" failed="$4" why="$5"
+
+  # needs-human label — ensure it exists, then attach. Both are best-effort and
+  # run in REPO_ROOT so gh infers {owner}/{repo} from the working directory.
+  ( cd "$REPO_ROOT" && labels_ensure "" needs-human B60205 "Vaatii ihmisen — automaatio luovutti" ) \
+    || log "could not ensure needs-human label for PR #$pr_num"
+  ( cd "$REPO_ROOT" && labels_add "" "$pr_num" needs-human ) \
+    || log "could not add needs-human label to PR #$pr_num"
+
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
+    state_finalize "$run_dir" "blocked" "ci_repair_failed_pr_$pr_num"
+    state_event "$run_dir" "pr_ci_repair_handover" "pr=$pr_num" "reason=$why"
+  }
+
+  local body
+  body=$(printf '%s\n\n%s\n\n%s\n%s\n' \
+    "PR-valvoja yritti korjata punaisen CI:n AI-agentilla feature-worktreessä \`$worktree\`, mutta $why." \
+    "Punaiseksi jääneet checkit:"$'\n'"\`\`\`"$'\n'"${failed:-（ei listattavissa — tarkista PR:n checkit）}"$'\n'"\`\`\`" \
+    "PR:ää **ei mergetty**. Tarkista CI-lokit ja korjauksen oikeellisuus, tai korjaa käsin ja aja valvoja uudelleen." \
+    "(AI-CI-korjaus on päällä \`PR_WATCH_ENABLE_CI_REPAIR=1\`. Poista \`needs-human\`-label kun asia on hoidettu.)")
+  ( cd "$REPO_ROOT" && printf '%s' "$body" | gha_with_token gh pr comment "$pr_num" --body-file - ) || \
+    log "failed to post ci-repair comment on PR #$pr_num"
 }
 
 # ----- main ---------------------------------------------------------------
