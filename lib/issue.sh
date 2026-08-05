@@ -193,6 +193,53 @@ unclaim_issue() {
   )
 }
 
+# count_open_blockers <repo-root> <N> [<owner/repo>]
+# Prints the number of OPEN issues blocking issue N and returns 0 when the
+# dependency graph was read successfully. Returns non-zero (printing nothing)
+# when the graph could NOT be read — the caller MUST treat that as "assume
+# blocked" (fail-closed, issue #28).
+#
+# WHY A SECOND, AUTHORITATIVE READ (issue #28):
+# The pickup search excludes blocked issues with `-is:blocked`, which reads
+# GitHub's SEARCH index — eventually consistent. A lagging index once leaked 25
+# blocked issues into pickup, each launched one tick apart in creation order
+# (exactly the pattern an unfiltered search produces). This helper reads the
+# dependency GRAPH directly (GET .../issues/{n}/dependencies/blocked_by) — the
+# same graph `is:blocked` is derived from, but strongly consistent — so a blocked
+# issue is caught even while the index lags. `-is:blocked` stays as the cheap
+# pre-filter; this is the second line of defence, not a replacement.
+#
+# FAIL-CLOSED: a false positive costs one skipped tick; a false negative costs a
+# whole out-of-order run. So any read error (network, auth, endpoint absent, or a
+# non-numeric body) returns non-zero rather than a count — the opposite of the
+# `gh api ... || echo 0` idiom, which would fail OPEN. Stays on the personal
+# gh-CLI identity: this is a pick-time read with no privacy boundary, like
+# pick_oldest_unassigned.
+count_open_blockers() {
+  local repo="$1"
+  local n="$2"
+  local owner_repo="${3:-}"
+  # gh substitutes {owner}/{repo} from the cwd's remote; for a non-origin remote
+  # (multi-org) we target the resolved owner/repo explicitly instead.
+  local path
+  if [ -n "$owner_repo" ]; then
+    path="repos/$owner_repo/issues/$n/dependencies/blocked_by"
+  else
+    path="repos/{owner}/{repo}/issues/$n/dependencies/blocked_by"
+  fi
+  local out
+  if ! out=$(
+    cd "$repo" || exit 1
+    gh api "$path" --jq '[.[] | select(.state == "open")] | length' 2>/dev/null
+  ); then
+    return 2
+  fi
+  case "$out" in
+    ''|*[!0-9]*) return 2 ;;  # empty or non-numeric body → fail-closed
+  esac
+  printf '%s' "$out"
+}
+
 # comment_issue <repo-root> <N> <text> [<owner/repo>] [<remote>]
 # Posts a comment to the issue. Text is passed via stdin to avoid
 # argument-length and quoting issues on long bodies.

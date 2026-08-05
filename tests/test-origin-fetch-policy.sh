@@ -45,11 +45,16 @@ mkdir -p "$BIN"
 # gh mock: serve issue lookups for phase_a (pick + claim verify) and record
 # label/comment attempts. fetch_issue_json wants raw JSON; verify_claim and
 # `api user` are reduced via --jq, so we emit the post-jq scalar directly.
+# The S2b blocked-by gate (issue #28) calls `gh api …/dependencies/blocked_by`
+# between the lock and the claim; stub it as "0 open blockers" so the run reaches
+# S4 as this test intends (a blocked issue would fail-closed at S2b, exit 9,
+# before ever touching the fetch policy under test).
 GH_LOG="$WORK/gh-calls.log"
 cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
 echo "\$*" >> "$GH_LOG"
 case "\$*" in
+  *"dependencies/blocked_by"*) echo "0" ;;                        # S2b: no blockers
   *"issue view"*"--json assignees"*) echo "testbot" ;;            # verify_claim
   *"issue view"*) echo '{"title":"Fetch test","body":"b","labels":[],"author":{"login":"x"},"comments":[]}' ;;
   *"api user"*) echo "testbot" ;;                                  # me == assignee

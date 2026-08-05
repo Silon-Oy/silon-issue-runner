@@ -32,8 +32,18 @@ stateDiagram-v2
     S1_PickIssue --> S2_Lock: candidate found
     S1_PickIssue --> [*]: no candidate (rc=2)
 
-    S2_Lock --> S3_Claim: lock acquired
+    S2_Lock --> S2b_BlockedCheck: lock acquired
     S2_Lock --> [*]: lock held by other run (rc=3)
+
+    %% S2b re-checks the strongly consistent blocked_by dependency GRAPH between
+    %% the lock and the claim (issue #28): the pickup search's -is:blocked reads
+    %% GitHub's eventually-consistent SEARCH index, which once lagged and leaked
+    %% 25 blocked issues into pickup. Placed AFTER the lock (only the winner pays
+    %% the API call) and BEFORE the claim (a blocked issue is never assigned).
+    %% Fail-closed: an unreadable graph counts as blocked. A named run overrides
+    %% with --force.
+    S2b_BlockedCheck --> S3_Claim: no open blocker (or --force)
+    S2b_BlockedCheck --> [*]: blocked by open dependency → blocked/blocked_by_dependency (rc=9)
 
     S3_Claim --> S4_Worktree: claim verified
     S3_Claim --> [*]: claim race lost (rc=3)

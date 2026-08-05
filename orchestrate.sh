@@ -63,6 +63,14 @@
 #   8   missing required dependency — the S0 preflight gate refused to start the
 #       run; nothing was locked, claimed or created. The stderr message names
 #       the missing tool AND its fix command.
+#   9   issue is blocked by an open dependency — refused between the lock and the
+#       claim (S2b), before the issue is assigned to us. The run dir is finalized
+#       blocked/blocked_by_dependency and the lock released; nothing is claimed.
+#       The pickup search's `-is:blocked` reads GitHub's eventually-consistent
+#       SEARCH index, so a lagging index once leaked 25 blocked issues into
+#       pickup (issue #28); this gate re-checks the strongly consistent
+#       dependency GRAPH and is FAIL-CLOSED (an unreadable graph counts as
+#       blocked). A named run can override with --force.
 #  10   awaiting human review — invoke --resume to continue
 #  11   awaiting clarification — cycle review returned NEEDS_CLARIFICATION; the
 #       run is finalized as awaiting_clarification with the waiting label and an
@@ -93,11 +101,15 @@ ISSUE_ARG=""
 # poller passes --remote <name> per (repo × remote) iteration; resume/restart/
 # continue read it from run.json (set in phase_a or via state_set).
 REMOTE_NAME="origin"
+# --force overrides the S2b blocked-by gate for a named run (issue #28): running
+# an issue with an open dependency is almost always a mistake, so it must be a
+# visible, deliberate act rather than a silent default. Never set by the poller.
+FORCE=0
 
 usage() {
   cat >&2 <<'USAGE'
 usage:
-  orchestrate.sh [--remote <name>] <repo-root> <issue-number-or-"poll">
+  orchestrate.sh [--remote <name>] [--force] <repo-root> <issue-number-or-"poll">
   orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL
   orchestrate.sh --restart <run-dir>
   orchestrate.sh --continue <run-dir>
@@ -159,6 +171,10 @@ else
         ;;
       --remote=*)
         REMOTE_NAME="${1#*=}"
+        shift
+        ;;
+      --force)
+        FORCE=1
         shift
         ;;
       *) break ;;
@@ -680,6 +696,35 @@ phase_a() {
   fi
   LOCK_HELD=1
   state_event "$RUN_DIR" "lock_acquired"
+
+  # ---------- S2b: authoritative blocked-by gate (issue #28) ----------
+  # The pickup search's `-is:blocked` reads GitHub's eventually-consistent SEARCH
+  # index; a lag once leaked 25 blocked issues into pickup, launched one tick
+  # apart in creation order. Re-check the strongly consistent dependency GRAPH
+  # here — AFTER the lock (so only the runner that won the lock spends the API
+  # call) and BEFORE the claim (so a blocked issue is never assigned to us). The
+  # count is logged either way, so a bad pickup is visible in the log, not just
+  # in colliding PRs. Fail-closed: an unreadable graph counts as blocked. --force
+  # makes running a blocked issue a visible, deliberate act.
+  local open_blockers=""
+  if [ "$FORCE" = "1" ]; then
+    log "S2b_BlockedCheck: --force set — bypassing blocked-by gate for issue=$ISSUE_NUM"
+    state_event "$RUN_DIR" "blocked_check_forced"
+  elif open_blockers=$(count_open_blockers "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"); then
+    log "S2b_BlockedCheck: issue=$ISSUE_NUM open_blockers=$open_blockers"
+    state_event "$RUN_DIR" "blocked_check_done" "open_blockers=$open_blockers"
+    if [ "$open_blockers" -gt 0 ]; then
+      log "issue #$ISSUE_NUM is blocked by $open_blockers open dependency(ies) — refusing (pass --force to override)"
+      state_finalize "$RUN_DIR" "blocked" "blocked_by_dependency"
+      state_event "$RUN_DIR" "blocked_by_dependency" "open_blockers=$open_blockers"
+      exit 9
+    fi
+  else
+    log "issue #$ISSUE_NUM: blocked_by dependency graph unreadable — assuming blocked (fail-closed; pass --force to override)"
+    state_finalize "$RUN_DIR" "blocked" "blocked_check_failed"
+    state_event "$RUN_DIR" "blocked_check_failed"
+    exit 9
+  fi
 
   # ---------- S3: claim ----------
   enter_state "S3_Claim"
