@@ -41,11 +41,16 @@ refresh_origin() {
 #   1. <remote>/<base-branch> when <base-branch> is given — a repo's opt-in
 #      base_branch (e.g. a long-lived integration branch like "twenty")
 #   2. the named remote's default HEAD (<remote>/main unless the symbolic ref
-#      points elsewhere); falls back to origin/HEAD if the named remote has
-#      no symbolic HEAD ref locally
-#   3. local HEAD (brand-new repo with no symbolic ref)
+#      points elsewhere)
+#   3. local HEAD — ONLY for a genuinely new repo that has no <remote>/* refs
+#      at all. A remote that HAS refs but no symbolic HEAD is a hard error, not
+#      a fall-through to local HEAD (issue #27): `git remote add` never sets
+#      <remote>/HEAD (only `git clone` does), so a multi-remote clone hits this
+#      routinely, and silently branching off local HEAD produces PRs cut from a
+#      stale commit with no error. Refuse instead, naming the one-line fix.
 # Prints the worktree path. Returns non-zero if an explicit base branch does
-# not resolve.
+# not resolve, or if the named remote has refs but no resolvable default HEAD
+# and no base branch was given.
 #
 # The base ref is assumed already fresh: fetching the remote is the caller's
 # responsibility (orchestrate.sh calls refresh_origin before this), so a stale
@@ -62,15 +67,24 @@ create_worktree() {
   mkdir -p "$base_path"
   local wt_path="$base_path/$run_id"
 
-  # Resolve the base ref. An explicit base branch wins; otherwise fall back to
-  # the upstream default branch, then to local HEAD (brand-new repo).
+  # Resolve the base ref. An explicit base branch wins; otherwise use the named
+  # remote's default HEAD. Local HEAD is a fallback ONLY when the remote has no
+  # refs at all (brand-new repo) — never a silent catch-all (issue #27).
   local base_ref
   if [ -n "$base_branch" ]; then
     base_ref="$remote/$base_branch"
   elif base_ref=$(cd "$repo" && git symbolic-ref --short "refs/remotes/$remote/HEAD" 2>/dev/null); then
     : # got something like <remote>/main
+  elif [ -n "$(git -C "$repo" for-each-ref --count=1 "refs/remotes/$remote/")" ]; then
+    # The remote is fetched (it has refs) but carries no symbolic HEAD to name
+    # its default branch. Falling back to local HEAD here would branch off
+    # whatever commit the working copy happens to sit on — the silent stale-base
+    # bug of issue #27. Fail fast, naming the fix, before any side effect.
+    echo "create_worktree: '$remote/HEAD' does not resolve and no base branch was given." >&2
+    echo "create_worktree: run 'git remote set-head $remote -a' in the repo (or set base_branch in .claude/run-issues.json), then retry." >&2
+    return 1
   else
-    base_ref="HEAD"
+    base_ref="HEAD" # genuinely new repo: no <remote>/* refs exist yet
   fi
 
   # `set -e` does not propagate a subshell's failure to the caller via the

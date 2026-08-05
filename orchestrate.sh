@@ -726,7 +726,23 @@ phase_a() {
        exit 5 ;;
   esac
 
-  WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH" "$BASE_BRANCH" "$REMOTE_NAME")
+  # create_worktree fails fast when the base ref cannot be resolved without
+  # guessing: an explicit base_branch that does not exist, or (issue #27) a
+  # named remote with refs but no <remote>/HEAD and no base_branch given.
+  # Branching off local HEAD in that case yields PRs cut from a stale commit
+  # with no error, so turn it into a diagnosable block (its stderr names the
+  # fix command) instead of letting `set -e` crash the run non-terminally.
+  local worktree_log="$RUN_DIR/worktree-create.log"
+  if ! WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH" "$BASE_BRANCH" "$REMOTE_NAME" 2>"$worktree_log"); then
+    log "S4: create_worktree failed — base ref unresolved; see $worktree_log"
+    state_finalize "$RUN_DIR" "blocked" "worktree_base_unresolved"
+    state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME"
+    _post_situation_to_issue "worktree_base_unresolved" \
+      "Worktreen base-haaraa ei voitu ratkaista ennen worktreen luontia — feature-haara olisi haarautunut väärästä commitista. Yleisin syy: \`$REMOTE_NAME/HEAD\` puuttuu kloonista (\`git remote add\` ei aseta sitä, vain \`git clone\`). Korjaus on lokissa nimetyllä komennolla, tai aseta \`base_branch\` repon \`.claude/run-issues.json\`:iin." \
+      "$worktree_log" 0 log
+    _add_needs_human_label
+    exit 5
+  fi
   state_set "$RUN_DIR" "worktree_path" "$WORKTREE_PATH"
   state_event "$RUN_DIR" "worktree_created" "path=$WORKTREE_PATH"
 

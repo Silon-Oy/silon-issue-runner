@@ -12,6 +12,11 @@
 #   (e) create_worktree without base -> falls back to origin/HEAD (main).
 #   (f) create_worktree with a non-existent base -> non-zero, no worktree dir.
 #   (g) pr-watch P5 rebases onto the PR's OWN base (origin/twenty), not main.
+#   (h) create_worktree, no base, remote has refs but no <remote>/HEAD (the
+#       `git remote add` multi-remote case) -> fail-fast, no worktree, error
+#       names `git remote set-head <remote> -a` (issue #27, no silent HEAD).
+#   (i) create_worktree in a repo with NO remote refs at all -> local HEAD
+#       fallback (the one legitimate HEAD case: a brand-new repo).
 #
 # Real local git repos (bare origin + clones); no network. orchestrate.sh has
 # no main-guard, so load_repo_base_branch is extracted with sed+eval rather
@@ -118,6 +123,48 @@ RC_F=$?
 [ "$RC_F" != "0" ] || { echo "FAIL (f): expected non-zero for absent base, got 0"; FAIL=1; }
 [ ! -d "$REPO/.claude/worktrees/run-f" ] || { echo "FAIL (f): worktree dir created despite absent base"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (f) absent base -> non-zero, no worktree"
+
+# ===========================================================================
+# (h) no base, remote has refs but no <remote>/HEAD -> fail-fast (issue #27)
+# ===========================================================================
+# Mirror the multi-remote repro: `git remote add` + fetch populates
+# refs/remotes/other/* but NEVER refs/remotes/other/HEAD (only clone/set-head
+# do). Point `other` at the same bare origin — content is irrelevant; all we
+# need is a fetched remote that has refs but no symbolic HEAD.
+git -C "$REPO" remote add other "$ORIGIN"
+git -C "$REPO" fetch -q other
+# Sanity: the setup actually reproduces the missing-HEAD condition.
+if git -C "$REPO" symbolic-ref --short refs/remotes/other/HEAD >/dev/null 2>&1; then
+  echo "FAIL (h setup): other/HEAD unexpectedly resolves — repro invalid"; FAIL=1
+fi
+[ -n "$(git -C "$REPO" for-each-ref --count=1 refs/remotes/other/)" ] \
+  || { echo "FAIL (h setup): other has no refs — repro invalid"; FAIL=1; }
+
+H_ERR="$WORK/h.err"
+WT_H=$(create_worktree "$REPO" "run-h" "feat/h" "" "other" 2>"$H_ERR")
+RC_H=$?
+[ "$RC_H" != "0" ] || { echo "FAIL (h): expected non-zero when other/HEAD missing, got 0"; FAIL=1; }
+[ ! -d "$REPO/.claude/worktrees/run-h" ] || { echo "FAIL (h): worktree dir created despite unresolved base"; FAIL=1; }
+grep -q "git remote set-head other -a" "$H_ERR" || { echo "FAIL (h): error did not name the fix command; got: $(cat "$H_ERR")"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS (h) remote refs but no <remote>/HEAD -> fail-fast, names fix"
+
+# ===========================================================================
+# (i) repo with NO remote refs at all -> local HEAD fallback (new repo)
+# ===========================================================================
+NLREPO="$WORK/nolocal-remote"
+git init -q "$NLREPO"
+(
+  cd "$NLREPO"
+  git config user.email t@t.t; git config user.name t
+  echo "solo" > f.txt; git add f.txt; git commit -qm init
+)
+NL_HEAD=$(git -C "$NLREPO" rev-parse HEAD)
+WT_I=$(create_worktree "$NLREPO" "run-i" "feat/i")
+RC_I=$?
+[ "$RC_I" = "0" ] || { echo "FAIL (i): create_worktree rc=$RC_I (want 0 for new repo)"; FAIL=1; }
+GOT_I=$(git -C "$WT_I" rev-parse HEAD 2>/dev/null)
+[ "$GOT_I" = "$NL_HEAD" ] || { echo "FAIL (i): worktree HEAD '$GOT_I' != local HEAD '$NL_HEAD'"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS (i) no remote refs -> local HEAD fallback (new repo)"
 
 # ===========================================================================
 # (g) pr-watch P5 rebases onto the PR's own base (origin/twenty), not main
