@@ -172,7 +172,19 @@ nimeää korjauskomennon. Puuttuva timeout-binääri on vain varoitus (ajo jatku
 Portti on top-levelissä, joten se koskee kaikkia neljää moodia (start / `--resume` / `--restart` /
 `--continue`). Ohitus: `RUN_ISSUES_SKIP_PREFLIGHT=1`.
 
-**Vaihe A** — S1 PickIssue → S2 Lock → S3 Claim → S4 Worktree → S5 DBClone → S6 CycleReview
+**Vaihe A** — S1 PickIssue → S2 Lock → **S2b BlockedCheck** → S3 Claim → S4 Worktree →
+S5 DBClone → S6 CycleReview
+
+- **S2b BlockedCheck** (#28) on autoritatiivinen esto-portti lukon ja claimin välissä.
+  Poimintahaun `-is:blocked` lukee GitHubin *eventually consistent* -hakuindeksiä; kerran
+  laahaava indeksi päästi 25 estettyä issueta poimintaan peräkkäisinä tikkeinä. Portti lukee
+  riippuvuusgraafin **suoraan** (`gh api …/issues/{n}/dependencies/blocked_by`,
+  `lib/issue.sh:count_open_blockers`) ja on **fail-closed**: lukukelvoton graafi tulkitaan
+  estoksi. Sijainti lukon jälkeen ⇒ vain lukon voittaja maksaa API-kutsun; ennen claimia ⇒
+  estettyä issueta ei koskaan assignata itselle. Avoin estäjä ⇒ `blocked/blocked_by_dependency`,
+  lukko vapautetaan, exit 9. Estäjien lukumäärä lokitetaan kummassakin tapauksessa, joten väärä
+  poiminta näkyy lokista eikä vasta törmäävistä PR:istä. Nimetyn ajon voi pakottaa `--force`illa;
+  `-is:blocked` jää halvaksi esikarsinnaksi, ei korvaudu.
 
 - **S4 Worktree** ratkaisee feature-haaran base-refin **arvaamatta**: eksplisiittinen
   `base_branch` → `<remote>/<base_branch>`, muuten `<remote>/HEAD`. Jos remotella on refit
@@ -221,6 +233,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) timeouttasi — ajo finalisoitu `timed_out`, kelpaa `--restart`iin |
 | 8 | Puuttuva pakollinen riippuvuus — S0-preflight-portti pysäytti ajon ennen S1:tä (ei lukkoa, ei claimia, ei run-diriä); stderr-viesti nimeää korjauskomennon |
+| 9 | Issue on estetty avoimella `blocked_by`-riippuvuudella — S2b-portti (#28) kieltäytyi lukon ja claimin välissä; ajo finalisoitu `blocked/blocked_by_dependency`, lukko vapautettu, ei claimia. Fail-closed (lukukelvoton graafi = esto). Nimetyn ajon voi pakottaa `--force`illa |
 | 10 | Odottaa ihmisen katselmointia — jatka `--resume` |
 | 11 | Odottaa tarkennusta — cycle review palautti NEEDS_CLARIFICATION; ajo finalisoitu `awaiting_clarification`, pollerin `scan_answered` jatkaa `--continue`lla |
 
@@ -235,7 +248,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
@@ -502,6 +515,9 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   natiiviin `is:blocked`-kvalifikaattoriin. Jos ominaisuus puuttuu GitHub Enterprise
   Serveristä, poiminta hiljenisi siellä (tuntematon negatiivinen kvalifikaattori palauttaa
   kaikki, ei virhettä). Merkitys tälle asennukselle on nolla: kaikki repot ovat github.com:issa.
+  Sama koskee S2b-portin (#28) dependencies-API:a: jos `…/dependencies/blocked_by` puuttuu tai
+  virheilee, `count_open_blockers` tulkitsee sen estoksi (fail-closed) ⇒ portti kieltäytyisi
+  ajamasta. Hätävara on nimetyn ajon `--force`.
 - **`commands/factory-run.md` viittaa puuttuvaan skriptiin.** Ohje kehottaa ajamaan
   `templates/factory-init.sh`-skriptin; tiedostoa ei ole tässä repossa. Joko se jäi pois
   siirrosta (#2) tai viittaus on vanhentunut.
