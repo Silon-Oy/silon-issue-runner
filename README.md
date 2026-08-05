@@ -225,6 +225,8 @@ jotta kaksi listaa ei ajaudu erilleen.
 |---|---|---|
 | `PR_WATCH_MERGE_LABEL` | `auto-merge` | Label, joka sallii auto-mergen |
 | `PR_WATCH_ENABLE_CONFLICT_RESOLUTION` | `0` (poller nostaa `1`:ksi) | AI-avusteinen konfliktinratkaisu (ks. osio 7.4) |
+| `PR_WATCH_ENABLE_CI_REPAIR` | `0` (poller nostaa `1`:ksi) | AI-avusteinen punaisen CI:n korjaus (ks. osio 7.5) |
+| `PR_WATCH_MAX_CI_REPAIRS` | `1` | CI-korjauksen yrityskatto per PR |
 
 ### Asennin
 
@@ -480,7 +482,10 @@ ajoja ei löydy tältä koneelta, siivous jättää issuen rauhaan ja lisää
 **i) PR on auki — mitä auto-merge vaatii.** PR-vahti mergeää vain, kun **kaikki kolme**
 toteutuu: PR:llä on `auto-merge`-label, CI on vihreä ja GitHub raportoi PR:n mergettäväksi.
 Draft ei ole mergettävä. Vanhentuneen tai konfliktisen PR:n rebase tehdään feature-haaran
-omassa worktreessä, ja CI on ajettava uudelleen vihreäksi ennen mergeä (osio 7.4). Mergen
+omassa worktreessä, ja CI on ajettava uudelleen vihreäksi ennen mergeä (osio 7.4). Punaisen
+CI:n voi pollerin ajama vahti myös yrittää korjata AI-agentilla samassa worktreessä — mutta
+vain todellista virhettä korjaten, ei testiä poistaen, ja CI on aina revalidoitava vihreäksi
+ennen mergeä (osio 7.5). Mergen
 jälkeen vahti ajaa repon valinnaisen `.claude/post-merge-migrate.sh`-skriptin ja siivoaa
 ajojäänteet — mutta **vain saman koneen ajot**; muille koneille se tulostaa lokiin valmiin
 siivouskomennon.
@@ -619,7 +624,33 @@ Rajoittimet:
 Halutessasi voit pitää sen pois myös pollerissa: `PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0`
 `poller.env`-tiedostossa.
 
-### 7.5 Submodule-pinni on turvaportti
+### 7.5 AI-CI-korjaus on oletuksena pois
+
+`pr-watch.sh` pitää muuttujan `PR_WATCH_ENABLE_CI_REPAIR` arvossa `0`. **Poller nostaa sen
+päälle** watchlistin repoille. Kun auto-merge-PR:n **vaadittu** CI-check menee punaiseksi, PR
+jäisi muuten roikkumaan ikuisesti (mikään ei muuta CI:n tulosta). Korjaus päällä vahti ajaa
+AI-agentin, joka korjaa virheen ja pushaa — muuten sama malli kuin konfliktinratkaisussa.
+
+Turvamalli:
+
+- Korjaus tehdään **feature-haaran omassa worktreessä**, ei koskaan mainissa
+  ([`prompts/05-ci-repair.md`](prompts/05-ci-repair.md)).
+- Agentti korjaa **todellisen virheen**. Se **ei saa** viherryttää CI:tä huijaamalla: testin
+  poistaminen, assertion löysääminen, `skip`/`only`/`continue-on-error`, timeoutin kasvatus tai
+  CI-workflown muokkaus ovat kiellettyjä. Jos oikea korjaus ei ole yksiselitteinen, oikea
+  lopputulos on **luovutus ihmiselle, ei vihreä CI** — väärin korjattu punainen CI on huonompi
+  kuin korjaamaton.
+- **CI-revalidointi on pakollinen** korjauksen jälkeen (sama portti kuin konfliktipolussa).
+  Punainen CI, committamaton yritys tai täyttynyt yrityskatto (`PR_WATCH_MAX_CI_REPAIRS`,
+  oletus `1`) ⇒ `needs-human`-label, PR-kommentti ja exit 8.
+- Yrityskatto johdetaan run-dirin tapahtumalogista, joten tilaton vahti ei jää silmukkaan.
+- `UNSTABLE`-tila (vaaditut checkit vihreitä, vain ei-vaadittu punainen) ei laukaise korjausta,
+  eikä estä mergeä. `DIRTY`+punainen rebasetaan ensin.
+
+Halutessasi voit pitää sen pois myös pollerissa: `PR_WATCH_ENABLE_CI_REPAIR=0`
+`poller.env`-tiedostossa.
+
+### 7.6 Submodule-pinni on turvaportti
 
 Kun paketti liitetään dotfiles-repoon, se liitetään **pinnattuna** git-submodulena. Pinni ei
 ole versionhallintakosmetiikkaa vaan turvaraja.
@@ -632,7 +663,7 @@ sanoen push tähän repoon olisi käytännössä etäkoodinsuoritus jokaisella a
 Pinni tekee päivityksestä **eksplisiittisen päätöksen**: submodulen viittaus siirretään käsin,
 ja siirto näkyy dotfiles-repon diffissä.
 
-### 7.6 Asentaja kieltäytyy koskemasta vieraisiin tiedostoihin
+### 7.7 Asentaja kieltäytyy koskemasta vieraisiin tiedostoihin
 
 Asentimen kantava invariantti on **INV-OWN**: se saa luoda, korvata tai poistaa vain polun,
 joka **puuttuu** tai on **symlinkki, jonka kohde resolvoituu paketin juuren sisään**. Kaikki
@@ -783,6 +814,7 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 5 | Merge epäonnistui |
 | 6 | Konflikti vaatii ihmisen — AI ei ratkaissut tai CI punainen |
 | 7 | Merge-jälkeinen migraatio epäonnistui |
+| 8 | Punainen CI vaatii ihmisen — AI ei korjannut, CI jäi punaiseksi tai yrityskatto täyttyi (`needs-human`-label + kommentti) |
 
 ### Label-vetoinen siivous (`auto-clean.sh`)
 

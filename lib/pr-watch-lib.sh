@@ -6,7 +6,7 @@
 #
 # This file is sourced; it defines functions only and does no top-level work.
 
-# pr_decide <pr-view-json> [enable_conflict_resolution] [merge_label]
+# pr_decide <pr-view-json> [enable_conflict_resolution] [merge_label] [enable_ci_repair]
 #
 # Reads a `gh pr view --json state,mergeable,mergeStateStatus,labels,statusCheckRollup`
 # payload on stdin (as the single argument) and prints exactly one decision
@@ -16,25 +16,49 @@
 #                    AND mergeable == "MERGEABLE" / mergeStateStatus CLEAN.
 #   SKIP_NO_LABEL  — the merge label is absent (nothing to do).
 #   SKIP_CLOSED    — PR is not OPEN (merged/closed).
-#   WAIT_CI        — label present but checks are pending/failing.
+#   WAIT_CI        — label present but checks are pending (or failing while CI
+#                    repair is OFF — see FIX_CI). A no-op; retry next poll.
+#   FIX_CI         — label present, CI is RED (a required/blocking check failed),
+#                    and CI repair is ON. The caller runs an AI agent in the
+#                    feature worktree to fix the failure, revalidates CI, and
+#                    only then merges. Never returned for a merge that is already
+#                    allowed (see UNSTABLE below).
 #   WAIT_DIRTY     — label present, mergeStateStatus DIRTY/BEHIND, but conflict
 #                    resolution is OFF (no rebase performed).
 #   REBASE         — label present, mergeStateStatus BEHIND/DIRTY, and conflict
 #                    resolution is ON (caller should attempt a rebase).
-#   SKIP_BLOCKED   — mergeStateStatus BLOCKED (e.g. required review missing);
-#                    not actionable by the watcher.
+#   SKIP_BLOCKED   — mergeStateStatus BLOCKED with GREEN CI (e.g. a required
+#                    review is missing); not actionable by the watcher.
+#
+# ORDERING — two deliberate points the edge cases in issue #25 pin down:
+#   1. DIRTY/BEHIND is decided BEFORE the CI state. A PR that is both out of date
+#      and red must be rebased FIRST (the rebase re-runs CI, so the current red
+#      may be moot). This precedes FIX_CI so the rebase and CI-repair paths are
+#      mutually exclusive per invocation and never nest: a PR still red after a
+#      rebase is re-derived as CLEAN+red on the next poll and can then FIX_CI.
+#   2. UNSTABLE never enters FIX_CI. mergeStateStatus == UNSTABLE means the
+#      REQUIRED checks are green and GitHub considers the PR mergeable; a red
+#      rollup entry there is a NON-required check. Repairing it would be wrong,
+#      so UNSTABLE keeps its prior behaviour (falls through to the merge switch,
+#      which still needs ci==GREEN to actually MERGE — a non-required red there
+#      yields WAIT_CI exactly as before, never a merge on red).
 #
 # INVARIANT (enforced here, asserted by the unit test): the function NEVER
 # returns MERGE unless label AND CI-green AND mergeable are all true together.
+# The FIX_CI path does not weaken this — FIX_CI is a request to repair, not a
+# merge; the merge only happens after a fresh CI-green revalidation.
 #
 # Arguments:
 #   $1  the gh-pr-view JSON document (string)
 #   $2  enable_conflict_resolution: "1" to allow REBASE, anything else = off
 #   $3  merge label name (default "auto-merge")
+#   $4  enable_ci_repair: "1" to allow FIX_CI on RED, anything else = off
+#       (off => a red CI keeps producing WAIT_CI, bit-for-bit as before).
 pr_decide() {
   local json="$1"
   local enable_res="${2:-0}"
   local merge_label="${3:-auto-merge}"
+  local enable_ci_repair="${4:-0}"
 
   local state mergeable merge_state has_label ci
   state=$(jq -r '.state // empty' <<<"$json")
@@ -54,10 +78,38 @@ pr_decide() {
     return 0
   fi
 
+  # Out-of-date branch: rebase FIRST (ordering point 1 above), before the CI
+  # state is even consulted, so REBASE and FIX_CI never contend for the same
+  # invocation.
+  case "$merge_state" in
+    BEHIND|DIRTY)
+      if [ "$enable_res" = "1" ]; then
+        echo "REBASE"
+      else
+        echo "WAIT_DIRTY"
+      fi
+      return 0
+      ;;
+  esac
+
   # CI rollup: green only if there are no FAILURE/ERROR/CANCELLED/TIMED_OUT
   # conclusions AND no still-pending checks. An empty rollup (no checks
   # configured) is treated as green — there is nothing to wait for.
   ci=$(pr_ci_state "$json")
+
+  # RED + repair ON => FIX_CI, but only when the red check actually blocks the
+  # merge. UNSTABLE is excluded (ordering point 2): its red is non-required, so
+  # there is nothing to repair and it must not be blocked in FIX_CI.
+  if [ "$ci" = "RED" ] && [ "$merge_state" != "UNSTABLE" ]; then
+    if [ "$enable_ci_repair" = "1" ]; then
+      echo "FIX_CI"
+    else
+      echo "WAIT_CI"
+    fi
+    return 0
+  fi
+
+  # PENDING (or a non-required RED under UNSTABLE) => wait; nothing to do yet.
   if [ "$ci" != "GREEN" ]; then
     echo "WAIT_CI"
     return 0
@@ -73,13 +125,6 @@ pr_decide() {
         echo "WAIT_CI"
       fi
       ;;
-    BEHIND|DIRTY)
-      if [ "$enable_res" = "1" ]; then
-        echo "REBASE"
-      else
-        echo "WAIT_DIRTY"
-      fi
-      ;;
     BLOCKED)
       echo "SKIP_BLOCKED"
       ;;
@@ -88,6 +133,30 @@ pr_decide() {
       echo "WAIT_CI"
       ;;
   esac
+}
+
+# pr_failed_checks <pr-view-json> — prints one "name: conclusion" line per
+# failed check in the statusCheckRollup, newline-separated (empty if none).
+# Pure + side-effect-free (mirrors pr_ci_state); used to name the red checks in
+# the CI-repair prompt and human-handover comment. Both rollup shapes are
+# handled: CheckRun (conclusion) and legacy StatusContext (state).
+pr_failed_checks() {
+  local json="$1"
+  jq -r '
+    (.statusCheckRollup // [])
+    | map(
+        if has("conclusion") then
+          select((.status // "") == "COMPLETED"
+                 and ((.conclusion // "") as $c
+                      | ($c != "SUCCESS" and $c != "NEUTRAL" and $c != "SKIPPED")))
+          | "\(.name // .context // "check"): \(.conclusion)"
+        else
+          select((.state // "") as $s | ($s != "SUCCESS" and $s != "PENDING"))
+          | "\(.context // .name // "status"): \(.state)"
+        end
+      )
+    | .[]
+  ' <<<"$json" 2>/dev/null || printf ''
 }
 
 # should_close_linked_issue <issue_state>

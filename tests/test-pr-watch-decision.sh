@@ -25,11 +25,11 @@ mk() {
      statusCheckRollup: (if $ci=="" then [] else [{status:"COMPLETED", conclusion:$ci}] end)}'
 }
 
-# assert <name> <expected> <json> <enable-res> <label>
+# assert <name> <expected> <json> <enable-res> <label> [enable-ci-repair]
 assert() {
-  local name="$1" expected="$2" json="$3" res="$4" lbl="$5"
+  local name="$1" expected="$2" json="$3" res="$4" lbl="$5" repair="${6:-0}"
   local got
-  got=$(pr_decide "$json" "$res" "$lbl")
+  got=$(pr_decide "$json" "$res" "$lbl" "$repair")
   if [ "$got" = "$expected" ]; then
     PASS=$((PASS + 1))
     printf 'PASS  %-40s -> %s\n' "$name" "$got"
@@ -58,6 +58,30 @@ assert "label+dirty+resON=REBASE"  REBASE        "$(mk OPEN CONFLICTING DIRTY $L
 PENDING=$(jq -nc '{state:"OPEN",mergeable:"MERGEABLE",mergeStateStatus:"CLEAN",
   labels:[{name:"auto-merge"}],statusCheckRollup:[{status:"IN_PROGRESS",conclusion:null}]}')
 assert "label+pending=WAIT_CI"     WAIT_CI       "$PENDING" 0 "$L"
+
+# --- CI repair (issue #25): the new FIX_CI token, 4th arg = enable_ci_repair ---
+# The motivating case is a REQUIRED check red => mergeStateStatus BLOCKED. RED +
+# repair ON => FIX_CI; RED + repair OFF => WAIT_CI (bit-for-bit prior behaviour);
+# PENDING => WAIT_CI regardless.
+assert "red+blocked+repairON=FIX_CI"  FIX_CI   "$(mk OPEN MERGEABLE BLOCKED $L FAILURE)"  0 "$L" 1
+assert "red+clean+repairON=FIX_CI"    FIX_CI   "$(mk OPEN MERGEABLE CLEAN   $L FAILURE)"  0 "$L" 1
+assert "red+blocked+repairOFF=WAIT"   WAIT_CI  "$(mk OPEN MERGEABLE BLOCKED $L FAILURE)"  0 "$L" 0
+assert "red+clean+repairOFF=WAIT"     WAIT_CI  "$(mk OPEN MERGEABLE CLEAN   $L FAILURE)"  0 "$L" 0
+assert "pending+repairON=WAIT_CI"     WAIT_CI  "$PENDING"                                 0 "$L" 1
+
+# Edge: UNSTABLE means required checks are green; a non-required red must NOT be
+# repaired and must NOT block the merge. So repair ON + UNSTABLE + red does not
+# yield FIX_CI — it stays WAIT_CI (prior behaviour), never MERGE-on-red.
+assert "unstable+red+repairON=WAIT"   WAIT_CI  "$(mk OPEN MERGEABLE UNSTABLE $L FAILURE)" 0 "$L" 1
+assert "unstable+green=MERGE"         MERGE    "$(mk OPEN MERGEABLE UNSTABLE $L SUCCESS)" 0 "$L" 1
+
+# Edge: a PR that is both DIRTY and red rebases FIRST — REBASE (res ON) takes
+# precedence over FIX_CI, so the two paths never nest in one invocation.
+assert "dirty+red+resON+repairON=REBASE" REBASE "$(mk OPEN CONFLICTING DIRTY $L FAILURE)" 1 "$L" 1
+assert "behind+red+resON+repairON=REBASE" REBASE "$(mk OPEN MERGEABLE BEHIND $L FAILURE)" 1 "$L" 1
+
+# INVARIANT still holds with repair ON: FIX_CI is never MERGE.
+assert "red+repairON!=MERGE(is FIX)" FIX_CI "$(mk OPEN MERGEABLE CLEAN $L FAILURE)" 0 "$L" 1
 
 # --- INVARIANT: MERGE requires all three. Brute-force every combination of
 #     the three gate inputs and assert MERGE only with the all-true row. ---
