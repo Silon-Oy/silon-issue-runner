@@ -174,6 +174,15 @@ Portti on top-levelissä, joten se koskee kaikkia neljää moodia (start / `--re
 
 **Vaihe A** — S1 PickIssue → S2 Lock → S3 Claim → S4 Worktree → S5 DBClone → S6 CycleReview
 
+- **S4 Worktree** ratkaisee feature-haaran base-refin **arvaamatta**: eksplisiittinen
+  `base_branch` → `<remote>/<base_branch>`, muuten `<remote>/HEAD`. Jos remotella on refit
+  mutta ei symbolista HEADia (yleistä `git remote add`illa lisätyillä remoteilla, joilla
+  `<remote>/HEAD` puuttuu) eikä `base_branch`ia ole annettu, ajo fail-fastaa
+  `blocked/worktree_base_unresolved` -tilaan (exit 5) ennen worktreen luontia sen sijaan, että
+  haarautuisi hiljaa paikalliseen HEADiin — situation-kommentti nimeää korjauskomennon
+  `git remote set-head <remote> -a`. Paikallinen HEAD -fallback jää vain aidosti uudelle
+  repolle ilman yhtään remote-refiä (#27).
+
 **Review-portti (S7)** — auto-tilassa päätös tehdään in-process; interaktiivisessa tilassa
 orkestraattori poistuu koodilla 10 ja jättää ajohakemiston ja lukon elämään. Jatko:
 `orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL`.
@@ -208,7 +217,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | 2 | Ei ehdokasissueta (poll-tila, ei tehtävää) |
 | 3 | Lukko-/claim-kisa hävitty |
 | 4 | Cycle review esti ajon (vain auto-tila) |
-| 5 | Estynyt ennen implementeriä tai siinä — db-clone, S7b tai S7c epäonnistui, tai implementer palautti BLOCKED |
+| 5 | Estynyt ennen implementeriä tai siinä — S4 worktreen base-ref ei ratkennut (`worktree_base_unresolved`), db-clone, S7b tai S7c epäonnistui, tai implementer palautti BLOCKED |
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) timeouttasi — ajo finalisoitu `timed_out`, kelpaa `--restart`iin |
 | 8 | Puuttuva pakollinen riippuvuus — S0-preflight-portti pysäytti ajon ennen S1:tä (ei lukkoa, ei claimia, ei run-diriä); stderr-viesti nimeää korjauskomennon |
