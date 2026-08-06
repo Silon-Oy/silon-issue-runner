@@ -199,6 +199,17 @@ S5 DBClone → S6 CycleReview
   `git remote set-head <remote> -a`. Paikallinen HEAD -fallback jää vain aidosti uudelle
   repolle ilman yhtään remote-refiä (#27).
 
+  `create_worktree` **erottaa epäonnistumisen syyn paluukoodilla** (#34), jottei
+  orkestraattori attribuoi kaikkia virheitä base-refin ratkeamattomuudeksi ja kehota
+  ajamaan `git remote set-head`iä silloinkin kun se oli jo voimassa: `2` = base-ref ei
+  ratkennut (yllä), `3` = **jäänne-haara** saman issuen edellisestä ajosta (suljettu PR
+  `--delete-branch`illa poisti vain remote-haaran, paikallinen jäi) → situation-kommentti
+  nimeää `cleanup-run.sh --repo <path> --issue <N>`, `4` = muu `git worktree add` -virhe
+  (olemassa oleva worktree-hakemisto, levytila, oikeudet) → syytä ei arvata, kommentti
+  osoittaa lokiin, jossa gitin oma virheviesti näkyy. Kaikki kolme finalisoidaan
+  `blocked`-tilaan omalla syykoodillaan (`worktree_base_unresolved` /
+  `worktree_leftover_branch` / `worktree_create_failed`) ja poistuvat koodilla 5.
+
 **Review-portti (S7)** — auto-tilassa päätös tehdään in-process; interaktiivisessa tilassa
 orkestraattori poistuu koodilla 10 ja jättää ajohakemiston ja lukon elämään. Jatko:
 `orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL`.
@@ -233,7 +244,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | 2 | Ei ehdokasissueta (poll-tila, ei tehtävää) |
 | 3 | Lukko-/claim-kisa hävitty |
 | 4 | Cycle review esti ajon (vain auto-tila) |
-| 5 | Estynyt ennen implementeriä tai siinä — S4 worktreen base-ref ei ratkennut (`worktree_base_unresolved`), db-clone, S7b tai S7c epäonnistui, tai implementer palautti BLOCKED |
+| 5 | Estynyt ennen implementeriä tai siinä — S4 worktreen luonti epäonnistui (`worktree_base_unresolved` base-ref ei ratkennut / `worktree_leftover_branch` jäänne-haara edellisestä ajosta / `worktree_create_failed` muu `git worktree add` -virhe, #34), db-clone, S7b tai S7c epäonnistui, tai implementer palautti BLOCKED |
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) timeouttasi — ajo finalisoitu `timed_out`, kelpaa `--restart`iin |
 | 8 | Puuttuva pakollinen riippuvuus — S0-preflight-portti pysäytti ajon ennen S1:tä (ei lukkoa, ei claimia, ei run-diriä); stderr-viesti nimeää korjauskomennon |
