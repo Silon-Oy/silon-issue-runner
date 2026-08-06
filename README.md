@@ -175,6 +175,12 @@ Oletuspolku `$HOME/.config/run-issues/watchlist.json`. Skeema ja multi-remote-es
 Huomaa: jos asetat `RUN_ISSUES_WATCHLIST`-muuttujan, se on **ainoa** ehdokas — osumaton
 override on virhe, ei fallback vanhaan polkuun.
 
+**Molemmat pollerit lukevat saman watchlistin ja kunnioittavat repo-kohtaista `remotes`-taulukkoa**
+(oletus `["origin"]`). `poller.sh` poimii issueita ja `pr-watch-poller.sh` valvoo PR:iä kustakin
+listatusta remotesta erikseen, reitittäen `gh`-kutsut oikeaan GitHub-orgiin. Jos issuet ja PR:t
+elävät muussa kuin `origin`-remotessa, lisää sen nimi `remotes`-taulukkoon — muuten PR-vahti
+katsoisi `origin`ia eikä mergeisi mitään.
+
 ### Kohderepon opt-in-konfiguraatio
 
 Kohderepo voi ohjata orkestraattoria tiedostolla `.claude/run-issues.json`:

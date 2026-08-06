@@ -68,6 +68,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/git-remote.sh
+# Multi-remote routing (issue #33): resolve_remote_to_owner_repo is the fallback
+# owner/repo derivation for a non-origin run whose run.json predates the
+# .owner_repo field. Pure functions; no top-level work.
+. "$SCRIPT_DIR/lib/git-remote.sh"
 # shellcheck source=lib/locking.sh
 . "$SCRIPT_DIR/lib/locking.sh"
 # shellcheck source=lib/state.sh
@@ -112,9 +117,26 @@ PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
 PR_WATCH_LABELS_CSV="${PR_WATCH_LABELS_CSV:-}"
 
 usage() {
-  echo "usage: pr-watch.sh <repo-root> <pr-number|scan>" >&2
+  echo "usage: pr-watch.sh [--remote <name>] <repo-root> <pr-number|scan>" >&2
   exit 1
 }
+
+# Optional `--remote <name>` flag before the two positional args (issue #33).
+# It is a SCAN filter + candidate-count label only: gh/git routing is derived
+# per-run from run.json below, so `--remote` never overrides where a given PR is
+# addressed — it just partitions which completed runs this invocation scans, so
+# the poller can spawn one scan session per remote of a multi-remote clone. Empty
+# (flag omitted, the legacy invocation) means "scan every remote's runs". Both
+# `--remote <name>` and `--remote=<name>` shapes are accepted (mirrors
+# orchestrate.sh).
+REMOTE_FILTER=""
+while :; do
+  case "${1:-}" in
+    --remote)   REMOTE_FILTER="${2:-}"; shift 2 || true ;;
+    --remote=*) REMOTE_FILTER="${1#*=}"; shift ;;
+    *) break ;;
+  esac
+done
 
 [ "$#" -eq 2 ] || usage
 REPO_ROOT="$1"
@@ -124,7 +146,33 @@ TARGET="$2"
 RUNS_DIR="$REPO_ROOT/.claude/run-issues"
 THIS_HOST="$(hostname -s)"
 
+# Per-PR routing (issues #33/#53), set at the top of watch_one from the run's OWN
+# remote recorded in run.json. PR_OWNER_REPO routes gh via `--repo owner/repo` so
+# a PR that lives in a non-origin org is addressed there instead of gh's cwd
+# (origin) inference; PR_ROUTE_REMOTE is the git remote NAME used for
+# fetch/push/rebase so the rebase + CI-repair paths target the PR's real remote.
+# Both default to the legacy single-remote shape: an empty owner/repo means gh
+# falls back to cwd inference, and the remote name is "origin".
+PR_OWNER_REPO=""
+PR_ROUTE_REMOTE="origin"
+
 log() { printf '%s pr-watch: %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
+
+# gh_route <gh-args…> — run gh in REPO_ROOT under the App token, appending
+# `--repo <owner/repo>` when the current PR's owner/repo is known (PR_OWNER_REPO)
+# so a non-origin remote reaches the right org. An empty PR_OWNER_REPO appends
+# nothing, i.e. gh's legacy cwd-based inference (origin) — so single-remote repos
+# and every existing gh mock behave exactly as before. The flag is appended LAST,
+# a position every gh subcommand here accepts, which also keeps the tests' gh
+# mocks (which switch on `$1 $2`) unaffected.
+gh_route() {
+  local repo_args=()
+  [ -n "$PR_OWNER_REPO" ] && repo_args=(--repo "$PR_OWNER_REPO")
+  # ${repo_args[@]+"${repo_args[@]}"} expands to nothing when the array is empty
+  # WITHOUT tripping `set -u` on bash 3.2 (macOS), which otherwise errors
+  # "unbound variable" on a bare "${repo_args[@]}" for an empty array.
+  ( cd "$REPO_ROOT" && gha_with_token gh "$@" ${repo_args[@]+"${repo_args[@]}"} )
+}
 
 # run_field <run-id> <jq-path> — empty string if file/key missing.
 run_field() {
@@ -166,7 +214,7 @@ discover_runid_for_pr() {
 # never tries to remove a worktree that lives on another host.
 scan_candidates() {
   shopt -s nullglob
-  local d rid status url host num
+  local d rid status url host num rem
   for d in "$RUNS_DIR"/*/; do
     rid=$(basename "$d")
     status=$(run_field "$rid" '.status')
@@ -177,6 +225,15 @@ scan_candidates() {
     # Empty host = pre-host-field run.json; treat as local (best effort).
     if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
       continue
+    fi
+    # Remote filter (issue #33): when --remote was passed, only emit runs whose
+    # recorded .remote matches, so the poller can drive one scan session per
+    # remote of a multi-remote clone. An empty .remote is legacy = origin. No
+    # filter (flag omitted) keeps the manual `pr-watch <repo> scan` behaviour of
+    # scanning every remote's runs.
+    if [ -n "$REMOTE_FILTER" ]; then
+      rem=$(run_field "$rid" '.remote'); [ -n "$rem" ] || rem="origin"
+      [ "$rem" = "$REMOTE_FILTER" ] || continue
     fi
     num=$(pr_number_from_url "$url")
     [ -n "$num" ] && printf '%s %s\n' "$num" "$rid"
@@ -207,6 +264,21 @@ watch_one() {
     run_slug=$(run_field "$rid" '.repo_slug')
   fi
 
+  # ----- Routing (issues #33/#53): address gh + git at the PR's OWN remote -----
+  # The orchestrator records the run's remote and (for non-origin remotes) its
+  # owner/repo in run.json. Route every gh call via `--repo owner/repo` and every
+  # git fetch/push/rebase via the remote NAME, so a PR whose issue and branch live
+  # in a non-origin org is operated on THERE instead of falling through to gh's
+  # cwd (origin) inference — the silent multi-remote failure of issue #33. Prefer
+  # the recorded .owner_repo; resolve it from the clone as a fallback for a
+  # non-origin run whose run.json predates the field. Origin stays empty on
+  # purpose (legacy cwd inference). Reset per call for scan mode's PR loop.
+  PR_ROUTE_REMOTE="$run_remote"
+  PR_OWNER_REPO=$(run_field "$rid" '.owner_repo')
+  if [ -z "$PR_OWNER_REPO" ] && [ "$run_remote" != "origin" ]; then
+    PR_OWNER_REPO=$(resolve_remote_to_owner_repo "$REPO_ROOT" "$run_remote" 2>/dev/null || true)
+  fi
+
   # ----- P2: Lock (reuse per-issue lock; PR work and orchestration share it)
   local locked=0
   if [ -n "$issue_num" ]; then
@@ -226,11 +298,8 @@ watch_one() {
 
   # ----- P3: Classify -----------------------------------------------------
   local pr_json
-  if ! pr_json=$(
-        cd "$REPO_ROOT"
-        gha_with_token gh pr view "$pr_num" \
-          --json state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName 2>/dev/null
-      ); then
+  if ! pr_json=$(gh_route pr view "$pr_num" \
+        --json state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName 2>/dev/null); then
     log "gh pr view failed for PR #$pr_num"
     _release
     return 4
@@ -290,7 +359,7 @@ watch_one() {
   # ----- P6: Merge --------------------------------------------------------
   log "merging PR #$pr_num (--rebase --delete-branch)"
   # Merge as the App so the "Merged by" attribution on the PR is <app>[bot].
-  if ! ( cd "$REPO_ROOT" && gha_with_token gh pr merge "$pr_num" --rebase --delete-branch ); then
+  if ! gh_route pr merge "$pr_num" --rebase --delete-branch; then
     log "merge failed for PR #$pr_num"
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
       state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=merge_failed"
@@ -392,7 +461,7 @@ maybe_close_linked_issue() {
   # Read the issue's current state. Fail-safe: any failure or empty result ->
   # do not close (a failed fetch must never trigger a close).
   local issue_json issue_state
-  if ! issue_json=$( cd "$REPO_ROOT" && gha_with_token gh issue view "$issue_num" --json state 2>/dev/null ); then
+  if ! issue_json=$(gh_route issue view "$issue_num" --json state 2>/dev/null); then
     log "could not read state for issue #$issue_num (gh issue view failed) — NOT closing (fail-safe)"
     return 0
   fi
@@ -408,7 +477,7 @@ maybe_close_linked_issue() {
   log "closing issue #$issue_num explicitly after PR #$pr_num merge (base '$base_ref')"
   local body
   body="Suljettu automaattisesti PR #$pr_num mergen jälkeen, koska GitHubin closing keyword ei laukennut (joko base ei ollut default-haara tai PR-kuvauksesta puuttui sulkeva avainsana)."
-  if ( cd "$REPO_ROOT" && gha_with_token gh issue close "$issue_num" --comment "$body" ); then
+  if gh_route issue close "$issue_num" --comment "$body"; then
     [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
       state_event "$run_dir" "linked_issue_closed" "issue=$issue_num" "base=$base_ref"
   else
@@ -420,7 +489,7 @@ maybe_close_linked_issue() {
 # ----- P5: Resolve --------------------------------------------------------
 # Conflict resolution is OFF by default (PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0),
 # in which case pr_decide never returns REBASE and this is unreachable. When ON
-# and the PR is BEHIND/DIRTY we rebase onto the PR's base branch (origin/<baseRefName>) in its own feature
+# and the PR is BEHIND/DIRTY we rebase onto the PR's base branch (<remote>/<baseRefName>) in its own feature
 # worktree (never main):
 #   - a CONFLICT-FREE rebase is published directly, then CI is revalidated;
 #   - a CONFLICTING rebase is handed to an AI agent (pr_resolve_conflict_ai)
@@ -456,7 +525,11 @@ pr_resolve() {
   local base_ref
   base_ref=$(jq -r '.baseRefName // "main"' <<<"$pr_json")
 
-  log "rebasing PR #$pr_num branch '$branch' onto origin/$base_ref in worktree $worktree"
+  # Route fetch/rebase at the PR's OWN remote (issue #33), not a hardcoded origin
+  # — in a multi-remote clone the base branch lives in the PR's org, addressed by
+  # PR_ROUTE_REMOTE (the run's recorded git remote name; "origin" in the common
+  # single-remote case).
+  log "rebasing PR #$pr_num branch '$branch' onto $PR_ROUTE_REMOTE/$base_ref in worktree $worktree"
 
   # Fetch first so a network/auth failure is distinguishable from a conflict
   # (transient — retry next poll, do not claim a conflict or comment).
@@ -470,16 +543,16 @@ pr_resolve() {
   fi
   _h=""
   if [ -n "$_watch_auth_header" ]; then
-    if ! ( cd "$worktree" && git -c "http.extraheader=$_watch_auth_header" fetch origin "$base_ref" --quiet ); then
-      log "git fetch origin $base_ref failed for PR #$pr_num — retrying next poll"
+    if ! ( cd "$worktree" && git -c "http.extraheader=$_watch_auth_header" fetch "$PR_ROUTE_REMOTE" "$base_ref" --quiet ); then
+      log "git fetch $PR_ROUTE_REMOTE $base_ref failed for PR #$pr_num — retrying next poll"
       [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
         state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
       _watch_auth_header=""
       return 4
     fi
   else
-    if ! ( cd "$worktree" && git fetch origin "$base_ref" --quiet ); then
-      log "git fetch origin $base_ref failed for PR #$pr_num — retrying next poll"
+    if ! ( cd "$worktree" && git fetch "$PR_ROUTE_REMOTE" "$base_ref" --quiet ); then
+      log "git fetch $PR_ROUTE_REMOTE $base_ref failed for PR #$pr_num — retrying next poll"
       [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
         state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
       return 4
@@ -489,7 +562,7 @@ pr_resolve() {
 
   # Attempt the rebase INSIDE the feature worktree, never on the base branch.
   local rebase_rc=0
-  ( cd "$worktree" && git rebase "origin/$base_ref" ) || rebase_rc=$?
+  ( cd "$worktree" && git rebase "$PR_ROUTE_REMOTE/$base_ref" ) || rebase_rc=$?
 
   if [ "$rebase_rc" -eq 0 ]; then
     # Conflict-free rebase. Publish it and revalidate CI.
@@ -524,7 +597,7 @@ pr_resolve_conflict_ai() {
   local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="${6:-main}"
 
   local base_sha conflict_files
-  base_sha=$( cd "$worktree" && git rev-parse --short "origin/$base_ref" 2>/dev/null || echo "unknown" )
+  base_sha=$( cd "$worktree" && git rev-parse --short "$PR_ROUTE_REMOTE/$base_ref" 2>/dev/null || echo "unknown" )
   conflict_files=$( cd "$worktree" && git diff --name-only --diff-filter=U 2>/dev/null )
   [ -n "$conflict_files" ] || conflict_files="(ei listattavissa — tarkista \`git status\`)"
 
@@ -558,11 +631,13 @@ pr_resolve_conflict_ai() {
   return 1
 }
 
-# _conflict_resolution_clean <worktree> [base-ref] — 0 iff the worktree is in a
-# clean, fully-rebased state: no rebase in progress, no unmerged paths, a clean
-# working tree, and HEAD descends from origin/<base-ref> (the rebase landed).
+# _conflict_resolution_clean <worktree> [base-ref] [remote] — 0 iff the worktree
+# is in a clean, fully-rebased state: no rebase in progress, no unmerged paths, a
+# clean working tree, and HEAD descends from <remote>/<base-ref> (the rebase
+# landed). <remote> defaults to PR_ROUTE_REMOTE (issue #33) so the ancestry check
+# targets the PR's own remote; "origin" in the common single-remote case.
 _conflict_resolution_clean() {
-  local wt="$1" base_ref="${2:-main}"
+  local wt="$1" base_ref="${2:-main}" remote="${3:-${PR_ROUTE_REMOTE:-origin}}"
   (
     cd "$wt" || exit 1
     local rebase_merge rebase_apply
@@ -574,8 +649,8 @@ _conflict_resolution_clean() {
     git diff --name-only --diff-filter=U 2>/dev/null | grep -q . && exit 1
     # Working tree + index must be clean (rebase committed everything).
     git status --porcelain 2>/dev/null | grep -q . && exit 1
-    # HEAD must descend from origin/<base-ref>, i.e. the rebase landed on the new base.
-    git merge-base --is-ancestor "origin/$base_ref" HEAD || exit 1
+    # HEAD must descend from <remote>/<base-ref>, i.e. the rebase landed on the new base.
+    git merge-base --is-ancestor "$remote/$base_ref" HEAD || exit 1
     exit 0
   )
 }
@@ -610,10 +685,10 @@ _pr_publish_and_revalidate() {
   }
   local body
   body=$(printf '%s\n\n%s\n%s\n' \
-    "PR-valvoja rebasesi haaran \`$branch\` \`origin/$base_ref\`:n päälle (konfliktit ratkaistiin AI:lla, jos niitä oli), mutta **CI ei vihreytynyt** uudelleenajossa." \
+    "PR-valvoja rebasesi haaran \`$branch\` \`$PR_ROUTE_REMOTE/$base_ref\`:n päälle (konfliktit ratkaistiin AI:lla, jos niitä oli), mutta **CI ei vihreytynyt** uudelleenajossa." \
     "Haara on pushattu rebasetussa tilassa — tarkista CI-lokit ja ratkaisun oikeellisuus worktreessä \`$worktree\`." \
     "PR:ää **ei mergetty**. Korjaa ja merkkaa PR uudelleen, tai aja valvoja uudelleen.")
-  ( cd "$REPO_ROOT" && printf '%s' "$body" | gha_with_token gh pr comment "$pr_num" --body-file - ) || \
+  printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
     log "failed to post ci-red comment on PR #$pr_num"
   return 6
 }
@@ -627,7 +702,7 @@ _pr_abort_to_human() {
 
   ( cd "$worktree" && git rebase --abort 2>/dev/null || true )
   local base_sha
-  base_sha=$( cd "$worktree" && git rev-parse "origin/$base_ref" 2>/dev/null || echo "unknown" )
+  base_sha=$( cd "$worktree" && git rev-parse "$PR_ROUTE_REMOTE/$base_ref" 2>/dev/null || echo "unknown" )
 
   log "AI could not resolve conflict on PR #$pr_num — rebase aborted; asking for human resolution"
   [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
@@ -636,11 +711,11 @@ _pr_abort_to_human() {
   }
   local body
   body=$(printf '%s\n\n%s\n%s\n%s\n' \
-    "PR-valvoja yritti rebasea \`origin/$base_ref\` (sha \`$base_sha\`) päälle ja ratkaista konfliktin AI-agentilla, mutta kestävää ratkaisua ei syntynyt." \
+    "PR-valvoja yritti rebasea \`$PR_ROUTE_REMOTE/$base_ref\` (sha \`$base_sha\`) päälle ja ratkaista konfliktin AI-agentilla, mutta kestävää ratkaisua ei syntynyt." \
     "Rebase peruttiin (\`git rebase --abort\`), joten haara \`$branch\` on ennallaan." \
     "Ratkaise konflikti manuaalisesti worktreessä \`$worktree\`, pushaa, ja merkkaa PR uudelleen." \
     "(AI-konfliktinratkaisu on päällä \`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1\` — tämä konflikti vaati ihmisen.)")
-  ( cd "$REPO_ROOT" && printf '%s' "$body" | gha_with_token gh pr comment "$pr_num" --body-file - ) || \
+  printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
     log "failed to post conflict comment on PR #$pr_num"
 }
 
@@ -654,7 +729,7 @@ pr_wait_ci_green() {
   local i=0 out rc
   while [ "$i" -lt "$max_polls" ]; do
     set +e
-    out=$( cd "$REPO_ROOT" && gha_with_token gh pr checks "$pr_num" 2>/dev/null )
+    out=$(gh_route pr checks "$pr_num" 2>/dev/null)
     rc=$?
     set -e
     # gh pr checks: rc 0 = all passed, 8 = some pending, non-zero/other = failure.
@@ -696,17 +771,20 @@ _pr_call_agent() {
 # the orchestrator's push; the header is captured to a local and never echoed).
 # --force-with-lease is safe for BOTH a rewritten (rebased) branch and a plain
 # fast-forward (a new CI-fix commit): it only refuses if the remote ref moved
-# unexpectedly. Returns 0 on success, 1 on failure.
+# unexpectedly. Pushes to the PR's OWN remote (PR_ROUTE_REMOTE, issue #33), not a
+# hardcoded origin — "origin" in the common single-remote case. Returns 0 on
+# success, 1 on failure.
 _pr_force_push() {
   local worktree="$1" branch="$2"
+  local remote="${PR_ROUTE_REMOTE:-origin}"
   local _hdr="" _h=""
   if _h=$(gha_git_push_header 2>/dev/null); then _hdr="$_h"; fi
   _h=""
   local ok=1
   if [ -n "$_hdr" ]; then
-    ( cd "$worktree" && git -c "http.extraheader=$_hdr" push --force-with-lease origin "$branch" ) && ok=0
+    ( cd "$worktree" && git -c "http.extraheader=$_hdr" push --force-with-lease "$remote" "$branch" ) && ok=0
   else
-    ( cd "$worktree" && git push --force-with-lease origin "$branch" ) && ok=0
+    ( cd "$worktree" && git push --force-with-lease "$remote" "$branch" ) && ok=0
   fi
   _hdr=""
   return "$ok"
@@ -849,11 +927,10 @@ pr_fix_ci() {
 _pr_collect_ci_log() {
   local branch="$1"
   local run_id
-  run_id=$( cd "$REPO_ROOT" && gha_with_token gh run list --branch "$branch" \
-              --json databaseId,conclusion --limit 20 2>/dev/null \
-            | jq -r 'map(select(.conclusion == "failure")) | .[0].databaseId // empty' 2>/dev/null ) || run_id=""
+  run_id=$(gh_route run list --branch "$branch" --json databaseId,conclusion --limit 20 2>/dev/null \
+            | jq -r 'map(select(.conclusion == "failure")) | .[0].databaseId // empty' 2>/dev/null) || run_id=""
   [ -n "$run_id" ] || { printf ''; return 0; }
-  ( cd "$REPO_ROOT" && gha_with_token gh run view "$run_id" --log-failed 2>/dev/null ) \
+  gh_route run view "$run_id" --log-failed 2>/dev/null \
     | head -c "$PR_WATCH_CI_LOG_MAX" || printf ''
 }
 
@@ -867,11 +944,12 @@ _pr_collect_ci_log() {
 _pr_ci_handover_to_human() {
   local pr_num="$1" run_dir="$2" worktree="$3" failed="$4" why="$5"
 
-  # needs-human label — ensure it exists, then attach. Both are best-effort and
-  # run in REPO_ROOT so gh infers {owner}/{repo} from the working directory.
-  ( cd "$REPO_ROOT" && labels_ensure "" needs-human B60205 "Vaatii ihmisen — automaatio luovutti" ) \
+  # needs-human label — ensure it exists, then attach. Both are best-effort. The
+  # REST label helpers route to PR_OWNER_REPO when known (issue #33) and fall back
+  # to {owner}/{repo} cwd inference when empty, so we keep the REPO_ROOT cwd.
+  ( cd "$REPO_ROOT" && labels_ensure "$PR_OWNER_REPO" needs-human B60205 "Vaatii ihmisen — automaatio luovutti" ) \
     || log "could not ensure needs-human label for PR #$pr_num"
-  ( cd "$REPO_ROOT" && labels_add "" "$pr_num" needs-human ) \
+  ( cd "$REPO_ROOT" && labels_add "$PR_OWNER_REPO" "$pr_num" needs-human ) \
     || log "could not add needs-human label to PR #$pr_num"
 
   [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
@@ -885,12 +963,21 @@ _pr_ci_handover_to_human() {
     "Punaiseksi jääneet checkit:"$'\n'"\`\`\`"$'\n'"${failed:-（ei listattavissa — tarkista PR:n checkit）}"$'\n'"\`\`\`" \
     "PR:ää **ei mergetty**. Tarkista CI-lokit ja korjauksen oikeellisuus, tai korjaa käsin ja aja valvoja uudelleen." \
     "(AI-CI-korjaus on päällä \`PR_WATCH_ENABLE_CI_REPAIR=1\`. Poista \`needs-human\`-label kun asia on hoidettu.)")
-  ( cd "$REPO_ROOT" && printf '%s' "$body" | gha_with_token gh pr comment "$pr_num" --body-file - ) || \
+  printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
     log "failed to post ci-repair comment on PR #$pr_num"
 }
 
 # ----- main ---------------------------------------------------------------
 if [ "$TARGET" = "scan" ]; then
+  # Collect candidates once so we can log HOW MANY were examined for this
+  # (repo, remote) before processing (issue #33). The old lone `launching` line
+  # could not distinguish "no mergeable PRs here" from "looked at the wrong
+  # repo" — a remote-scoped candidate count makes a mis-routed scan visible in
+  # the log immediately instead of only via PRs that never merge.
+  candidates=$(scan_candidates)
+  candidate_count=$(printf '%s' "$candidates" | grep -c . || true)
+  log "repo=$REPO_ROOT remote=${REMOTE_FILTER:-all} candidates=$candidate_count"
+
   found=0
   rc_final=2
   while IFS= read -r line; do
@@ -910,7 +997,9 @@ if [ "$TARGET" = "scan" ]; then
     elif [ "$rc_final" != "0" ]; then
       rc_final="$rc"
     fi
-  done < <(scan_candidates)
+  done <<EOF
+$candidates
+EOF
 
   [ "$found" = "1" ] || { log "scan: no candidate PRs"; exit 2; }
   exit "$rc_final"
