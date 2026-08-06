@@ -789,20 +789,43 @@ phase_a() {
        exit 5 ;;
   esac
 
-  # create_worktree fails fast when the base ref cannot be resolved without
-  # guessing: an explicit base_branch that does not exist, or (issue #27) a
-  # named remote with refs but no <remote>/HEAD and no base_branch given.
-  # Branching off local HEAD in that case yields PRs cut from a stale commit
-  # with no error, so turn it into a diagnosable block (its stderr names the
-  # fix command) instead of letting `set -e` crash the run non-terminally.
+  # create_worktree fails fast rather than branching off a wrong base. Its exit
+  # code identifies WHICH failure so we attribute the block correctly (issue
+  # #34 — one code made every failure look like a missing <remote>/HEAD and
+  # printed the wrong fix): 2 = base ref unresolved (issue #27), 3 = leftover
+  # branch from a previous run of this issue, 4 = other `git worktree add`
+  # failure whose cause we do not name. The stderr captured into worktree_log
+  # carries git's real error for cases 3 and 4.
   local worktree_log="$RUN_DIR/worktree-create.log"
-  if ! WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH" "$BASE_BRANCH" "$REMOTE_NAME" 2>"$worktree_log"); then
-    log "S4: create_worktree failed — base ref unresolved; see $worktree_log"
-    state_finalize "$RUN_DIR" "blocked" "worktree_base_unresolved"
-    state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME"
-    _post_situation_to_issue "worktree_base_unresolved" \
-      "Worktreen base-haaraa ei voitu ratkaista ennen worktreen luontia — feature-haara olisi haarautunut väärästä commitista. Yleisin syy: \`$REMOTE_NAME/HEAD\` puuttuu kloonista (\`git remote add\` ei aseta sitä, vain \`git clone\`). Korjaus on lokissa nimetyllä komennolla, tai aseta \`base_branch\` repon \`.claude/run-issues.json\`:iin." \
-      "$worktree_log" 0 log
+  local worktree_rc=0
+  WORKTREE_PATH=$(create_worktree "$REPO_ROOT" "$RUN_ID" "$BRANCH" "$BASE_BRANCH" "$REMOTE_NAME" 2>"$worktree_log") || worktree_rc=$?
+  if [ "$worktree_rc" -ne 0 ]; then
+    case "$worktree_rc" in
+      2)
+        log "S4: create_worktree failed — base ref unresolved; see $worktree_log"
+        state_finalize "$RUN_DIR" "blocked" "worktree_base_unresolved"
+        state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME" "reason=base_unresolved"
+        _post_situation_to_issue "worktree_base_unresolved" \
+          "Worktreen base-haaraa ei voitu ratkaista ennen worktreen luontia — feature-haara olisi haarautunut väärästä commitista. Yleisin syy: \`$REMOTE_NAME/HEAD\` puuttuu kloonista (\`git remote add\` ei aseta sitä, vain \`git clone\`). Korjaus on lokissa nimetyllä komennolla, tai aseta \`base_branch\` repon \`.claude/run-issues.json\`:iin." \
+          "$worktree_log" 0 log
+        ;;
+      3)
+        log "S4: create_worktree failed — leftover branch '$BRANCH' from a previous run; see $worktree_log"
+        state_finalize "$RUN_DIR" "blocked" "worktree_leftover_branch"
+        state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME" "reason=leftover_branch"
+        _post_situation_to_issue "worktree_leftover_branch" \
+          "Worktreen luonti epäonnistui: paikallinen haara \`$BRANCH\` on jäänne saman issuen edellisestä ajosta. Suljettu PR (\`gh pr close --delete-branch\`) poistaa vain remote-haaran, joten paikallinen jää. Korjaus: aja \`cleanup-run.sh --repo $REPO_ROOT --issue $ISSUE_NUM\` ja käynnistä issue uudelleen — älä aja \`git remote set-head\`, se ei liity tähän." \
+          "$worktree_log" 0 log
+        ;;
+      *)
+        log "S4: create_worktree failed (rc=$worktree_rc) — 'git worktree add' error; see $worktree_log"
+        state_finalize "$RUN_DIR" "blocked" "worktree_create_failed"
+        state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME" "reason=create_failed"
+        _post_situation_to_issue "worktree_create_failed" \
+          "Worktreen luonti epäonnistui (\`git worktree add\`) — base-haara ratkesi, joten syy on itse luonnissa (esim. olemassa oleva worktree-hakemisto, levytila tai oikeudet). Todellinen virhe on liitetyssä lokissa; en arvaa syytä sen yli." \
+          "$worktree_log" 0 log
+        ;;
+    esac
     _add_needs_human_label
     exit 5
   fi
