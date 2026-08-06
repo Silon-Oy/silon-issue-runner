@@ -134,8 +134,11 @@ labels_remove() {
   err=$(labels_gh api --method DELETE "repos/$(_labels_repo_path "$owner_repo")/issues/$number/labels/$encoded" 2>&1 >/dev/null)
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    # A 404 means the label is already absent — success for our intent.
-    if printf '%s' "$err" | grep -qiE 'HTTP 404|404:|not found|does not exist'; then
+    # A 404 means the label is already absent — success for our intent. Match the
+    # HTTP-status form only: `gh api` appends `(HTTP <code>)` to every error, so a
+    # bare `command not found` (rc 127, gh off PATH) or a 403 must NOT be mistaken
+    # for a benign 404 and swallowed — those are the failures cleanup-run counts.
+    if printf '%s' "$err" | grep -qiE 'HTTP 404|404:'; then
       return 0
     fi
     _labels_diag "labels_remove($owner_repo#$number: $label)" "$err"
