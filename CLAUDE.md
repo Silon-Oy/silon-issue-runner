@@ -96,7 +96,11 @@ paketin repo-juuri
 ```
 
 Submodule pinnataan tiettyyn committiin: dotfilesin `git pull` ei siis koskaan päivitä
-orkestraattoria vahingossa, vaan päivitys on eksplisiittinen toimenpide.
+orkestraattoria vahingossa, vaan päivitys on eksplisiittinen toimenpide. Pinnin kääntöpuoli on
+että ajossa oleva koodi voi ajautua hiljaa `main`in taakse; #32:n jälkeen ajautuma on näkyvä
+(pollerit lokittavat `version=<sha> behind_origin=<N>` tikin alussa ja varoittavat kun `N>0`,
+`orchestrate.sh --version` tulostaa saman, ja situation-kommenteissa on `Runner-version:`-rivi;
+lähde `lib/version.sh`, §6).
 
 Kahdesta mallista seuraa, ettei asentajan `scripts`-sidonta voi olla ehdoton eikä puuttua:
 submodule-mallissa polun tuottaa vieras puu, johon ei saa kirjoittaa, ja oletusmallissa mikään
@@ -257,6 +261,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, orkestraattorin S0-portti (#7) tekee samasta lähteestä fataalin (exit 8). Korjauskomennot tulevat yhdestä lähteestä (`preflight_install_hint`) |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
+| `version.sh` | Ajossa olevan runner-version näkyväksi teko (#32): `runner_version` (lyhyt HEAD), `runner_behind_origin` (jäljessä `origin/main`ia), `runner_version_summary` (raporttirivi) ja `runner_fetch_throttled` (throttlattu `git fetch`). Fail-soft: puuttuva `.git`/verkko ⇒ `?`. Pollerit lokittavat tikin alussa, `orchestrate.sh --version` ja situation-kommentin `Runner-version:` lukevat samasta lähteestä |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 
 ## 7. Ympäristömuuttujat

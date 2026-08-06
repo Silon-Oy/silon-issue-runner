@@ -83,6 +83,12 @@ WATCHLIST_TRIED="${RUN_ISSUES_WATCHLIST:-${WATCHLIST_CONFIG}, ${WATCHLIST_LEGACY
 # shellcheck source=lib/git-remote.sh
 . "${RUN_ISSUES_HOME}/lib/git-remote.sh"
 
+# runner_version / runner_behind_origin / runner_fetch_throttled report which
+# runner version is actually executing (issue #32). Pure functions; safe to
+# source. Used by the tick-start version banner below.
+# shellcheck source=lib/version.sh
+. "${RUN_ISSUES_HOME}/lib/version.sh"
+
 # Hard requirements; bail fast if anything is missing.
 WATCHLIST=$(poller_resolve_watchlist "${RUN_ISSUES_WATCHLIST:-}" "$WATCHLIST_CONFIG" "$WATCHLIST_LEGACY") \
   || { echo "$(date -u +%FT%TZ) pr-watch-poller: watchlist missing, tried: $WATCHLIST_TRIED" >> "$LOG"; exit 0; }
@@ -94,6 +100,19 @@ preflight_have tmux   || { echo "$(date -u +%FT%TZ) pr-watch-poller: tmux not in
 if ! jq -e . "$WATCHLIST" >/dev/null 2>&1; then
   echo "$(date -u +%FT%TZ) pr-watch-poller: watchlist is not valid JSON" >> "$LOG"
   exit 0
+fi
+
+# ----- Tick-start version banner (issue #32) -------------------------------
+# Log which runner version is actually executing, every tick — see poller.sh for
+# the rationale (a pinned dotfiles submodule drifts silently behind origin/main).
+# Same throttled fetch + WARNING; the watcher's own stamp file so the two pollers
+# do not share throttle state.
+runner_fetch_throttled "$RUN_ISSUES_HOME" "${LOG_DIR}/pr-watch-poller.fetch-stamp" 3600 "$(preflight_timeout_bin)"
+RUNNER_VER=$(runner_version "$RUN_ISSUES_HOME")
+RUNNER_BEHIND=$(runner_behind_origin "$RUN_ISSUES_HOME")
+echo "$(date -u +%FT%TZ) pr-watch-poller: version=$RUNNER_VER behind_origin=$RUNNER_BEHIND" >> "$LOG"
+if [ "$RUNNER_BEHIND" != "?" ] && [ "$RUNNER_BEHIND" -gt 0 ] 2>/dev/null; then
+  echo "$(date -u +%FT%TZ) pr-watch-poller: WARNING running $RUNNER_BEHIND commits behind origin/main (pinned submodule?)" >> "$LOG"
 fi
 
 GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")

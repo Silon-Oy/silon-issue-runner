@@ -151,6 +151,13 @@ LIB_LABELS="${RUN_ISSUES_HOME}/lib/labels.sh"
 # shellcheck source=lib/labels.sh
 . "$LIB_LABELS"
 
+# runner_version / runner_behind_origin / runner_fetch_throttled report which
+# runner version is actually executing (issue #32). Pure functions; safe to
+# source. Used by the tick-start version banner below.
+LIB_VERSION="${RUN_ISSUES_HOME}/lib/version.sh"
+# shellcheck source=lib/version.sh
+. "$LIB_VERSION"
+
 # _iso_to_epoch <iso-utc-ts> — convert an ISO-8601 Zulu timestamp (the format
 # state.sh writes: YYYY-MM-DDTHH:MM:SSZ) to Unix epoch seconds. Empty string on
 # parse failure (callers treat this as "can't compare, leave it alone"). macOS
@@ -549,6 +556,21 @@ scan_clean() {
   # `set -e`, where a trailing-false branch would otherwise abort the caller.
   return 0
 }
+
+# ----- Tick-start version banner (issue #32) -------------------------------
+# Log which runner version is actually executing, every tick. A pinned dotfiles
+# submodule (CLAUDE.md §3) advances only on an explicit bump, and nothing used
+# to reveal when the running code had drifted behind origin/main — a blind spot
+# that produced three wrong diagnoses in one incident. A throttled fetch keeps
+# behind_origin honest (≤ once/hour) without a fetch on every 300s tick; the
+# WARNING makes an out-of-date runner impossible to miss on a glance at the log.
+runner_fetch_throttled "$RUN_ISSUES_HOME" "${LOG_DIR}/run-issues-poller.fetch-stamp" 3600 "$(preflight_timeout_bin)"
+RUNNER_VER=$(runner_version "$RUN_ISSUES_HOME")
+RUNNER_BEHIND=$(runner_behind_origin "$RUN_ISSUES_HOME")
+echo "$(date -u +%FT%TZ) poller: version=$RUNNER_VER behind_origin=$RUNNER_BEHIND" >> "$LOG"
+if [ "$RUNNER_BEHIND" != "?" ] && [ "$RUNNER_BEHIND" -gt 0 ] 2>/dev/null; then
+  echo "$(date -u +%FT%TZ) poller: WARNING running $RUNNER_BEHIND commits behind origin/main (pinned submodule?)" >> "$LOG"
+fi
 
 # ----- Pre-loop liveness sweep (across ALL watchlist repos) ----------------
 # A wedged orchestrator can keep its tmux session alive forever (issue #49: a
