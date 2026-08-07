@@ -81,6 +81,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/pr-watch-lib.sh"
 # shellcheck source=lib/claude-call.sh
 . "$SCRIPT_DIR/lib/claude-call.sh"
+# shellcheck source=lib/preflight.sh
+# Shared dependency probe. Reused for the CI-repair path's claude-CLI preflight
+# (issue #45): the orchestrator's S0 gate already catches the npx --no-install
+# 127 trap before a run starts, but the watcher's FIX_CI classification called
+# the same CLI with no such guard, so a missing agent produced rc=127, a
+# misleading "agent found no fix" comment, and a permanently blocked PR. This
+# gives the watcher the identical probe. RUN_ISSUES_CLAUDE_CMD{,_DEFAULT} come
+# from claude-call.sh, sourced above.
+. "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=lib/labels.sh
 # Label writes go through the REST helpers (no read:project scope needed). The
 # CI-repair human-handover attaches the needs-human label through these.
@@ -214,13 +223,30 @@ discover_runid_for_pr() {
 # never tries to remove a worktree that lives on another host.
 scan_candidates() {
   shopt -s nullglob
-  local d rid status url host num rem
+  local d rid status url host num rem reason
   for d in "$RUNS_DIR"/*/; do
     rid=$(basename "$d")
     status=$(run_field "$rid" '.status')
     url=$(run_field "$rid" '.pr_url')
     host=$(run_field "$rid" '.host')
-    [ "$status" = "completed" ] || continue
+    # Emit completed runs, PLUS runs left blocked by a CI-repair handover (issue
+    # #45, symptom B): those must return to the scan so a PR whose CI has since
+    # gone green (human fixed the cause in main, rebased, removed needs-human) is
+    # merged instead of stranded forever. The condition is deliberately NARROW —
+    # only the ci_repair_failed* blocked_reason — so every other blocked state
+    # (stalled_in_*, env_bootstrap_failed, pr_conflicted) stays out of the scan
+    # exactly as before; watch_one applies the needs-human hold gate before acting.
+    case "$status" in
+      completed) : ;;
+      blocked)
+        reason=$(run_field "$rid" '.blocked_reason')
+        case "$reason" in
+          ci_repair_failed*) : ;;
+          *) continue ;;
+        esac
+        ;;
+      *) continue ;;
+    esac
     [ -n "$url" ] || continue
     # Empty host = pre-host-field run.json; treat as local (best effort).
     if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
@@ -256,12 +282,18 @@ watch_one() {
   # Both fields are absent on legacy runs, which correctly yields the legacy name.
   local run_remote="origin"
   local run_slug=""
+  local run_status="" run_blocked_reason=""
   if [ -n "$rid" ]; then
     run_dir="$RUNS_DIR/$rid"
     issue_num=$(run_field "$rid" '.issue_number')
     run_remote=$(run_field "$rid" '.remote')
     [ -n "$run_remote" ] || run_remote="origin"
     run_slug=$(run_field "$rid" '.repo_slug')
+    # Issue #45 (symptom B): a run left blocked by a CI-repair handover is
+    # re-emitted into the scan (see scan_candidates) so it is not permanently
+    # stranded. We recognise it here to apply the needs-human hold gate below.
+    run_status=$(run_field "$rid" '.status')
+    run_blocked_reason=$(run_field "$rid" '.blocked_reason')
   fi
 
   # ----- Routing (issues #33/#53): address gh + git at the PR's OWN remote -----
@@ -305,8 +337,41 @@ watch_one() {
     return 4
   fi
 
+  # ----- Issue #45 (symptom B): un-stick a CI-repair handover ------------
+  # A run this watcher previously blocked via _pr_ci_handover_to_human is
+  # re-emitted into the scan (scan_candidates below), so it is no longer lost
+  # forever. The needs-human label is the hold flag: while present, the watcher
+  # stays hands-off — no re-decision, no repeated comment on every poll. Once a
+  # human removes it (as the handover comment instructs), the run is re-armed and
+  # falls through to the normal decision: it merges if CI has since gone green, or
+  # is re-attempted/re-handed-over if still red. This delivers what the comment
+  # promises ("remove needs-human when handled").
+  case "$run_blocked_reason" in
+    ci_repair_failed*)
+      if [ "$run_status" = "blocked" ] && pr_has_label "$pr_json" needs-human; then
+        log "PR #$pr_num held by needs-human (CI-repair handover) — skipping until a human removes the label"
+        [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+          state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=needs_human_held"
+        _release
+        return 4
+      fi
+      [ "$run_status" = "blocked" ] && \
+        log "PR #$pr_num re-armed after CI-repair handover (needs-human removed) — re-examining"
+      ;;
+  esac
+
   local decision
   decision=$(pr_decide "$pr_json" "$PR_WATCH_ENABLE_CONFLICT_RESOLUTION" "$PR_WATCH_MERGE_LABEL" "$PR_WATCH_ENABLE_CI_REPAIR")
+
+  # S0-style CI-repair preflight (issue #45, symptom A): FIX_CI is only a useful
+  # classification if the claude CLI can actually launch. If it cannot (the
+  # npx --no-install 127 trap the orchestrator's S0 gate catches), downgrade to
+  # WAIT_CI BEFORE dispatching to pr_fix_ci — so the red PR is re-examined next
+  # poll instead of burning a repair attempt (and its pr_ci_repair_attempted
+  # event) on an agent that never starts, and is never left permanently blocked.
+  if [ "$decision" = "FIX_CI" ] && ! pr_ci_repair_preflight; then
+    decision="WAIT_CI"
+  fi
   log "PR #$pr_num classified: $decision"
   if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
     state_event "$run_dir" "pr_classified" "pr=$pr_num" "decision=$decision"
@@ -803,6 +868,32 @@ _pr_force_push() {
   return "$ok"
 }
 
+# pr_ci_repair_preflight — is the claude CLI usable for a CI-repair call?
+# (issue #45, symptom A). Mirrors the orchestrator's S0 gate (lib/preflight.sh):
+# the DEFAULT invocation `npx --no-install @anthropic-ai/claude-code` exits 127
+# when the package is absent even though npx itself is on PATH, so `command -v`
+# cannot see the failure — only an actual `--version` probe can. An overridden
+# RUN_ISSUES_CLAUDE_CMD is the user's own driver whose --version we must neither
+# guess nor fire, so we only verify its first token is callable (same policy as
+# S0's `have` mode). Logs the reason once on failure. Returns 0 usable, 1 not.
+pr_ci_repair_preflight() {
+  local reason=""
+  if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
+    # shellcheck disable=SC2086
+    if ! preflight_probe_claude $RUN_ISSUES_CLAUDE_CMD; then
+      reason="claude CLI probe failed (\`$RUN_ISSUES_CLAUDE_CMD --version\` returned non-zero — likely the npx --no-install 127 trap; fix: $(preflight_install_hint claude))"
+    fi
+  else
+    local first="${RUN_ISSUES_CLAUDE_CMD%% *}"
+    if ! preflight_have "$first"; then
+      reason="claude driver '$first' not found on PATH (RUN_ISSUES_CLAUDE_CMD override)"
+    fi
+  fi
+  [ -z "$reason" ] && return 0
+  log "CI-repair unavailable: $reason"
+  return 1
+}
+
 # ----- P5b: Repair red CI --------------------------------------------------
 # CI repair is OFF by default (PR_WATCH_ENABLE_CI_REPAIR=0), in which case
 # pr_decide never returns FIX_CI and this is unreachable. When ON and a labelled
@@ -892,6 +983,21 @@ pr_fix_ci() {
     "$PR_WATCH_CI_REPAIR_TIMEOUT" || arc=$?
   log "AI CI-repair call for PR #$pr_num returned rc=$arc"
 
+  # Distinguish "could not launch" from "found no fix" (issue #45, symptom A).
+  # rc=127 is command-not-found — the agent never ran, so reporting it as "the
+  # agent produced no commit" would mislead a human into studying a CI error the
+  # agent never even looked at. This is defence-in-depth: the classify-time
+  # preflight (pr_ci_repair_preflight) normally downgrades FIX_CI to WAIT_CI
+  # before we get here, but a transient launch failure past that check must still
+  # be reported honestly as infrastructure, not an agent decision.
+  if [ "$arc" -eq 127 ]; then
+    log "CI-repair agent could not be launched for PR #$pr_num (rc=127) — infrastructure failure, not an agent decision"
+    _pr_ci_handover_to_human "$pr_num" "$run_dir" "$worktree" "$failed_checks" \
+      "CI-korjausagenttia ei voitu käynnistää (rc=127); tarkista claude-CLI:n saatavuus pr-watchin ympäristössä" \
+      launch_failed
+    return 8
+  fi
+
   # Verify the agent produced a NEW commit on a CLEAN worktree. No new commit =>
   # a failed attempt (nothing to push, CI would not change) — hand to a human
   # WITHOUT a pointless push. A dirty worktree must never be published either.
@@ -947,15 +1053,20 @@ _pr_collect_ci_log() {
     | head -c "$PR_WATCH_CI_LOG_MAX" || printf ''
 }
 
-# _pr_ci_handover_to_human <pr-number> <run-dir> <worktree> <failed-checks> <why>
+# _pr_ci_handover_to_human <pr-number> <run-dir> <worktree> <failed-checks> <why> [<kind>]
 # The CI-repair path's human handover: attach the needs-human label, comment the
 # PR with what was tried and which checks stayed red, and finalize the run
 # blocked. Mirrors _pr_abort_to_human but for CI repair — the branch/worktree are
 # left AS-IS for inspection (no rebase to abort), the run is marked blocked, and
 # it carries its own exit code (8) at the call site. All steps are best-effort:
 # a failed label or comment never changes the outcome.
+#   <kind> = agent_ran (default) — the agent ran but could not fix / CI stayed red
+#          = launch_failed        — the agent never launched (rc=127); the comment
+#            says so plainly instead of implying the agent tried (issue #45).
+# The blocked_reason recorded here (ci_repair_failed_pr_<n>) is what re-emits the
+# run into scan_candidates so a later CI-green PR is un-stuck (issue #45).
 _pr_ci_handover_to_human() {
-  local pr_num="$1" run_dir="$2" worktree="$3" failed="$4" why="$5"
+  local pr_num="$1" run_dir="$2" worktree="$3" failed="$4" why="$5" kind="${6:-agent_ran}"
 
   # needs-human label — ensure it exists, then attach. Both are best-effort. The
   # REST label helpers route to PR_OWNER_REPO when known (issue #33) and fall back
@@ -970,12 +1081,23 @@ _pr_ci_handover_to_human() {
     state_event "$run_dir" "pr_ci_repair_handover" "pr=$pr_num" "reason=$why"
   }
 
+  # The opening sentence is the honest signal (issue #45, symptom A): a launch
+  # failure (rc=127) must NOT read as "the agent tried and found no fix", which
+  # sends a human off studying a CI error the agent never looked at. Everything
+  # after the opening is shared.
+  local opening
+  if [ "$kind" = "launch_failed" ]; then
+    opening="PR-valvoja **ei voinut käynnistää** CI-korjausagenttia feature-worktreessä \`$worktree\`: $why. Agentti ei siis ehtinyt tutkia CI-virhettä lainkaan — kyseessä on infrastruktuurivika, ei agentin päätös olla korjaamatta."
+  else
+    opening="PR-valvoja yritti korjata punaisen CI:n AI-agentilla feature-worktreessä \`$worktree\`, mutta $why."
+  fi
+
   local body
   body=$(printf '%s\n\n%s\n\n%s\n%s\n' \
-    "PR-valvoja yritti korjata punaisen CI:n AI-agentilla feature-worktreessä \`$worktree\`, mutta $why." \
+    "$opening" \
     "Punaiseksi jääneet checkit:"$'\n'"\`\`\`"$'\n'"${failed:-（ei listattavissa — tarkista PR:n checkit）}"$'\n'"\`\`\`" \
     "PR:ää **ei mergetty**. Tarkista CI-lokit ja korjauksen oikeellisuus, tai korjaa käsin ja aja valvoja uudelleen." \
-    "(AI-CI-korjaus on päällä \`PR_WATCH_ENABLE_CI_REPAIR=1\`. Poista \`needs-human\`-label kun asia on hoidettu.)")
+    "(AI-CI-korjaus on päällä \`PR_WATCH_ENABLE_CI_REPAIR=1\`. Poista \`needs-human\`-label kun asia on hoidettu — valvoja käsittelee PR:n uudelleen ja mergaa sen kun CI on vihreä.)")
   printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
     log "failed to post ci-repair comment on PR #$pr_num"
 }

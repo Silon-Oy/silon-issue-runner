@@ -135,6 +135,19 @@ pr_decide() {
   esac
 }
 
+# pr_has_label <pr-view-json> <label> — rc 0 if the label is present on the PR,
+# 1 otherwise. Pure + side-effect-free; reads the same `labels[].name` shape
+# pr_decide gates the merge label on. Used by the watcher to treat `needs-human`
+# as the CI-repair hold flag (issue #45): while it is present the watcher stays
+# hands-off; removing it re-arms the run.
+pr_has_label() {
+  local json="$1" label="$2"
+  local present
+  present=$(jq -r --arg L "$label" \
+    '[.labels[]?.name] | index($L) | if . == null then "0" else "1" end' <<<"$json")
+  [ "$present" = "1" ]
+}
+
 # pr_failed_checks <pr-view-json> — prints one "name: conclusion" line per
 # failed check in the statusCheckRollup, newline-separated (empty if none).
 # Pure + side-effect-free (mirrors pr_ci_state); used to name the red checks in

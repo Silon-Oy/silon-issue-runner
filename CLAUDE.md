@@ -399,6 +399,27 @@ no-op, ei virhe.
   `pr-watch-poller.sh` nostaa `1`:ksi watchlistin repoille. Edge-caset koodissa: `UNSTABLE`
   (vaaditut checkit vihreitä) ei mene `FIX_CI`hin; `DIRTY`+punainen rebasetaan ensin (`pr_decide`
   päättää `BEHIND`/`DIRTY`n ennen CI:tä), joten korjaus- ja rebase-polut eivät ketjuunnu.
+
+  **Käynnistysvarmuus ja toipuminen (#45).** Kolme kytkeytyvää vartijaa, jotka estävät yhtä
+  käynnistysvirhettä jäädyttämästä PR:ää käsin-mergettäväksi:
+  1. **Luokitteluvaiheen preflight.** Ennen kuin `FIX_CI` dispatchataan `pr_fix_ci`:hin,
+     `watch_one` ajaa `pr_ci_repair_preflight`in — saman `--version`-tarkistuksen kuin S0
+     (`lib/preflight.sh`), joka pyydystää oletuskutsun `npx --no-install`-ansan (rc=127 vaikka
+     `npx` on polulla). CLI:n puuttuessa `FIX_CI` alennetaan `WAIT_CI`:ksi **ennen**
+     `pr_ci_repair_attempted`-eventtiä, joten yrityskatto ei kulu agenttiin joka ei koskaan
+     käynnisty eikä PR:ää koskaan blokata. Vain oletuskutsu probataan; overrider
+     `RUN_ISSUES_CLAUDE_CMD`:n ensimmäisen tokenin olemassaolo tarkistetaan (`have`-politiikka).
+  2. **Rehellinen raportointi.** Jos agenttikutsu silti palauttaa `rc=127` (transientti
+     käynnistysvirhe), `pr_fix_ci` erottaa sen "ei löytänyt korjausta" -tapauksesta:
+     `_pr_ci_handover_to_human`in `kind=launch_failed` kirjoittaa PR-kommenttiin "agenttia ei
+     voitu käynnistää (rc=127)" eikä harhaanjohtavaa "agentti ei tuottanut committia".
+  3. **Ei pysyvää jäätymistä.** Luovutus finalisoi ajon `blocked/ci_repair_failed_pr_<n>`.
+     `scan_candidates` uudelleen-emittoi **juuri nämä** blocked-ajot (kapea ehto — muut
+     blocked-tilat kuten `stalled_in_*`, `env_bootstrap_failed`, `pr_conflicted` jäävät pois
+     kuten ennen), joten CI:n vihertyessä PR palaa käsittelyyn. `needs-human` on pidätyslippu:
+     sen ollessa PR:llä vahti ohittaa ajon hiljaa (ei uudelleenkommentointia joka tikillä);
+     kun ihminen poistaa sen, ajo re-armataan ja mergetään jos CI on vihreä — juuri se, mitä
+     luovutuskommentti lupaa.
 - **`lib/github-app-auth.sh`** — GitHub App -identiteetti henkilökohtaisen tokenin sijaan.
   Aktivoituu vain jos App-env-muuttujat on asetettu; muuten jokainen sivuvaikutus on vartioitu.
 
