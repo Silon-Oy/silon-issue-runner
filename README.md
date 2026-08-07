@@ -808,9 +808,10 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | `lost_race` | Toinen ajo ehti varata issuen | Ei toimenpiteitä — normaalia rinnakkaisuutta |
 | `cancelled` | Peruttu katselmointiportissa | Worktree ja haara jätettiin paikoilleen |
 
-`blocked`-tilan tavalliset syyt: `env_bootstrap_failed`, `env_bootstrap_timeout`,
-`provision_test_env_failed`, `implementer_BLOCKED`, `clarification_loop_exhausted`,
-`git_push_failed`, `pr_create_failed`, `origin_fetch_failed`, `stalled_in_<vaihe>`.
+`blocked`-tilan tavalliset syyt: `cycle_review_BLOCKER`, `env_bootstrap_failed`,
+`env_bootstrap_timeout`, `provision_test_env_failed`, `implementer_BLOCKED`,
+`clarification_loop_exhausted`, `git_push_failed`, `pr_create_failed`,
+`origin_fetch_failed`, `stalled_in_<vaihe>`.
 
 ### Exit-koodit
 

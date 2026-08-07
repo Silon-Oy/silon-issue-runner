@@ -855,6 +855,7 @@ phase_a() {
       _post_situation_to_issue "db_clone_failed" \
         "Tietokannan kloonaus epäonnistui (rc=$db_rc) ennen toteutusvaihetta. Tarkista DB-klooni-konfiguraatio ja palvelut." \
         "$db_clone_log" 0
+      _add_needs_human_label
       exit 5
       ;;
   esac
@@ -980,6 +981,7 @@ review_gate() {
       _post_situation_to_issue "cycle_review_blocker" \
         "Cycle review esti ajon (\`$reason\`). Tarkista issue ja korjaa este." \
         "$cr_out" 0 prose
+      _add_needs_human_label
       exit 4
       ;;
     interactive)
@@ -1909,6 +1911,7 @@ PROVISION_ENV
       _post_situation_to_issue "implementer_blocked" \
         "Toteutusvaihe (implementer) jäi jumiin eikä tuottanut valmista tulosta. Tarkista alla oleva tuloste ja issuen vaatimukset." \
         "$imp_out" 0 prose
+      _add_needs_human_label
       exit 5
       ;;
   esac
@@ -2009,6 +2012,7 @@ PROVISION_ENV
     _post_situation_to_issue "git_push_failed" \
       "Toteutus valmistui, mutta haaran push GitHubiin epäonnistui (rc=$push_rc). Tarkista push-loki ja remote-oikeudet." \
       "$RUN_DIR/git-push.log" 0
+    _add_needs_human_label
     exit 6
   fi
 
@@ -2044,6 +2048,7 @@ PROVISION_ENV
     _post_situation_to_issue "pr_create_failed" \
       "Haara pushattiin, mutta pull requestin avaaminen epäonnistui. Tarkista alla oleva gh-loki ja avaa PR tarvittaessa käsin." \
       "$RUN_DIR/gh-pr-create.log" 0
+    _add_needs_human_label
     exit 6
   fi
 
