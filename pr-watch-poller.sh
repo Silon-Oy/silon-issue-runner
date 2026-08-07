@@ -117,6 +117,21 @@ fi
 
 GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
 
+# Separate concurrency cap for the PR watcher (issue #47). A PR scan is a few
+# seconds of `gh` calls — an entirely different weight class from the tens of
+# minutes an orchestrator run takes — yet both pollers share
+# global_max_concurrent, deliberately kept low for those long orchestrator runs.
+# The watcher inherited that too-tight cap. Left unset, PR_WATCH_MAX falls back
+# to global_max_concurrent so an UNEDITED watchlist behaves exactly as before.
+# Two overrides in precedence order: the optional watchlist key
+# pr_watch_max_concurrent, then the PR_WATCH_GLOBAL_MAX environment variable
+# (poller.env channel), which wins so an operator can raise the watcher's cap
+# without touching the shared watchlist or poller.sh's orchestrator concurrency.
+PR_WATCH_MAX=$(jq -r ".pr_watch_max_concurrent // ${GLOBAL_MAX}" "$WATCHLIST")
+if [ -n "${PR_WATCH_GLOBAL_MAX:-}" ]; then
+  PR_WATCH_MAX="$PR_WATCH_GLOBAL_MAX"
+fi
+
 # Enable AI conflict resolution for every watchlist repo by default. pr-watch.sh
 # defaults this OFF (0); the poller flips it ON so that auto-merge can complete
 # through a rebase conflict without a human. Still overridable: export
@@ -132,18 +147,69 @@ CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
 # disable. Rides on the per-repo command below like the conflict flag.
 CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
 
+# Materialise the watchlist repos into an array so the rotation cursor below can
+# resume iteration from an arbitrary offset. while-read (not mapfile) for bash
+# 3.2 compatibility.
+REPOS=()
+while IFS= read -r repo_json; do
+  [ -n "$repo_json" ] || continue
+  REPOS+=("$repo_json")
+done < <(jq -c '.repos[]?' "$WATCHLIST")
+N=${#REPOS[@]}
+if [ "$N" -eq 0 ]; then
+  echo "$(date -u +%FT%TZ) pr-watch-poller: watchlist has no repos, nothing to do" >> "$LOG"
+  exit 0
+fi
+
+# Parallel array of repo paths — the rotation cursor's identity. Binding the
+# cursor to the PATH (not a numeric index) is what lets it survive a watchlist
+# edit: an entry inserted or removed elsewhere does not shift where we resume,
+# and a removed cursor target simply restarts from the top instead of pointing
+# at the wrong repo.
+REPOS_PATHS=()
+for (( i=0; i<N; i++ )); do
+  REPOS_PATHS+=("$(jq -r '.path // empty' <<<"${REPOS[$i]}")")
+done
+
+# --- Rotation cursor (issue #47) --------------------------------------------
+# Without it, iteration restarts from index 0 every tick; because scans are
+# short the cap is empty again by the next tick, so only the first PR_WATCH_MAX
+# repos are ever visited and the watchlist tail starves forever — its auto-merge
+# PRs stay open with no error anywhere. The cursor records the repo to RESUME AT
+# next tick, so every repo gets its turn within ceil(N / PR_WATCH_MAX) ticks.
+# State is a single line (the resume repo path) in a file next to the logs; a
+# missing, empty or corrupt file is not an error — it just restarts from index 0.
+CURSOR_FILE="${LOG_DIR}/.pr-watch-cursor"
+
+START_IDX=0
+if [ -f "$CURSOR_FILE" ]; then
+  SAVED_PATH=$(head -n 1 "$CURSOR_FILE" 2>/dev/null || true)
+  if [ -n "$SAVED_PATH" ]; then
+    for (( i=0; i<N; i++ )); do
+      if [ "${REPOS_PATHS[$i]}" = "$SAVED_PATH" ]; then
+        START_IDX=$i
+        break
+      fi
+    done
+  fi
+fi
+
 # Count active pr-watch tmux sessions to respect the cap. The `|| ACTIVE=0`
 # fallback lives OUTSIDE the command substitution on purpose (see poller.sh
 # and issue #2): grep -c always prints a count but exits 1 on zero matches,
 # and pipefail would propagate that. Out here, the fallback only fires when
 # the substitution exits non-zero, keeping ACTIVE a clean integer.
 ACTIVE=$(tmux ls 2>/dev/null | grep -c '^pr-watch-') || ACTIVE=0
-if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
-  echo "$(date -u +%FT%TZ) pr-watch-poller: at cap ($ACTIVE/$GLOBAL_MAX), skipping" >> "$LOG"
+if [ "$ACTIVE" -ge "$PR_WATCH_MAX" ]; then
+  echo "$(date -u +%FT%TZ) pr-watch-poller: at cap ($ACTIVE/$PR_WATCH_MAX), skipping" >> "$LOG"
   exit 0
 fi
 
-# Iterate repos. while-read (not mapfile) for bash 3.2 compatibility.
+# Iterate repos starting from the rotation cursor, wrapping around the whole
+# list so the tail is reached within a bounded number of ticks (issue #47).
+# NEXT_IDX tracks the repo to resume at: it advances past each fully-serviced
+# repo, but on a cap hit it is pinned to the repo we stopped at so the next tick
+# starts there.
 #
 # Multi-remote (issue #33): each repo entry may carry a `remotes` array of
 # git-remote names (default `["origin"]`), exactly as poller.sh reads it (#53).
@@ -154,86 +220,109 @@ fi
 # it scopes its scan + candidate count to that remote. gh routing inside
 # pr-watch.sh is per-run from run.json — the poller only validates each remote
 # here so a misconfigured one is skipped instead of spawning a useless scan.
-while IFS= read -r repo_json; do
-  [ -n "$repo_json" ] || continue
+NEXT_IDX=$START_IDX
+CAP_HIT=0
+for (( i=0; i<N; i++ )); do
+  idx=$(( (START_IDX + i) % N ))
+  repo_json="${REPOS[$idx]}"
+  REPO_PATH="${REPOS_PATHS[$idx]}"
 
-  REPO_PATH=$(jq -r '.path // empty' <<<"$repo_json")
   if [ -z "$REPO_PATH" ] || [ ! -d "$REPO_PATH/.git" ]; then
     echo "$(date -u +%FT%TZ) pr-watch-poller: skip invalid repo entry: $repo_json" >> "$LOG"
-    continue
-  fi
+  else
+    # tmux-safe suffix from the repo path's basename so concurrent repos get
+    # distinct sessions.
+    REPO_TAG=$(basename "$REPO_PATH" | tr -c '[:alnum:]_' '_')
 
-  # tmux-safe suffix from the repo path's basename so concurrent repos get
-  # distinct sessions.
-  REPO_TAG=$(basename "$REPO_PATH" | tr -c '[:alnum:]_' '_')
+    # remotes array (default ["origin"]) — mirror poller.sh. A bad/empty array
+    # (missing field, non-array, empty) collapses to ["origin"] so a malformed
+    # watchlist edit keeps the entry working on its origin remote.
+    REMOTES_LIST=$(jq -r '
+      (.remotes // ["origin"])
+      | if type == "array" then . else ["origin"] end
+      | map(select(type == "string" and length > 0))
+      | if length == 0 then ["origin"] else . end
+      | join("\n")
+    ' <<<"$repo_json")
 
-  # remotes array (default ["origin"]) — mirror poller.sh. A bad/empty array
-  # (missing field, non-array, empty) collapses to ["origin"] so a malformed
-  # watchlist edit keeps the entry working on its origin remote.
-  REMOTES_LIST=$(jq -r '
-    (.remotes // ["origin"])
-    | if type == "array" then . else ["origin"] end
-    | map(select(type == "string" and length > 0))
-    | if length == 0 then ["origin"] else . end
-    | join("\n")
-  ' <<<"$repo_json")
+    for REMOTE in $REMOTES_LIST; do
+      # Validate the remote: resolve owner/repo so a misconfigured non-origin
+      # remote is skipped with a WARNING instead of spawning a scan that would
+      # find nothing. origin keeps legacy behaviour — an un-parseable URL is
+      # non-fatal (pr-watch.sh + gh fall back to cwd inference).
+      OWNER_REPO=""
+      if ! OWNER_REPO=$(resolve_remote_to_owner_repo "$REPO_PATH" "$REMOTE" 2>/dev/null); then
+        if [ "$REMOTE" = "origin" ]; then
+          OWNER_REPO=""
+        else
+          echo "$(date -u +%FT%TZ) pr-watch-poller: WARNING remote '$REMOTE' missing or URL un-parseable in $REPO_PATH — skipping" >> "$LOG"
+          continue
+        fi
+      fi
 
-  for REMOTE in $REMOTES_LIST; do
-    # Validate the remote: resolve owner/repo so a misconfigured non-origin
-    # remote is skipped with a WARNING instead of spawning a scan that would
-    # find nothing. origin keeps legacy behaviour — an un-parseable URL is
-    # non-fatal (pr-watch.sh + gh fall back to cwd inference).
-    OWNER_REPO=""
-    if ! OWNER_REPO=$(resolve_remote_to_owner_repo "$REPO_PATH" "$REMOTE" 2>/dev/null); then
+      # Best-effort archived-remote warning (issue #33, proposal 3). An archived
+      # repo cannot be merged into, so operating a watcher against one is almost
+      # always the configuration error behind this bug (origin was archived in the
+      # observed case). One cheap gh call per remote; any failure (offline, auth,
+      # no such repo) is ignored — this is a diagnostic, never a gate.
+      if [ -n "$OWNER_REPO" ]; then
+        if ARCHIVED=$( cd "$REPO_PATH" && gh repo view "$OWNER_REPO" --json isArchived --jq '.isArchived' 2>/dev/null ) \
+           && [ "$ARCHIVED" = "true" ]; then
+          echo "$(date -u +%FT%TZ) pr-watch-poller: WARNING remote '$REMOTE' ($OWNER_REPO) is ARCHIVED — PRs there cannot be merged; check the watchlist for $REPO_PATH" >> "$LOG"
+        fi
+      fi
+
+      # Remote-namespaced tmux session name (issue #33). origin collapses to the
+      # legacy `pr-watch-<repo>` shape so single-remote repos are unchanged; a
+      # non-origin remote gets a `-<remote>` infix so two remotes of the same
+      # clone are not collapsed by the exact-match duplicate suppression below —
+      # the silent-starvation failure mode poller.sh fixed in #53.
       if [ "$REMOTE" = "origin" ]; then
-        OWNER_REPO=""
+        SESSION="pr-watch-${REPO_TAG}"
       else
-        echo "$(date -u +%FT%TZ) pr-watch-poller: WARNING remote '$REMOTE' missing or URL un-parseable in $REPO_PATH — skipping" >> "$LOG"
+        REMOTE_TAG=$(printf '%s' "$REMOTE" | tr -c '[:alnum:]_' '_')
+        SESSION="pr-watch-${REPO_TAG}-${REMOTE_TAG}"
+      fi
+
+      # `=` forces an exact tmux target match; without it e.g. `pr-watch-customer-c`
+      # prefix-matches `pr-watch-customer-c_erp` and one repo blocks the other.
+      if tmux has-session -t "=$SESSION" 2>/dev/null; then
+        echo "$(date -u +%FT%TZ) pr-watch-poller: session $SESSION already running" >> "$LOG"
         continue
       fi
-    fi
 
-    # Best-effort archived-remote warning (issue #33, proposal 3). An archived
-    # repo cannot be merged into, so operating a watcher against one is almost
-    # always the configuration error behind this bug (origin was archived in the
-    # observed case). One cheap gh call per remote; any failure (offline, auth,
-    # no such repo) is ignored — this is a diagnostic, never a gate.
-    if [ -n "$OWNER_REPO" ]; then
-      if ARCHIVED=$( cd "$REPO_PATH" && gh repo view "$OWNER_REPO" --json isArchived --jq '.isArchived' 2>/dev/null ) \
-         && [ "$ARCHIVED" = "true" ]; then
-        echo "$(date -u +%FT%TZ) pr-watch-poller: WARNING remote '$REMOTE' ($OWNER_REPO) is ARCHIVED — PRs there cannot be merged; check the watchlist for $REPO_PATH" >> "$LOG"
+      # Re-check cap before spawning (another iteration may have started one).
+      # On a hit we do NOT lose the tail: NEXT_IDX is pinned below to the repo we
+      # stopped at, so the next tick resumes here. The log names how many repos
+      # were left unvisited this tick — a plain "hit cap" line looked like normal
+      # congestion and hid the starvation for a day (issue #47).
+      ACTIVE=$(tmux ls 2>/dev/null | grep -c '^pr-watch-') || ACTIVE=0
+      if [ "$ACTIVE" -ge "$PR_WATCH_MAX" ]; then
+        NOT_VISITED=$(( N - i ))
+        echo "$(date -u +%FT%TZ) pr-watch-poller: hit cap during loop ($ACTIVE/$PR_WATCH_MAX) — ${NOT_VISITED} repo(s) not visited this tick, resuming there next tick" >> "$LOG"
+        CAP_HIT=1
+        break  # leave the for-remote loop; the for-repo loop breaks on CAP_HIT below
       fi
-    fi
 
-    # Remote-namespaced tmux session name (issue #33). origin collapses to the
-    # legacy `pr-watch-<repo>` shape so single-remote repos are unchanged; a
-    # non-origin remote gets a `-<remote>` infix so two remotes of the same
-    # clone are not collapsed by the exact-match duplicate suppression below —
-    # the silent-starvation failure mode poller.sh fixed in #53.
-    if [ "$REMOTE" = "origin" ]; then
-      SESSION="pr-watch-${REPO_TAG}"
-    else
-      REMOTE_TAG=$(printf '%s' "$REMOTE" | tr -c '[:alnum:]_' '_')
-      SESSION="pr-watch-${REPO_TAG}-${REMOTE_TAG}"
-    fi
+      echo "$(date -u +%FT%TZ) pr-watch-poller: launching $SESSION for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
 
-    # `=` forces an exact tmux target match; without it e.g. `pr-watch-customer-c`
-    # prefix-matches `pr-watch-customer-c_erp` and one repo blocks the other.
-    if tmux has-session -t "=$SESSION" 2>/dev/null; then
-      echo "$(date -u +%FT%TZ) pr-watch-poller: session $SESSION already running" >> "$LOG"
-      continue
-    fi
+      tmux new-session -d -s "$SESSION" \
+        "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' '$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
+    done
+  fi
 
-    # Re-check cap before spawning (another iteration may have started one).
-    ACTIVE=$(tmux ls 2>/dev/null | grep -c '^pr-watch-') || ACTIVE=0
-    if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
-      echo "$(date -u +%FT%TZ) pr-watch-poller: hit cap during loop ($ACTIVE/$GLOBAL_MAX)" >> "$LOG"
-      break 2  # break out of both the for-remote loop and the while-repos loop
-    fi
+  # Cursor bookkeeping. On a cap hit, pin NEXT_IDX to the repo we stopped at so
+  # the next tick resumes exactly there; otherwise advance past this fully
+  # serviced repo (wrapping) so the following tick continues down the list.
+  if [ "$CAP_HIT" -eq 1 ]; then
+    NEXT_IDX=$idx
+    break
+  fi
+  NEXT_IDX=$(( (idx + 1) % N ))
+done
 
-    echo "$(date -u +%FT%TZ) pr-watch-poller: launching $SESSION for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
-
-    tmux new-session -d -s "$SESSION" \
-      "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' '$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
-  done
-done < <(jq -c '.repos[]?' "$WATCHLIST")
+# Persist the cursor for the next tick. Atomic (temp + rename) so a mid-write
+# kill cannot leave a torn file. A torn or otherwise unreadable file is harmless
+# anyway — the resolver above treats an unmatched path as "start from index 0".
+CURSOR_TMP=$(mktemp "${LOG_DIR}/.pr-watch-cursor.XXXXXX")
+printf '%s\n' "${REPOS_PATHS[$NEXT_IDX]}" > "$CURSOR_TMP" && mv "$CURSOR_TMP" "$CURSOR_FILE"

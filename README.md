@@ -317,6 +317,14 @@ avain, oletus `2`) kaikkien repojen yli. Katon täyttyessä tikki kirjoittaa lok
 `at cap (n/m)` eikä käynnistä mitään. Sama issue ei koskaan saa kahta sessiota: duplikaatit
 karsitaan repo- ja remote-kohtaisella tmux-session nimellä.
 
+**PR-vahdin poller** (`pr-watch-poller.sh`) käyttää **rotaatiokursoria**, joka jatkaa joka
+tikillä siitä repoista mihin edellinen jäi, jotta koko watchlist tulee käytyä eikä hännän
+auto-merge-PR jää nälkiintymään. Sillä on myös oma, korkeampi rinnakkaisuuskatto: watchlistin
+valinnainen `pr_watch_max_concurrent` (oletus = `global_max_concurrent`) tai ympäristömuuttuja
+`PR_WATCH_GLOBAL_MAX`. PR-skannaus on sekuntien työ, joten se voi käydä korkeammalla katolla
+ilman että orkestraattoriajojen rinnakkaisuus kasvaa. `poller.sh` säilyttää entisen semantiikan
+sellaisenaan. Ks. CLAUDE.md §7.
+
 **Tikin sisäinen järjestys** (`poller.sh`, oletusväli 300 s eli 5 min): jumiutuneiden ajojen
 liveness-pyyhkäisy koko watchlistiin → `auto-clean`-siivoukset → aikakatkaistujen ajojen
 `--restart` → vastattujen tarkennusten `--continue` → **vasta viimeisenä** uuden issuen

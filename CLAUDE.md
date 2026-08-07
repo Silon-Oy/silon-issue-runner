@@ -333,10 +333,24 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `RUN_ISSUES_HOME` | *(pollerin oma `SCRIPT_DIR`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Luetaan vain ympäristöstä |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Liveness-raja: vanhempi ajo tapetaan ja finalisoidaan `blocked/stalled_in_<state>`. **Täytyy** ylittää pisin laillinen yksivaiheinen claude-kutsu |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee `auto-clean.sh`:n |
+| `PR_WATCH_GLOBAL_MAX` | *(watchlistin `pr_watch_max_concurrent`, tai sen puuttuessa `global_max_concurrent`)* | **Vain `pr-watch-poller.sh`.** PR-vahdin oma rinnakkaisuuskatto (#47). PR-skannaus on sekuntien työ, joten se voi käydä selvästi korkeammalla katolla kuin kymmenien minuuttien orkestraattoriajot ilman että `poller.sh`:n rinnakkaisuus kasvaa. Ympäristömuuttuja voittaa watchlist-avaimen |
 
 Watchlistin resolvointijärjestys ilman overridea: `$HOME/.config/run-issues/watchlist.json` →
 `$HOME/dotfiles/machine-studio/run-issues-watchlist.json`. Jälkimmäinen on **vain fallback**
 (ks. §12); ensisijainen polku ei koskaan ole dotfiles-puu.
+
+**PR-vahdin rotaatiokursori (#47).** `pr-watch-poller.sh` iteroi watchlistiä
+rotaatiokursorilla: se muistaa mihin repoon jäi ja jatkaa seuraavalla tikillä siitä eteenpäin
+kiertäen listan ympäri, jotta jokainen repo pääsee vuoroon `ceil(N / PR_WATCH_MAX)` tikin
+sisällä. Ilman kursoria iterointi alkoi joka tikki indeksistä 0 ja katkesi kattoon — koska
+skannaukset ovat lyhyitä, vain listan `PR_WATCH_MAX` ensimmäistä repoa käytiin koskaan ja hännän
+auto-merge-PR:t jäivät ikuisesti auki ilman virhettä missään. Kursorin tila on yksi rivi
+(jatkorepon polku, ei indeksi) tiedostossa `$RUN_ISSUES_LOG_DIR/.pr-watch-cursor`; polkuun
+sidottuna se kestää watchlistin muokkauksen (muualta lisätty/poistettu entry ei siirrä
+jatkokohtaa) ja puuttuva/korruptoitunut tiedosto vain aloittaa alusta. `poller.sh` **ei** käytä
+kursoria — sen pitkät ajot varaavat slotit yli tikkien, joten se ei kärsi samasta
+nälkiintymisestä. `tests/test-pr-watch-poller-rotation.sh` vartioi rotaatiota, kattoa ja
+kursorin kestävyyttä.
 
 **Toimituskanava.** launchd ei anna agentille omaa ympäristöä, eivätkä login-tiedostot sisällä
 mitään run-issues-kohtaista, joten LaunchAgent-ajossa — ainoassa tuotantotilassa —
