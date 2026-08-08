@@ -799,7 +799,7 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 2 | Ei ehdokasissueta (poll-tila, ei tekemistä) |
 | 3 | Lukko-/claim-kilpajuoksu hävitty |
 | 4 | Katselmointi esti ajon (vain auto-tila) |
-| 5 | Estynyt ennen implementeriä tai implementerissä — worktreen luonti (S4), db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED. S4:n epäonnistuminen erotellaan syyn mukaan omaksi estotilakseen, ja issuelle jätetty kommentti nimeää juuri sen korjauksen: `worktree_base_unresolved` (base-haara ei ratkennut → `git remote set-head` tai `base_branch`), `worktree_leftover_branch` (paikallinen haara jäänteenä saman issuen edellisestä ajosta → `cleanup-run.sh`) tai `worktree_create_failed` (muu `git worktree add` -virhe → syy näkyy liitetyssä lokissa) |
+| 5 | Estynyt ennen implementeriä tai implementerissä — worktreen luonti (S4), db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED. Tarkan syyn ja sen korjauksen kertoo `run.json`-statuksen syykenttä, ks. vianetsinnän kohta (e) |
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) aikakatkaistiin — ajo on `--restart`-kelpoinen |
 | 8 | **Puuttuva pakollinen riippuvuus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon |
