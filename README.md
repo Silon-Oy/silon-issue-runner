@@ -333,7 +333,7 @@ automaation lisäämää labelia kannata poistaa käsin ennen kuin syy on korjat
 | `auto-run` | **sinä** | sinä | Poimintaehto. Nimi tulee konfiguraatiosta (`default_labels` / `RUN_ISSUES_LABELS_CSV`), ei koodista |
 | `waiting` | orkestraattori, kun ajo jää odottamaan vastaustasi | orkestraattori, kun `--continue` jatkaa | Estää poiminnan sillä aikaa kun tarkennus on kesken |
 | `wip` | **sinä** | sinä | Estää poiminnan. Tarkoitettu "teen tämän itse" -merkinnäksi |
-| `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu | `cleanup-run.sh` (myös `/cleanup-run`) | **Ei estä poimintaa** — assignaatio estää. Signaali sinulle |
+| `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu; PR-vahti, kun CI-korjaus luovuttaa | `cleanup-run.sh` (myös `/cleanup-run`); PR:ltä **sinä** | Issuella: **ei estä poimintaa** — assignaatio estää; signaali sinulle. PR:llä: **pidättää PR-vahdin**, kunnes poistat sen (7.5) |
 | `auto-clean` | **sinä** | `auto-clean.sh` onnistuneen siivouksen jälkeen | Pyytää siivoamaan issuen ajojäänteet ja sulkemaan issuen. Ks. 6.6 h) |
 | `auto-clean-skipped` | `auto-clean.sh`, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
 | `auto-merge` | **sinä** issuelle | — | Propagoituu issuelta PR:lle, ja PR-vahti mergeää vain labeloidun PR:n |
@@ -344,7 +344,9 @@ Kolme yleistä sekaannusta kannattaa erottaa heti:
   (6.5), ei mikään label; `run.json`-status `blocked` puolestaan kertoo vain, että yksittäinen
   ajo päättyi virheeseen. Kumpikaan ei aiheuta toista — epäonnistunut ajo **ei** estä issueta.
 - **`needs-human` ei estä poimintaa.** Se on pelkkä lippu sinulle. Uuden ajon estää
-  assignaatio, joka jää voimaan (6.4).
+  assignaatio, joka jää voimaan (6.4). **Poikkeus on PR:lle lisätty `needs-human`**, jonka
+  PR-vahti lisää CI-korjauksen luovuttaessa: siinä se on aito pidätyslippu, ja sen poistaminen
+  on nimenomaan se toimenpide, joka palauttaa PR:n vahdin käsittelyyn (7.5).
 - **`auto-merge` luetaan PR:ltä, ei issuelta.** Orkestraattori kopioi sen issuelta PR:lle
   (`RUN_ISSUES_PR_LABELS_CSV`, oletus `auto-merge`). Jos lisäät labelin issuelle vasta PR:n
   avaamisen jälkeen, se ei siirry itsestään — lisää se silloin suoraan PR:lle.
@@ -687,6 +689,21 @@ Turvamalli:
 - Yrityskatto johdetaan run-dirin tapahtumalogista, joten tilaton vahti ei jää silmukkaan.
 - `UNSTABLE`-tila (vaaditut checkit vihreitä, vain ei-vaadittu punainen) ei laukaise korjausta,
   eikä estä mergeä. `DIRTY`+punainen rebasetaan ensin.
+- **Agentin käynnistyvyys tarkistetaan ennen korjausyritystä.** Jos claude-CLI ei ole
+  käytettävissä — tyypillisesti oletuskutsun `npx --no-install` -ansa, jossa `npx` on polulla
+  mutta pakettia ei ole asennettu — korjauspäätös alennetaan pelkäksi CI-odotukseksi. Yrityskatto
+  ei siis kulu agenttiin joka ei koskaan käynnisty, ja PR palaa tarkasteluun seuraavalla tikillä.
+- **Käynnistysvirhe raportoidaan käynnistysvirheenä.** Jos agenttikutsu silti epäonnistuu
+  käynnistyksessä, PR-kommentti kertoo ettei agenttia voitu käynnistää — ei harhaanjohtavasti,
+  että agentti tutki CI-virheen eikä löytänyt korjausta.
+
+**Luovutus ei jäädytä PR:ää.** Luovutus finalisoi ajon tilaan `blocked/ci_repair_failed_pr_<n>`,
+mutta skannaus poimii **juuri nämä** blocked-ajot uudelleen (muut blocked-tilat, kuten
+`stalled_in_*`, jäävät skannauksen ulkopuolelle kuten ennenkin). `needs-human` toimii PR:llä
+**pidätyslippuna**: sen ollessa paikallaan vahti ohittaa PR:n hiljaa eikä kommentoi uudelleen
+joka tikillä. **Kun poistat labelin, ajo palaa käsittelyyn** ja PR mergetään heti kun CI on
+vihreä — juuri niin kuin luovutuskommentti lupaa. Aiemmin luovutettu PR jäi käsin
+mergettäväksi, vaikka CI olisi myöhemmin vihertynyt.
 
 Halutessasi voit pitää sen pois myös pollerissa: `PR_WATCH_ENABLE_CI_REPAIR=0`
 `poller.env`-tiedostossa.
@@ -831,7 +848,7 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) aikakatkaistiin — ajo on `--restart`-kelpoinen |
 | 8 | **Puuttuva pakollinen riippuvuus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon |
-| 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (`-is:blocked`-hakuindeksin sijaan) ja on fail-closed. Nimetyn ajon voi pakottaa `--force`-lipulla |
+| 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (`-is:blocked`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia: se on odotustila, joka jatkuu itsestään kun estäjä sulkeutuu. Nimetyn ajon voi pakottaa `--force`-lipulla |
 | 10 | Odottaa ihmisen katselmointia — jatka komennolla `--resume` |
 | 11 | Odottaa tarkennusta — vastaa issuelle, poller jatkaa `--continue`-ajolla |
 
