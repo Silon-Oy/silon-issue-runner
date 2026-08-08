@@ -833,10 +833,14 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | `lost_race` | Toinen ajo ehti varata issuen | Ei toimenpiteitä — normaalia rinnakkaisuutta |
 | `cancelled` | Peruttu katselmointiportissa | Worktree ja haara jätettiin paikoilleen |
 
-`blocked`-tilan tavalliset syyt: `cycle_review_BLOCKER`, `env_bootstrap_failed`,
-`env_bootstrap_timeout`, `provision_test_env_failed`, `implementer_BLOCKED`,
-`clarification_loop_exhausted`, `git_push_failed`, `pr_create_failed`,
-`origin_fetch_failed`, `stalled_in_<vaihe>`.
+`blocked`-tilan tavalliset syyt: `cycle_review_BLOCKER`, `origin_fetch_failed`,
+`worktree_base_unresolved`, `worktree_leftover_branch`, `worktree_create_failed`,
+`env_bootstrap_failed`, `env_bootstrap_timeout`, `provision_test_env_failed`,
+`implementer_BLOCKED`, `clarification_loop_exhausted`, `git_push_failed`,
+`pr_create_failed`, `stalled_in_<vaihe>`. Näistä kaikki jättävät issuelle
+`needs-human`-labelin; kolme S4-syytä on avattu korjauskomentoineen kohdassa (e) yllä.
+Poikkeus on `blocked_by_dependency` (exit 9), joka on odotustila eikä labeloi mitään —
+ajo jatkuu itsestään kun estäjä sulkeutuu.
 
 ### Exit-koodit
 
