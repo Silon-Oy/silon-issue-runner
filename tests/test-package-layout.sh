@@ -28,7 +28,7 @@ EXPECTED_FILES=(
   cleanup-run.sh auto-clean.sh install.sh
   .gitignore CLAUDE.md README.md
 )
-EXPECTED_DIRS=(lib prompts tests db-clone agents commands docs/diagrams examples)
+EXPECTED_DIRS=(lib prompts tests db-clone agents commands skills docs/diagrams examples)
 
 for f in "${EXPECTED_FILES[@]}"; do
   if [ -f "$ROOT/$f" ]; then

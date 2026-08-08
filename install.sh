@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # install.sh — link this package's Claude assets into $HOME/.claude.
 #
-# Claude Code reads agents from $HOME/.claude/agents and slash commands from
-# $HOME/.claude/commands. Those directories are a shared namespace: dotfiles (or
-# any other source) ships its own files there too. The installer therefore
-# operates under one invariant, and everything else follows from it:
+# Claude Code reads agents from $HOME/.claude/agents, slash commands from
+# $HOME/.claude/commands and skills from $HOME/.claude/skills. Those directories
+# are a shared namespace: dotfiles (or any other source) ships its own files
+# there too. The installer therefore operates under one invariant, and
+# everything else follows from it:
 #
 #   INV-OWN — the installer may create, replace or remove a path only if that
 #   path is absent, or is a symlink whose target resolves inside this package
@@ -50,6 +51,10 @@ LAUNCH_AGENTS_DIR="${RUN_ISSUES_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 # Directories whose contents this package owns file by file.
 LINKED_DIRS="agents commands"
 
+# Directories whose contents this package owns entry by entry, where each entry
+# is itself a directory (a skill is <name>/SKILL.md plus attachments).
+SKILL_DIRS="skills"
+
 DRY_RUN=0
 QUIET=0
 WITH_LAUNCHAGENTS=0
@@ -68,8 +73,8 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Links this package's agents and slash commands into $HOME/.claude, file by
-file, so that they coexist with assets from other sources.
+Links this package's agents, slash commands and skills into $HOME/.claude,
+entry by entry, so that they coexist with assets from other sources.
 
 Options:
   --dry-run             Print the plan and exit without writing anything
@@ -163,30 +168,77 @@ count_action() {
   printf '%s' "$n"
 }
 
-# plan_link_dir <name> — plan the per-file links for $PKG_ROOT/<name> into
-# $CLAUDE_HOME/<name>, and plan the removal of package-owned links that no
-# longer correspond to a shipped file.
+# plan_link_dir <name> [mode] — plan the per-entry links for $PKG_ROOT/<name>
+# into $CLAUDE_HOME/<name>, and plan the removal of package-owned links that no
+# longer correspond to a shipped entry.
+#
+# mode selects both what an entry is and how a foreign directory at the target
+# is treated:
+#
+#   files  (default) — each entry is a *.md file (agents, commands). A foreign
+#                      directory at the target is a REFUSAL that aborts the
+#                      whole run: these files are the package's core (without
+#                      agents and commands the runner does not work), so a
+#                      shadowed directory must stop everything, not be skipped.
+#
+#   skills           — each entry is a <name>/SKILL.md subdirectory, linked at
+#                      directory level. A foreign directory at the target is a
+#                      CONFLICT, not a refusal: the skill is extra guidance
+#                      whose absence breaks nothing, and on the maintainer's
+#                      machine $HOME/.claude/skills is itself a directory symlink
+#                      (-> dotfiles, agents/commands were split per-file but
+#                      skills was not, see #5). Refusing there would abort the
+#                      whole install — including agents/commands — over an
+#                      optional extra. So skills degrades to a conflict line and
+#                      lets the core install proceed.
+#
+# The ownership predicate (is_pkg_owned_link) and the name-based prune are
+# identical for both modes: a directory symlink into the package is owned just
+# as a file symlink is.
 plan_link_dir() {
-  local name="$1"
+  local name="$1" mode="${2:-files}"
   local src_dir="$PKG_ROOT/$name" dst_dir="$CLAUDE_HOME/$name"
   local src base dst entry ebase keep current
-  local wanted=()
+  local wanted=() srcs=()
 
-  # A whole-directory symlink means another source owns the directory itself
-  # (the pre-split dotfiles layout). Writing into it would place this package's
-  # files in a repository it does not own.
+  # A whole-directory symlink (or a non-directory) means another source owns the
+  # directory itself (the pre-split dotfiles layout). Writing into it would place
+  # this package's entries in a tree it does not own. Under files mode this is
+  # fatal to the whole run; under skills mode it degrades to a conflict so the
+  # core install still completes — see the header for why.
   if [ -L "$dst_dir" ]; then
-    refuse "$dst_dir is a directory symlink -> $(readlink "$dst_dir"). Replace it with a real directory holding per-file symlinks, then re-run install.sh."
+    if [ "$mode" = skills ]; then
+      conflict "$dst_dir is a directory symlink -> $(readlink "$dst_dir"); skill not installed. Replace it with a real directory holding per-entry symlinks, then re-run install.sh."
+    else
+      refuse "$dst_dir is a directory symlink -> $(readlink "$dst_dir"). Replace it with a real directory holding per-file symlinks, then re-run install.sh."
+    fi
     return 0
   fi
   if [ -e "$dst_dir" ] && [ ! -d "$dst_dir" ]; then
-    refuse "$dst_dir exists but is not a directory. Move it aside, then re-run install.sh."
+    if [ "$mode" = skills ]; then
+      conflict "$dst_dir exists but is not a directory; skill not installed. Move it aside, then re-run install.sh."
+    else
+      refuse "$dst_dir exists but is not a directory. Move it aside, then re-run install.sh."
+    fi
     return 0
   fi
   [ -d "$dst_dir" ] || plan_add mkdir "$dst_dir"
 
-  for src in "$src_dir"/*.md; do
-    [ -e "$src" ] || continue
+  # Enumerate shipped entries. Skills are directories carrying a SKILL.md; the
+  # trailing slash from the */ glob is stripped so the link target has none.
+  if [ "$mode" = skills ]; then
+    for src in "$src_dir"/*/; do
+      [ -f "${src}SKILL.md" ] || continue
+      srcs+=("${src%/}")
+    done
+  else
+    for src in "$src_dir"/*.md; do
+      [ -e "$src" ] || continue
+      srcs+=("$src")
+    done
+  fi
+
+  for src in ${srcs[@]+"${srcs[@]}"}; do
     base="$(basename "$src")"
     wanted+=("$base")
     dst="$dst_dir/$base"
@@ -534,7 +586,14 @@ main() {
   report_preflight
 
   for d in $LINKED_DIRS; do
-    plan_link_dir "$d"
+    plan_link_dir "$d" files
+  done
+  # Skills come after the core directories: on the maintainer's machine skills
+  # produces a conflict (its target is a directory symlink) but agents/commands
+  # must still install, and the summary reads more naturally with the core
+  # links reported before the conflict line.
+  for d in $SKILL_DIRS; do
+    plan_link_dir "$d" skills
   done
   # Order matters: plan_scripts_binding publishes SCRIPTS_BINDING_TARGET, which
   # plan_launchagents needs to decide whether the plists' program will resolve

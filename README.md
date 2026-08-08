@@ -101,6 +101,10 @@ Mitä asennin tekee:
 - `~/.claude/agents/` ja `~/.claude/commands/` — per-tiedosto-symlink jokaiselle paketin
   `*.md`-tiedostolle. Lähdejoukko on glob, joten uusi agentti tulee asennukseen pelkällä
   nimeämisellä. Paketin omistamat symlinkit, joita paketti ei enää toimita, siivotaan.
+- `~/.claude/skills/` — per-hakemisto-symlink jokaiselle paketin skillille (linkki on
+  hakemistotasolla, koska skill on `<nimi>/SKILL.md` liitteineen). Sama omistajuussääntö ja
+  siivous kuin yllä, mutta vieras `skills`-hakemisto tuottaa vain `CONFLICT`-rivin ja
+  exit-koodin 4 — se ei kaada agenttien ja komentojen asennusta (osio 6.9).
 - `~/.claude/scripts/run-issues` — **ehdollinen** sidonta. Jos polku jo toimii, se jätetään
   rauhaan. Jos sitä ei ole ja asentaja voi omistaa sen, luodaan symlink paketin juureen.
 - `~/Library/LaunchAgents/` — vain `--with-launchagents`. Kaavio:
@@ -551,6 +555,24 @@ Kaksi asiaa kannattaa muistaa ajaessa käsin:
   tapahtui. Väärällä koneella ajettu siivous ei löydä mitään ja raportoi sen.
 - **Pollerit ovat konelukittuja.** Ne vertaavat konenimeä muuttujaan
   `RUN_ISSUES_POLLER_HOSTS` ja exittaavat hiljaa nollalla, jos osumaa ei tule (osio 8).
+
+### 6.9 Skill: `run-issues-workflow`
+
+Poiminta- ja labelointipäätökset (6.2–6.5) tehdään silloin kun issue **luodaan** —
+kohderepossa, jossa tätä README:tä ei ole vieressä. Sitä hetkeä varten paketti toimittaa
+skillin [`skills/run-issues-workflow/SKILL.md`](skills/run-issues-workflow/SKILL.md), jonka
+`install.sh` linkittää polkuun `$HOME/.claude/skills/` samalla ajolla kuin agentit ja
+slash-komennot. Skill on siis **globaalisti käytettävissä** kaikissa repoissa, ei vain tässä.
+
+Se latautuu Claude-sessioon progressiivisesti silloin kun teet issue-työtä vieraassa repossa
+(näet `auto-run`-labelin, `run.json`-artefaktin tai PR-vahdin) ja kattaa kaksi näkökulmaa:
+issuen kirjoittamisen niin että runner poimii sen, ja triagen "miksi issueni ei lähde ajoon".
+Se **ei** kata tilakonetta, exit-koodeja eikä `lib/`-rakennetta — ne ovat tämän paketin
+anatomiaa ja kuvattu tässä dokumentissa ja `CLAUDE.md`:ssä.
+
+Ylläpitäjän koneella, jolla `$HOME/.claude/skills` on hakemistosymlinkki dotfilesiin, skill ei
+asennu automaattisesti: `install.sh` tulostaa siitä `CONFLICT`-rivin ja exit-koodin 4, mutta
+linkittää agentit ja komennot normaalisti (ks. [`CLAUDE.md`](CLAUDE.md) §3 ja §12).
 
 ---
 

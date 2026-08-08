@@ -17,7 +17,7 @@ Sisältö:
 - **Pollerit** — `poller.sh`, `pr-watch-poller.sh`: LaunchAgent-vetoinen automaattiajo watchlistin repoille.
 - **PR-vahti** — `pr-watch.sh`: CI-odotus, konfliktin ratkaisu, auto-merge.
 - **Apuvälineet** — `cleanup-run.sh`, `auto-clean.sh`.
-- **Claude-integraatio** — `agents/`, `commands/` (slash-komennot), `prompts/`.
+- **Claude-integraatio** — `agents/`, `commands/` (slash-komennot), `skills/`, `prompts/`.
 
 ## 2. Hakemistorakenne ja polkuvalinta
 
@@ -32,6 +32,7 @@ tests/     plain-bash-testipaketti, ajuri run-all.sh
 db-clone/  opt-in-tietokantakloonaus
 agents/    Claude-agenttimäärittelyt (architect, developer, reviewer, refactorer)
 commands/  slash-komennot (run-issues, cleanup-run, pr-watch, refresh, factory-*)
+skills/    Claude-skillit (run-issues-workflow: issue-konventiot kohderepoon)
 docs/diagrams/  mermaid-kaaviot (.mmd)
 examples/  run-issues-watchlist.example.json, run-issues-poller.env.example
 com.claude-issue-runner.run-issues-poller.plist
@@ -108,10 +109,12 @@ muu ei tuota sitä lainkaan. `tests/test-install-links.sh` case 2 vartioi oletus
 `install.sh` → `orchestrate.sh` suoritettavissa); sen kaatuminen tarkoittaa, että puhtaan
 koneen slash-komennot osoittavat olemattomaan skriptiin.
 
-`agents/` ja `commands/` päätyvät kummassakin ketjussa polkuun `~/.claude/scripts/run-issues/…`,
-mikä ei riitä: Claude Code lukee ne hakemistoista `~/.claude/agents/` ja `~/.claude/commands/`.
-Paketin oma `install.sh` symlinkkaa ne sinne **per tiedosto**, jotta muiden lähteiden
-agentit ja komennot eivät korvaudu.
+`agents/`, `commands/` ja `skills/` päätyvät kummassakin ketjussa polkuun
+`~/.claude/scripts/run-issues/…`, mikä ei riitä: Claude Code lukee ne hakemistoista
+`~/.claude/agents/`, `~/.claude/commands/` ja `~/.claude/skills/`. Paketin oma `install.sh`
+symlinkkaa agentit ja komennot sinne **per tiedosto** ja skillit **per hakemisto** (skill on
+`<nimi>/SKILL.md` mahdollisine liitteineen), jotta muiden lähteiden agentit, komennot ja
+skillit eivät korvaudu.
 
 ### `install.sh`
 
@@ -138,11 +141,12 @@ Kolme johdannaista, jotka kannattaa lukea kieltoina:
    juuri se hiljainen osittaisvirhe, jonka takia asentaja on olemassa.
 3. **Asentaja ei kutsu `launchctl`ia.** Ks. §11.
 
-Kolme vastuuta:
+Neljä vastuuta:
 
 | Kohde | Toimenpide |
 |---|---|
 | `~/.claude/agents/`, `~/.claude/commands/` | Per-tiedosto-symlink jokaiselle paketin `*.md`-tiedostolle. Lähdejoukko on glob, ei kovakoodattu lista — uusi agentti tulee asennukseen pelkällä nimeämisellä. Paketin omistamat symlinkit, joita paketti ei enää toimita, siivotaan (prune). |
+| `~/.claude/skills/` | Per-hakemisto-symlink jokaiselle paketin `skills/<nimi>/SKILL.md`:lle (linkki on hakemistotasolla, koska skill voi sisältää liitetiedostoja). Sama omistajuuspredikaatti ja prune kuin agenteilla. **Ero:** vieras hakemistosymlinkki tuottaa tässä `conflict`in (exit 4), ei `refuse`a. Agents/commands-kohdalla kieltäytyminen suojaa paketin **ydintoiminnallisuutta** — ilman agentteja ja komentoja runner ei toimi, joten koko ajon pysäyttäminen on oikein. Skill on lisätieto, jonka puuttuminen ei riko mitään; ylläpitäjän koneella `~/.claude/skills` on hakemistosymlinkki (`-> dotfiles`, ks. §12), ja refuse siellä kaataisi myös agents/commands-osuuden, koska kieltäytyminen on koko ajon laajuinen. Siksi skills degradoituu conflict-riviksi ja ydinasennus jatkuu. |
 | `~/.claude/scripts/run-issues` | **Ehdollinen** sidonta: jos polku jo toimii (`orchestrate.sh` suoritettavissa), se jätetään rauhaan riippumatta siitä kuka sen tarjoaa — submodule-malli ja jokainen toistoajo osuvat tähän, ja lopputulos on **no-op**. Jos polkua ei ole ja paketti voi omistaa sen, luodaan symlink paketin juureen — tämä on oletusmalli, jossa slash-komennot muuten osoittaisivat olemattomaan skriptiin. Vieraaseen puuhun ei kirjoiteta. |
 | `~/Library/LaunchAgents/` | Vain `--with-launchagents`. Ks. §11. Deploy ei vielä käynnistä mitään: poller exittaa hiljaa 0, kunnes host-portti osuu koneen nimeen (`RUN_ISSUES_POLLER_HOSTS`, §7 ja §12). |
 
@@ -511,6 +515,13 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
 - **`~/.claude/agents` ja `~/.claude/commands` hakemistosymlinkkeinä → #5.** Niin kauan kuin
   dotfiles symlinkkaa koko hakemiston, `install.sh` kieltäytyy (exit 2). Korjaus on
   dotfiles-repon puolella eikä kuulu tähän pakettiin.
+- **`~/.claude/skills` hakemistosymlinkkinä → #5 (sama juurisyy, eri hakemisto).** Ylläpitäjän
+  koneella `~/.claude/skills` on yhä hakemistosymlinkki (`-> dotfiles`); `agents` ja `commands`
+  on jaettu per tiedosto, `skills` ei vielä. Tällä koneella `install.sh` tulostaa skillistä
+  **conflict-rivin ja exit 4:n** (ei refusea, jottei koko asennus kaadu — §3), joten
+  agents/commands linkittyvät normaalisti ja `skills/run-issues-workflow` jää asentumatta. Se ei
+  ole bugi vaan odotettu välitila: korjaus (skills-hakemiston jako per-tiedosto/per-hakemisto
+  -symlinkeiksi) on dotfiles-repon puolen työ, samoin kuin agents/commands aikanaan.
 - **`install.sh --uninstall` puuttuu.** Paketin omistamien symlinkkien poisto on tehtävä
   käsin. Omistajuuspredikaatti (symlinkin kohde paketin juuren sisällä) riittäisi sellaisenaan
   toteutukseen.

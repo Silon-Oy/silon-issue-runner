@@ -17,6 +17,12 @@
 #   6. Prune removes package-owned dangling links only; foreign dangling
 #      links survive
 #   7. --dry-run writes nothing at all
+#   9. A foreign ~/.claude/skills directory symlink -> CONFLICT (not a refusal),
+#      exit 4, agents/commands still installed, skills left untouched
+#  10. Prune/foreign handling for skills: a package-owned skill link no longer
+#      shipped is pruned; a foreign real skill dir survives
+#
+# (Case 1 also asserts that skills link at directory level on a fresh home.)
 #
 # (Case 2 — the ~/.claude/scripts/run-issues binding — lives further down.)
 #
@@ -98,6 +104,21 @@ if [ -d "$H1/.claude/agents" ] && [ ! -L "$H1/.claude/agents" ]; then
 else
   echo "FAIL: case1 \$HOME/.claude/agents is not a real directory"; FAIL=1
 fi
+
+# Skills are linked at directory level, not per file: $CLAUDE_HOME/skills/<name>
+# -> $PKG_ROOT/skills/<name>. This is the acceptance criterion "clean install
+# creates the skill link, exit 0".
+for src in "$ROOT/skills"/*/; do
+  [ -f "${src}SKILL.md" ] || continue
+  base="$(basename "$src")"
+  dst="$H1/.claude/skills/$base"
+  if [ -L "$dst" ] && [ "$(readlink "$dst")" = "${src%/}" ]; then
+    echo "PASS: case1 skills/$base linked to the package at directory level"
+  else
+    echo "FAIL: case1 skills/$base not linked (readlink='$( [ -L "$dst" ] && readlink "$dst" )')"
+    FAIL=1
+  fi
+done
 
 # ---- Case 2: the scripts binding the slash commands depend on ----
 # commands/{run-issues,cleanup-run,pr-watch}.md and prompts/02-implementer.md
@@ -266,6 +287,81 @@ else
   echo "FAIL: case7 --dry-run did not print a plan:"
   printf '%s\n' "$out7" | sed 's/^/      /'
   FAIL=1
+fi
+
+# ---- Case 9: a foreign skills directory symlink is a conflict, not a refusal ----
+# On the maintainer's machine ~/.claude/skills is a directory symlink -> dotfiles
+# (agents/commands were split per-file, skills was not, see CLAUDE.md §12). A
+# refusal there would abort the WHOLE install, taking agents/commands with it
+# over an optional extra. So skills must degrade to a CONFLICT (exit 4) while the
+# core links still install.
+H9="$WORK/home9"
+mkdir -p "$H9/.claude" "$H9/foreign-skills"
+ln -s "$H9/foreign-skills" "$H9/.claude/skills"
+out9=$(run_install "$H9" 2>&1)
+rc9=$?
+if [ "$rc9" -eq 4 ]; then
+  echo "PASS: case9 foreign skills symlink exits 4 (conflict, not refuse)"
+else
+  echo "FAIL: case9 foreign skills symlink exited $rc9 (expected 4)"
+  printf '%s\n' "$out9" | sed 's/^/      /'
+  FAIL=1
+fi
+if printf '%s\n' "$out9" | grep -qi '^CONFLICT: .*skills'; then
+  echo "PASS: case9 conflict is reported on a CONFLICT: line"
+else
+  echo "FAIL: case9 no skills CONFLICT: line in the output"
+  printf '%s\n' "$out9" | sed 's/^/      /'
+  FAIL=1
+fi
+# The core install must not be blocked by the skills conflict.
+if [ -L "$H9/.claude/agents/architect.md" ] && [ -L "$H9/.claude/commands/run-issues.md" ]; then
+  echo "PASS: case9 agents and commands still installed alongside the skills conflict"
+else
+  echo "FAIL: case9 skills conflict blocked the core agents/commands links"; FAIL=1
+fi
+# The foreign symlink and the tree behind it are left exactly as they were.
+if [ -L "$H9/.claude/skills" ] && [ "$(readlink "$H9/.claude/skills")" = "$H9/foreign-skills" ]; then
+  echo "PASS: case9 foreign skills symlink left untouched"
+else
+  echo "FAIL: case9 foreign skills symlink was modified"; FAIL=1
+fi
+if [ ! -e "$H9/foreign-skills/run-issues-workflow" ]; then
+  echo "PASS: case9 nothing was written through the foreign symlink"
+else
+  echo "FAIL: case9 the installer wrote through the foreign skills symlink"; FAIL=1
+fi
+
+# ---- Case 10: prune and foreign handling for skills ----
+# A package-owned skill link whose name the package no longer ships is pruned;
+# a foreign real skill directory is left alone (it is not a package-owned link).
+H10="$WORK/home10"
+mkdir -p "$H10/.claude/skills/foreign-skill"
+printf 'name: foreign\n' > "$H10/.claude/skills/foreign-skill/SKILL.md"
+ln -s "$ROOT/skills/ghost-skill" "$H10/.claude/skills/ghost-skill"   # package-owned, unshipped
+out10=$(run_install "$H10" 2>&1)
+rc10=$?
+if [ "$rc10" -eq 0 ]; then
+  echo "PASS: case10 skills prune run exits 0"
+else
+  echo "FAIL: case10 skills prune run exited $rc10"
+  printf '%s\n' "$out10" | sed 's/^/      /'
+  FAIL=1
+fi
+if [ ! -L "$H10/.claude/skills/ghost-skill" ]; then
+  echo "PASS: case10 unshipped package-owned skill link pruned"
+else
+  echo "FAIL: case10 unshipped package-owned skill link survived"; FAIL=1
+fi
+if [ -d "$H10/.claude/skills/foreign-skill" ] && [ ! -L "$H10/.claude/skills/foreign-skill" ]; then
+  echo "PASS: case10 foreign real skill directory left untouched"
+else
+  echo "FAIL: case10 foreign real skill directory was modified"; FAIL=1
+fi
+if [ -L "$H10/.claude/skills/run-issues-workflow" ]; then
+  echo "PASS: case10 shipped skill still linked"
+else
+  echo "FAIL: case10 shipped skill not linked"; FAIL=1
 fi
 
 echo "----------------------------------------"
