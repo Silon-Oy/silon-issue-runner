@@ -138,7 +138,13 @@ RC_F=$?
 # do). Point `other` at the same bare origin — content is irrelevant; all we
 # need is a fetched remote that has refs but no symbolic HEAD.
 git -C "$REPO" remote add other "$ORIGIN"
-git -C "$REPO" fetch -q other
+# followRemoteHEAD=never is REQUIRED from git 2.50 on: its default (`create`)
+# makes `git fetch` write refs/remotes/<name>/HEAD itself, which would destroy
+# this repro — the fixture would have the very ref whose absence is under test.
+# Older git ignores the unknown key, so the line is version-safe. The production
+# case survives regardless: pre-2.50 clones and remotes added before the upgrade
+# still carry no <remote>/HEAD.
+git -C "$REPO" -c remote.other.followRemoteHEAD=never fetch -q other
 # Sanity: the setup actually reproduces the missing-HEAD condition.
 if git -C "$REPO" symbolic-ref --short refs/remotes/other/HEAD >/dev/null 2>&1; then
   echo "FAIL (h setup): other/HEAD unexpectedly resolves — repro invalid"; FAIL=1
