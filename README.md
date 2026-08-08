@@ -503,7 +503,12 @@ Draft ei ole mergettävä. Vanhentuneen tai konfliktisen PR:n rebase tehdään f
 omassa worktreessä, ja CI on ajettava uudelleen vihreäksi ennen mergeä (osio 7.4). Punaisen
 CI:n voi pollerin ajama vahti myös yrittää korjata AI-agentilla samassa worktreessä — mutta
 vain todellista virhettä korjaten, ei testiä poistaen, ja CI on aina revalidoitava vihreäksi
-ennen mergeä (osio 7.5). Mergen
+ennen mergeä (osio 7.5). Itse merge yritetään ensin rebasena
+(`gh pr merge --rebase --delete-branch`); jos GitHub torjuu sen — näin käy aina, kun
+feature-haaralla on merge-commit, esimerkiksi konfliktin ratkaisusta — vahti tekee
+merge-commitin (`--merge`). Ilman tätä varapolkua PR ei mergeytyisi koskaan, koska haaran muoto
+ei muutu itsestään. Molempien yritysten virheteksti kirjataan lokiin, joten aito merge-esto
+kertoo syynsä. Mergen
 jälkeen vahti ajaa repon valinnaisen `.claude/post-merge-migrate.sh`-skriptin ja siivoaa
 ajojäänteet — mutta **vain saman koneen ajot**; muille koneille se tulostaa lokiin valmiin
 siivouskomennon.

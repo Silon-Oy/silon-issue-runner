@@ -30,5 +30,5 @@ flowchart TD
     prcreate -->|"non-empty"| prtwenty["PR base = twenty"]
     prcreate -->|"empty"| prdefault["PR base = repo default (main)<br/>(backward compatible)"]
 
-    prtwenty --> watcher["pr-watch P6<br/>gh pr merge --rebase<br/>(respects PR base automatically)"]
+    prtwenty --> watcher["pr-watch P6<br/>gh pr merge --rebase, --merge fallback<br/>(respects PR base automatically)"]
     prtwenty -.->|"opt-in PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1"| p5["pr_resolve P5<br/>base_ref = baseRefName from gh pr view<br/>git rebase origin/base_ref (NOT main)"]

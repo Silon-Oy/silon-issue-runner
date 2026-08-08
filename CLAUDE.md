@@ -499,6 +499,17 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
 
 ## 12. Tunnetut avoimet asiat
 
+- **PR-vahdin merge-strategia (P6) on kiinteä, ei konfiguroitava** (#41). `pr-watch.sh` yrittää
+  ensin `gh pr merge --rebase --delete-branch` ja putoaa `--merge`iin, jos GitHub torjuu
+  rebase-mergen. Torjunta on **pysyvä, ei ohimenevä**: GitHub kieltäytyy rebase-mergestä aina
+  kun feature-haaralla on merge-commit (normaali tila, kun konflikti on ratkaistu mergeämällä
+  base haaraan), eikä haaran muoto muutu itsestään — ilman varapolkua jokainen tikki toistaisi
+  saman epäonnistumisen ja yksi rebase-kyvytön PR jumittaisi koko riippuvuusjonon. Molempien
+  yritysten `gh`-virheteksti lokitetaan, jotta aito merge-esto nimeää syynsä aiemman
+  läpinäkymättömän `merge failed` -rivin sijaan. Konfiguroitava `PR_WATCH_MERGE_STRATEGY`
+  rajattiin ulos cycle reviewssä ei-minimaalisena; varapolku kattaa raportoidun vian.
+  `tests/test-pr-watch-merge-fallback.sh` vartioi järjestystä (rebase ensin, `--merge` vasta
+  sen kaaduttua) ja sitä että ajo finalisoituu `merged`.
 - **`POLLER_HOSTS_LEGACY_DEFAULT` on taaksepäin-yhteensopivuusshim.** `lib/poller-config.sh`
   sisältää sisäänrakennetun oletuslistan niistä konenimistä, joilla pollerit ajoivat ennen kuin
   host-portista tuli konfiguroitava. Se on tietoinen poikkeus §1:n lupaukseen "ei
