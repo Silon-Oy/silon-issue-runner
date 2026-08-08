@@ -831,7 +831,7 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) aikakatkaistiin — ajo on `--restart`-kelpoinen |
 | 8 | **Puuttuva pakollinen riippuvuus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon |
-| 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (`-is:blocked`-hakuindeksin sijaan) ja on fail-closed. Nimetyn ajon voi pakottaa `--force`-lipulla |
+| 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (`-is:blocked`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia: se on odotustila, joka jatkuu itsestään kun estäjä sulkeutuu. Nimetyn ajon voi pakottaa `--force`-lipulla |
 | 10 | Odottaa ihmisen katselmointia — jatka komennolla `--resume` |
 | 11 | Odottaa tarkennusta — vastaa issuelle, poller jatkaa `--continue`-ajolla |
 

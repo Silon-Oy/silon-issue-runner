@@ -228,6 +228,21 @@ S10 Push → S11 PRCreate → S12 Finalize
   (`<worktree>/.claude/provision-test-env.sh`). Puuttuva hook → no-op; epäonnistuminen
   fail-fastaa samoin kuin S7b (`blocked/provision_test_env_failed`).
 
+**Terminaalisen eston merkintä (#43).** Claimin jälkeinen terminaalinen esto lisää issuelle
+**aina** `needs-human`-labelin (`_add_needs_human_label`) situation-kommentin lisäksi:
+`db_clone_failed`, `cycle_review_blocker`, `implementer_blocked`, `git_push_failed`,
+`pr_create_failed`, `origin_fetch_failed`, `worktree_*`, `env_bootstrap_*`,
+`provision_test_env_failed`, `clarification_loop_exhausted` sekä pollerin
+`stalled_in_<vaihe>`. Pelkkä kommentti ei riitä: se ei ole suodatettava, joten pysyvästi
+jumiin jäänyt ajo näytti GitHubissa samalta kuin normaali kesken oleva ajo (yksi hiljainen
+esto pysäytti kuuden issuen riippuvuusketjun yön yli). Labelin elinkaari on valmis —
+`cleanup-run.sh` poistaa sen.
+
+**Poikkeus: claimia edeltävät portit eivät labeloi.** `blocked_by_dependency` ja
+`blocked_check_failed` (S2b) poistuvat ennen claimia, issue ei ole assignattuna meille, ja
+aito `blocked_by` jatkuu itsestään kun estäjä sulkeutuu — se on odotustila, ei ihmisen
+tarve. Sama koskee S0-preflightiä (exit 8), joka poistuu ennen lukkoa.
+
 **Jatkomoodit:**
 
 - `--restart <run-dir>` — jatkaa `timed_out`-ajoa ramppaavalla timeoutilla
