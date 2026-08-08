@@ -101,6 +101,10 @@ Mitä asennin tekee:
 - `~/.claude/agents/` ja `~/.claude/commands/` — per-tiedosto-symlink jokaiselle paketin
   `*.md`-tiedostolle. Lähdejoukko on glob, joten uusi agentti tulee asennukseen pelkällä
   nimeämisellä. Paketin omistamat symlinkit, joita paketti ei enää toimita, siivotaan.
+- `~/.claude/skills/` — per-hakemisto-symlink jokaiselle paketin skillille (linkki on
+  hakemistotasolla, koska skill on `<nimi>/SKILL.md` liitteineen). Sama omistajuussääntö ja
+  siivous kuin yllä, mutta vieras `skills`-hakemisto tuottaa vain `CONFLICT`-rivin ja
+  exit-koodin 4 — se ei kaada agenttien ja komentojen asennusta (osio 6.9).
 - `~/.claude/scripts/run-issues` — **ehdollinen** sidonta. Jos polku jo toimii, se jätetään
   rauhaan. Jos sitä ei ole ja asentaja voi omistaa sen, luodaan symlink paketin juureen.
 - `~/Library/LaunchAgents/` — vain `--with-launchagents`. Kaavio:
