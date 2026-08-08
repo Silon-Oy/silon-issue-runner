@@ -48,9 +48,21 @@ refresh_origin() {
 #      <remote>/HEAD (only `git clone` does), so a multi-remote clone hits this
 #      routinely, and silently branching off local HEAD produces PRs cut from a
 #      stale commit with no error. Refuse instead, naming the one-line fix.
-# Prints the worktree path. Returns non-zero if an explicit base branch does
-# not resolve, or if the named remote has refs but no resolvable default HEAD
-# and no base branch was given.
+# Prints the worktree path on success.
+#
+# Return codes carry the FAILURE CAUSE so the caller attributes the block
+# correctly (issue #34 — a single `1` made the orchestrator misdiagnose every
+# failure as a missing <remote>/HEAD and print the wrong fix):
+#   0  worktree created
+#   2  base ref could not be resolved — an explicit base branch that does not
+#      exist, or a named remote with refs but no <remote>/HEAD and no base
+#      branch. Fix: `git remote set-head` or set base_branch.
+#   3  the local branch <branch> already exists — a leftover from a previous run
+#      of the SAME issue (a closed PR with --delete-branch removes only the
+#      remote branch). Fix: cleanup-run.sh, NOT `git remote set-head`.
+#   4  `git worktree add` failed for some other reason (existing worktree dir,
+#      disk space, permissions). Cause is not identified here — the caller must
+#      point at the log rather than guess.
 #
 # The base ref is assumed already fresh: fetching the remote is the caller's
 # responsibility (orchestrate.sh calls refresh_origin before this), so a stale
@@ -82,25 +94,40 @@ create_worktree() {
     # bug of issue #27. Fail fast, naming the fix, before any side effect.
     echo "create_worktree: '$remote/HEAD' does not resolve and no base branch was given." >&2
     echo "create_worktree: run 'git remote set-head $remote -a' in the repo (or set base_branch in .claude/run-issues.json), then retry." >&2
-    return 1
+    return 2
   else
     base_ref="HEAD" # genuinely new repo: no <remote>/* refs exist yet
   fi
 
-  # `set -e` does not propagate a subshell's failure to the caller via the
-  # trailing `printf`, so guard the subshell explicitly with `|| return 1`.
-  (
-    cd "$repo"
-    # Validate an explicit base branch resolves (the remote is already fresh
-    # via the caller's refresh_origin); a clear error here beats a cryptic
-    # `git worktree add` failure downstream.
-    if [ -n "$base_branch" ] \
-       && ! git rev-parse --verify --quiet "refs/remotes/$remote/$base_branch" >/dev/null; then
-      echo "create_worktree: base branch '$remote/$base_branch' not found (remote fresh)" >&2
-      exit 1
-    fi
-    git worktree add -b "$branch" "$wt_path" "$base_ref" >/dev/null
-  ) || return 1
+  # Validate an explicit base branch resolves (the remote is already fresh via
+  # the caller's refresh_origin); a clear error here beats a cryptic
+  # `git worktree add` failure downstream. Same cause as the missing-HEAD
+  # branch above: the base ref does not resolve (rc 2).
+  if [ -n "$base_branch" ] \
+     && ! git -C "$repo" rev-parse --verify --quiet "refs/remotes/$remote/$base_branch" >/dev/null; then
+    echo "create_worktree: base branch '$remote/$base_branch' not found (remote fresh)" >&2
+    return 2
+  fi
+
+  # A local branch left behind by a previous run of the SAME issue makes
+  # `git worktree add -b` fail with "already exists" — but that is NOT a base-ref
+  # problem, so detect it explicitly and report a distinct cause (rc 3). Without
+  # this, the generic failure below would be misread as an unresolved base and
+  # the caller would print the wrong fix (issue #34).
+  if git -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+    echo "create_worktree: local branch '$branch' already exists (leftover from a previous run of this issue)." >&2
+    return 3
+  fi
+
+  # Any remaining `git worktree add` failure (existing worktree dir, disk,
+  # permissions) is genuinely unclassified here — surface it as rc 4 so the
+  # caller points at the log instead of guessing a cause. Let git's own stderr
+  # flow through (the caller captures it into worktree-create.log): the real
+  # error is what the log must show (issue #34), so only stdout is silenced.
+  if ! git -C "$repo" worktree add -b "$branch" "$wt_path" "$base_ref" >/dev/null; then
+    echo "create_worktree: 'git worktree add' failed for branch '$branch' (see log)." >&2
+    return 4
+  fi
 
   printf '%s' "$wt_path"
 }

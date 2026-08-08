@@ -56,6 +56,20 @@ stateDiagram-v2
     %% RESTART_CONTEXT / cycle-review base and is non-fatal.)
     S4_Worktree --> S5_DBClone: origin fetched (or no origin) → worktree ready
     S4_Worktree --> [*]: origin fetch failed → blocked/origin_fetch_failed + needs-human (rc=5)
+
+    %% create_worktree separates the failure cause by exit code (issue #34) so
+    %% the situation comment names the RIGHT fix instead of always blaming a
+    %% missing remote HEAD: 2 = base ref unresolved (issue #27, fix is
+    %% git remote set-head or an explicit base_branch), 3 = leftover local
+    %% branch from a previous run of this issue (a closed PR with
+    %% --delete-branch removes only the remote one; fix is cleanup-run.sh),
+    %% 4 = any other git worktree add error (existing worktree dir, disk,
+    %% permissions) whose cause is NOT guessed — the attached log carries
+    %% git's own message. All three finalize blocked with their own reason.
+    S4_Worktree --> [*]: base ref unresolved → blocked/worktree_base_unresolved + needs-human (rc=5)
+    S4_Worktree --> [*]: leftover branch from a previous run → blocked/worktree_leftover_branch + needs-human (rc=5)
+    S4_Worktree --> [*]: other worktree add error → blocked/worktree_create_failed + needs-human (rc=5)
+
     S5_DBClone --> S6_CycleReview: clone ok or not needed
     S5_DBClone --> [*]: clone failed (rc=5)
 

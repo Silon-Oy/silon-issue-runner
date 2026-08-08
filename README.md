@@ -450,13 +450,21 @@ Poller huomaa vastauksen seuraavalla tikillä, poistaa `waiting`-labelin ja jatk
 `RUN_ISSUES_MAX_RETRIES` (oletus 1). Budjetin loputtua ajo jää odottamaan ihmistä. Sinä et
 tee mitään ensimmäisen aikakatkaisun jälkeen — odota yksi tikki.
 
-**e) Ajo estyi ennen toteutusta tai sen aikana** (exit 5). Syitä on viisi, ja ne erottaa
-`run.json`-statuksen syykentästä: `env_bootstrap_failed` / `env_bootstrap_timeout`
-(riippuvuuksien asennus kaatui — tyypillisesti puuttuva `GITHUB_TOKEN` yksityiselle
-riippuvuudelle), `provision_test_env_failed` (repon oma testiympäristöhook kaatui),
-db-kloonauksen virhe, tai toteuttaja palautti `BLOCKED`. Kaikissa issuelle tulee
-`needs-human`-label ja kommentti, jossa on tuloste. Korjaa syy, siivoa ajo (`/cleanup-run`) ja
-päästä issue takaisin poimintaan.
+**e) Ajo estyi ennen toteutusta tai sen aikana** (exit 5). Syyn erottaa `run.json`-statuksen
+syykentästä, ja jokainen niistä tuottaa issuelle `needs-human`-labelin ja kommentin, jossa on
+tuloste:
+
+| Syykenttä | Mitä tapahtui |
+|---|---|
+| `worktree_base_unresolved` | Feature-haaran base-refiä ei saatu ratkaistua: remotella on refejä mutta ei symbolista HEADia eikä `base_branch`ia ole asetettu. Korjaus: `git remote set-head <remote> -a` kohderepossa |
+| `worktree_leftover_branch` | Saman issuen edellisestä ajosta jäi paikallinen haara (suljettu PR `--delete-branch`illa poistaa vain remote-haaran). Korjaus: `cleanup-run.sh --repo <polku> --issue <N>` |
+| `worktree_create_failed` | Muu `git worktree add` -virhe (olemassa oleva worktree-hakemisto, levytila, oikeudet). Syytä ei arvata — gitin oma virheviesti on ajon lokissa |
+| `env_bootstrap_failed` / `env_bootstrap_timeout` | Riippuvuuksien asennus kaatui — tyypillisesti puuttuva `GITHUB_TOKEN` yksityiselle riippuvuudelle |
+| `provision_test_env_failed` | Repon oma testiympäristöhook kaatui |
+| `db_clone_rc_<n>` | Db-kloonaus epäonnistui |
+| toteuttaja palautti `BLOCKED` | Agentti ei pystynyt toteuttamaan issueta |
+
+Korjaa syy, siivoa ajo (`/cleanup-run`) ja päästä issue takaisin poimintaan.
 
 **f) Ajo jäi jumiin.** Jos ajon viimeisin tapahtuma on vanhempi kuin
 `RUN_ISSUES_STALE_AFTER` (oletus 3600 s), poller tappaa sen tmux-session, merkitsee ajon
@@ -791,7 +799,7 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 2 | Ei ehdokasissueta (poll-tila, ei tekemistä) |
 | 3 | Lukko-/claim-kilpajuoksu hävitty |
 | 4 | Katselmointi esti ajon (vain auto-tila) |
-| 5 | Estynyt ennen implementeriä tai implementerissä — db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED |
+| 5 | Estynyt ennen implementeriä tai implementerissä — worktreen luonti (S4), db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED. Tarkan syyn ja sen korjauksen kertoo `run.json`-statuksen syykenttä, ks. vianetsinnän kohta (e) |
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) aikakatkaistiin — ajo on `--restart`-kelpoinen |
 | 8 | **Puuttuva pakollinen riippuvuus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon |
