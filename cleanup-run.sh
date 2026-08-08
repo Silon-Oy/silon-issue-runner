@@ -29,6 +29,26 @@
 #   7. Run-dir          (rm -rf .claude/run-issues/<run-id>)
 #   8. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/<repo-slug>-issue-N.lock;
 #                        the name comes from the run's own run.json identity)
+#
+# Local vs. remote: steps 1 (assignment + label) are REMOTE — they need `gh` and
+# talk to GitHub. Steps 2–8 are LOCAL — they touch this machine only. The log
+# tags every action [remote]/[local] so a partial teardown is legible at a
+# glance, and the exit code reflects it (see below).
+#
+# Requires `gh` on PATH: the assignment is the only reservation state every
+# machine sees, so a cleanup that wipes local state while leaving the issue
+# assigned drops it out of auto-run pickup permanently. `gh` is checked up front
+# (before the first side effect); over ssh a non-interactive shell lacks the
+# Homebrew PATH — prepend it: ssh <host> 'PATH=/opt/homebrew/bin:$PATH cleanup-run.sh …'.
+#
+# Exit codes:
+#   0  all requested runs cleaned, every operation succeeded ("Done.")
+#   1  usage error / not a git repo
+#   2  no run matched the selection
+#   3  gh is not on PATH — refused before any side effect
+#   4  partial failure — local state was torn down but one or more GitHub (or
+#      local) operations failed; the summary names the counts and exit is non-zero
+#      so automation and humans notice instead of trusting a bare "Done."
 
 set -euo pipefail
 
@@ -164,14 +184,44 @@ confirm() {
 }
 
 do_or_dry() {
-  # do_or_dry <label> <cmd...>
-  local label="$1"; shift
+  # do_or_dry <scope> <label> <cmd...>
+  #   scope = local | remote   (tags the log line so a partial teardown reads at
+  #                             a glance: local artefacts gone but GitHub state
+  #                             untouched, or the reverse)
+  # Runs <cmd...> unless --dry-run and RETURNS the command's exit status (0 in
+  # dry-run) so the CALLER can tally failures. A non-zero status prints the
+  # non-fatal notice but never aborts — the rest of the teardown keeps running.
+  local scope="$1" label="$2"; shift 2
   if [ "$DRY_RUN" = "1" ]; then
-    printf '  [dry] %s: %s\n' "$label" "$*"
-  else
-    printf '  %s: %s\n' "$label" "$*"
-    "$@" || printf '    (non-fatal failure, continuing)\n' >&2
+    printf '  [dry] [%s] %s: %s\n' "$scope" "$label" "$*"
+    return 0
   fi
+  printf '  [%s] %s: %s\n' "$scope" "$label" "$*"
+  local rc=0
+  "$@" || rc=$?
+  [ "$rc" -eq 0 ] || printf '    (non-fatal failure, continuing)\n' >&2
+  return "$rc"
+}
+
+# require_gh — fail before the FIRST side effect if the GitHub CLI is missing.
+# The remote steps (unassign, remove needs-human) are the whole point of a
+# cleanup: the assignment is the only reservation state every machine sees, so a
+# run that wipes the worktree/branch/lock while leaving the issue assigned drops
+# it out of auto-run pickup permanently — 25 issues were stranded exactly this
+# way (issue #31). A partial teardown is worse than none, because it destroys the
+# local state a retry would need. Same posture as the orchestrator's S0 gate.
+# --dry-run performs no side effects, so it never requires gh.
+require_gh() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  command -v gh >/dev/null 2>&1 && return 0
+  {
+    echo "cleanup-run: gh is not on PATH — GitHub operations (unassign, unlabel) cannot run."
+    echo "  Refusing before any teardown: local state a retry would need must not be destroyed"
+    echo "  while the issue stays assigned and out of auto-run pickup."
+    echo "  Over ssh a non-interactive shell lacks the Homebrew PATH — prepend it:"
+    echo "    ssh <host> 'PATH=/opt/homebrew/bin:\$PATH cleanup-run.sh …'"
+  } >&2
+  exit 3
 }
 
 # ---------- listing ----------
@@ -200,8 +250,13 @@ cleanup_run() {
 
   if [ ! -d "$run_dir" ]; then
     echo "cleanup-run: run-dir not found: $run_dir" >&2
+    LOCAL_FAIL_COUNT=$((LOCAL_FAIL_COUNT + 1))
     return 1
   fi
+
+  # Snapshot the fleet-wide failure tallies so we can tell, at the end of THIS
+  # run's teardown, whether it completed with zero failed operations (→ RUNS_OK).
+  local pre_gh_fail="$GH_FAIL_COUNT" pre_local_fail="$LOCAL_FAIL_COUNT"
 
   local status issue_num branch worktree_path db_clone provision_env remote owner_repo run_slug
   status=$(run_field "$rid" '.status')
@@ -220,6 +275,7 @@ cleanup_run() {
 
   if [ "$status" = "completed" ] && [ "$FORCE" != "1" ]; then
     printf 'SKIP %s — status=completed (PR likely open; pass --force to clean anyway)\n' "$rid"
+    RUNS_SKIPPED=$((RUNS_SKIPPED + 1))
     return 0
   fi
 
@@ -231,19 +287,27 @@ cleanup_run() {
   [ -n "$owner_repo" ] && repo_args="--repo $owner_repo"
 
   if [ -n "$issue_num" ]; then
+    # The remote ops run in a subshell because `gh` (and labels_remove's
+    # {owner}/{repo} placeholder) infer the repo from the cwd on origin runs.
+    # A subshell cannot mutate the parent's GH_FAIL_COUNT, so it tallies its own
+    # failures and hands the count back as its exit status; the parent folds it
+    # in. `|| rf=$?` captures that status without tripping `set -e`.
+    local rf=0
     # shellcheck disable=SC2086
     (
       cd "$REPO_ROOT"
-      do_or_dry "unassign" gh issue edit "$issue_num" $repo_args --remove-assignee "@me"
+      f=0
+      do_or_dry remote "unassign" gh issue edit "$issue_num" $repo_args --remove-assignee "@me" || f=$((f + 1))
       # Drop the needs-human label so the issue re-enters auto-run pickup once
       # unassigned. Without this the poll re-surfaces the issue as no:assignee
-      # but the stale label lingers. Best-effort: do_or_dry swallows the
-      # non-fatal failure when the label is absent (the API answers 404).
-      # Label writes go through lib/labels.sh: `gh issue edit --remove-label`
-      # needs the read:project scope, which is how this silently no-op'd for
-      # weeks elsewhere in the pipeline.
-      do_or_dry "unlabel" labels_remove "$owner_repo" "$issue_num" needs-human
-    )
+      # but the stale label lingers. labels_remove treats an absent label (404)
+      # as success, so this only counts as a failure on a REAL error — a 403
+      # (missing read:project scope, the silent breakage that stalled the
+      # pipeline for weeks elsewhere) or a 127 (gh not on PATH).
+      do_or_dry remote "unlabel" labels_remove "$owner_repo" "$issue_num" needs-human || f=$((f + 1))
+      exit "$f"
+    ) || rf=$?
+    GH_FAIL_COUNT=$((GH_FAIL_COUNT + rf))
   fi
 
   # Tear down per-run provisioned test-env resources (best-effort, idempotent).
@@ -259,31 +323,37 @@ cleanup_run() {
       if [ "$DRY_RUN" = "1" ]; then
         printf '  [dry] provision-test-env: %s cleanup %s\n' "$prov_hook" "$rid"
       else
-        printf '  provision-test-env: tearing down resources for %s\n' "$rid"
+        printf '  [local] provision-test-env: tearing down resources for %s\n' "$rid"
         if ! ( cd "$worktree_path" && "$prov_hook" cleanup "$rid" ); then
           printf '  ! provision-test-env cleanup failed for %s — tear down manually.\n' "$rid" >&2
+          LOCAL_FAIL_COUNT=$((LOCAL_FAIL_COUNT + 1))
         fi
       fi
     else
-      printf '  provision-test-env: hook gone (worktree removed?) — skipping teardown for %s\n' "$rid"
+      printf '  [local] provision-test-env: hook gone (worktree removed?) — skipping teardown for %s\n' "$rid"
     fi
   fi
 
+  # Local git ops run via `git -C "$REPO_ROOT"` rather than a `( cd … )` subshell
+  # so their failure count reaches the parent's LOCAL_FAIL_COUNT — a subshell
+  # cannot mutate it.
   if [ -n "$worktree_path" ] && [ -d "$worktree_path" ]; then
-    (
-      cd "$REPO_ROOT"
-      do_or_dry "worktree" git worktree remove --force "$worktree_path"
-    )
+    do_or_dry local "worktree" git -C "$REPO_ROOT" worktree remove --force "$worktree_path" \
+      || LOCAL_FAIL_COUNT=$((LOCAL_FAIL_COUNT + 1))
   elif [ -n "$worktree_path" ]; then
-    printf '  worktree: %s already gone\n' "$worktree_path"
+    printf '  [local] worktree: %s already gone\n' "$worktree_path"
   fi
 
   if [ -n "$branch" ]; then
-    (
-      cd "$REPO_ROOT"
-      # `git branch -D` errors if the branch is missing — that's fine here.
-      do_or_dry "branch" git branch -D "$branch"
-    )
+    # `git branch -D` errors if the branch is missing. That is the expected
+    # idempotent case, not a failure — check existence first so a re-run (or a
+    # run whose branch was already deleted) does not inflate the failure count.
+    if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+      do_or_dry local "branch" git -C "$REPO_ROOT" branch -D "$branch" \
+        || LOCAL_FAIL_COUNT=$((LOCAL_FAIL_COUNT + 1))
+    else
+      printf '  [local] branch: %s already gone\n' "$branch"
+    fi
   fi
 
   # Drop the cloned DB (best-effort). db-clone.sh cleanup is opt-in and
@@ -294,16 +364,17 @@ cleanup_run() {
     if [ "$DRY_RUN" = "1" ]; then
       printf '  [dry] db-clone: %s cleanup %s %s\n' "$SCRIPT_DIR/db-clone/db-clone.sh" "$REPO_ROOT" "$rid"
     else
-      printf '  db-clone: dropping clone %s\n' "$db_clone"
+      printf '  [local] db-clone: dropping clone %s\n' "$db_clone"
       if ! "$SCRIPT_DIR/db-clone/db-clone.sh" cleanup "$REPO_ROOT" "$rid"; then
         printf '  ! DB clone drop failed for %s — drop manually with backend tooling.\n' "$db_clone" >&2
+        LOCAL_FAIL_COUNT=$((LOCAL_FAIL_COUNT + 1))
       fi
     fi
   fi
 
   archive_run "$rid" "$run_dir"
 
-  do_or_dry "run-dir" rm -rf "$run_dir"
+  do_or_dry local "run-dir" rm -rf "$run_dir" || LOCAL_FAIL_COUNT=$((LOCAL_FAIL_COUNT + 1))
 
   if [ -n "$issue_num" ]; then
     # Remove the lock this run actually holds — derived from its OWN recorded
@@ -326,11 +397,16 @@ cleanup_run() {
     local lock_dir
     for lock_dir in "${lock_dirs[@]}"; do
       if [ -d "$lock_dir" ]; then
-        do_or_dry "lock" rm -rf "$lock_dir"
+        do_or_dry local "lock" rm -rf "$lock_dir" || LOCAL_FAIL_COUNT=$((LOCAL_FAIL_COUNT + 1))
       else
-        printf '  lock: %s not held\n' "$(basename "$lock_dir" .lock)"
+        printf '  [local] lock: %s not held\n' "$(basename "$lock_dir" .lock)"
       fi
     done
+  fi
+
+  # This run's teardown is fully clean iff it added no failures to either tally.
+  if [ "$GH_FAIL_COUNT" -eq "$pre_gh_fail" ] && [ "$LOCAL_FAIL_COUNT" -eq "$pre_local_fail" ]; then
+    RUNS_OK=$((RUNS_OK + 1))
   fi
 }
 
@@ -376,6 +452,10 @@ if [ "$MODE" = "list" ]; then
   exit 0
 fi
 
+# Fail before selection (read-only) and before any teardown: every non-list mode
+# performs GitHub side effects and must not start a partial cleanup without gh.
+require_gh
+
 SELECTED=()
 while IFS= read -r line; do
   [ -n "$line" ] && SELECTED+=("$line")
@@ -402,9 +482,36 @@ if ! confirm "Proceed with cleanup?"; then
   exit 0
 fi
 
+# Fleet-wide tallies. cleanup_run runs in THIS shell (not a subshell), so these
+# globals accumulate across every selected run. Separating remote (GitHub) from
+# local failures is the crux of issue #31: a run that wipes local state while a
+# GitHub op fails must not report a bare "Done.".
+GH_FAIL_COUNT=0
+LOCAL_FAIL_COUNT=0
+RUNS_OK=0
+RUNS_SKIPPED=0
+RUNS_TOTAL=${#SELECTED[@]}
+
 for r in "${SELECTED[@]}"; do
   cleanup_run "$r" || true
 done
 
 echo
-echo "Done."
+if [ "$GH_FAIL_COUNT" -eq 0 ] && [ "$LOCAL_FAIL_COUNT" -eq 0 ]; then
+  echo "Done."
+  exit 0
+fi
+
+# Partial failure: local state was (at least partly) torn down but some
+# operation failed. Report the split and exit non-zero so automation and humans
+# notice instead of trusting a bare "Done." — the bug this whole change fixes.
+attempted=$((RUNS_TOTAL - RUNS_SKIPPED))
+{
+  printf 'Done with failures: %d/%d run(s) fully cleaned, %d GitHub op(s) failed, %d local op(s) failed.\n' \
+    "$RUNS_OK" "$attempted" "$GH_FAIL_COUNT" "$LOCAL_FAIL_COUNT"
+  [ "$RUNS_SKIPPED" -gt 0 ] && printf '  (%d completed run(s) skipped; pass --force to include them.)\n' "$RUNS_SKIPPED"
+  if [ "$GH_FAIL_COUNT" -gt 0 ]; then
+    printf '  Some issues may remain assigned and out of auto-run pickup — inspect the [remote] lines above.\n'
+  fi
+} >&2
+exit 4

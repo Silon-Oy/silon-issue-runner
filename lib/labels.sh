@@ -112,8 +112,13 @@ EOF
 }
 
 # labels_remove <owner/repo> <number> <label>
-# Removing a label that is not attached returns 404 from the API; that is a
-# no-op for our purposes, so callers treat any failure as non-fatal.
+# Removing a label that is not attached returns 404 from the API. That IS the
+# desired end state (the label is not on the item), so — exactly like
+# labels_ensure treats a 422 "already_exists" as success — a 404 is reported as
+# rc=0 and stays silent. This distinction matters to callers that count failures
+# (cleanup-run.sh): a routine cleanup of an issue that never carried the label
+# must not read as a failed GitHub operation, while a real 403 (missing scope)
+# or a 127 (gh not on PATH) still returns non-zero and gets counted.
 labels_remove() {
   local owner_repo="$1" number="$2" label="$3"
   if [ -z "$number" ] || [ -z "$label" ]; then
@@ -128,7 +133,16 @@ labels_remove() {
   local err rc
   err=$(labels_gh api --method DELETE "repos/$(_labels_repo_path "$owner_repo")/issues/$number/labels/$encoded" 2>&1 >/dev/null)
   rc=$?
-  [ "$rc" -eq 0 ] || _labels_diag "labels_remove($owner_repo#$number: $label)" "$err"
+  if [ "$rc" -ne 0 ]; then
+    # A 404 means the label is already absent — success for our intent. Match the
+    # HTTP-status form only: `gh api` appends `(HTTP <code>)` to every error, so a
+    # bare `command not found` (rc 127, gh off PATH) or a 403 must NOT be mistaken
+    # for a benign 404 and swallowed — those are the failures cleanup-run counts.
+    if printf '%s' "$err" | grep -qiE 'HTTP 404|404:'; then
+      return 0
+    fi
+    _labels_diag "labels_remove($owner_repo#$number: $label)" "$err"
+  fi
   return "$rc"
 }
 
