@@ -19,6 +19,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORCH="$HERE/../orchestrate.sh"
 ISSUE_LIB="$HERE/../lib/issue.sh"
 STATE_LIB="$HERE/../lib/state.sh"
+VERSION_LIB="$HERE/../lib/version.sh"
 
 WORK=$(mktemp -d -t situation-comment.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
@@ -32,6 +33,10 @@ mkdir -p "$REPO"
 . "$ISSUE_LIB"
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"
+# runner_version_summary is called by _post_situation_to_issue for the
+# Runner-version meta line (issue #32).
+# shellcheck source=lib/version.sh
+. "$VERSION_LIB"
 
 CAPTURE="$WORK/last-comment.txt"
 comment_issue() {  # <repo> <N> <text> [<owner/repo>] [<remote>] — capture body only
@@ -48,6 +53,10 @@ RUN_ISSUES_SITUATION_ARTIFACT_MAX=60000
 RUN_ID="20260521-1500-issue-99"
 RUN_DIR="$REPO/.claude/run-issues/$RUN_ID"
 REPO_ROOT="$REPO"
+# _post_situation_to_issue reads SCRIPT_DIR (the package root) for the
+# Runner-version meta line; point it at this checkout so runner_version_summary
+# resolves a real sha instead of "?".
+SCRIPT_DIR="$HERE/.."
 ISSUE_NUM="99"
 BRANCH="auto-run/issue-99-x"
 # Multi-remote (issue #53): _post_situation_to_issue passes these to
@@ -80,6 +89,7 @@ printf '%s' "$BODY" | grep -q '```' && { echo "FAIL c1: prose artifact wrapped i
 printf '%s' "$BODY" | grep -q 'run-issues:awaiting-answer' && { echo "FAIL c1: marker present in non-awaitable"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'Vastaa tähän issueen' && { echo "FAIL c1: reply prompt present in non-awaitable"; FAIL=1; }
 printf '%s' "$BODY" | grep -q 'Status/syy: `cycle_review_blocker`' || { echo "FAIL c1: kind meta line missing"; FAIL=1; }
+printf '%s' "$BODY" | grep -q 'Runner-version: `' || { echo "FAIL c1: Runner-version meta line missing"; FAIL=1; }
 grep -q '"event":"situation_posted"' "$RUN_DIR/state.jsonl" || { echo "FAIL c1: no situation_posted event"; FAIL=1; }
 grep -q '"awaitable":"0"' "$RUN_DIR/state.jsonl" || { echo "FAIL c1: event awaitable!=0"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 1: blocker prose (<details>, no fence), no marker, event"

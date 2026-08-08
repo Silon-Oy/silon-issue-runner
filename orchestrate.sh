@@ -113,9 +113,23 @@ usage:
   orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL
   orchestrate.sh --restart <run-dir>
   orchestrate.sh --continue <run-dir>
+  orchestrate.sh --version
 USAGE
   exit 1
 }
+
+# --version (issue #32): the first thing a diagnosis reaches for. Report which
+# runner version is executing and how far it has drifted, then exit — before any
+# mode dispatch, lock, or run-dir. Self-contained so it works even with no repo
+# or issue argument. SCRIPT_DIR is redefined identically in the library-loading
+# section below; that path is never reached here because we exit.
+if [ "${1:-}" = "--version" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=lib/version.sh
+  . "$SCRIPT_DIR/lib/version.sh"
+  printf 'run-issues %s\n' "$(runner_version_summary "$SCRIPT_DIR")"
+  exit 0
+fi
 
 if [ "${1:-}" = "--restart" ]; then
   MODE="restart"
@@ -225,6 +239,10 @@ source "$SCRIPT_DIR/lib/hook-runner.sh"
 source "$SCRIPT_DIR/lib/env-bootstrap.sh"
 # shellcheck source=lib/labels.sh
 source "$SCRIPT_DIR/lib/labels.sh"
+# shellcheck source=lib/version.sh
+# Runner-version visibility (issue #32): read by _post_situation_to_issue so a
+# hand-off report names the code version that produced it, and by --version.
+source "$SCRIPT_DIR/lib/version.sh"
 # shellcheck source=lib/github-app-auth.sh
 # Sourced AFTER source_machine_env (below) populates env vars. We require the
 # file to exist; the helper guards every side effect on gha_enabled, so loading
@@ -1311,6 +1329,11 @@ _post_situation_to_issue() {
   body+="- Status/syy: \`${kind}\`"$'\n'
   body+="- Host: \`${host}\`"$'\n'
   body+="- Run-id: \`${RUN_ID}\`"$'\n'
+  # Runner-version (issue #32): the code version that produced this report. When
+  # the running runner is a pinned submodule drifting behind origin/main, this
+  # is the line that reveals it to whoever reads the report — not just to whoever
+  # can ssh into the host. SCRIPT_DIR is the package root, not the target repo.
+  body+="- Runner-version: \`$(runner_version_summary "$SCRIPT_DIR")\`"$'\n'
 
   if [ "$awaitable" = "1" ]; then
     local marker
