@@ -357,14 +357,27 @@ watch_one() {
   esac
 
   # ----- P6: Merge --------------------------------------------------------
-  log "merging PR #$pr_num (--rebase --delete-branch)"
   # Merge as the App so the "Merged by" attribution on the PR is <app>[bot].
-  if ! gh_route pr merge "$pr_num" --rebase --delete-branch; then
-    log "merge failed for PR #$pr_num"
-    [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
-      state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=merge_failed"
-    _release
-    return 5
+  #
+  # We prefer --rebase, but GitHub rejects a rebase-merge when the feature
+  # branch contains a merge commit (issue #41) — a normal state whenever a
+  # conflict was resolved by merging the base branch into the feature branch.
+  # That failure is PERMANENT: the branch shape never changes on its own, so
+  # retrying --rebase every tick would loop forever. Fall back to a --merge
+  # commit, which GitHub accepts for such branches. gh's own error text is
+  # captured and logged so a genuine failure names its cause instead of the
+  # opaque "merge failed" that made every merge block look identical.
+  local merge_out
+  log "merging PR #$pr_num (--rebase --delete-branch)"
+  if ! merge_out=$(gh_route pr merge "$pr_num" --rebase --delete-branch 2>&1); then
+    log "PR #$pr_num: rebase merge failed (merge commit on branch?) — retrying with --merge: ${merge_out:-<no output>}"
+    if ! merge_out=$(gh_route pr merge "$pr_num" --merge --delete-branch 2>&1); then
+      log "merge failed for PR #$pr_num: ${merge_out:-<no output>}"
+      [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=merge_failed"
+      _release
+      return 5
+    fi
   fi
 
   # ----- P7: PostMerge ----------------------------------------------------

@@ -27,7 +27,7 @@ stateDiagram-v2
     P5_Resolve --> CONFLICT: CI not green after rebase
     P5_Resolve --> NOT_MERGEABLE: no worktree / fetch failed / blocked
 
-    P6_Merge: P6 Merge\ngh pr merge --rebase --delete-branch
+    P6_Merge: P6 Merge\ngh pr merge --rebase --delete-branch\nrebase rejected (merge commit on branch) -> retry --merge
     P6_Merge --> P7_PostMerge: merged
     P6_Merge --> MERGE_FAIL: merge failed
 
