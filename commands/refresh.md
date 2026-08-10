@@ -427,25 +427,16 @@ Kun portit ovat vapaat → etene PHASE 5:een (normaali taustakäynnistys + healt
 
 ## PHASE 5 — Käynnistä dev-server taustalle
 
-Käynnistä `start`-komento niin että se **jää eloon** työkalukutsun palatessa.
+Käynnistä `start`-komento niin että se **jää eloon työkalukutsua ja sessiota pidemmäksi
+ajaksi** — dev-serverin tarkoitettu elinkaari on sessiota pidempi: käyttäjä jatkaa
+työskentelyä ja pysäyttää sen itse `kill <DEV_PID>`:llä (PHASE 6).
 
-**Ensisijainen tapa — Bash-työkalun `run_in_background: true` -moodi.** Aja start-komento
-Bash-työkalulla `run_in_background: true` -parametrilla ja ohjaa tuloste lokiin **komennon
-sisällä**, jotta `.claude/refresh-dev.log` säilyy raportoitavana polkuna. Tämä on
-alustariippumaton eikä nojaa util-linuxin `setsid`iin (jota macOS:ssä ei ole):
-
-```bash
-cd "$REPO_ROOT" && pnpm dev > "$REPO_ROOT/.claude/refresh-dev.log" 2>&1
-```
-
-(Korvaa `pnpm dev` CONFIG.start-arvolla. `run_in_background: true` pitää prosessin elossa
-työkalukutsun palatessa; loki menee aina `$REPO_ROOT/.claude/refresh-dev.log`-tiedostoon.
-Ota talteen työkalun palauttama taustatehtävän tunniste elossaolotarkistusta varten.)
-
-**Etualan fallback** (jos et voi käyttää `run_in_background`-moodia). `setsid` **ei kuulu
-macOS:n perusasennukseen** — älä käytä sitä ehdoitta (`command not found` → dev-server ei
-käynnisty). Pelkkä `nohup … & disown` riittää macOS:llä; `setsid` lisätään vain
-saatavuustarkistuksen takaa:
+**Ensisijainen tapa — `nohup … & disown`.** Irrota prosessi kokonaan sessiosta, jotta se
+säilyy hengissä myös työkalukutsun ja session jälkeen. `setsid` **ei kuulu macOS:n
+perusasennukseen** — älä käytä sitä ehdoitta (`command not found` → dev-server ei käynnisty).
+Pelkkä `nohup … & disown` riittää macOS:llä; `setsid` lisätään vain saatavuustarkistuksen
+takaa. Loki ohjataan **komennon sisällä** `.claude/refresh-dev.log`-tiedostoon, jotta se
+säilyy raportoitavana polkuna:
 
 ```bash
 command -v setsid >/dev/null 2>&1 && SETSID=setsid || SETSID=""
@@ -454,6 +445,29 @@ DEV_PID=$!
 disown "$DEV_PID" 2>/dev/null || true
 echo "DEV_PID=$DEV_PID LOG=$REPO_ROOT/.claude/refresh-dev.log"
 ```
+
+(Korvaa `pnpm dev` CONFIG.start-arvolla. `nohup … & disown` irrottaa prosessin sessiosta,
+joten se jää eloon myös silloin kun harness lopettaa taustatehtäviä; loki menee aina
+`$REPO_ROOT/.claude/refresh-dev.log`-tiedostoon. `DEV_PID` on elossaolotarkistusta ja
+PHASE 6:n raporttia varten.)
+
+**Toissijainen tapa — Bash-työkalun `run_in_background: true` -moodi** (vain jos et voi ajaa
+edellä olevaa etualan käynnistystä). Aja start-komento Bash-työkalulla
+`run_in_background: true` -parametrilla ja ohjaa tuloste lokiin **komennon sisällä**, jotta
+`.claude/refresh-dev.log` säilyy raportoitavana polkuna:
+
+```bash
+cd "$REPO_ROOT" && pnpm dev > "$REPO_ROOT/.claude/refresh-dev.log" 2>&1
+```
+
+**Varaus — elinkaarisidos.** `run_in_background: true` pitää prosessin elossa vain
+**työkalukutsun palatessa**, ei sessiota pidempään: prosessi on sidottu harnessin
+taustatehtävän elinkaareen, ja harness voi pysäyttää tehtävän
+(`<task-notification> status: killed`) ennen dev-serverin tarkoitettua elinkaarta. Silloin
+portti vapautuu eikä mikään kuuntele, vaikka PHASE 6 on jo raportoinut URL:n ja PID:n. Jos
+käytät tätä tapaa, ota talteen työkalun palauttama taustatehtävän tunniste
+elossaolotarkistusta varten **ja** mainitse PHASE 6:n raportissa, että prosessi voi kuolla
+taustatehtävän mukana.
 
 **Elossaolotarkistus ennen health-pollia.** Käynnistys voi epäonnistua hiljaa: `&`-taustaan
 ajettu rivi (tai `run_in_background`-tehtävä) "onnistuu" heti vaikka komento ei löytyisi, ja
@@ -464,7 +478,7 @@ lokin häntä ja **STOP heti**, älä odota 45 s turhaan:
 ```bash
 sleep 1
 DEAD=0
-# Etualan fallback: DEV_PID asetettu → tarkista prosessi. run_in_background-moodissa
+# Ensisijainen tapa (nohup): DEV_PID asetettu → tarkista prosessi. run_in_background-moodissa
 # käytä sen sijaan työkalun palauttamaa taustatehtävän tilaa (completed/failed = kuollut).
 if [ -n "$DEV_PID" ] && ! kill -0 "$DEV_PID" 2>/dev/null; then DEAD=1; fi
 # Molemmissa moodeissa: käynnistysvirhe lokissa on varma kuolleen prosessin signaali.
@@ -633,11 +647,13 @@ varmista että kukin pätee yhä:
    rivit ovat jo olemassa → ei muutosta eikä likaista työpuuta. Trackattua `refresh.json`:ia
    ei ignoroida. Pelkkä `.gitignore`-muutos ei laukaise PHASE 1:n STOP:ia seuraavalla ajolla.
 9. **setsid-vapaa käynnistys + elossaolotarkistus.** PHASE 5:n ensisijainen käynnistystapa
-   on Bash-työkalun `run_in_background: true` -moodi eikä käytä `setsid`iä; etualan fallback
-   toimii macOS:llä sellaisenaan (`setsid` vain saatavuustarkistuksen takaa, kopioi–liitä ei
-   tuota `command not found`). Jos käynnistys epäonnistuu (prosessi kuolee heti tai loki
-   sisältää `command not found`), komento tulostaa lokin hännän ja pysähtyy **ennen** 45 s
-   health-pollia — ei odota turhaan.
+   on `nohup … & disown`, joka irrottaa prosessin sessiosta niin että se jää eloon sessiota
+   pidemmäksi ajaksi; se toimii macOS:llä sellaisenaan (`setsid` vain saatavuustarkistuksen
+   takaa, kopioi–liitä ei tuota `command not found`). Toissijainen `run_in_background: true`
+   -moodi sitoo prosessin harnessin taustatehtävään ja voi kuolla sen mukana, joten sitä
+   käytetään vain jos etualan käynnistystä ei voi ajaa. Jos käynnistys epäonnistuu (prosessi
+   kuolee heti tai loki sisältää `command not found`), komento tulostaa lokin hännän ja
+   pysähtyy **ennen** 45 s health-pollia — ei odota turhaan.
 10. **Koodi edellä kantaa + `BEHIND == 0` → pending-migraatiot sovelletaan silti.** Kun
    migraatiot ovat päätyneet työpuuhun ohi komennon oman pullin (manuaalinen merge/checkout,
    `/run-issues`, cherry-pick tms.) ja `origin/main == HEAD` (`BEHIND == 0`), komento **ei**
