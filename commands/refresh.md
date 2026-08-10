@@ -75,10 +75,17 @@ PHASE 3b täydentää sen.)
 
 ```bash
 BEFORE=$(git -C "$REPO_ROOT" rev-parse HEAD)
-git -C "$REPO_ROOT" fetch origin
 BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
-BEHIND=$(git -C "$REPO_ROOT" rev-list --count "HEAD..origin/$BRANCH")
-echo "BEFORE=$BEFORE BRANCH=$BRANCH BEHIND=$BEHIND"
+# Lue haaran upstream-remote configista, fallback origin. `git config --get
+# branch.<name>.remote` palauttaa pelkän remoten nimen, joten remote-nimen sisältämä
+# `/` ei riko sitä (toisin kuin @{upstream}-parsinta). Multi-remote-repossa, jonka
+# haara trackaa muuta kuin originia (esim. customer-d/main), tämä fetchaa ja pullaa oikeasta
+# remotesta eikä pysähdy toisen (hylätyn) remoten hajaantumiseen. Haara jolla ei ole
+# upstreamia käyttää originia kuten ennen.
+REMOTE=$(git -C "$REPO_ROOT" config --get "branch.$BRANCH.remote" || echo origin)
+git -C "$REPO_ROOT" fetch "$REMOTE"
+BEHIND=$(git -C "$REPO_ROOT" rev-list --count "HEAD..$REMOTE/$BRANCH")
+echo "BEFORE=$BEFORE BRANCH=$BRANCH REMOTE=$REMOTE BEHIND=$BEHIND"
 ```
 
 - Jos `BEHIND == 0` → repo on jo ajan tasalla, **ei pull-diffiä eikä PHASE 3:n buildeja**.
@@ -88,7 +95,7 @@ echo "BEFORE=$BEFORE BRANCH=$BRANCH BEHIND=$BEHIND"
 - Muuten pullaa fast-forward-only:
 
   ```bash
-  git -C "$REPO_ROOT" pull --ff-only origin "$BRANCH"
+  git -C "$REPO_ROOT" pull --ff-only "$REMOTE" "$BRANCH"
   ```
 
   - Jos pull **epäonnistuu** (esim. haarat ovat hajaantuneet / ff ei mahdollinen, tai
@@ -524,8 +531,10 @@ tail -40 "$REPO_ROOT/.claude/refresh-dev.log"
 
 Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
 
-1. **Pull-yhteenveto**: oltiinko ajan tasalla vai pullattiinko, BRANCH, BEFORE→AFTER
-   (lyhyet hashit), montako committia.
+1. **Pull-yhteenveto**: oltiinko ajan tasalla vai pullattiinko, BRANCH, käytetty REMOTE
+   (haaran upstream configista, fallback `origin`), BEFORE→AFTER (lyhyet hashit), montako
+   committia. Raportoi REMOTE **aina**, jotta väärästä lähteestä pullaaminen näkyy heti —
+   erityisesti multi-remote-repossa, jonka haara ei tracka originia.
 2. **Ajetut buildit + syyt**: lista (komento ← laukaiseva tiedosto). Jos PHASE 3a sovelsi
    pending-migraatiot (`migrate deploy`) ja/tai Prisma Client regeneroitiin (`db:generate`),
    mainitse se tässä samalla tavalla kuin muut buildit — myös silloin kun migraatio ei
@@ -647,3 +656,10 @@ varmista että kukin pätee yhä:
    -500 ei toistu; ilman konfigia sama tehtävä on PHASE 3a:n Prisma-autodetektiolla
    (skenaario 7). Jos `apply` failaa (esim. dev-kanta alhaalla always-apply-tilassa) →
    komento pysähtyy PHASE 3c:ssä eikä käynnistä dev-serveriä.
+11. **Upstream ei ole `origin` → pull oikeasta remotesta.** Repossa jonka haara trackaa
+   muuta kuin `origin`ia (esim. `customer-d/main`), PHASE 2 lukee remoten
+   `branch.<name>.remote`-configista ja fetchaa + laskee `BEHIND`in + pullaa **siitä**
+   remotesta eikä pysähdy toisen (hylätyn) remoten hajaantumiseen. Repoissa joissa upstream
+   on `origin` — eli valtaosassa — käytös on ennallaan (fallback osuu). Haara jolla ei ole
+   upstreamia lainkaan käyttää `origin`ia kuten ennenkin. PHASE 6:n pull-yhteenveto raportoi
+   käytetyn remoten aina.
