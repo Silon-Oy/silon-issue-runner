@@ -324,10 +324,6 @@ watch_one() {
   # Always release the lock on the way out of this PR.
   _release() { [ "$locked" = "1" ] && unlock_issue "$issue_num" "$run_remote" "$run_slug" || true; }
 
-  if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
-    state_event "$run_dir" "pr_watch_started" "pr=$pr_num"
-  fi
-
   # ----- P3: Classify -----------------------------------------------------
   local pr_json
   if ! pr_json=$(gh_route pr view "$pr_num" \
@@ -373,7 +369,23 @@ watch_one() {
     decision="WAIT_CI"
   fi
   log "PR #$pr_num classified: $decision"
-  if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
+
+  # state.jsonl noise gate (issue #65). A closed PR stays SKIP_CLOSED forever,
+  # yet the pr_watch_started / pr_classified / pr_watch_skipped trio used to be
+  # re-written on every tick — >99.7% of a 345 MB state.jsonl was exactly this.
+  # Log the FIRST SKIP_CLOSED (a real transition: the PR closed) but suppress the
+  # whole trio on every repeat, keyed on the last recorded decision read from the
+  # tail of state.jsonl (never the whole file). Every other decision is live
+  # state and is logged as before. emit_events also gates pr_watch_started below,
+  # so a suppressed tick writes nothing at all.
+  local emit_events=1
+  if [ "$decision" = "SKIP_CLOSED" ] && [ -n "$run_dir" ] && [ -d "$run_dir" ] \
+     && [ "$(pr_last_decision "$run_dir/state.jsonl")" = "SKIP_CLOSED" ]; then
+    emit_events=0
+  fi
+
+  if [ "$emit_events" = 1 ] && [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
+    state_event "$run_dir" "pr_watch_started" "pr=$pr_num"
     state_event "$run_dir" "pr_classified" "pr=$pr_num" "decision=$decision"
   fi
 
@@ -403,7 +415,9 @@ watch_one() {
       fi
       ;;
     SKIP_NO_LABEL|SKIP_CLOSED|SKIP_BLOCKED)
-      [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+      # Third leg of the trio: suppressed together with the two above on a
+      # repeated SKIP_CLOSED (emit_events=0). All other skips are logged.
+      [ "$emit_events" = 1 ] && [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
         state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=$decision"
       _release
       return 4

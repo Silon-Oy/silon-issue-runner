@@ -353,7 +353,8 @@ README §7.8. Vartija: `tests/test-status-render.sh`.
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `poller-config.sh` | Pollerien host-portti ja watchlistin resolvointi puhtaina funktioina. Erillinen lib siksi, että molemmat pollerit tarvitsevat saman päätöksen ja se on testattava **sourcaamalla** — poller itse exittaa source-hetkellä vieraalla koneella |
-| `pr-watch-lib.sh` | PR:n luokittelu- ja merge-päätöslogiikka (irrotettu testattavaksi) |
+| `log-rotate.sh` | Pollerien koon perusteella laukeava lokirotaatio (#65): `rotate_log_if_big` siirtää lokitiedoston `.1`:ksi rajan ylittyessä, yksi sukupolvi. Erillinen lib eikä `poller-config.sh`, jotta sen puhtausväite säilyy — tämä tekee levykirjoituksen (`mv`). Sourcetaan **ennen** pollerin `exec`-uudelleenohjausta, koska jo avatun fd:n tiedoston siirto olisi no-op |
+| `pr-watch-lib.sh` | PR:n luokittelu- ja merge-päätöslogiikka (irrotettu testattavaksi). Ml. `pr_last_decision` (#65): lukee state.jsonlin **hännästä** viimeisimmän `pr_classified`-päätöksen, jotta `pr-watch.sh` osaa vaieta toistuvan `SKIP_CLOSED`-tapahtumatrion |
 | `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, orkestraattorin S0-portti (#7) tekee samasta lähteestä fataalin (exit 8). Korjauskomennot tulevat yhdestä lähteestä (`preflight_install_hint`) |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
@@ -398,6 +399,7 @@ README §7.8. Vartija: `tests/test-status-render.sh`.
 | `RUN_ISSUES_POLLER_HOSTS` | *(sisäänrakennettu legacy-lista, ks. §12)* | Pilkuin/välilyönnein eroteltuja glob-kuvioita, verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0 luomatta mitään |
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku. Asetettuna se on **ainoa** ehdokas — osumaton override on virhe, ei fallback |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Kaikkien neljän lokitiedoston hakemisto per poller (`.log`, `.runs.log`, `.stdout.log`, `.stderr.log`) |
+| `RUN_ISSUES_LOG_MAX_BYTES` | `10485760` (10 MB) | Lokirotaation raja (#65). Tikin alussa, ennen ensimmäistä kirjoitusta ja **ennen** `exec`-uudelleenohjausta, molemmat pollerit rotatoivat jokaisen neljästä lokistaan (`mv` → `.1`, yksi sukupolvi) jos koko ylittää rajan. `0` = rotaatio pois päältä. `mv` samalla levyllä on atominen, joten rinnakkainen lukija näkee aina ehjän vanhan tai uuden tiedoston |
 | `RUN_ISSUES_HOME` | *(pollerin oma `SCRIPT_DIR`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Luetaan vain ympäristöstä |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Liveness-raja: vanhempi ajo tapetaan ja finalisoidaan `blocked/stalled_in_<state>`. **Täytyy** ylittää pisin laillinen yksivaiheinen claude-kutsu |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee `auto-clean.sh`:n |
@@ -760,15 +762,20 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   viittaa tänne. Jos fakta muuttuu, **tämä tiedosto on lähde**. `tests/test-readme.sh` vartioi
   README:n rakennetta ja johtaa exit-koodiodotuksensa suoraan skripteistä, joten uusi
   exit-koodi ilman README-riviä on punainen testi.
-- **`state.jsonl` kasvaa rajatta, valtaosin PR-vahtikohinaa (#59).** Mitattu Studiolla: 256
-  run-diriä, `state.jsonl`-tiedostoja yhteensä 345 MB ja 1,19 M tapahtumaa, joista **>99,7 %**
-  on PR-vahtipollerin `pr_watch_started`/`pr_classified`/`pr_watch_skipped`-riviä joka tikillä
-  — myös jo suljetuille PR:ille (suurin yksittäinen tiedosto 6,7 MB). Tästä seuraa sitova
-  koodisääntö, jota `status.sh` noudattaa: **`state.jsonl`iä ei lueta kokonaan missään
+- **`state.jsonl`-kohina PR-vahdista — kasvun lähde tukittu (#65), takautuva siivous jäljellä.**
+  Mitattu Studiolla (#59): 256 run-diriä, `state.jsonl`-tiedostoja yhteensä 345 MB ja 1,19 M
+  tapahtumaa, joista **>99,7 %** oli PR-vahtipollerin
+  `pr_watch_started`/`pr_classified`/`pr_watch_skipped`-riviä joka tikillä — myös jo suljetuille
+  PR:ille (suurin yksittäinen tiedosto 6,7 MB). **#65 pysäytti kasvun:** `pr-watch.sh` kirjaa
+  ensimmäisen `SKIP_CLOSED`-siirtymän (PR sulkeutui) mutta **vaikenee toistuvasta** kolmikosta,
+  kun run-dirin edellinen kirjattu päätös oli myös `SKIP_CLOSED`. Edellinen päätös luetaan
+  `pr_last_decision`illa (`lib/pr-watch-lib.sh`) **vain hännästä** — mikä tekee edelleen sitovaksi
+  koodisäännön, jota `status.sh`kin noudattaa: **`state.jsonl`iä ei lueta kokonaan missään
   koodipolussa; vain `tail -n N` on sallittu** (`scan_stalled` lukee hännän, `status.sh` samoin
-  `RUN_ISSUES_STATUS_TAIL_LINES` rivin verran). Tiedostojen kohinan karsinta (esim. lopettaa
-  `pr_classified`in kirjoitus suljetuille PR:ille, tai rotatoida vanhat tapahtumat) on oma
-  siivousmuutoksensa, joka ei kuulunut #59:n lukevaan näkymään.
+  `RUN_ISSUES_STATUS_TAIL_LINES` rivin verran). Jäljellä: **jo levyllä olevien 345 MB:n
+  takautuva tiivistäminen** on eri asia kuin kasvun pysäytys — se poistuu run-dirien
+  siivouksen myötä (#65 scope-out). Sisaravaus: pollerilokien rotaatio (`RUN_ISSUES_LOG_MAX_BYTES`,
+  §7; `lib/log-rotate.sh`, §6) tukkii saman rajattoman kasvun `.runs.log`ista (mitattu 190 MB).
 - **"maintainer" on kovakoodattu prompteihin ja komentoihin.** Nimi esiintyy seitsemässä tiedostossa
   (`prompts/`, `commands/`, `agents/`). Parametrisointi `{{HUMAN}}`-muuttujaksi kattaisi vain
   `prompts/`-hakemiston, koska `render_prompt` ei koske `commands/`- eikä `agents/`-tiedostoihin

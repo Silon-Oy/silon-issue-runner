@@ -227,3 +227,29 @@ pr_ci_state() {
       end
   ' <<<"$json"
 }
+
+# PR_LAST_DECISION_TAIL — how many lines of state.jsonl's TAIL pr_last_decision
+# reads. state.jsonl grows without bound and is dominated by PR-watch noise (up
+# to multiple MB, issue #59), so the whole file must never be read; the last
+# pr_classified sits at most a handful of events from the end in normal
+# operation, so a small tail window always contains it. Matches status.sh's own
+# tail-window convention.
+PR_LAST_DECISION_TAIL="${PR_LAST_DECISION_TAIL:-40}"
+
+# pr_last_decision <state-jsonl-path> — prints the `decision` of the most recent
+# pr_classified event in the given state.jsonl, or nothing when the file is
+# missing/empty or holds no such event.
+#
+# Reads only the tail of the file (never the whole thing — see above). Used by
+# the watcher to suppress the pr_watch_started / pr_classified / pr_watch_skipped
+# trio when a PR stays closed: the first SKIP_CLOSED is a meaningful transition
+# and is logged, but every repeat after it would otherwise re-write the trio on
+# every tick forever (the root cause of the 345 MB state.jsonl measured in #65).
+# Pure read, no writes; testable by pointing at a temp file.
+pr_last_decision() {
+  local jsonl="$1"
+  [ -f "$jsonl" ] || return 0
+  tail -n "$PR_LAST_DECISION_TAIL" "$jsonl" 2>/dev/null \
+    | jq -rn '[inputs | select(.event == "pr_classified") | .data.decision] | last // empty' \
+        2>/dev/null || true
+}

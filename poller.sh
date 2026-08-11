@@ -30,6 +30,12 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/poller-config.sh
 . "${RUN_ISSUES_HOME}/lib/poller-config.sh"
 
+# rotate_log_if_big (issue #65). Sourced here — before the exec redirect below —
+# because rotating .stdout.log/.stderr.log AFTER their fds are opened would leave
+# the fd writing to the moved inode. Defines one function; no top-level work.
+# shellcheck source=lib/log-rotate.sh
+. "${RUN_ISSUES_HOME}/lib/log-rotate.sh"
+
 # Machine configuration. launchd hands an agent no environment of its own and
 # the login files hold nothing run-issues-specific, so this file is the only
 # channel through which a machine can configure its pollers. It is sourced, so
@@ -59,6 +65,16 @@ LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/run-issues-poller.log"
 RUNS_LOG="${LOG_DIR}/run-issues-poller.runs.log"
+
+# Size-based log rotation (issue #65). At the start of the tick, before the first
+# write and before the exec redirect below, rotate any of the four log files that
+# has grown past RUN_ISSUES_LOG_MAX_BYTES (default 10 MB; 0 disables). One .1
+# generation is kept. The .stdout/.stderr rotation MUST precede the exec below.
+RUN_ISSUES_LOG_MAX_BYTES="${RUN_ISSUES_LOG_MAX_BYTES:-10485760}"
+rotate_log_if_big "$LOG"                                    "$RUN_ISSUES_LOG_MAX_BYTES"
+rotate_log_if_big "$RUNS_LOG"                               "$RUN_ISSUES_LOG_MAX_BYTES"
+rotate_log_if_big "${LOG_DIR}/run-issues-poller.stdout.log" "$RUN_ISSUES_LOG_MAX_BYTES"
+rotate_log_if_big "${LOG_DIR}/run-issues-poller.stderr.log" "$RUN_ISSUES_LOG_MAX_BYTES"
 
 # The plists carry no StandardOutPath/StandardErrorPath keys, because launchd
 # performs no variable expansion in them. The poller therefore owns all four of
