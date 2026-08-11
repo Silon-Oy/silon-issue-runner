@@ -24,8 +24,8 @@ Sisältö:
 ```
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
-status.sh                      install.sh             provision-test-env.README.md
-README.md                      CLAUDE.md
+status.sh                      status-digest.sh       install.sh
+provision-test-env.README.md   README.md              CLAUDE.md
 lib/       16 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
 tests/     plain-bash-testipaketti, ajuri run-all.sh
@@ -34,7 +34,8 @@ agents/    Claude-agenttimäärittelyt (architect, developer, reviewer, refactor
 commands/  slash-komennot (run-issues, cleanup-run, pr-watch, refresh, factory-*)
 skills/    Claude-skillit (run-issues-workflow: issue-konventiot kohderepoon)
 docs/diagrams/  mermaid-kaaviot (.mmd)
-examples/  run-issues-watchlist.example.json, run-issues-poller.env.example
+examples/  run-issues-watchlist.example.json, run-issues-poller.env.example,
+           status-digest.env.example
 com.claude-issue-runner.run-issues-poller.plist
 com.claude-issue-runner.pr-watch-poller.plist
 .gitignore
@@ -424,6 +425,23 @@ lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
 kertoo mitä vahti **tekisi juuri nyt**. GitHub App -identiteetti kunnioitetaan jos konfiguroitu
 (`gha_with_token`, §8, GitHub App -env).
 
+### Kooste (`status-digest.sh`, #61)
+
+Kaikki valinnaisia; `examples/status-digest.env.example` dokumentoi ne. Flag voittaa
+env-muuttujan, joka voittaa oletuksen. Env-tiedosto sourcetaan **ensin** (kuten `poller.env`),
+joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_DIGEST_ENV_FILE` | `$HOME/.config/run-issues/digest.env` | Ensin sourcettava konfiguraatiotiedosto. Puuttuva = oletukset. **Ei salaisuuksia** — `gws` kantaa omat tunnisteensa |
+| `RUN_ISSUES_DIGEST_TO` | *(tyhjä)* | Vastaanottaja(t), pilkuin. `--to` ohittaa. Tyhjä (eikä `--to`) ⇒ runko stdoutiin |
+| `RUN_ISSUES_DIGEST_MAX_SILENCE` | `7` | Hiljaisuusraja vuorokausina: muuttumatonkin tilanne lähetetään tämän jälkeen (hiljaisuus ≠ rikki). `--max-silence` ohittaa; `0` poistaa heartbeatin. Mitataan aina aiempaa lähetystä/baselinea vasten (epoch 0 = ensiajo ≠ ylitys) |
+| `RUN_ISSUES_DIGEST_MIN_CLASS` | `stalled` | Alin mukaan otettava luokka: `attention` (vain ihmistä vaativat) tai `stalled` (attention + jumittuneet/orvot). `--min-class` ohittaa |
+| `RUN_ISSUES_DIGEST_MAX_ROWS` | `10` | Rivikatto per `class_reason`-ryhmä ennen "…ja M muuta" |
+| `RUN_ISSUES_DIGEST_SUBJECT_PREFIX` | `run-issues -kooste` | Otsikon etuliite |
+| `RUN_ISSUES_DIGEST_GWS` | `gws` | Lähetyskomento. Testien injektiopiste (osoita olemattomaan ⇒ stdout-polku) |
+| `RUN_ISSUES_DIGEST_STATE_FILE` | `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha` | Sormenjälkitiedosto. Rivi 1 = sha256, rivi 2 = viimeisin lähetys-epoch. Kirjoitetaan atomisesti (`mktemp` + `mv -f`) |
+
 ### PR-vahti
 
 | Muuttuja | Oletus | Vaikutus |
@@ -485,6 +503,27 @@ no-op, ei virhe.
   provisioi testien tarvitsemat ulkoiset resurssit ja injektoi osoitteet `KEY=VALUE`-muodossa
   implementerin ympäristöön. Erillinen koneisto db-clonesta, ei korvaaja. Ks.
   `provision-test-env.README.md`.
+- **`status-digest.sh` + `gws`** (#61) — työntökooste huomiota vaativista ajoista.
+  `status.sh --json | status-digest.sh` (tai `--from-file`) ryhmittelee `attention`- ja
+  `stalled`-ajot `class_reason`in mukaan suomenkieliseksi `text/plain`-rungoksi (iät
+  vuorokausina, linkit issueen/PR:ään) ja lähettää sen `gws`illä Gmailiin. `status.sh` tekee
+  tilanteesta *löydettävän*, tämä *huomatun*: dashboard jota pitää muistaa avata epäonnistui,
+  kun customer-a-report #92 odotti 71 vrk `awaiting_clarification`-tilassa ilman että mikään työnsi
+  tietoa. Nojaa **vain** paikalliseen JSONiin (`github: null` on laillinen), ei gh-rikastukseen.
+  **Kolme opt-in-porrasta, kaikki hyvänlaatuisia no-oppeja:** (1) `gws` ei ole paketin
+  riippuvuus — ilman sitä tai ilman vastaanottajaa runko tulostetaan stdoutiin (exit 0), sama
+  SKIP-henki kuin testeissä, joten koosteen voi putkittaa mihin tahansa kanavaan; (2)
+  toistokuoleman torjunta: sormenjälki = `sha256` järjestetystä `(run_id, class,
+  class_reason)`-listasta tallennetaan `RUN_ISSUES_DIGEST_STATE_FILE`iin (rivi 1 sha, rivi 2
+  lähetys-epoch, kirjoitus atominen `mktemp`+`mv -f`), ja muuttumaton tilanne ei lähetä mitään
+  ellei `--force`; (3) `--max-silence <vrk>` (oletus 7): jos mitään ei ole lähetetty näin
+  kauan, lähetetään silti (tyhjässä tapauksessa "kaikki kunnossa" -viesti) — hiljaisuus ei saa
+  tarkoittaa "rikki". `schema_version` tarkistetaan: tuntematon versio ⇒ exit 2 ilman
+  lähetystä (skeemasopimus alkaa maksaa itsensä takaisin). Konfiguraatio §7:ssä, malli
+  `examples/status-digest.env.example`, testit `tests/test-status-digest.sh`. Ajastus
+  (LaunchAgent/cron) on erillinen pieni lisäys, ei tässä. Exit-koodit: 0 lähetetty/ei
+  tarvetta, 1 käyttö-/syötevirhe, 2 tuntematon `schema_version`, 3 lähetys epäonnistui (runko
+  silti stdoutissa).
 - **`PR_WATCH_ENABLE_CONFLICT_RESOLUTION`** — AI-avusteinen rebase-konfliktin ratkaisu.
   `pr-watch.sh` pitää sen pois päältä; `pr-watch-poller.sh` nostaa sen päälle watchlistin
   repoille, jotta auto-merge pääsee konfliktin läpi ilman ihmistä.
