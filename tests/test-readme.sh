@@ -6,10 +6,10 @@
 #
 #   a) the sections a first-hour reader needs are present as headings
 #   b) the documented exit codes are DERIVED FROM THE SOURCE, not from memory —
-#      the exit-code lists live in three separate spaces (orchestrator,
-#      installer, PR watcher) that must never be conflated, and every one of
-#      them has grown a code before (orchestrator gained 8 in #7). Adding a code
-#      to a script without documenting it turns this test red.
+#      the exit-code lists live in separate spaces (orchestrator, installer, PR
+#      watcher, status, stop-run) that must never be conflated, and several have
+#      grown a code before (orchestrator gained 8 in #7). Adding a code to a
+#      script without documenting it turns this test red.
 #   c) every relative link resolves to a file that exists in the repo
 #   d) no personal absolute path or token shape leaks into a shared document
 #   e) the security model still names every consent surface it covers
@@ -96,11 +96,14 @@ PRW_CODES="$(sed -n '/^# Exit codes:/,/^$/p' "$ROOT/pr-watch.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 STATUS_CODES="$(sed -n '/^# Exit codes:/,/^$/p' "$ROOT/status.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
+STOP_CODES="$(sed -n '/^# Exit codes:/,/^$/p' "$ROOT/stop-run.sh" \
+  | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 
 assert_exit_codes "orchestrator" "orchestrate.sh" "$ORCH_CODES"
 assert_exit_codes "installer" "install.sh" "$INST_CODES"
 assert_exit_codes "pr-watch" "pr-watch.sh" "$PRW_CODES"
 assert_exit_codes "status" "status.sh" "$STATUS_CODES"
+assert_exit_codes "stop-run" "stop-run.sh" "$STOP_CODES"
 
 # The four spaces must stay four tables. One merged table would document the
 # codes but lose the fact that code 5 means something different in each script.

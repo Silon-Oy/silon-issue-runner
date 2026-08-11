@@ -26,10 +26,15 @@
 #
 # Parameterisation is deliberately minimal (a pure refactor): the caller passes
 # the `reason` slug (finalize_stalled passes `stalled_in_<current_state>`) and an
-# optional `context` keyword that flavours the log headline and the state_event
-# name. The situation comment is still written for the "stalled" context; when
-# stop-run.sh lands it branches the comment body here (that is the "message text
-# parameterisation" the issue anticipates — jumittuminen vs. pyydetty pysäytys).
+# optional `context` keyword that flavours the log headline, the state_event
+# name AND the situation-comment body. Two comment flavours exist (issue #64):
+#   - "stalled" (the poller liveness sweep) — carries an awaiting-answer marker,
+#     so a human reply re-triggers a fresh run via scan_blocked_answered (#57).
+#   - "stopped" (stop-run.sh, an operator-requested stop) — NO marker: a stop is
+#     a deliberate human action and stop-run's scope-out forbids an automatic
+#     restart, so the reply-driven retry must NOT fire. The body points to
+#     cleanup (cleanup-run.sh / the auto-clean label) instead. This is the
+#     "jumittuminen vs. pyydetty pysäytys" branch the extraction (#63) foresaw.
 #
 # This file only defines functions — no side effects at source time — so it is
 # safe to source from any caller. It pulls in its own dependencies (git-remote /
@@ -177,35 +182,55 @@ run_terminate() {
 
     # Write the comment body to a temp file (heredoc inside $(...) has fragile
     # parser interactions with bash's case-statement-aware tokenizer; the temp
-    # file is simpler and verifiable). The comment intentionally mirrors
-    # _post_situation_to_issue's headline + meta-list shape so an maintainer
-    # scanning issues sees the same skeleton across all hand-off paths.
-    #
-    # The body below is the "stalled" flavour. When stop-run.sh adds its context
-    # this is where its comment branch goes (the issue's message-text seam).
-    local stale_after_log body_file stalled_marker
-    stale_after_log="${RUN_ISSUES_STALE_AFTER:-3600}"
-    # Answerable marker (issue #57): a human reply after this ts re-triggers a
-    # fresh run via scan_blocked_answered. build_marker + parse_marker/detect_answer
-    # are the SAME machinery the orchestrator uses, so the poller's stalled comment
-    # participates identically. Marker first (top of body) — parse_marker takes the
-    # newest by ts, and detect_answer skips this comment itself (it carries the
-    # "run-issues:" token).
-    stalled_marker=$(build_marker "$run_id_in_run" "$issue" "$(date -u +%FT%TZ)")
-    body_file=$(mktemp -t poller-stalled-body.XXXXXX)
-    {
-      echo "$stalled_marker"
-      echo "## /run-issues — Ajo jumitettu vaiheessa \`${current_state}\`"
-      echo
-      echo "- Issue: #${issue}"
-      echo "- Status/syy: \`${reason}\`"
-      echo "- Host: \`${THIS_HOST}\`"
-      echo "- Run-dir: \`${run_dir}\`"
-      echo
-      echo "Pollerin liveness-tarkistus havaitsi että rakenteinen etenemistila (\`state.jsonl\`-aikaleima) ei ole liikahtanut yli ${stale_after_log}s. Tmux-sessio tapettiin ja ajo viimeisteltiin \`blocked\`-tilaan, jotta yksittäinen jumi-ajo ei tukkisi \`GLOBAL_MAX\`-kapasiteettia loputtomiin (issue #49)."
-      echo
-      echo "**Kun este on selvitetty, kommentoi tähän issueen — ajo siivotaan ja yritetään uudelleen automaattisesti (≤5 min).** Vaihtoehtoisesti siivoa käsin koneella \`${THIS_HOST}\`: \`~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes\`."
-    } > "$body_file"
+    # file is simpler and verifiable). Both flavours mirror
+    # _post_situation_to_issue's headline + meta-list shape so an maintainer scanning
+    # issues sees the same skeleton across all hand-off paths — the branch below
+    # differs only in the marker, the headline verb and the follow-up sentence.
+    local body_file
+    body_file=$(mktemp -t run-terminate-body.XXXXXX)
+    if [ "$context" = "stopped" ]; then
+      # Operator-requested stop (stop-run.sh, issue #64). NO awaiting-answer
+      # marker: scope-out forbids an automatic restart, so scan_blocked_answered
+      # must not re-trigger this run on a reply. The body points to cleanup
+      # instead — the worktree/branch/run-dir are intentionally left intact, so a
+      # human decides when to tear them down.
+      {
+        echo "## /run-issues — Ajo pysäytetty vaiheessa \`${current_state}\`"
+        echo
+        echo "- Issue: #${issue}"
+        echo "- Status/syy: \`${reason}\`"
+        echo "- Host: \`${THIS_HOST}\`"
+        echo "- Run-dir: \`${run_dir}\`"
+        echo
+        echo "Ajo pysäytettiin operaattorin pyynnöstä (\`stop-run.sh\`). Tmux-sessio tapettiin ja ajo viimeisteltiin \`blocked\`-tilaan, jotta se ei enää varaa \`GLOBAL_MAX\`-kapasiteettia. **Worktree, haara ja run-dir jätettiin ennalleen** — pysäytys ei ole siivous."
+        echo
+        echo "**Jatkotoimet:** siivoa artefaktit käsin koneella \`${THIS_HOST}\`: \`~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes\`, tai lisää issueen \`auto-clean\`-label niin poller siivoaa sen automaattisesti. Siivouksen jälkeen issue palaa normaaliin poimintaan uutena ajona."
+      } > "$body_file"
+    else
+      # Stalled flavour (poller liveness sweep, issue #49). Answerable marker
+      # (issue #57): a human reply after this ts re-triggers a fresh run via
+      # scan_blocked_answered. build_marker + parse_marker/detect_answer are the
+      # SAME machinery the orchestrator uses, so the poller's stalled comment
+      # participates identically. Marker first (top of body) — parse_marker takes
+      # the newest by ts, and detect_answer skips this comment itself (it carries
+      # the "run-issues:" token).
+      local stale_after_log stalled_marker
+      stale_after_log="${RUN_ISSUES_STALE_AFTER:-3600}"
+      stalled_marker=$(build_marker "$run_id_in_run" "$issue" "$(date -u +%FT%TZ)")
+      {
+        echo "$stalled_marker"
+        echo "## /run-issues — Ajo jumitettu vaiheessa \`${current_state}\`"
+        echo
+        echo "- Issue: #${issue}"
+        echo "- Status/syy: \`${reason}\`"
+        echo "- Host: \`${THIS_HOST}\`"
+        echo "- Run-dir: \`${run_dir}\`"
+        echo
+        echo "Pollerin liveness-tarkistus havaitsi että rakenteinen etenemistila (\`state.jsonl\`-aikaleima) ei ole liikahtanut yli ${stale_after_log}s. Tmux-sessio tapettiin ja ajo viimeisteltiin \`blocked\`-tilaan, jotta yksittäinen jumi-ajo ei tukkisi \`GLOBAL_MAX\`-kapasiteettia loputtomiin (issue #49)."
+        echo
+        echo "**Kun este on selvitetty, kommentoi tähän issueen — ajo siivotaan ja yritetään uudelleen automaattisesti (≤5 min).** Vaihtoehtoisesti siivoa käsin koneella \`${THIS_HOST}\`: \`~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes\`."
+      } > "$body_file"
+    fi
     ( cd "$repo" && gh issue comment "$issue" --body-file "$body_file" >/dev/null 2>&1 ) || true
     rm -f "$body_file"
   fi

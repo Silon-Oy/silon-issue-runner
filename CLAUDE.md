@@ -24,8 +24,8 @@ Sisältö:
 ```
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
-status.sh                      status-digest.sh       status-render.sh
-install.sh
+stop-run.sh                    status.sh              status-digest.sh
+status-render.sh               install.sh
 provision-test-env.README.md   README.md              CLAUDE.md
 lib/       16 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
@@ -337,6 +337,33 @@ README §7.8. Vartija: `tests/test-status-render.sh`.
 | 2 | Syöte kelvoton — `status.sh` ei tuottanut validia JSONia tai `schema_version` tuntematon; vanha sivu jää paikoilleen (ei ylikirjoiteta rikkinäisellä renderöinnillä) |
 | 3 | Kirjoitus epäonnistui (levy täynnä / oikeudet); temp siivotaan, vanha sivu jää ehjäksi |
 
+### Yksittäisen ajon pysäytys (`stop-run.sh`, #64)
+
+Oma avaruus. Ohut operaattoripinta `lib/run-terminate.sh`:n `run_terminate`lle (#63): resolvoi
+kohdeajon (`--run-dir <path>` **tai** `--repo <path> --issue <N> [--remote <name>]`), valvoo
+turvaportit ja delegoi pysäytyksen syyllä `stopped_by_operator` ja contextilla `stopped` — **ei
+toteuta lopetuslogiikkaa uudelleen**. Constraint 5 seuraa ilmaiseksi: `run_terminate` ei koske
+worktreehen/haaraan/run-diriin, joten pysäytys on ei-destruktiivinen (purku jää
+`cleanup-run.sh`ille / `auto-clean`-labelille). Ei `--all`ia eikä oletuskohdetta (constraint 1):
+massapysäytys on koko orkestraattorin pysäyttäminen (`launchctl`), ei tämän. Host-portti on
+**stop-runin oma** tarkistus (`run.json.host` vs `hostname -s`), koska `run_terminate` palauttaa
+vieraalla hostilla hiljaa `0`, ei exit 4:ää — defense-in-depth säilyy. Terminaalitila-portti
+(exit 5) käyttää samaa "vain live-ajo on stopattavissa ilman `--force`ia" -logiikkaa kuin
+`cleanup-run.sh`:n `--force`: live-ajon status on aina `initialized` (S8 restart/continue
+palauttaa sen), joten mikä tahansa muu status on finalisoitu ajo. Tilannekommentti haarautuu
+`run_terminate`ssa contextin mukaan: `stopped` saa pysäytyssanaisen rungon **ilman**
+awaiting-answer-markeria (scope-out: ei automaattista uudelleenkäynnistystä ⇒
+`scan_blocked_answered` ei saa laueta), toisin kuin `stalled`. Vartija: `tests/test-stop-run.sh`.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Pysäytetty — tmux tapettu, ajo finalisoitu `blocked/stopped_by_operator`, `needs-human`-label + kommentti postattu, lukko purettu ajon omasta identiteetistä. Tai `--dry-run` tulosti suunnitelman kirjoittamatta mitään |
+| 1 | Käyttövirhe (tuntematon lippu, puuttuva kohde, tai `--run-dir` yhdistettynä `--repo`/`--issue`/`--remote`iin) |
+| 2 | Kohdetta ei löytynyt — `--run-dir`illä ei `run.json`ia (tai se osoittaa `run-issues-archive/`iin), tai `--repo`+`--issue`+`--remote` ei osunut yhteenkään ajoon |
+| 3 | `--issue` osui useampaan ajoon (esim. kaksi remotea) — kieltäytyy arvaamasta, tarkenna `--run-dir`illä. Mitään ei tehty |
+| 4 | Vieras host — `run.json.host` ≠ `hostname -s`; ajo kuuluu toiselle koneelle, mihinkään ei koskettu |
+| 5 | Terminaalitila — ajon status ei ole `initialized`; `--force` pysäyttää silti (esim. `completed`-ajon elävän PR-kontekstin purkaminen vaatii tietoisen valinnan). Mihinkään ei koskettu |
+
 ## 6. `lib/`-rakenne
 
 | Tiedosto | Vastuu |
@@ -357,7 +384,7 @@ README §7.8. Vartija: `tests/test-status-render.sh`.
 | `pr-watch-lib.sh` | PR:n luokittelu- ja merge-päätöslogiikka (irrotettu testattavaksi). Ml. `pr_last_decision` (#65): lukee state.jsonlin **hännästä** viimeisimmän `pr_classified`-päätöksen, jotta `pr-watch.sh` osaa vaieta toistuvan `SKIP_CLOSED`-tapahtumatrion |
 | `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, orkestraattorin S0-portti (#7) tekee samasta lähteestä fataalin (exit 8). Korjauskomennot tulevat yhdestä lähteestä (`preflight_install_hint`) |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
-| `run-terminate.sh` | Elävän ajon turvallinen lopetus kutsuttavana funktiona (#63): `run_terminate <run-dir> <reason-slug> [<context>]` — host-portti, eksakti tmux-tappo, `state_finalize`+`state_event`, best-effort `needs-human`-label + tilannekommentti, lukon purku ajon **omasta** tallennetusta identiteetistä (`repo_slug`+`remote`, #67). Irrotettu `poller.sh:finalize_stalled`in rungosta, joka `exit 0`si source-hetkellä vieraalla koneella eikä siksi ollut kutsuttavissa muualta; tuleva `stop-run.sh` (erillinen issue) käyttää samaa polkua monistamatta turvakriittistä logiikkaa. Puhtaasti funktiomääritelmiä, sourcetaan turvallisesti (sourcaa omat riippuvuutensa). Loki `_run_terminate_log`illa (`declare -F log` → `$LOG` → stderr). `finalize_stalled` on nyt ohut kutsuja joka välittää `stalled_in_<current_state>`; vartija `tests/test-poller-stale-detection.sh` (muuttumaton) + `tests/test-run-terminate.sh` |
+| `run-terminate.sh` | Elävän ajon turvallinen lopetus kutsuttavana funktiona (#63): `run_terminate <run-dir> <reason-slug> [<context>]` — host-portti, eksakti tmux-tappo, `state_finalize`+`state_event`, best-effort `needs-human`-label + tilannekommentti, lukon purku ajon **omasta** tallennetusta identiteetistä (`repo_slug`+`remote`, #67). Irrotettu `poller.sh:finalize_stalled`in rungosta, joka `exit 0`si source-hetkellä vieraalla koneella eikä siksi ollut kutsuttavissa muualta; `stop-run.sh` (#64) käyttää samaa polkua monistamatta turvakriittistä logiikkaa. Puhtaasti funktiomääritelmiä, sourcetaan turvallisesti (sourcaa omat riippuvuutensa). Loki `_run_terminate_log`illa (`declare -F log` → `$LOG` → stderr). Tilannekommentti haarautuu `context`in mukaan (#64): `stalled` kantaa awaiting-answer-markerin (`scan_blocked_answered` uusii ajon vastauksella, #57), `stopped` **ei** kanna markeria (scope-out: ei automaattista uudelleenkäynnistystä) ja osoittaa siivoukseen. `finalize_stalled` on nyt ohut kutsuja joka välittää `stalled_in_<current_state>`; vartija `tests/test-poller-stale-detection.sh` (muuttumaton) + `tests/test-run-terminate.sh` |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot (#59): `_STATUS_NORMALIZE_JQ` (heterogeenisen `run.json`in normalisointi + `schema_gaps`), `status_read_bulk`/`status_read_perfile` (kaksitasoinen luenta), `_STATUS_CLASSIFY_JQ` + `status_classify` (viisi luokkaa prioriteettijärjestyksessä, INV-STATUS lukee vain `status`ia, INV-UNKNOWN fail-closed), `_STATUS_GITHUB_RECLASSIFY_JQ` (`_github_reclassify`, #60: `--github`-rikastuksen jälkeen ajettava jälkiluokittelu — no-op kun `github == null`, muuten nostaa `class_confidence`in `low`→`high` varmistuneelle PR:lle ja lisää `pr_ci_red`/`pr_changes_requested`/`pr_draft_stale`/`pr_not_open`-refinoinnit), ja `_iso_to_epoch` (siirretty poller.sh:sta; poller sourcaa sen täältä, jotta `scan_stalled`in liveness-kello ja `status.sh`:n `idle_seconds` lasketaan identtisesti) |
 | `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta |

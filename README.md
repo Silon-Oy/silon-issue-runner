@@ -559,6 +559,7 @@ käytettävissä.
 | `orchestrate.sh` | `orchestrate.sh <repo> <N\|poll>` | Yksi issue → yksi PR. Muut moodit: `--resume <run-dir> --decision …`, `--restart <run-dir>`, `--continue <run-dir>`, `--remote <nimi>` |
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
+| `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run` |
 | `cleanup-run.sh` | `cleanup-run.sh --issue <N> --yes` | Ajojäänteiden purku. `--list`, `--all`, `--force`, `--dry-run`, `--remote` |
 | `auto-clean.sh` | *(pollerin kutsuma)* | Label-vetoinen siivous + issuen sulkeminen. Käsin: `--repo <polku> --issue <N>` |
 | `poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin issue-automaatio |
@@ -918,8 +919,8 @@ ajo jatkuu itsestään kun estäjä sulkeutuu.
 
 ### Exit-koodit
 
-Viisi skriptiä, **viisi erillistä exit-koodiavaruutta**. Sama numero ei tarkoita samaa asiaa
-eri skripteissä — tarkista aina, kumpi prosessi exittasi.
+Useita skriptejä, **kukin oma erillinen exit-koodiavaruutensa**. Sama numero ei tarkoita samaa
+asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 
 ### Orkestraattori (`orchestrate.sh`)
 
@@ -994,6 +995,23 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 Koodit 4 ja 5 eivät ole virheitä vaan **kieltäytymisiä**: siivous ei koske avoimen PR:n ajoon
 eikä arvaile toisen koneen tilaa. `auto-clean-skipped` on silmukkasuoja — poista se käsin,
 kun olet hoitanut asian, jos haluat siivouksen yrittävän uudelleen.
+
+### Yksittäisen ajon pysäytys (`stop-run.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Pysäytetty (tai `--dry-run` tulosti suunnitelman) |
+| 1 | Käyttövirhe (tuntematon lippu, puuttuva tai ristiriitainen kohde) |
+| 2 | Kohdetta ei löytynyt (myös arkistoon osoittava `--run-dir`) |
+| 3 | `--issue` osui useampaan ajoon — tarkenna `--run-dir`illä |
+| 4 | Vieras host — ajo kuuluu toiselle koneelle; mihinkään ei koskettu |
+| 5 | Terminaalitilassa oleva ajo — käytä `--force`ia; mihinkään ei koskettu |
+
+`stop-run.sh` pysäyttää **yhden** elävän ajon hallitusti: tappaa tmux-session, viimeistelee ajon
+`blocked/stopped_by_operator`-tilaan, lisää `needs-human`-labelin ja tilannekommentin. Se **ei
+ole siivous** — worktree, haara ja run-dir jäävät koskematta (purku jää `cleanup-run.sh`ille tai
+`auto-clean`-labelille). Ei `--all`-lippua eikä oletuskohdetta: massapysäytys on koko
+orkestraattorin pysäyttäminen (`launchctl`), ei tämän skriptin asia.
 
 ### Mistä lokit löytyvät
 
