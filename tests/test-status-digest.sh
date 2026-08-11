@@ -193,6 +193,19 @@ check "degraded: exit 0" "$RC" "0"
 if printf '%s' "$OUT" | grep -q "Vajaa luenta"; then ok "degraded: warning line present"; else bad "degraded: warning line missing"; fi
 if printf '%s' "$OUT" | grep -q "#30"; then ok "degraded: github:null run still reported"; else bad "degraded: run missing"; fi
 
+# ---- long list: > MAX_ROWS in one class_reason group -> cap + "…ja M muuta" ----
+FXL="$FX/long.json"
+jq -n '{schema_version:1, generated_at:"2026-08-11T22:00:00Z", host:"host-a",
+  totals:{degraded:false},
+  runs: [range(0;12) | {run_id:"L\(.)", repo_slug:"foo", issue_number:(100+.),
+    issue_url:"https://github.com/Silon-Oy/foo/issues/\(100+.)", pr_url:null, pr_number:null,
+    age_seconds:(1000000 - .*1000), class:"attention", class_reason:"blocked",
+    current_state:"S5_DBClone"}],
+  read_errors: [] }' > "$FXL"
+run "$FXL" --dry-run
+if printf '%s' "$OUT" | grep -q "…ja 2 muuta"; then ok "long list: truncation marker present"; else bad "long list: no '…ja M muuta'"; fi
+check "long list: capped at 10 rows" "$(printf '%s' "$OUT" | grep -c '    foo  #')" "10"
+
 # ---- without gws (already the mode) but WITH a recipient -> stdout + exit 0 ----
 rm -f "$STATE"
 OUT="$(RUN_ISSUES_DIGEST_GWS="/nonexistent/gws" RUN_ISSUES_DIGEST_STATE_FILE="$STATE" \
