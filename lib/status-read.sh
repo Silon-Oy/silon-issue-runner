@@ -155,6 +155,53 @@ _STATUS_CLASSIFY_JQ='
   ;
 '
 
+# _STATUS_GITHUB_RECLASSIFY_JQ — jq program text that DEFINES `_github_reclassify`.
+# Applied AFTER _classify, to a run object that already carries a `github`
+# sub-object (issue #60). A no-op when `.github == null`, so in local mode
+# (no --github) the output is bit-for-bit what #59 produced. When github is
+# present it refines the local verdict with the live PR state:
+#
+#   - pr_state NOT_OPEN  => cleanup/pr_not_open/high. The PR is gone (merged or
+#       closed); the run's worktree should be torn down. This is the core of the
+#       ~30% the local view cannot see: run.json still says `completed` with a
+#       stale `pr_open_waiting` verdict, but the PR has since left GitHub.
+#   - pr_state OPEN      => confidence -> high (the PR state is now CONFIRMED,
+#       not inferred from state.jsonl), then three attention refinements, first
+#       match wins:
+#       * ci RED (and NOT merge_state UNSTABLE — same edge as pr_decide ordering
+#         point 2: an UNSTABLE red is a non-required check, not a blocker)
+#         => attention/pr_ci_red
+#       * review_decision CHANGES_REQUESTED => attention/pr_changes_requested
+#       * is_draft AND run age > 7d (604800s) => attention/pr_draft_stale
+#       otherwise the local class stands, only its confidence rises.
+#
+# Single-quoted for the same reason as the classify program.
+# jq $-variables are meant to stay literal (SC2016); consumed elsewhere (SC2034).
+# shellcheck disable=SC2016,SC2034
+_STATUS_GITHUB_RECLASSIFY_JQ='
+  def _github_reclassify:
+    . as $r
+    | if ($r.github == null) then $r
+      else
+        ($r.github) as $g
+        | if ($g.pr_state // "") == "NOT_OPEN" then
+            $r + {class:"cleanup", class_reason:"pr_not_open", class_confidence:"high"}
+          elif ($g.pr_state // "") == "OPEN" then
+            ($r + {class_confidence:"high"}) as $base
+            | if ($g.ci == "RED" and ($g.merge_state_status // "") != "UNSTABLE") then
+                $base + {class:"attention", class_reason:"pr_ci_red"}
+              elif ($g.review_decision == "CHANGES_REQUESTED") then
+                $base + {class:"attention", class_reason:"pr_changes_requested"}
+              elif ($g.is_draft == true and ($r.age_seconds != null and $r.age_seconds > 604800)) then
+                $base + {class:"attention", class_reason:"pr_draft_stale"}
+              else $base
+              end
+          else $r
+          end
+      end
+  ;
+'
+
 # status_classify <run-json-object> [<stale-after-seconds>]
 # Pure classifier over ONE fully-enriched run object. Prints
 # "<class> <class_reason> <class_confidence>" on stdout. Used by

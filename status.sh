@@ -13,6 +13,7 @@
 # Usage:
 #   status.sh [--json|--human] [--class <a,b>] [--repo <path>]
 #             [--watchlist <path>] [--stale-after <s>]
+#             [--github [--github-full]] [--no-cache] [--cache-ttl <s>]
 #
 #   --json / --human   output format. Default: --json when stdout is not a TTY,
 #                      --human when it is.
@@ -24,6 +25,20 @@
 #                      an override is the ONLY candidate, a missing file errors).
 #   --stale-after <s>  liveness threshold in seconds (default 3600, same var as
 #                      the poller: RUN_ISSUES_STALE_AFTER).
+#   --github           opt-in GitHub enrichment (lib/status-github.sh): fill each
+#                      run's `github` sub-object from `gh pr list` (ONCE per
+#                      owner/repo) via a TTL cache. Without it every run's
+#                      `github` is null and behaviour is bit-for-bit as before.
+#                      Enrichment never crashes output nor changes the local
+#                      classification: an unreachable repo lands in
+#                      enrichment.repos_failed, its runs stay github:null + low
+#                      confidence, exit code unaffected.
+#   --github-full      with --github: also split each NOT_OPEN PR into MERGED vs
+#                      CLOSED (one `gh pr view` per closed PR). Both mean cleanup,
+#                      hence the extra flag.
+#   --no-cache         with --github: ignore any cached PR list, always fetch.
+#   --cache-ttl <s>    with --github: cache freshness window (default 300, env
+#                      RUN_ISSUES_STATUS_CACHE_TTL).
 #
 # Exit codes:
 #   0  read OK
@@ -38,6 +53,9 @@
 #   RUN_ISSUES_STALE_AFTER       liveness threshold (default 3600 — the SAME
 #                                variable the poller uses, on purpose)
 #   RUN_ISSUES_STATUS_TAIL_LINES tail lines read per state.jsonl (default 40)
+#   RUN_ISSUES_STATUS_CACHE_FILE --github cache path (default
+#                                ${XDG_CACHE_HOME:-$HOME/Library/Caches}/run-issues/status-github.json)
+#   RUN_ISSUES_STATUS_CACHE_TTL  --github cache TTL seconds (default 300)
 #   RUN_ISSUES_HOME              install root (test injection point; defaults to
 #                                this script's directory)
 
@@ -59,6 +77,15 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 . "$RUN_ISSUES_HOME/lib/locking.sh"
 # shellcheck source=lib/status-read.sh
 . "$RUN_ISSUES_HOME/lib/status-read.sh"
+# --github enrichment: pr_decide / pr_ci_state (pr-watch-lib.sh), gha_with_token
+# (github-app-auth.sh), and the enrichment/cache helpers (status-github.sh). All
+# function-only, safe to source unconditionally; only exercised under --github.
+# shellcheck source=lib/pr-watch-lib.sh
+. "$RUN_ISSUES_HOME/lib/pr-watch-lib.sh"
+# shellcheck source=lib/github-app-auth.sh
+. "$RUN_ISSUES_HOME/lib/github-app-auth.sh"
+# shellcheck source=lib/status-github.sh
+. "$RUN_ISSUES_HOME/lib/status-github.sh"
 
 STATUS_TAIL="${RUN_ISSUES_STATUS_TAIL_LINES:-40}"
 STALE_AFTER="${RUN_ISSUES_STALE_AFTER:-3600}"
@@ -69,9 +96,13 @@ OUT_MODE=""          # "", json, human
 CLASS_FILTER=""
 REPO_FILTER=""
 WATCHLIST_OVERRIDE="${RUN_ISSUES_WATCHLIST:-}"
+GITHUB_MODE=0        # 1 when --github given
+GITHUB_FULL=0        # 1 when --github-full given (implies --github)
+NO_CACHE=0           # 1 when --no-cache given
+CACHE_TTL="${RUN_ISSUES_STATUS_CACHE_TTL:-300}"
 
 usage() {
-  sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die_usage() {
@@ -90,6 +121,13 @@ while [ "$#" -gt 0 ]; do
       shift; [ "$#" -gt 0 ] || die_usage "--stale-after needs a value"
       case "$1" in ''|*[!0-9]*) die_usage "--stale-after must be a non-negative integer" ;; esac
       STALE_AFTER="$1" ;;
+    --github)       GITHUB_MODE=1 ;;
+    --github-full)  GITHUB_MODE=1; GITHUB_FULL=1 ;;
+    --no-cache)     NO_CACHE=1 ;;
+    --cache-ttl)
+      shift; [ "$#" -gt 0 ] || die_usage "--cache-ttl needs a value"
+      case "$1" in ''|*[!0-9]*) die_usage "--cache-ttl must be a non-negative integer" ;; esac
+      CACHE_TTL="$1" ;;
     -h|--help) usage; exit 0 ;;
     *) die_usage "unknown argument: $1" ;;
   esac
@@ -309,21 +347,190 @@ else
   REPOS_ABSENT="[]"
 fi
 
-# ---- assemble the document ----
+# ---- clock (shared by enrichment cache-age and the assembled document) ----
 NOW_EPOCH="$(date -u +%s)"
 GENERATED_AT="$(date -u +%FT%TZ)"
+
+# ---- optional GitHub enrichment (--github) ----------------------------------
+# Fill each run's `github` sub-object from `gh pr list` ONCE per owner/repo,
+# behind a TTL cache. Fail-soft throughout: an unreachable repo lands in
+# repos_failed, its runs keep github:null + low confidence, exit code unchanged.
+# GHMAP_JSON is a { "<run-index>": <ghmap-entry> } map the assembly jq joins in.
+# A ghmap entry is one of: {failed:true} (repo enrichment failed, force low
+# confidence) or {github:<obj>} (an OPEN or NOT_OPEN sub-object).
+GHMAP_JSON="{}"
+ENRICH_MODE="local"
+ENRICH_FETCHED_AT="null"
+ENRICH_CACHE_AGE="null"
+ENRICH_REPOS_ENRICHED=0
+ENRICH_REPOS_FAILED="[]"
+if [ "$GITHUB_MODE" -eq 1 ]; then
+  ENRICH_MODE="github"
+  [ "$GITHUB_FULL" -eq 1 ] && ENRICH_MODE="github-full"
+
+  # pr_decide toggles: match the pollers that actually tend these repos (both ON)
+  # so pr_decide_verdict is "what the watcher would decide right now". Overridable
+  # via the same env vars pr-watch reads.
+  GH_RES="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
+  GH_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
+  GH_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
+
+  # Github enum: run-index <tab> pr_number <tab> owner/repo, only for runs that
+  # have BOTH a PR URL and a resolved owner (edge cases: no pr_url => no query;
+  # unresolvable remote => no enrichment for it).
+  GH_ENUM="$TMPD/gh_enum.tsv"
+  jq -r --slurpfile owners "$TMPD/owners.json" '
+    ($owners[0]) as $om
+    | to_entries[]
+    | .key as $idx | .value as $r
+    | ($om[$r.repo_path + "\t" + $r.remote].owner // "") as $owner
+    | (if (($r.pr_url // "") | length) == 0 then null
+       else (($r.pr_url | capture("/(?<n>[0-9]+)/?$") | .n)? // null) end) as $pn
+    | select($pn != null and $owner != "")
+    | [$idx, $pn, $owner] | @tsv
+  ' "$TMPD/normalized.json" > "$GH_ENUM" 2>/dev/null || : > "$GH_ENUM"
+
+  # Distinct owner/repos to query (one gh pr list each).
+  GH_OWNERS="$TMPD/gh_owners.txt"
+  cut -f3 "$GH_ENUM" 2>/dev/null | sort -u | sed '/^$/d' > "$GH_OWNERS" || : > "$GH_OWNERS"
+
+  CACHE_FILE="$(status_github_cache_file)"
+  CACHE_IN="$(status_github_load_cache "$CACHE_FILE")"
+  CACHE_OUT="$CACHE_IN"
+  mkdir -p "$TMPD/gh"
+  FAILED_FILE="$TMPD/gh_failed.txt"; : > "$FAILED_FILE"
+  OWNER_META="$TMPD/gh_owner_meta.tsv"; : > "$OWNER_META"  # owner \t status \t age
+  gh_i=0
+  MIN_FETCHED_EPOCH=""
+  MIN_FETCHED_AT=""
+  MAX_AGE=""
+
+  while IFS= read -r owner; do
+    [ -n "$owner" ] || continue
+    prs=""
+    fetched_at=""
+    fetched_epoch=""
+    used_cache=0
+
+    # Cache hit? Entry present, fresh, and caching not disabled.
+    if [ "$NO_CACHE" -ne 1 ]; then
+      cached="$(printf '%s' "$CACHE_IN" | jq -c --arg k "$owner" '.[$k] // empty' 2>/dev/null || true)"
+      if [ -n "$cached" ]; then
+        c_epoch="$(printf '%s' "$cached" | jq -r '.fetched_epoch // empty' 2>/dev/null || true)"
+        if [ -n "$c_epoch" ]; then
+          age=$((NOW_EPOCH - c_epoch))
+          if [ "$age" -ge 0 ] && [ "$age" -le "$CACHE_TTL" ]; then
+            prs="$(printf '%s' "$cached" | jq -c '.prs // []' 2>/dev/null || echo '[]')"
+            fetched_at="$(printf '%s' "$cached" | jq -r '.fetched_at // empty' 2>/dev/null || true)"
+            fetched_epoch="$c_epoch"
+            used_cache=1
+          fi
+        fi
+      fi
+    fi
+
+    # Cache miss / stale / disabled => fetch once.
+    if [ "$used_cache" -ne 1 ]; then
+      if prs="$(status_github_fetch_open_prs "$owner")" && [ -n "$prs" ] \
+         && printf '%s' "$prs" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        fetched_at="$GENERATED_AT"
+        fetched_epoch="$NOW_EPOCH"
+        # Refresh this owner's cache entry.
+        CACHE_OUT="$(printf '%s' "$CACHE_OUT" | jq -c \
+          --arg k "$owner" --argjson prs "$prs" \
+          --arg fa "$fetched_at" --argjson fe "$fetched_epoch" \
+          '.[$k] = {fetched_at:$fa, fetched_epoch:$fe, prs:$prs}' 2>/dev/null || printf '%s' "$CACHE_OUT")"
+      else
+        # Network failure / rate limit / bad payload => this repo failed.
+        printf '%s\n' "$owner" >> "$FAILED_FILE"
+        continue
+      fi
+    fi
+
+    age=$((NOW_EPOCH - fetched_epoch))
+    [ "$age" -ge 0 ] || age=0
+    # Track the STALEST data so the top-level cache_age_seconds never looks fresher
+    # than the oldest repo (issue #60: old data must not look fresh).
+    if [ -z "$MAX_AGE" ] || [ "$age" -gt "$MAX_AGE" ]; then MAX_AGE="$age"; fi
+    if [ -z "$MIN_FETCHED_EPOCH" ] || [ "$fetched_epoch" -lt "$MIN_FETCHED_EPOCH" ]; then
+      MIN_FETCHED_EPOCH="$fetched_epoch"
+      MIN_FETCHED_AT="$fetched_at"
+    fi
+
+    # Build the number->github map for this owner (ci + verdict per open PR).
+    prmap="$(status_github_build_pr_map "$prs" "$fetched_at" "$age" "$GH_LABEL" "$GH_RES" "$GH_REPAIR")"
+    printf '%s' "$prmap" > "$TMPD/gh/$gh_i.prmap.json"
+    printf '%s\t%s\t%s\n' "$owner" "$gh_i" "$age" >> "$OWNER_META"
+    printf '%s\t%s\n' "$owner" "$fetched_at" >> "$TMPD/gh_owner_fetched.tsv"
+    ENRICH_REPOS_ENRICHED=$((ENRICH_REPOS_ENRICHED + 1))
+    gh_i=$((gh_i + 1))
+  done < "$GH_OWNERS"
+
+  # Persist the refreshed cache (best-effort, atomic).
+  status_github_write_cache "$CACHE_FILE" "$CACHE_OUT"
+
+  # repos_failed as a JSON array.
+  if [ -s "$FAILED_FILE" ]; then
+    ENRICH_REPOS_FAILED="$(jq -R -s 'split("\n") | map(select(length > 0))' "$FAILED_FILE")"
+  fi
+
+  # Map each enumerated run to its ghmap entry.
+  # owner -> prmap index + age lookup (built above).
+  GHMAP_FILE="$TMPD/ghmap.jsonl"; : > "$GHMAP_FILE"
+  while IFS=$'\t' read -r idx pn owner; do
+    [ -n "$idx" ] || continue
+    # Failed repo?
+    if grep -Fxq "$owner" "$FAILED_FILE" 2>/dev/null; then
+      jq -nc --arg i "$idx" '{($i): {failed:true}}' >> "$GHMAP_FILE"
+      continue
+    fi
+    # Look up this owner's prmap index + age.
+    meta="$(grep -F "$owner"$'\t' "$OWNER_META" 2>/dev/null | head -n1 || true)"
+    [ -n "$meta" ] || continue
+    pmi="$(printf '%s' "$meta" | cut -f2)"
+    page="$(printf '%s' "$meta" | cut -f3)"
+    fetched_at="$(grep -F "$owner"$'\t' "$TMPD/gh_owner_fetched.tsv" 2>/dev/null | head -n1 | cut -f2 || true)"
+    obj="$(jq -c --arg k "$pn" '.[$k] // empty' "$TMPD/gh/$pmi.prmap.json" 2>/dev/null || true)"
+    if [ -n "$obj" ]; then
+      # Open PR.
+      jq -nc --arg i "$idx" --argjson o "$obj" '{($i): {github:$o}}' >> "$GHMAP_FILE"
+    else
+      # Not in the open set => NOT_OPEN. Optionally resolve MERGED/CLOSED.
+      closed_as=""
+      if [ "$GITHUB_FULL" -eq 1 ]; then
+        closed_as="$(status_github_closed_state "$owner" "$pn")"
+      fi
+      nobj="$(status_github_not_open_object "$fetched_at" "$page" "$closed_as")"
+      jq -nc --arg i "$idx" --argjson o "$nobj" '{($i): {github:$o}}' >> "$GHMAP_FILE"
+    fi
+  done < "$GH_ENUM"
+
+  if [ -s "$GHMAP_FILE" ]; then
+    GHMAP_JSON="$(jq -s -c 'add // {}' "$GHMAP_FILE")"
+  fi
+
+  # Top-level enrichment provenance: stalest age wins.
+  if [ -n "$MAX_AGE" ]; then ENRICH_CACHE_AGE="$MAX_AGE"; fi
+  if [ -n "$MIN_FETCHED_AT" ]; then
+    ENRICH_FETCHED_AT="$(jq -nc --arg v "$MIN_FETCHED_AT" '$v')"
+  fi
+fi
+printf '%s' "$GHMAP_JSON" > "$TMPD/ghmap.json"
 
 ASSEMBLE_JQ="
 def _epoch: (try fromdateiso8601 catch null);
 ${_STATUS_CLASSIFY_JQ}
+${_STATUS_GITHUB_RECLASSIFY_JQ}
 (\$runs[0]) as \$raw
 | (\$owners[0]) as \$ownermap
 | (\$probe[0]) as \$probemap
 | (\$state[0]) as \$statemap
+| (\$ghmap[0]) as \$ghmap
 | [ \$raw | to_entries[]
     | (.key | tostring) as \$is | .value as \$r
     | (\$probemap[\$is] // {}) as \$p
     | (\$statemap[\$is] // {}) as \$s
+    | (\$ghmap[\$is] // null) as \$gh
     | (\$ownermap[\$r.repo_path + \"\t\" + \$r.remote] // {}) as \$o
     | (\$o.owner // \"\") as \$owner
     | (if (\$r.repo_slug_raw // \"\") != \"\" then \$r.repo_slug_raw else (\$o.slug // \"\") end) as \$slug_eff
@@ -366,17 +573,23 @@ ${_STATUS_CLASSIFY_JQ}
         session_alive: (\$p.session_alive // false),
         lock_held: (\$p.lock_held // false),
         schema_gaps: \$r.schema_gaps,
-        github: null
+        github: (if \$gh == null then null
+                 elif (\$gh.failed == true) then null
+                 else \$gh.github end)
       }
     | _classify(\$stale)
+    | (if (\$gh != null and \$gh.failed == true) then . + {class_confidence: \"low\"} else . end)
+    | _github_reclassify
   ] as \$runs_final
 | {
     schema_version: 1,
     generated_at: \$generated_at,
     host: \$this_host,
     stale_after_seconds: \$stale,
-    enrichment: { mode: \"local\", fetched_at: null, cache_age_seconds: null,
-                  repos_enriched: 0, repos_failed: [] },
+    enrichment: { mode: \$enrich_mode, fetched_at: \$enrich_fetched_at,
+                  cache_age_seconds: \$enrich_cache_age,
+                  repos_enriched: \$enrich_repos_enriched,
+                  repos_failed: \$enrich_repos_failed },
     sources: { watchlist: \$watchlist, repos_configured: \$repos_configured,
                repos_scanned: \$repos_scanned, repos_absent: \$repos_absent },
     totals: {
@@ -413,6 +626,7 @@ DOC="$(jq -n \
   --slurpfile owners "$TMPD/owners.json" \
   --slurpfile probe "$TMPD/probe.json" \
   --slurpfile state "$TMPD/state.json" \
+  --slurpfile ghmap "$TMPD/ghmap.json" \
   --argjson now "$NOW_EPOCH" \
   --argjson stale "$STALE_AFTER" \
   --argjson repos_configured "$REPOS_CONFIGURED" \
@@ -420,6 +634,11 @@ DOC="$(jq -n \
   --argjson repos_absent "$REPOS_ABSENT" \
   --argjson archived "$ARCHIVED" \
   --argjson read_errors "$READ_ERRORS" \
+  --arg enrich_mode "$ENRICH_MODE" \
+  --argjson enrich_fetched_at "$ENRICH_FETCHED_AT" \
+  --argjson enrich_cache_age "$ENRICH_CACHE_AGE" \
+  --argjson enrich_repos_enriched "$ENRICH_REPOS_ENRICHED" \
+  --argjson enrich_repos_failed "$ENRICH_REPOS_FAILED" \
   --arg this_host "$THIS_HOST" \
   --arg generated_at "$GENERATED_AT" \
   --arg watchlist "$WATCHLIST" \
@@ -448,8 +667,19 @@ else
   degraded="$(printf '%s' "$DOC" | jq -r '.totals.degraded')"
   n_err="$(printf '%s' "$DOC" | jq -r '.read_errors | length')"
 
-  printf '%srun-issues status%s — %s — %s — paikallinen data\n' \
-    "$C_BOLD" "$C_RESET" "$THIS_HOST" "$GENERATED_AT"
+  if [ "$GITHUB_MODE" -eq 1 ]; then
+    gh_age="$(printf '%s' "$DOC" | jq -r '.enrichment.cache_age_seconds // "?"')"
+    gh_failed="$(printf '%s' "$DOC" | jq -r '.enrichment.repos_failed | length')"
+    printf '%srun-issues status%s — %s — %s — GitHub-rikastus (cache %ss vanha' \
+      "$C_BOLD" "$C_RESET" "$THIS_HOST" "$GENERATED_AT" "$gh_age"
+    if [ "$gh_failed" != "0" ]; then
+      printf ', %s%s repoa epäonnistui%s' "$C_RED" "$gh_failed" "$C_RESET"
+    fi
+    printf ')\n'
+  else
+    printf '%srun-issues status%s — %s — %s — paikallinen data\n' \
+      "$C_BOLD" "$C_RESET" "$THIS_HOST" "$GENERATED_AT"
+  fi
   if [ "$degraded" = "true" ]; then
     printf '  %s⚠ vajaa luenta: %s lukuvirhettä%s\n' "$C_RED" "$n_err" "$C_RESET"
   fi

@@ -605,16 +605,27 @@ status.sh --json | jq …       # versioitu dokumentti (schema_version: 1) putke
 status.sh --class attention   # näytä kaikki huomiota vaativat ajot (ei 10 rivin kattoa)
 status.sh --repo <polku>      # rajaa yhteen watchlist-repoon
 status.sh --stale-after 7200  # oma jumiutumisraja (oletus 3600, sama kuin pollerilla)
+status.sh --github            # opt-in: rikasta PR-tila GitHubista (TTL-cache)
 ```
 
-`--json` on vakaa rajapinta: myöhemmät inkrementit (gh-rikastus, sähköpostikooste, HTML-sivu)
-lukevat samaa dokumenttia. Jokainen ajo luokitellaan viiteen luokkaan — `running`, `stalled`,
-`attention`, `pr_in_flight`, `cleanup` — pelkän paikallisen datan perusteella, ilman
-GitHub-kutsuja. Tuntematon PR-tila kallistuu aina elävään suuntaan (`pr_in_flight`), ei
-siivottavaksi. Yksittäinen rikkinäinen `run.json` ei kaada luentaa: se eristetään
-`read_errors`-listaan ja skripti poistuu koodilla 3 muun datan silti ollessa validia.
-Exit-koodit ovat osiossa 9. Ne ovat oma avaruutensa — sama numero tarkoittaa eri asiaa kuin
-orkestraattorissa tai PR-vahdissa.
+`--json` on vakaa rajapinta: myöhemmät inkrementit (sähköpostikooste, HTML-sivu) lukevat samaa
+dokumenttia. Jokainen ajo luokitellaan viiteen luokkaan — `running`, `stalled`, `attention`,
+`pr_in_flight`, `cleanup` — pelkän paikallisen datan perusteella, ilman GitHub-kutsuja.
+Tuntematon PR-tila kallistuu aina elävään suuntaan (`pr_in_flight`), ei siivottavaksi.
+Yksittäinen rikkinäinen `run.json` ei kaada luentaa: se eristetään `read_errors`-listaan ja
+skripti poistuu koodilla 3 muun datan silti ollessa validia. Exit-koodit ovat osiossa 9. Ne
+ovat oma avaruutensa — sama numero tarkoittaa eri asiaa kuin orkestraattorissa tai
+PR-vahdissa.
+
+**Opt-in GitHub-rikastus (`--github`).** `run.json` jäätyy `completed`-tilaan PR:n
+avaushetkellä; PR:n loppuelämä (draft, mergeability, CI, labelit, katselmointi) elää vain
+GitHubissa. `--github` täyttää jokaisen ajon `github`-aliobjektin hakemalla avoimet PR:t
+`gh pr list`illä **kerran per owner/repo** TTL-cachella (`RUN_ISSUES_STATUS_CACHE_TTL`, oletus
+300 s; `--no-cache` ohittaa, `--cache-ttl <s>` säätää). CI-tila ja PR-vahdin verdict tulevat
+PR-vahdin omista funktioista, joten näkymä ja vahti eivät ole eri mieltä PR:n vihreydestä.
+Rikastus on **fail-soft**: yhden repon verkkovirhe vie sen `enrichment.repos_failed`-listaan,
+sen ajot jäävät `github: null`, muut repot rikastuvat ja exit-koodi on ennallaan. Ilman lippua
+käytös on bitilleen kuin ennen (`github: null` joka ajossa). Tekninen referenssi: CLAUDE.md §8.
 
 ---
 

@@ -332,7 +332,8 @@ kertovat vain lukemisen onnistumisesta — ei mitään lukittua, claimattua tai 
 | `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, orkestraattorin S0-portti (#7) tekee samasta lähteestä fataalin (exit 8). Korjauskomennot tulevat yhdestä lähteestä (`preflight_install_hint`) |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
-| `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot (#59): `_STATUS_NORMALIZE_JQ` (heterogeenisen `run.json`in normalisointi + `schema_gaps`), `status_read_bulk`/`status_read_perfile` (kaksitasoinen luenta), `_STATUS_CLASSIFY_JQ` + `status_classify` (viisi luokkaa prioriteettijärjestyksessä, INV-STATUS lukee vain `status`ia, INV-UNKNOWN fail-closed), ja `_iso_to_epoch` (siirretty poller.sh:sta; poller sourcaa sen täältä, jotta `scan_stalled`in liveness-kello ja `status.sh`:n `idle_seconds` lasketaan identtisesti) |
+| `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot (#59): `_STATUS_NORMALIZE_JQ` (heterogeenisen `run.json`in normalisointi + `schema_gaps`), `status_read_bulk`/`status_read_perfile` (kaksitasoinen luenta), `_STATUS_CLASSIFY_JQ` + `status_classify` (viisi luokkaa prioriteettijärjestyksessä, INV-STATUS lukee vain `status`ia, INV-UNKNOWN fail-closed), `_STATUS_GITHUB_RECLASSIFY_JQ` (`_github_reclassify`, #60: `--github`-rikastuksen jälkeen ajettava jälkiluokittelu — no-op kun `github == null`, muuten nostaa `class_confidence`in `low`→`high` varmistuneelle PR:lle ja lisää `pr_ci_red`/`pr_changes_requested`/`pr_draft_stale`/`pr_not_open`-refinoinnit), ja `_iso_to_epoch` (siirretty poller.sh:sta; poller sourcaa sen täältä, jotta `scan_stalled`in liveness-kello ja `status.sh`:n `idle_seconds` lasketaan identtisesti) |
+| `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta |
 | `version.sh` | Ajossa olevan runner-version näkyväksi teko (#32): `runner_version` (lyhyt HEAD), `runner_behind_origin` (jäljessä `origin/main`ia), `runner_version_summary` (raporttirivi) ja `runner_fetch_throttled` (throttlattu `git fetch`). Fail-soft: puuttuva `.git`/verkko ⇒ `?`. Pollerit lokittavat tikin alussa, `orchestrate.sh --version` ja situation-kommentin `Runner-version:` lukevat samasta lähteestä |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 
@@ -413,7 +414,15 @@ lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin override. **Sama semantiikka kuin pollerilla:** asetettuna se on ainoa ehdokas — osumaton override on virhe (exit 2), ei fallback. Ilman overridea sama resolvointijärjestys kuin pollereilla (`poller_resolve_watchlist`) |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Jumiutumisraja `idle_seconds`-vertailulle ja `running`/`stalled`-luokittelulle. **Sama muuttuja kuin pollerilla tarkoituksella:** näkymä ja poller eivät saa olla eri mieltä jumiudesta. `--stale-after` ohittaa |
 | `RUN_ISSUES_STATUS_TAIL_LINES` | `40` | Montako riviä `state.jsonl`in **hännästä** luetaan per ajo (`pr_local_verdict` + `idle_seconds`). Tiedostoa ei lueta koskaan kokonaan (mitattu reunaehto: `state.jsonl` on 345 MB / 99,7 % PR-vahtikohinaa) — vain `tail -n N` |
+| `RUN_ISSUES_STATUS_CACHE_FILE` | `${XDG_CACHE_HOME:-$HOME/Library/Caches}/run-issues/status-github.json` | **Vain `--github` (#60).** GitHub-rikastuksen TTL-cache, avaimena owner/repo. Atominen kirjoitus (`mktemp`+`mv -f`) |
+| `RUN_ISSUES_STATUS_CACHE_TTL` | `300` | **Vain `--github`.** Cachen tuoreusikkuna sekunteina. `--cache-ttl <s>` ohittaa, `--no-cache` pakottaa haun |
 | `RUN_ISSUES_HOME` | *(scriptin oma hakemisto)* | Testien injektiopiste, luetaan vain ympäristöstä |
+
+`--github` lukee myös PR-vahdin togglet (`PR_WATCH_ENABLE_CONFLICT_RESOLUTION`,
+`PR_WATCH_ENABLE_CI_REPAIR`, `PR_WATCH_MERGE_LABEL`) päättääkseen `pr_decide_verdict`in — oletus
+`1`/`1`/`auto-merge` (sama kuin pollerit, jotka näitä repoja oikeasti hoitavat), jotta verdict
+kertoo mitä vahti **tekisi juuri nyt**. GitHub App -identiteetti kunnioitetaan jos konfiguroitu
+(`gha_with_token`, §8, GitHub App -env).
 
 ### PR-vahti
 
@@ -455,6 +464,20 @@ johdetaan `$HOME`:sta tai näistä overrideista — tildelaajennusta ei käytet�
 Kaikki alla oleva on **pois päältä oletuksena**. Puuttuva konfiguraatio on hyvänlaatuinen
 no-op, ei virhe.
 
+- **`status.sh --github`** (#60) — kokonaistilan opt-in GitHub-rikastus. Ilman lippua `status.sh`
+  on puhtaasti lukeva ja jokaisen ajon `github`-aliobjekti on `null` (käytös bitilleen kuin
+  #59:ssä). Lipun kanssa `lib/status-github.sh` täyttää jokaisen ajon `github`-aliobjektin
+  hakemalla avoimet PR:t `gh pr list`illä **kerran per owner/repo** (ei per ajo) TTL-cachella
+  (`RUN_ISSUES_STATUS_CACHE_*`, §7). `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide`
+  (`lib/pr-watch-lib.sh`) — ei omaa kopiota kummastakaan, sama `--json`-kenttäjoukko kuin
+  PR-vahdilla, joten payloadit ovat vaihtokelpoisia. Rikastus nostaa `class_confidence`in
+  `low`→`high` varmistuneelle PR:lle ja lisää luokitteluun `pr_ci_red`/`pr_changes_requested`/
+  `pr_draft_stale`-syyt sekä siirtää suljetun PR:n ajon `cleanup`iin (`_github_reclassify`,
+  §6). **Fail-soft:** yhden repon verkkovirhe → `enrichment.repos_failed`, sen ajot jäävät
+  `github: null` + `low`, muut repot rikastuvat, exit-koodi ja paikallinen luokittelu ennallaan.
+  Autentikointi `gha_with_token`in kautta (GitHub App kunnioitetaan). `--github-full` erottaa
+  suljetun PR:n `MERGED`/`CLOSED`iksi (per suljettu PR `gh pr view`), molemmat johtavat
+  siivoukseen. `tests/test-status-github.sh` vartioi (gh-shim `PATH`issa laskee kutsut).
 - **`db-clone/`** — kohderepon `.claude/db-clone.json` ohjaa tietokannan kloonauksen ajon
   ajaksi (S5). Kloonin nimi injektoidaan implementerille muuttujana
   `RUN_ISSUES_DB_CLONE`. Ks. `db-clone/README.md`.
