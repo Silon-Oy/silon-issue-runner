@@ -783,8 +783,8 @@ phase_a() {
        state_finalize "$RUN_DIR" "blocked" "origin_fetch_failed"
        state_event "$RUN_DIR" "origin_fetch_failed" "phase=S4" "remote=$REMOTE_NAME"
        _post_situation_to_issue "origin_fetch_failed" \
-         "Remote-haku (\`git fetch $REMOTE_NAME\`) epäonnistui ennen worktreen luontia — feature-haara haarautuisi vanhentuneesta \`$REMOTE_NAME/main\`:sta. Tyypillisesti verkkokatko tai auth-ongelma. Tarkista yhteys ja aja issue uudelleen." \
-         "$RUN_DIR/origin-fetch.log" 0 log
+         "Remote-haku (\`git fetch $REMOTE_NAME\`) epäonnistui ennen worktreen luontia — feature-haara haarautuisi vanhentuneesta \`$REMOTE_NAME/main\`:sta. Tyypillisesti verkkokatko tai auth-ongelma. Tarkista yhteys — ajo yritetään uudelleen kun kommentoit issueen." \
+         "$RUN_DIR/origin-fetch.log" blocked log
        _add_needs_human_label
        exit 5 ;;
   esac
@@ -806,24 +806,24 @@ phase_a() {
         state_finalize "$RUN_DIR" "blocked" "worktree_base_unresolved"
         state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME" "reason=base_unresolved"
         _post_situation_to_issue "worktree_base_unresolved" \
-          "Worktreen base-haaraa ei voitu ratkaista ennen worktreen luontia — feature-haara olisi haarautunut väärästä commitista. Yleisin syy: \`$REMOTE_NAME/HEAD\` puuttuu kloonista (\`git remote add\` ei aseta sitä, vain \`git clone\`). Korjaus on lokissa nimetyllä komennolla, tai aseta \`base_branch\` repon \`.claude/run-issues.json\`:iin." \
-          "$worktree_log" 0 log
+          "Worktreen base-haaraa ei voitu ratkaista ennen worktreen luontia — feature-haara olisi haarautunut väärästä commitista. Yleisin syy: \`$REMOTE_NAME/HEAD\` puuttuu kloonista (\`git remote add\` ei aseta sitä, vain \`git clone\`). Korjaus on lokissa nimetyllä komennolla, tai aseta \`base_branch\` repon \`.claude/run-issues.json\`:iin. Kun korjaus on tehty, kommentoi issueen — ajo yritetään uudelleen." \
+          "$worktree_log" blocked log
         ;;
       3)
         log "S4: create_worktree failed — leftover branch '$BRANCH' from a previous run; see $worktree_log"
         state_finalize "$RUN_DIR" "blocked" "worktree_leftover_branch"
         state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME" "reason=leftover_branch"
         _post_situation_to_issue "worktree_leftover_branch" \
-          "Worktreen luonti epäonnistui: paikallinen haara \`$BRANCH\` on jäänne saman issuen edellisestä ajosta. Suljettu PR (\`gh pr close --delete-branch\`) poistaa vain remote-haaran, joten paikallinen jää. Korjaus: aja \`cleanup-run.sh --repo $REPO_ROOT --issue $ISSUE_NUM\` ja käynnistä issue uudelleen — älä aja \`git remote set-head\`, se ei liity tähän." \
-          "$worktree_log" 0 log
+          "Worktreen luonti epäonnistui: paikallinen haara \`$BRANCH\` on jäänne saman issuen edellisestä ajosta. Suljettu PR (\`gh pr close --delete-branch\`) poistaa vain remote-haaran, joten paikallinen jää. Kommentoi issueen niin ajo siivotaan ja yritetään uudelleen automaattisesti — tai siivoa käsin \`cleanup-run.sh --repo $REPO_ROOT --issue $ISSUE_NUM\`. Älä aja \`git remote set-head\`, se ei liity tähän." \
+          "$worktree_log" blocked log
         ;;
       *)
         log "S4: create_worktree failed (rc=$worktree_rc) — 'git worktree add' error; see $worktree_log"
         state_finalize "$RUN_DIR" "blocked" "worktree_create_failed"
         state_event "$RUN_DIR" "worktree_create_failed" "phase=S4" "remote=$REMOTE_NAME" "reason=create_failed"
         _post_situation_to_issue "worktree_create_failed" \
-          "Worktreen luonti epäonnistui (\`git worktree add\`) — base-haara ratkesi, joten syy on itse luonnissa (esim. olemassa oleva worktree-hakemisto, levytila tai oikeudet). Todellinen virhe on liitetyssä lokissa; en arvaa syytä sen yli." \
-          "$worktree_log" 0 log
+          "Worktreen luonti epäonnistui (\`git worktree add\`) — base-haara ratkesi, joten syy on itse luonnissa (esim. olemassa oleva worktree-hakemisto, levytila tai oikeudet). Todellinen virhe on liitetyssä lokissa; en arvaa syytä sen yli. Korjaa este ja kommentoi issueen — ajo yritetään uudelleen." \
+          "$worktree_log" blocked log
         ;;
     esac
     _add_needs_human_label
@@ -853,8 +853,8 @@ phase_a() {
       log "db-clone failed (rc=$db_rc) — see $db_clone_log"
       state_finalize "$RUN_DIR" "blocked" "db_clone_rc_$db_rc"
       _post_situation_to_issue "db_clone_failed" \
-        "Tietokannan kloonaus epäonnistui (rc=$db_rc) ennen toteutusvaihetta. Tarkista DB-klooni-konfiguraatio ja palvelut." \
-        "$db_clone_log" 0
+        "Tietokannan kloonaus epäonnistui (rc=$db_rc) ennen toteutusvaihetta. Tarkista DB-klooni-konfiguraatio ja palvelut — ajo yritetään uudelleen kun kommentoit issueen." \
+        "$db_clone_log" blocked
       _add_needs_human_label
       exit 5
       ;;
@@ -974,13 +974,13 @@ review_gate() {
       if [ "$IS_CONTINUE" = "1" ]; then
         _remove_waiting_label
         _hand_to_human \
-          "Cycle review esti ajon tarkennuksen jälkeen (\`$reason\`). Tarkista issue ja korjaa este." \
-          "$cr_out"
+          "Cycle review esti ajon tarkennuksen jälkeen (\`$reason\`). Tarkista issue ja korjaa este — ajo yritetään uudelleen kun kommentoit issueen." \
+          "$cr_out" blocked
         exit 4
       fi
       _post_situation_to_issue "cycle_review_blocker" \
-        "Cycle review esti ajon (\`$reason\`). Tarkista issue ja korjaa este." \
-        "$cr_out" 0 prose
+        "Cycle review esti ajon (\`$reason\`). Tarkista issue ja korjaa este — ajo yritetään uudelleen kun kommentoit issueen." \
+        "$cr_out" blocked prose
       _add_needs_human_label
       exit 4
       ;;
@@ -1124,7 +1124,7 @@ restart_load_state() {
      || ! git -C "$WORKTREE_PATH" status >/dev/null 2>&1; then
     log "restart: worktree unusable at '$WORKTREE_PATH' — handing to human"
     state_finalize "$RUN_DIR" "blocked" "restart_worktree_corrupt"
-    _hand_to_human "Restart epäonnistui: worktree \`$WORKTREE_PATH\` on rikki tai puuttuu. Siivoa ajo ja aja issue uudelleen."
+    _hand_to_human "Restart epäonnistui: worktree \`$WORKTREE_PATH\` on rikki tai puuttuu. Kommentoi issueen, niin ajo siivotaan ja yritetään uudelleen automaattisesti." "" blocked
     exit 0
   fi
 
@@ -1244,8 +1244,8 @@ continue_load_state() {
     log "continue: clarification budget exhausted (round=$round >= max=$RUN_ISSUES_MAX_CLARIFICATIONS) — handing to human"
     state_finalize "$RUN_DIR" "blocked" "clarification_loop_exhausted"
     _remove_waiting_label
-    _hand_to_human "clarification-silmukka ei suppene $round kierroksen jälkeen. Cycle review tarvitsee yhä tarkennusta — tarkista issue käsin." \
-      "$RUN_DIR/01-cycle-review.out"
+    _hand_to_human "clarification-silmukka ei suppene $round kierroksen jälkeen. Cycle review tarvitsee yhä tarkennusta — tarkenna issue ja kommentoi, niin ajo yritetään uudelleen." \
+      "$RUN_DIR/01-cycle-review.out" blocked
     exit 0
   fi
 
@@ -1257,7 +1257,7 @@ continue_load_state() {
     log "continue: worktree unusable at '$WORKTREE_PATH' — handing to human"
     state_finalize "$RUN_DIR" "blocked" "continue_worktree_corrupt"
     _remove_waiting_label
-    _hand_to_human "Continue epäonnistui: worktree \`$WORKTREE_PATH\` on rikki tai puuttuu. Siivoa ajo ja aja issue uudelleen."
+    _hand_to_human "Continue epäonnistui: worktree \`$WORKTREE_PATH\` on rikki tai puuttuu. Kommentoi issueen, niin ajo siivotaan ja yritetään uudelleen automaattisesti." "" blocked
     exit 0
   fi
 
@@ -1333,7 +1333,16 @@ RUN_ISSUES_SITUATION_ARTIFACT_MAX="${RUN_ISSUES_SITUATION_ARTIFACT_MAX:-60000}"
 #   <kind>          slug for logging/event (e.g. cycle_review_clarification)
 #   <headline>      1–3 Finnish sentences: WHAT happened + WHAT maintainer should do
 #   <artifact-file> optional absolute path to attach
-#   <awaitable>     1 = answerable -> embed marker + reply instruction; default 0
+#   <awaitable>     answerability flavour; default "0" (not answerable). Any
+#                   answerable flavour embeds a marker (build_marker) so a human
+#                   reply can be tied back to this run by its timestamp:
+#                     "clarification" (alias "1") — clarification loop: the reply
+#                       resumes THIS run via --continue (poller scan_answered).
+#                     "blocked"       — terminal blocked run (issue #57): the
+#                       reply tears the run down and lets normal pickup retry it
+#                       fresh (poller scan_blocked_answered). Different reply
+#                       instruction because there is no --continue, a whole new
+#                       run starts.
 #   <artifact-mode> "prose" renders the artifact as Markdown (wraps on GitHub —
 #                   right for cycle-review/implementer output); "log" (default)
 #                   wraps it in a code fence to keep monospace log formatting.
@@ -1360,13 +1369,22 @@ _post_situation_to_issue() {
   # can ssh into the host. SCRIPT_DIR is the package root, not the target repo.
   body+="- Runner-version: \`$(runner_version_summary "$SCRIPT_DIR")\`"$'\n'
 
-  if [ "$awaitable" = "1" ]; then
-    local marker
-    marker=$(build_marker "$RUN_ID" "$ISSUE_NUM" "$(date -u +%FT%TZ)")
-    # Marker first so α2's scanner finds it deterministically at the top.
-    body="${marker}"$'\n'"${body}"
-    body+=$'\n'"**Vastaa tähän issueen kommentilla — Studio jatkaa automaattisesti (≤5 min).**"$'\n'
-  fi
+  case "$awaitable" in
+    1|clarification|blocked)
+      local marker
+      marker=$(build_marker "$RUN_ID" "$ISSUE_NUM" "$(date -u +%FT%TZ)")
+      # Marker first so the poller's scanner finds it deterministically at the top.
+      body="${marker}"$'\n'"${body}"
+      if [ "$awaitable" = "blocked" ]; then
+        # Terminal block: a reply does NOT resume this run — it triggers a fresh
+        # pickup after the poller tears this run down. Say so, so the human's
+        # mental model matches ("comment when the blocker is gone → bot retries").
+        body+=$'\n'"**Kun este on poistettu, kommentoi tähän issueen — ajo yritetään uudelleen automaattisesti (≤5 min).**"$'\n'
+      else
+        body+=$'\n'"**Vastaa tähän issueen kommentilla — Studio jatkaa automaattisesti (≤5 min).**"$'\n'
+      fi
+      ;;
+  esac
 
   if [ -n "$artifact_file" ] && [ -f "$artifact_file" ]; then
     local raw raw_bytes rendered
@@ -1458,7 +1476,7 @@ _finalize_awaiting_clarification() {
   _add_waiting_label
   _post_situation_to_issue "cycle_review_clarification" \
     "Cycle review tarvitsee tarkennusta (kierros $round) ennen kuin toteutus voi jatkua. Kerro puuttuvat tiedot kommentissa." \
-    "$cr_out" 1 prose
+    "$cr_out" clarification prose
   state_event "$RUN_DIR" "awaiting_clarification" "round=$round"
 }
 
@@ -1473,14 +1491,21 @@ _add_needs_human_label() {
   ( cd "$REPO_ROOT" && labels_add "$OWNER_REPO" "$ISSUE_NUM" needs-human ) 2>&1 | _log_label_err || true
 }
 
-# _hand_to_human <message> [<artifact-file>] — best-effort: post a full
-# situation report and ensure the needs-human label is attached. All failures
-# are non-fatal (the run is already finalized in run.json regardless). The
-# artifact (when present) is implementer output, so render it as prose.
+# _hand_to_human <message> [<artifact-file>] [<awaitable>] — best-effort: post a
+# full situation report and ensure the needs-human label is attached. All
+# failures are non-fatal (the run is already finalized in run.json regardless).
+# The artifact (when present) is implementer output, so render it as prose.
+#
+# <awaitable> defaults to "0" (not answerable) so the timed_out hand-offs
+# (finalize_timeout, restart budget) keep their non-answerable comment — that
+# path resumes via --restart, not a human reply. A terminal BLOCKED hand-off
+# passes "blocked" so the comment carries a marker and a human reply re-triggers
+# a fresh run (issue #57, poller scan_blocked_answered).
 _hand_to_human() {
   local msg="$1"
   local artifact_file="${2:-}"
-  _post_situation_to_issue "needs_human" "$msg" "$artifact_file" 0 prose
+  local awaitable="${3:-0}"
+  _post_situation_to_issue "needs_human" "$msg" "$artifact_file" "$awaitable" prose
   _add_needs_human_label
 }
 
@@ -1701,8 +1726,8 @@ _run_env_install() {
     state_finalize "$RUN_DIR" "blocked" "env_bootstrap_timeout"
     state_event "$RUN_DIR" "env_bootstrap_timeout" "pm=$manager" "timeout=$RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT"
     local detail
-    detail="Riippuvuuksien asennus ($manager) aikakatkesi (${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT}s) ennen toteutusvaihetta. Yleisin syy on jumiutunut paketinhallinta-lukko, hidas/jumahtava verkkoyhteys (Packagist/npm-registry/GitHub Packages) tai vialliset auth-tokenit. Tarkista asennusloki ja koneellinen env-tiedosto. Asennusloki (kesken jäänyt) alla."
-    _post_situation_to_issue "env_bootstrap_timeout" "$detail" "$boot_log" 0 log
+    detail="Riippuvuuksien asennus ($manager) aikakatkesi (${RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT}s) ennen toteutusvaihetta. Yleisin syy on jumiutunut paketinhallinta-lukko, hidas/jumahtava verkkoyhteys (Packagist/npm-registry/GitHub Packages) tai vialliset auth-tokenit. Tarkista asennusloki ja koneellinen env-tiedosto — ajo yritetään uudelleen kun kommentoit issueen. Asennusloki (kesken jäänyt) alla."
+    _post_situation_to_issue "env_bootstrap_timeout" "$detail" "$boot_log" blocked log
     _add_needs_human_label
     exit 5
   fi
@@ -1718,7 +1743,8 @@ _run_env_install() {
       detail="Riippuvuuksien asennus ($manager) epäonnistui ennen toteutusvaihetta (rc=$boot_rc). Yleisin syy on puuttuva GITHUB_TOKEN yksityisille @scope/*-paketeille — tarkista koneellinen env-tiedosto. Asennusvirhe alla."
     fi
     # Post the install log in log-mode (monospace) — it is tool output, not prose.
-    _post_situation_to_issue "env_bootstrap_failed" "$detail" "$boot_log" 0 log
+    detail+=" Korjaa este ja kommentoi issueen — ajo yritetään uudelleen automaattisesti."
+    _post_situation_to_issue "env_bootstrap_failed" "$detail" "$boot_log" blocked log
     _add_needs_human_label
     exit 5
   fi
@@ -1800,8 +1826,8 @@ run_provision_test_env() {
     state_finalize "$RUN_DIR" "blocked" "provision_test_env_failed"
     state_event "$RUN_DIR" "provision_test_env_failed" "rc=$prov_rc"
     _post_situation_to_issue "provision_test_env_failed" \
-      "Testiympäristön provisiointi (\`.claude/provision-test-env.sh\`) epäonnistui ennen toteutusvaihetta (rc=$prov_rc). Tyypillisesti puuttuva tai väärä tietokantayhteys/migraatio — tarkista koneellinen env-tiedosto ja hookin loki alla." \
-      "$prov_log" 0 log
+      "Testiympäristön provisiointi (\`.claude/provision-test-env.sh\`) epäonnistui ennen toteutusvaihetta (rc=$prov_rc). Tyypillisesti puuttuva tai väärä tietokantayhteys/migraatio — tarkista koneellinen env-tiedosto ja hookin loki alla. Korjaa este ja kommentoi issueen — ajo yritetään uudelleen." \
+      "$prov_log" blocked log
     _add_needs_human_label
     exit 5
   fi
@@ -1909,8 +1935,8 @@ PROVISION_ENV
       log "implementer blocked or no result line"
       state_finalize "$RUN_DIR" "blocked" "implementer_${imp_result:-no_result}"
       _post_situation_to_issue "implementer_blocked" \
-        "Toteutusvaihe (implementer) jäi jumiin eikä tuottanut valmista tulosta. Tarkista alla oleva tuloste ja issuen vaatimukset." \
-        "$imp_out" 0 prose
+        "Toteutusvaihe (implementer) jäi jumiin eikä tuottanut valmista tulosta. Tarkista alla oleva tuloste ja issuen vaatimukset — ajo yritetään uudelleen kun kommentoit issueen." \
+        "$imp_out" blocked prose
       _add_needs_human_label
       exit 5
       ;;
@@ -2010,8 +2036,8 @@ PROVISION_ENV
     log "git push failed (rc=$push_rc)"
     state_finalize "$RUN_DIR" "blocked" "git_push_failed"
     _post_situation_to_issue "git_push_failed" \
-      "Toteutus valmistui, mutta haaran push GitHubiin epäonnistui (rc=$push_rc). Tarkista push-loki ja remote-oikeudet." \
-      "$RUN_DIR/git-push.log" 0
+      "Toteutus valmistui, mutta haaran push GitHubiin epäonnistui (rc=$push_rc). Tarkista push-loki ja remote-oikeudet — ajo yritetään uudelleen kun kommentoit issueen." \
+      "$RUN_DIR/git-push.log" blocked
     _add_needs_human_label
     exit 6
   fi
@@ -2046,8 +2072,8 @@ PROVISION_ENV
     log "gh pr create failed"
     state_finalize "$RUN_DIR" "blocked" "pr_create_failed"
     _post_situation_to_issue "pr_create_failed" \
-      "Haara pushattiin, mutta pull requestin avaaminen epäonnistui. Tarkista alla oleva gh-loki ja avaa PR tarvittaessa käsin." \
-      "$RUN_DIR/gh-pr-create.log" 0
+      "Haara pushattiin, mutta pull requestin avaaminen epäonnistui. Tarkista alla oleva gh-loki ja avaa PR tarvittaessa käsin — ajo yritetään uudelleen kun kommentoit issueen." \
+      "$RUN_DIR/gh-pr-create.log" blocked
     _add_needs_human_label
     exit 6
   fi

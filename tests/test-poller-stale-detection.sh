@@ -43,6 +43,13 @@ mkdir -p "$REPO/.git"
 # shellcheck source=lib/labels.sh
 . "$HERE/../lib/labels.sh"
 
+# finalize_stalled embeds an awaiting-answer marker in its situation comment
+# (issue #57) so a human reply re-triggers a fresh run via scan_blocked_answered.
+# build_marker lives in lib/issue.sh; source it or the eval'd function body hits
+# `build_marker: command not found`.
+# shellcheck source=lib/issue.sh
+. "$HERE/../lib/issue.sh"
+
 # Extract function bodies from poller.sh. The awk pattern walks from each
 # function header to its closing brace at column 0, mirroring the harness
 # used by test-poller-scan-timeout.sh. We need scan_stalled, finalize_stalled,
@@ -104,12 +111,14 @@ PATH="$WORK/bin:$PATH"
 # Mock gh: just log calls. finalize_stalled is best-effort on gh, so it must
 # tolerate failures, but for test assertions we want to see what was called.
 GH_LOG="$WORK/gh-calls.log"
+GH_BODY="$WORK/gh-comment-body.txt"   # last posted comment body (issue #57 marker check)
 cat > "$WORK/bin/gh" <<SH
 #!/usr/bin/env bash
 echo "\$*" >> "$GH_LOG"
-# Drain piped body so the writer never gets SIGPIPE.
+# Capture the piped body (so a marker assertion can read it) and drain it so the
+# writer never gets SIGPIPE.
 case "\$*" in
-  *"--body-file"*) cat "\$(awk '{for(i=1;i<=NF;i++) if(\$i=="--body-file") print \$(i+1)}' <<< "\$*")" >/dev/null 2>&1 || true ;;
+  *"--body-file"*) cat "\$(awk '{for(i=1;i<=NF;i++) if(\$i=="--body-file") print \$(i+1)}' <<< "\$*")" > "$GH_BODY" 2>/dev/null || true ;;
 esac
 exit 0
 SH
@@ -219,6 +228,14 @@ grep -qF "labels[]=needs-human" "$GH_LOG" \
   || { echo "FAIL finalize: needs-human label not attempted"; FAIL=1; }
 grep -q "issue comment" "$GH_LOG" \
   || { echo "FAIL finalize: situation comment not posted"; FAIL=1; }
+
+# 4b. The stalled comment must carry an awaiting-answer marker (issue #57) so a
+#     human reply re-triggers a fresh run via scan_blocked_answered, plus the
+#     blocked-flavoured "comment to retry" instruction.
+grep -q 'run-issues:awaiting-answer' "$GH_BODY" \
+  || { echo "FAIL finalize: stalled comment missing awaiting-answer marker"; FAIL=1; }
+grep -q 'yritetään uudelleen automaattisesti' "$GH_BODY" \
+  || { echo "FAIL finalize: stalled comment missing blocked retry instruction"; FAIL=1; }
 
 # 5. Advisory lock released.
 [ ! -d "$RUN_ISSUES_LOCK_ROOT/issue-100.lock" ] \

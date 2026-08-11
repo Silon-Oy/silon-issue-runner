@@ -310,6 +310,11 @@ truncate_for_github() {
 # Routed via _issue_gh so reads count against the App's rate limit (15k/h) when
 # active and the remote is origin. Non-origin remotes bypass App mode (per-org
 # App scope-out).
+#
+# `state` ("OPEN"/"CLOSED") is included so the poller's scan_blocked_answered
+# (issue #57) can gate on an open issue from the SAME fetch it uses for the
+# marker/answer detection — no extra network round-trip. Every other caller
+# reads named fields (title/body/comments/…) and ignores the extra field.
 fetch_issue_json() {
   local repo="$1"
   local n="$2"
@@ -319,7 +324,7 @@ fetch_issue_json() {
     cd "$repo"
     # shellcheck disable=SC2046
     _issue_gh --remote "$remote" -- \
-      issue view "$n" $(_repo_args "$owner_repo") --json title,body,labels,author,comments
+      issue view "$n" $(_repo_args "$owner_repo") --json title,body,labels,author,comments,state
   )
 }
 

@@ -243,6 +243,30 @@ esto pysäytti kuuden issuen riippuvuusketjun yön yli). Labelin elinkaari on va
 aito `blocked_by` jatkuu itsestään kun estäjä sulkeutuu — se on odotustila, ei ihmisen
 tarve. Sama koskee S0-preflightiä (exit 8), joka poistuu ennen lukkoa.
 
+**Blocked-ajon uusintayritys ihmiskommentilla (#57).** Jokainen yllä lueteltu terminaalinen
+`blocked/*`-esto, joka postaa situation-kommentin, upottaa siihen `awaiting-answer`-markerin
+(`build_marker`, sama koneisto kuin tarkennussilmukassa) ja **blocked-muotoisen vastausohjeen**
+("kun este on poistettu, kommentoi — ajo yritetään uudelleen"). Tämä kattaa myös pollerin
+stalled-finalisoinnin (`blocked/stalled_in_*`), jonka kommentti rakennetaan `finalize_stalled`issa
+käsin mutta kantaa saman markerin. Kanava on `_post_situation_to_issue`in / `_hand_to_human`in
+`awaitable`-argumentti: `0` (ei vastattava), `clarification` (tarkennussilmukka, jatkaa
+`--continue`lla) tai `blocked` (uusintayritys). Timeout-polun (`timed_out`,
+`timeout_budget_exhausted`) hand-off pysyy **ei-vastattavana** — se jatkuu `--restart`illa, ei
+kommentilla.
+
+Kun ihminen vastaa markerin jälkeen, pollerin **`scan_blocked_answered`** (poller.sh,
+`scan_answered`in sisarfunktio: sama host/remote-portti, `parse_marker`+`detect_answer`)
+tunnistaa tämän koneen avoimen blocked-ajon ja ajaa siihen `cleanup-run.sh --issue`n
+(worktree, branch, run-dir, assignaatio, `needs-human`-label, lukko — **issueta ei suljeta**,
+toisin kuin `auto-clean.sh`). Siivottu issue täyttää normaalin poimintahaun (`no:assignee`) ja
+tulee poimituksi seuraavalla tikillä täytenä uutena ajona tuoreesta basesta — ei vanhan
+run-dirin jatkamista, koska blocked-ajon worktree on tyypillisesti haarautettu ennen esteen
+poistanutta mergeä. Silmukkaraja on rakenteellinen ilman uutta laskuria: uudelleen blocked
+päättyvä ajo postaa **uuden** markerin, ja `scan_blocked_answered` vaatii vastauksen uusimman
+markerin jälkeen ⇒ yksi kommentti = korkeintaan yksi yritys. Suljettu issue tai markeriton
+legacy-ajo ohitetaan hiljaa. `fetch_issue_json` palauttaa nyt myös issuen `state`n, jotta
+avoimuustarkistus tehdään samasta hausta kuin markeri/vastaus.
+
 **Jatkomoodit:**
 
 - `--restart <run-dir>` — jatkaa `timed_out`-ajoa ramppaavalla timeoutilla
@@ -282,7 +306,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28) |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |

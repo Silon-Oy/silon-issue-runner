@@ -131,6 +131,22 @@ printf '%s' "$BODY" | grep -q 'IMPLEMENTER_RESULT: BLOCKED' || { echo "FAIL c4: 
 printf '%s' "$BODY" | grep -q 'Täysi loki Studiolla' || { echo "FAIL c4: fallback path missing"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 4: oversized -> notice + fallback, body under cap"
 
+# === case 5b: awaitable "blocked" (marker + blocked-flavoured reply) ========
+# Issue #57: a terminal blocked comment must carry a marker (so a reply re-picks)
+# but a DIFFERENT reply instruction than clarification — no --continue, a whole
+# new run. Verifies the marker is present, the blocked prompt text is used, and
+# the clarification prompt text is NOT.
+: > "$RUN_DIR/state.jsonl"
+_post_situation_to_issue "implementer_blocked" "Implementer jumissa." "" blocked
+BODY=$(cat "$CAPTURE")
+echo "--- case 5b body (first 3 lines) ---"; printf '%s\n' "$BODY" | head -3
+printf '%s' "$BODY" | head -1 | grep -q 'run-issues:awaiting-answer' || { echo "FAIL c5b: marker not on first line"; FAIL=1; }
+printf '%s' "$BODY" | grep -q 'este on poistettu' || { echo "FAIL c5b: blocked reply prompt missing"; FAIL=1; }
+printf '%s' "$BODY" | grep -q 'yritetään uudelleen' || { echo "FAIL c5b: blocked retry wording missing"; FAIL=1; }
+printf '%s' "$BODY" | grep -q 'Studio jatkaa automaattisesti' && { echo "FAIL c5b: clarification prompt leaked into blocked"; FAIL=1; }
+grep -q '"awaitable":"blocked"' "$RUN_DIR/state.jsonl" || { echo "FAIL c5b: event awaitable!=blocked"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS case 5b: blocked flavour, marker + distinct reply prompt"
+
 # === case 5: log mode keeps the code fence (monospace logs) ================
 : > "$RUN_DIR/state.jsonl"
 LOG="$WORK/db.log"

@@ -114,6 +114,9 @@ RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
 # resetting the staleness clock).
 RUN_ISSUES_STALE_AFTER="${RUN_ISSUES_STALE_AFTER:-3600}"
 AUTO_CLEAN="${RUN_ISSUES_HOME}/auto-clean.sh"
+# cleanup-run.sh tears down a run WITHOUT closing the issue — the retry path for
+# an answered blocked run (issue #57) uses it, not auto-clean.sh (which closes).
+CLEANUP="${RUN_ISSUES_HOME}/cleanup-run.sh"
 
 # The four libs below are sourced UNGUARDED on purpose. A `[ -f ] && .` guard
 # does not abort under `set -e`, so a lib that failed to resolve used to make
@@ -277,9 +280,14 @@ finalize_stalled() {
   local rj="$run_dir/run.json"
   [ -f "$rj" ] || return 0
 
-  local current_state repo host_in_run remote_in_run slug_in_run
+  local current_state repo host_in_run remote_in_run slug_in_run run_id_in_run
   current_state=$(jq -r '.current_state // "unknown"' "$rj" 2>/dev/null || echo "unknown")
   repo=$(jq -r '.repo // empty' "$rj" 2>/dev/null || echo "")
+  # run_id for the awaiting-answer marker (issue #57). Empty -> run-dir basename,
+  # which IS the run-id by construction. Only the marker's ts matters downstream
+  # (scan_blocked_answered reads ts=), but build_marker wants the run field too.
+  run_id_in_run=$(jq -r '.run_id // empty' "$rj" 2>/dev/null || echo "")
+  [ -n "$run_id_in_run" ] || run_id_in_run=$(basename "$run_dir")
   host_in_run=$(jq -r '.host // empty' "$rj" 2>/dev/null || echo "")
   # Multi-remote (issue #53): empty -> "origin" (legacy run.json predating the
   # field). The remote drives tmux session naming and lock teardown below.
@@ -356,10 +364,18 @@ finalize_stalled() {
     # file is simpler and verifiable). The comment intentionally mirrors
     # _post_situation_to_issue's headline + meta-list shape so an maintainer
     # scanning issues sees the same skeleton across all hand-off paths.
-    local stale_after_log body_file
+    local stale_after_log body_file stalled_marker
     stale_after_log="${RUN_ISSUES_STALE_AFTER:-3600}"
+    # Answerable marker (issue #57): a human reply after this ts re-triggers a
+    # fresh run via scan_blocked_answered. build_marker + parse_marker/detect_answer
+    # are the SAME machinery the orchestrator uses, so the poller's stalled comment
+    # participates identically. Marker first (top of body) — parse_marker takes the
+    # newest by ts, and detect_answer skips this comment itself (it carries the
+    # "run-issues:" token).
+    stalled_marker=$(build_marker "$run_id_in_run" "$issue" "$(date -u +%FT%TZ)")
     body_file=$(mktemp -t poller-stalled-body.XXXXXX)
     {
+      echo "$stalled_marker"
       echo "## /run-issues — Ajo jumitettu vaiheessa \`${current_state}\`"
       echo
       echo "- Issue: #${issue}"
@@ -369,7 +385,7 @@ finalize_stalled() {
       echo
       echo "Pollerin liveness-tarkistus havaitsi että rakenteinen etenemistila (\`state.jsonl\`-aikaleima) ei ole liikahtanut yli ${stale_after_log}s. Tmux-sessio tapettiin ja ajo viimeisteltiin \`blocked\`-tilaan, jotta yksittäinen jumi-ajo ei tukkisi \`GLOBAL_MAX\`-kapasiteettia loputtomiin (issue #49)."
       echo
-      echo "Siivoa ajo koneella \`${THIS_HOST}\`: \`~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes\` ja aja issue tarvittaessa uudelleen."
+      echo "**Kun este on selvitetty, kommentoi tähän issueen — ajo siivotaan ja yritetään uudelleen automaattisesti (≤5 min).** Vaihtoehtoisesti siivoa käsin koneella \`${THIS_HOST}\`: \`~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes\`."
     } > "$body_file"
     ( cd "$repo" && gh issue comment "$issue" --body-file "$body_file" >/dev/null 2>&1 ) || true
     rm -f "$body_file"
@@ -487,6 +503,76 @@ scan_answered() {
   # Return 0 regardless of the last iteration's test: callers may capture this
   # in a command substitution under `set -e`, where a trailing-false `&&` would
   # otherwise abort the caller.
+  return 0
+}
+
+# scan_blocked_answered <repo-path> [<remote>] [<owner/repo>] — sibling of
+# scan_answered for TERMINAL blocked runs (issue #57). Prints
+# "<issue-number> <run-dir>" for blocked runs on THIS host whose issue is still
+# OPEN and carries a human reply AFTER the run's awaiting-answer marker.
+#
+# The difference from scan_answered is the mental model, not the plumbing:
+#   - status == "blocked" (not awaiting_clarification), and no round cap — the
+#     loop guard is structural, not a counter. A reply tears the run down and
+#     lets normal pickup start a WHOLE NEW run from a fresh base (a blocked run's
+#     worktree is typically branched before the merge that cleared the blocker,
+#     so resuming it would build on stale work). If the blocker is still there
+#     the new run blocks again and posts a NEW marker, so one reply => at most
+#     one retry.
+#   - the issue must be OPEN. A blocked run whose issue was closed is done — we
+#     never resurrect it. State comes from the SAME fetch used for the marker.
+#
+# Same host/remote gate and the same parse_marker/detect_answer pair as
+# scan_answered. A legacy blocked run finalized before this change carries no
+# marker, so parse_marker returns empty and it is skipped silently — never a
+# per-tick error or log line.
+scan_blocked_answered() {
+  local repo_path="$1"
+  local want_remote="${2:-}"
+  local owner_repo="${3:-}"
+  local runs_dir="$repo_path/.claude/run-issues"
+  [ -d "$runs_dir" ] || return 0
+  local rj status host inum repo marker_ts answer rem effective_remote issue_state
+  shopt -s nullglob
+  for rj in "$runs_dir"/*/run.json; do
+    status=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
+    [ "$status" = "blocked" ] || continue
+    host=$(jq -r '.host // ""' "$rj" 2>/dev/null || echo "")
+    # Empty host = pre-host-field run.json; treat as local (best effort).
+    if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
+      continue
+    fi
+    if [ -n "$want_remote" ]; then
+      rem=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
+      [ "$rem" = "$want_remote" ] || continue
+      effective_remote="$want_remote"
+    else
+      effective_remote="origin"
+    fi
+    inum=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$inum" ] || continue
+    repo=$(jq -r '.repo // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$repo" ] || repo="$repo_path"
+
+    # Network: only for this local, blocked run. One fetch yields state + comments.
+    local issue_json
+    issue_json=$(fetch_issue_json "$repo" "$inum" "$owner_repo" "$effective_remote" 2>/dev/null || true)
+    [ -n "$issue_json" ] || continue
+    local tmp_json
+    tmp_json=$(mktemp)
+    printf '%s' "$issue_json" > "$tmp_json"
+    # Closed issue -> the run is done for good; never resurrect it. `state` from
+    # fetch_issue_json is "OPEN"/"CLOSED"; a missing field (mocked/old gh) is
+    # treated as OPEN so the marker/answer gate still decides.
+    issue_state=$(jq -r '.state // "OPEN"' "$tmp_json" 2>/dev/null || echo "OPEN")
+    if [ "$issue_state" != "OPEN" ]; then rm -f "$tmp_json"; continue; fi
+    marker_ts=$(parse_marker "$tmp_json" | sed -n 's/.*ts=\([^ ]*\).*/\1/p')
+    if [ -z "$marker_ts" ]; then rm -f "$tmp_json"; continue; fi
+    answer=$(detect_answer "$tmp_json" "$marker_ts")
+    rm -f "$tmp_json"
+    [ -n "$answer" ] && printf '%s %s\n' "$inum" "$(dirname "$rj")"
+  done
+  # Return 0 regardless (see scan_answered): callers capture this under `set -e`.
   return 0
 }
 
@@ -729,6 +815,40 @@ while IFS= read -r repo_json; do
       tmux new-session -d -s "$C_SESSION" \
         "RUN_ISSUES_AUTO=1 '$ORCH' --continue '$CONTINUE_DIR' 2>&1 | tee -a '$RUNS_LOG'"
     done < <(scan_answered "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
+
+    # ----- Retry answered blocked runs (issue #57) -------------------------
+    # A human reply on a blocked run's issue means the blocker is (claimed to be)
+    # gone. Unlike a clarification, we do NOT resume the run: we tear it down via
+    # cleanup-run.sh (worktree, branch, run-dir, GitHub assignment, needs-human
+    # label, lock — issue NOT closed) so normal pickup starts a FRESH run from the
+    # current base on a later tick. auto-clean.sh is deliberately NOT used here —
+    # it closes the issue. cleanup-run.sh --issue cleans every run-dir for the
+    # issue (so multiple blocked runs collapse to one retry) but skips completed
+    # runs, protecting any open PR. --yes because there is no human at the prompt.
+    #
+    # Failure is logged (tee to RUNS_LOG) and non-fatal: the run-dir is gone after
+    # a successful teardown, so the same reply cannot trigger a second retry; a
+    # partial teardown leaves state for the next tick to notice. The duplicate-
+    # session guard stops a slow cleanup from being respawned while it runs.
+    while IFS= read -r blocked_line; do
+      [ -n "$blocked_line" ] || continue
+      BLOCKED_ISSUE="${blocked_line%% *}"
+      BLOCKED_DIR="${blocked_line#* }"
+      if EXISTING=$(_running_session_name "run-issues-blocked-clean-" "$REMOTE" "$REPO_SLUG" "$BLOCKED_ISSUE"); then
+        echo "$(date -u +%FT%TZ) poller: blocked-clean session $EXISTING already running" >> "$LOG"
+        continue
+      fi
+      BC_SUFFIX=$(session_suffix "$REMOTE" "$BLOCKED_ISSUE" "$REPO_SLUG")
+      BC_SESSION="run-issues-blocked-clean-${BC_SUFFIX}"
+      ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
+      if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
+        echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring blocked-retry cleanup of issue $BLOCKED_ISSUE (remote=$REMOTE)" >> "$LOG"
+        break
+      fi
+      echo "$(date -u +%FT%TZ) poller: blocked run answered — cleaning $BC_SESSION for repo=$REPO_PATH issue=$BLOCKED_ISSUE run=$BLOCKED_DIR remote=$REMOTE (fresh pickup next tick)" >> "$LOG"
+      tmux new-session -d -s "$BC_SESSION" \
+        "'$CLEANUP' --repo '$REPO_PATH' --issue '$BLOCKED_ISSUE' --remote '$REMOTE' --yes 2>&1 | tee -a '$RUNS_LOG'"
+    done < <(scan_blocked_answered "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
     # ----- Pick a new candidate issue (per remote) -------------------------
     # gh issue list is routed via `--repo owner/repo` when known so a
