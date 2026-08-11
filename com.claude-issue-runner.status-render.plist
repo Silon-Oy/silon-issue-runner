@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    No StandardOutPath / StandardErrorPath keys on purpose. launchd reads those
+    keys itself and performs no variable expansion, so a literal $HOME in them
+    resolves to a directory literally named "$HOME". $HOME expands in
+    ProgramArguments only, because that expansion is done by the
+    /bin/bash -l -c wrapper, not by launchd.
+
+    Materialising the plist with the paths already expanded is not an option
+    here: install.sh decides ownership by "is a symlink into the package root"
+    (INV-OWN), and a materialised copy carries no such marker. status-render.sh
+    therefore owns its two log paths itself and redirects its own stdout/stderr
+    into $RUN_ISSUES_LOG_DIR, exactly as the pollers do.
+
+    Regenerates the static status page every 300s. The page is written to
+    RUN_ISSUES_STATUS_OUT_DIR; how (or whether) it is served is the machine
+    owner's configuration — see examples/status-caddy.example.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-issue-runner.status-render</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-l</string>
+        <string>-c</string>
+        <string>$HOME/.claude/scripts/run-issues/status-render.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

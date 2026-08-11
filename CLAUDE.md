@@ -24,7 +24,8 @@ Sisältö:
 ```
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
-status.sh                      status-digest.sh       install.sh
+status.sh                      status-digest.sh       status-render.sh
+install.sh
 provision-test-env.README.md   README.md              CLAUDE.md
 lib/       16 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
@@ -35,9 +36,10 @@ commands/  slash-komennot (run-issues, cleanup-run, pr-watch, refresh, factory-*
 skills/    Claude-skillit (run-issues-workflow: issue-konventiot kohderepoon)
 docs/diagrams/  mermaid-kaaviot (.mmd)
 examples/  run-issues-watchlist.example.json, run-issues-poller.env.example,
-           status-digest.env.example
+           status-digest.env.example, status-caddy.example
 com.claude-issue-runner.run-issues-poller.plist
 com.claude-issue-runner.pr-watch-poller.plist
+com.claude-issue-runner.status-render.plist
 .gitignore
 ```
 
@@ -313,6 +315,28 @@ kertovat vain lukemisen onnistumisesta — ei mitään lukittua, claimattua tai 
 | 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
 | 3 | Vajaa luenta — ≥1 `run.json` oli lukukelvoton/virheellinen; dokumentti silti validi ja täydellinen muun osan osalta (`degraded: true`), rikkinäiset polut `read_errors`-listassa. Kaksitasoinen luenta (bulk → per-file-fallback) eristää rikkinäisen, muut luetaan |
 
+### Statussivun renderöinti (`status-render.sh`, #62)
+
+Oma avaruus. `status.sh`:n JSONin ensimmäinen kuluttaja: kirjoittaa `index.html`in ja
+`status.json`in atomisesti (`RUN_ISSUES_STATUS_OUT_DIR`, oletus
+`${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`). HTML on itsenäinen: inline-CSS, ei
+ulkoisia resursseja, ei JavaScriptiä. **Kenttävalkolista, ei mustalista**: renderöijä poimii
+nimetyt kentät (repo-slug, issue-numero + URL, PR-URL, `class`/`class_reason`, iät,
+`current_state`, haara, `blocked_reason`, cachen ikä, `generated_at`) `jq`:lla eikä koskaan
+itereoi run-objektia, jottei myöhemmin skeemaan lisätty kenttä (issuen otsikko, lokit,
+promptit, polut) vuoda sivulle. Jokainen datamerkkijono escapataan (`jq @html`). Ilman
+`--input`ia skripti ajaa `status.sh --json`in itse (LaunchAgent-polku); `status.sh`:n exit 3
+(degraded) siedetään, muu ei-nolla ⇒ vanha sivu jää paikoilleen. Altistuspäätös (Caddy-vhost,
+Tailscale-bind) ei kuulu pakettiin — vain `examples/status-caddy.example`. Turvamalli:
+README §7.8. Vartija: `tests/test-status-render.sh`.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Renderöity — molemmat tiedostot kirjoitettu atomisesti (temp + `mv -f`) |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva arvo) |
+| 2 | Syöte kelvoton — `status.sh` ei tuottanut validia JSONia tai `schema_version` tuntematon; vanha sivu jää paikoilleen (ei ylikirjoiteta rikkinäisellä renderöinnillä) |
+| 3 | Kirjoitus epäonnistui (levy täynnä / oikeudet); temp siivotaan, vanha sivu jää ehjäksi |
+
 ## 6. `lib/`-rakenne
 
 | Tiedosto | Vastuu |
@@ -441,6 +465,14 @@ joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
 | `RUN_ISSUES_DIGEST_SUBJECT_PREFIX` | `run-issues -kooste` | Otsikon etuliite |
 | `RUN_ISSUES_DIGEST_GWS` | `gws` | Lähetyskomento. Testien injektiopiste (osoita olemattomaan ⇒ stdout-polku) |
 | `RUN_ISSUES_DIGEST_STATE_FILE` | `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha` | Sormenjälkitiedosto. Rivi 1 = sha256, rivi 2 = viimeisin lähetys-epoch. Kirjoitetaan atomisesti (`mktemp` + `mv -f`) |
+
+### Statussivun renderöinti (`status-render.sh`, #62)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_STATUS_OUT_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www` | Hakemisto, johon `index.html` ja `status.json` kirjoitetaan. `--out-dir` ohittaa |
+| `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Skripti ohjaa oman stdout/stderrinsä `status-render.stdout.log`/`.stderr.log`-tiedostoihin täältä, kun ei aja TTY:llä (plistissä ei loki-avaimia, §11) |
+| `RUN_ISSUES_HOME` | *(scriptin oma hakemisto)* | Testien injektiopiste; myös `status.sh`:n sijainti LaunchAgent-polulla (ilman `--input`ia) |
 
 ### PR-vahti
 

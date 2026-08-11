@@ -627,6 +627,14 @@ Rikastus on **fail-soft**: yhden repon verkkovirhe vie sen `enrichment.repos_fai
 sen ajot jäävät `github: null`, muut repot rikastuvat ja exit-koodi on ennallaan. Ilman lippua
 käytös on bitilleen kuin ennen (`github: null` joka ajossa). Tekninen referenssi: CLAUDE.md §8.
 
+**Staattinen web-esitys.** [`status-render.sh`](status-render.sh) on JSONin ensimmäinen
+kuluttaja: se kirjoittaa `index.html`in ja `status.json`in atomisesti hakemistoon
+`RUN_ISSUES_STATUS_OUT_DIR` (oletus `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`),
+ilman JavaScriptiä ja ilman ulkoisia resursseja. Valinnainen LaunchAgent
+`com.claude-issue-runner.status-render.plist` regeneroi sivun 300 s välein. Sivun altistaminen
+verkkoon on koneen omistajan asia — lue turvamallin osio [7.8](#78-statussivun-web-esitys-on-uusi-altistuspinta)
+ja `examples/status-caddy.example` ennen kuin tarjoilet sitä mistään.
+
 ---
 
 ## 7. Turvamalli
@@ -784,6 +792,34 @@ Kolme seurausta:
 Käytännön ohje: aja aina `--dry-run` ensin ja lue suunnitelma. Se kertoo tarkalleen jokaisen
 polun, johon kosketaan.
 
+### 7.8 Statussivun web-esitys on uusi altistuspinta
+
+[`status-render.sh`](status-render.sh) muuntaa `status.sh`:n JSONin staattiseksi web-sivuksi
+(`index.html` + `status.json`) hakemistoon `RUN_ISSUES_STATUS_OUT_DIR` (oletus
+`${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`). Valinnainen LaunchAgent
+`com.claude-issue-runner.status-render.plist` regeneroi sivun 300 s välein.
+
+**Paketti tuottaa vain tiedostot. Se ei koskaan päätä, miten sivu altistetaan** — ei vhostia,
+ei domainia, ei tunnelia. Altistuspäätös (Caddy-vhost, Tailscale-bind, todennettu proxy) on
+koneen omistajan konfiguraatiota, ei tämän repon sisältöä. Syy on vuotoraja: **sivulla on
+repo-slugit, issue-numerot, PR-URLit ja haaranimet** — ja haaranimet ja repo-slugit paljastavat
+rutiininomaisesti asiakasnimiä ja sisäistä projektirakennetta. Julkisen tunnelin takana ilman
+pääsynhallintaa ne olisivat maailmanlaajuisesti luettavissa.
+
+Kaksi rakenteellista suojaa pienentää vuotoa jo lähteellä:
+
+- **Kenttävalkolista, ei mustalista.** Renderöijä poimii nimetyt kentät `jq`:lla eikä koskaan
+  itereoi run-objektia. Kielletyt kentät — issuen otsikko ja runko, agenttien tuloste, lokit,
+  promptit, absoluuttiset polut — eivät koskaan päädy sivulle. Mustalista vuotaisi aina
+  myöhemmin skeemaan lisätyn kentän; valkolista ei voi.
+- **HTML-escapaus.** Jokainen datasta tuleva merkkijono escapataan (`jq @html`), joten
+  `<script>`-niminen haara renderöityy tekstinä, ei suoritettavana koodina.
+
+Mutta valkolista ei korvaa pääsynhallintaa: **`index.html` ei sisällä autentikointia.**
+Verkkokerros on ainoa suoja. [`examples/status-caddy.example`](examples/status-caddy.example)
+sitoo palvelimen Tailscale-osoitteeseen ja nimeää julkisen altistuksen riskin; älä kytke sitä
+julkisen tunnelin taakse ilman todennettua pääsynhallintaa.
+
 ---
 
 ## 8. Perehdytys — miksi se käyttäytyy noin
@@ -934,6 +970,15 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 1 | Käyttövirhe (tuntematon lippu tai kelvoton arvo) |
 | 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
 | 3 | Vajaa luenta — yksi tai useampi `run.json` oli lukukelvoton/virheellinen; dokumentti on silti validi ja täydellinen muun osan osalta (`degraded: true`), ja rikkinäiset polut on listattu `read_errors`-kentässä |
+
+### Statussivun renderöinti (`status-render.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Renderöity — `index.html` ja `status.json` kirjoitettu atomisesti |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva arvo) |
+| 2 | Syöte kelvoton — `status.sh` ei tuottanut validia JSONia tai `schema_version` on tuntematon; vanha sivu jää paikoilleen |
+| 3 | Kirjoitus epäonnistui (levy täynnä / oikeudet); temp-tiedostot siivotaan, vanha sivu jää ehjäksi |
 
 ### Label-vetoinen siivous (`auto-clean.sh`)
 

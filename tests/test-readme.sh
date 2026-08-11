@@ -146,7 +146,8 @@ for id in \
   'provision-test-env.sh' \
   'db-clone.json' \
   'post-merge-migrate.sh' \
-  'run-issues.json'
+  'run-issues.json' \
+  'status-render.sh'
 do
   if grep -qF -- "$id" "$README"; then
     echo "PASS: security-model identifier present: $id"

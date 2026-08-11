@@ -1,0 +1,55 @@
+# status-caddy.example — a Caddy vhost that serves the static status page.
+#
+# status-render.sh writes index.html + status.json into
+# RUN_ISSUES_STATUS_OUT_DIR (default:
+# ${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www). This package writes
+# ONLY those files. Serving them is the machine owner's decision, so this is an
+# example you copy and adapt — nothing here is installed or activated.
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ READ THIS BEFORE EXPOSING THE PAGE                                       │
+# │                                                                         │
+# │ The page carries repo slugs, issue numbers, PR URLs and branch names.   │
+# │ Branch names and repo slugs routinely reveal CLIENT NAMES and internal  │
+# │ project structure. There is NO authentication inside the page — access  │
+# │ control is a network-layer concern, and it is your job, not this        │
+# │ package's.                                                              │
+# │                                                                         │
+# │ DO NOT put this vhost behind a public tunnel (cloudflared, ngrok, a     │
+# │ public reverse proxy) UNLESS it sits behind authenticated access        │
+# │ control (e.g. Cloudflare Access, an authenticating proxy, mTLS). A      │
+# │ public tunnel with no auth makes every repo/branch/PR world-readable.   │
+# │                                                                         │
+# │ The safe default below binds to a Tailscale address, so the page is     │
+# │ reachable only from your own tailnet and never from the open internet.  │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# Replace 100.x.y.z with THIS machine's Tailscale IP (`tailscale ip -4`), and
+# the path with your actual RUN_ISSUES_STATUS_OUT_DIR. `bind` is what keeps the
+# listener off every other interface — without it Caddy would listen on 0.0.0.0.
+http://100.x.y.z:8080 {
+	bind 100.x.y.z
+	root * /Users/CHANGE-ME/.local/state/run-issues/www
+	file_server {
+		index index.html
+	}
+	# Read-only: refuse anything but GET/HEAD so the static tree cannot be
+	# written to over HTTP even by accident.
+	@write not method GET HEAD
+	respond @write 405
+}
+
+# ── If you must expose it beyond the tailnet ────────────────────────────────
+# Put an authenticating layer IN FRONT and keep the origin bound to localhost
+# or the tailnet. Example shape with Cloudflare Access terminating auth and a
+# tunnel pointing at a LOCAL-ONLY origin (never bind the origin to 0.0.0.0):
+#
+#   http://127.0.0.1:8080 {
+#   	root * /Users/CHANGE-ME/.local/state/run-issues/www
+#   	file_server { index index.html }
+#   }
+#
+# …with `cloudflared` routing an Access-protected hostname to 127.0.0.1:8080.
+# The auth MUST be enforced before the request reaches Caddy — an unauthenticated
+# public tunnel to this origin leaks client names. If in doubt, keep it on the
+# tailnet.
