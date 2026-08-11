@@ -21,7 +21,7 @@
 #   1. README.md exists and is non-empty
 #   2. Required sections are present as '## ' headings
 #   3. Exit-code freshness: every code in orchestrate.sh / install.sh /
-#      pr-watch.sh has a table row, and three separate tables exist
+#      pr-watch.sh / status.sh has a table row, and four separate tables exist
 #   4. Relative links resolve to existing paths
 #   5. No leaked absolute paths or token shapes
 #   6. Security-model identifiers are present
@@ -94,18 +94,21 @@ INST_CODES="$(sed -n '/^Exit codes:/,/^EOF$/p' "$ROOT/install.sh" \
   | sed -n 's/^[[:space:]]*\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 PRW_CODES="$(sed -n '/^# Exit codes:/,/^$/p' "$ROOT/pr-watch.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
+STATUS_CODES="$(sed -n '/^# Exit codes:/,/^$/p' "$ROOT/status.sh" \
+  | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 
 assert_exit_codes "orchestrator" "orchestrate.sh" "$ORCH_CODES"
 assert_exit_codes "installer" "install.sh" "$INST_CODES"
 assert_exit_codes "pr-watch" "pr-watch.sh" "$PRW_CODES"
+assert_exit_codes "status" "status.sh" "$STATUS_CODES"
 
-# The three spaces must stay three tables. One merged table would document the
+# The four spaces must stay four tables. One merged table would document the
 # codes but lose the fact that code 5 means something different in each script.
 TABLES=$(grep -c '^| *Koodi *|' "$README")
-if [ "$TABLES" -ge 3 ]; then
-  echo "PASS: $TABLES separate exit-code tables (>= 3 required)"
+if [ "$TABLES" -ge 4 ]; then
+  echo "PASS: $TABLES separate exit-code tables (>= 4 required)"
 else
-  echo "FAIL: only $TABLES exit-code table(s); the three exit-code spaces must not be merged"; FAIL=1
+  echo "FAIL: only $TABLES exit-code table(s); the four exit-code spaces must not be merged"; FAIL=1
 fi
 
 # ---- Case 4: relative links resolve ----

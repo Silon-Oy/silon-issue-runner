@@ -161,18 +161,13 @@ LIB_VERSION="${RUN_ISSUES_HOME}/lib/version.sh"
 # shellcheck source=lib/version.sh
 . "$LIB_VERSION"
 
-# _iso_to_epoch <iso-utc-ts> — convert an ISO-8601 Zulu timestamp (the format
-# state.sh writes: YYYY-MM-DDTHH:MM:SSZ) to Unix epoch seconds. Empty string on
-# parse failure (callers treat this as "can't compare, leave it alone"). macOS
-# `date -j -f` parses + emits; GNU `date -d` is the Linux fallback for the
-# Studio CI shell (the Studio itself runs Darwin, but the tests run on either).
-_iso_to_epoch() {
-  local ts="$1"
-  [ -n "$ts" ] || { printf ''; return 0; }
-  date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" "+%s" 2>/dev/null \
-    || date -u -d "$ts" "+%s" 2>/dev/null \
-    || printf ''
-}
+# _iso_to_epoch lives in lib/status-read.sh (issue #59): status.sh and the
+# poller must agree bit-for-bit on how a timestamp becomes epoch seconds, so
+# scan_stalled's liveness clock and status.sh's idle_seconds share one
+# definition. Pure function + jq-program constants; no top-level work.
+LIB_STATUS_READ="${RUN_ISSUES_HOME}/lib/status-read.sh"
+# shellcheck source=lib/status-read.sh
+. "$LIB_STATUS_READ"
 
 # _running_session_name <prefix> <remote> <repo-slug> <issue>
 # Prints the name of an existing tmux session for this (repo, remote, issue) and

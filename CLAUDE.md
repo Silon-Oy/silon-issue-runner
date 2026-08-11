@@ -24,9 +24,9 @@ Sisältö:
 ```
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
-install.sh                     provision-test-env.README.md
+status.sh                      install.sh             provision-test-env.README.md
 README.md                      CLAUDE.md
-lib/       15 bash-moduulia (ks. §6)
+lib/       16 bash-moduulia (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
 tests/     plain-bash-testipaketti, ajuri run-all.sh
 db-clone/  opt-in-tietokantakloonaus
@@ -278,7 +278,12 @@ avoimuustarkistus tehdään samasta hausta kuin markeri/vastaus.
 
 ## 5. Exit-koodit
 
-Lähde: `orchestrate.sh`, otsikkokommentti.
+Jokaisella suoritettavalla skriptillä on **oma exit-koodiavaruutensa** — sama numero
+tarkoittaa eri asiaa eri skripteissä. Lähde on kunkin skriptin otsikkokommentti;
+`tests/test-readme.sh` johtaa README:n odotukset suoraan näistä, joten uusi koodi ilman
+README-riviä on punainen testi.
+
+### Orkestraattori (`orchestrate.sh`)
 
 | Koodi | Merkitys |
 |---|---|
@@ -294,6 +299,18 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | 9 | Issue on estetty avoimella `blocked_by`-riippuvuudella — S2b-portti (#28) kieltäytyi lukon ja claimin välissä; ajo finalisoitu `blocked/blocked_by_dependency`, lukko vapautettu, ei claimia. Fail-closed (lukukelvoton graafi = esto). Nimetyn ajon voi pakottaa `--force`illa |
 | 10 | Odottaa ihmisen katselmointia — jatka `--resume` |
 | 11 | Odottaa tarkennusta — cycle review palautti NEEDS_CLARIFICATION; ajo finalisoitu `awaiting_clarification`, pollerin `scan_answered` jatkaa `--continue`lla |
+
+### Kokonaistila (`status.sh`, #59)
+
+Oma avaruus, ei sekoiteta orkestraattorin koodeihin. Puhtaasti lukeva skripti, joten koodit
+kertovat vain lukemisen onnistumisesta — ei mitään lukittua, claimattua tai luotua.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Luenta onnistui |
+| 1 | Käyttövirhe (tuntematon lippu / kelvoton arvo) |
+| 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
+| 3 | Vajaa luenta — ≥1 `run.json` oli lukukelvoton/virheellinen; dokumentti silti validi ja täydellinen muun osan osalta (`degraded: true`), rikkinäiset polut `read_errors`-listassa. Kaksitasoinen luenta (bulk → per-file-fallback) eristää rikkinäisen, muut luetaan |
 
 ## 6. `lib/`-rakenne
 
@@ -315,6 +332,7 @@ Lähde: `orchestrate.sh`, otsikkokommentti.
 | `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, orkestraattorin S0-portti (#7) tekee samasta lähteestä fataalin (exit 8). Korjauskomennot tulevat yhdestä lähteestä (`preflight_install_hint`) |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
+| `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot (#59): `_STATUS_NORMALIZE_JQ` (heterogeenisen `run.json`in normalisointi + `schema_gaps`), `status_read_bulk`/`status_read_perfile` (kaksitasoinen luenta), `_STATUS_CLASSIFY_JQ` + `status_classify` (viisi luokkaa prioriteettijärjestyksessä, INV-STATUS lukee vain `status`ia, INV-UNKNOWN fail-closed), ja `_iso_to_epoch` (siirretty poller.sh:sta; poller sourcaa sen täältä, jotta `scan_stalled`in liveness-kello ja `status.sh`:n `idle_seconds` lasketaan identtisesti) |
 | `version.sh` | Ajossa olevan runner-version näkyväksi teko (#32): `runner_version` (lyhyt HEAD), `runner_behind_origin` (jäljessä `origin/main`ia), `runner_version_summary` (raporttirivi) ja `runner_fetch_throttled` (throttlattu `git fetch`). Fail-soft: puuttuva `.git`/verkko ⇒ `?`. Pollerit lokittavat tikin alussa, `orchestrate.sh --version` ja situation-kommentin `Runner-version:` lukevat samasta lähteestä |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 
@@ -387,6 +405,15 @@ luetaan vain ympäristöstä. Malli: `examples/run-issues-poller.env.example`.
 jotka `orchestrate.sh` ja `pr-watch.sh` sourceavat itse. Poller ei tarvitse niistä yhtäkään ja
 lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
 `tests/test-poller-config.sh` vartioi tätä.
+
+### Kokonaistila (`status.sh`, #59)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin override. **Sama semantiikka kuin pollerilla:** asetettuna se on ainoa ehdokas — osumaton override on virhe (exit 2), ei fallback. Ilman overridea sama resolvointijärjestys kuin pollereilla (`poller_resolve_watchlist`) |
+| `RUN_ISSUES_STALE_AFTER` | `3600` | Jumiutumisraja `idle_seconds`-vertailulle ja `running`/`stalled`-luokittelulle. **Sama muuttuja kuin pollerilla tarkoituksella:** näkymä ja poller eivät saa olla eri mieltä jumiudesta. `--stale-after` ohittaa |
+| `RUN_ISSUES_STATUS_TAIL_LINES` | `40` | Montako riviä `state.jsonl`in **hännästä** luetaan per ajo (`pr_local_verdict` + `idle_seconds`). Tiedostoa ei lueta koskaan kokonaan (mitattu reunaehto: `state.jsonl` on 345 MB / 99,7 % PR-vahtikohinaa) — vain `tail -n N` |
+| `RUN_ISSUES_HOME` | *(scriptin oma hakemisto)* | Testien injektiopiste, luetaan vain ympäristöstä |
 
 ### PR-vahti
 
@@ -639,6 +666,15 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   viittaa tänne. Jos fakta muuttuu, **tämä tiedosto on lähde**. `tests/test-readme.sh` vartioi
   README:n rakennetta ja johtaa exit-koodiodotuksensa suoraan skripteistä, joten uusi
   exit-koodi ilman README-riviä on punainen testi.
+- **`state.jsonl` kasvaa rajatta, valtaosin PR-vahtikohinaa (#59).** Mitattu Studiolla: 256
+  run-diriä, `state.jsonl`-tiedostoja yhteensä 345 MB ja 1,19 M tapahtumaa, joista **>99,7 %**
+  on PR-vahtipollerin `pr_watch_started`/`pr_classified`/`pr_watch_skipped`-riviä joka tikillä
+  — myös jo suljetuille PR:ille (suurin yksittäinen tiedosto 6,7 MB). Tästä seuraa sitova
+  koodisääntö, jota `status.sh` noudattaa: **`state.jsonl`iä ei lueta kokonaan missään
+  koodipolussa; vain `tail -n N` on sallittu** (`scan_stalled` lukee hännän, `status.sh` samoin
+  `RUN_ISSUES_STATUS_TAIL_LINES` rivin verran). Tiedostojen kohinan karsinta (esim. lopettaa
+  `pr_classified`in kirjoitus suljetuille PR:ille, tai rotatoida vanhat tapahtumat) on oma
+  siivousmuutoksensa, joka ei kuulunut #59:n lukevaan näkymään.
 - **"maintainer" on kovakoodattu prompteihin ja komentoihin.** Nimi esiintyy seitsemässä tiedostossa
   (`prompts/`, `commands/`, `agents/`). Parametrisointi `{{HUMAN}}`-muuttujaksi kattaisi vain
   `prompts/`-hakemiston, koska `render_prompt` ei koske `commands/`- eikä `agents/`-tiedostoihin

@@ -558,6 +558,7 @@ käytettävissä.
 |---|---|---|
 | `orchestrate.sh` | `orchestrate.sh <repo> <N\|poll>` | Yksi issue → yksi PR. Muut moodit: `--resume <run-dir> --decision …`, `--restart <run-dir>`, `--continue <run-dir>`, `--remote <nimi>` |
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
+| `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
 | `cleanup-run.sh` | `cleanup-run.sh --issue <N> --yes` | Ajojäänteiden purku. `--list`, `--all`, `--force`, `--dry-run`, `--remote` |
 | `auto-clean.sh` | *(pollerin kutsuma)* | Label-vetoinen siivous + issuen sulkeminen. Käsin: `--repo <polku> --issue <N>` |
 | `poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin issue-automaatio |
@@ -588,6 +589,32 @@ anatomiaa ja kuvattu tässä dokumentissa ja `CLAUDE.md`:ssä.
 Ylläpitäjän koneella, jolla `$HOME/.claude/skills` on hakemistosymlinkki dotfilesiin, skill ei
 asennu automaattisesti: `install.sh` tulostaa siitä `CONFLICT`-rivin ja exit-koodin 4, mutta
 linkittää agentit ja komennot normaalisti (ks. [`CLAUDE.md`](CLAUDE.md) §3 ja §12).
+
+### 6.10 Kokonaistilan katsominen (`status.sh`)
+
+Kun yksi kone ajaa kymmenien repojen orkestrointeja rinnakkain, kokonaistilaa ei näe mistään:
+levyllä on satoja run-direjä, joista muutama vaatii ihmistä (blocked, timed_out,
+awaiting_clarification, pr_conflicted) hukkuu siivoamattomien valmiiden ajojen joukkoon.
+`status.sh` aggregoi kaikkien watchlist-repojen run-dirit yhdeksi näkymäksi. Se on **puhtaasti
+lukeva**: ei verkkoa, ei mitään mutaatiota, vain bash + `jq`.
+
+```bash
+status.sh                     # --human kun stdout on pääte, muuten --json
+status.sh --human             # tiivis yhteenveto: huomiota vaativat, laskurit, siivousjono
+status.sh --json | jq …       # versioitu dokumentti (schema_version: 1) putkeen
+status.sh --class attention   # näytä kaikki huomiota vaativat ajot (ei 10 rivin kattoa)
+status.sh --repo <polku>      # rajaa yhteen watchlist-repoon
+status.sh --stale-after 7200  # oma jumiutumisraja (oletus 3600, sama kuin pollerilla)
+```
+
+`--json` on vakaa rajapinta: myöhemmät inkrementit (gh-rikastus, sähköpostikooste, HTML-sivu)
+lukevat samaa dokumenttia. Jokainen ajo luokitellaan viiteen luokkaan — `running`, `stalled`,
+`attention`, `pr_in_flight`, `cleanup` — pelkän paikallisen datan perusteella, ilman
+GitHub-kutsuja. Tuntematon PR-tila kallistuu aina elävään suuntaan (`pr_in_flight`), ei
+siivottavaksi. Yksittäinen rikkinäinen `run.json` ei kaada luentaa: se eristetään
+`read_errors`-listaan ja skripti poistuu koodilla 3 muun datan silti ollessa validia.
+Exit-koodit ovat osiossa 9. Ne ovat oma avaruutensa — sama numero tarkoittaa eri asiaa kuin
+orkestraattorissa tai PR-vahdissa.
 
 ---
 
@@ -844,7 +871,7 @@ ajo jatkuu itsestään kun estäjä sulkeutuu.
 
 ### Exit-koodit
 
-Neljä skriptiä, **neljä erillistä exit-koodiavaruutta**. Sama numero ei tarkoita samaa asiaa
+Viisi skriptiä, **viisi erillistä exit-koodiavaruutta**. Sama numero ei tarkoita samaa asiaa
 eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 
 ### Orkestraattori (`orchestrate.sh`)
@@ -887,6 +914,15 @@ eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 6 | Konflikti vaatii ihmisen — AI ei ratkaissut tai CI punainen |
 | 7 | Merge-jälkeinen migraatio epäonnistui |
 | 8 | Punainen CI vaatii ihmisen — AI ei korjannut, CI jäi punaiseksi tai yrityskatto täyttyi (`needs-human`-label + kommentti) |
+
+### Kokonaistila (`status.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Luenta onnistui |
+| 1 | Käyttövirhe (tuntematon lippu tai kelvoton arvo) |
+| 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
+| 3 | Vajaa luenta — yksi tai useampi `run.json` oli lukukelvoton/virheellinen; dokumentti on silti validi ja täydellinen muun osan osalta (`degraded: true`), ja rikkinäiset polut on listattu `read_errors`-kentässä |
 
 ### Label-vetoinen siivous (`auto-clean.sh`)
 

@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# test-status-schema.sh — contract guard for the status.sh --json document.
+#
+# Later increments (gh enrichment, an email digest, a static HTML page) consume
+# this JSON, so the schema is the real interface. This test asserts the shape,
+# not the values: valid JSON; every top-level key present; every run carries the
+# required fields; github is ALWAYS null in this increment (gh data lives only
+# in that sub-object, so a consumer cannot read a missing gh field as
+# authoritative); totals.by_class sums to totals.runs; and every class /
+# class_reason is a documented enum member.
+#
+# Run: bash tests/test-status-schema.sh   (exit 0 = all pass)
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+STATUS="$ROOT/status.sh"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "SKIP: jq not installed"
+  exit 0
+fi
+
+PASS=0
+FAIL=0
+ok()  { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
+bad() { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n' "$1"; }
+check(){ if [ "$2" = "$3" ]; then ok "$1 ($2)"; else bad "$1: got=[$2] expected=[$3]"; fi; }
+
+FX="$(mktemp -d "${TMPDIR:-/tmp}/status-schema-test.XXXXXX")"
+trap 'rm -rf "$FX"' EXIT
+HOST="$(hostname -s 2>/dev/null || echo unknown)"
+REPO="$FX/repo-a"
+RUNS="$REPO/.claude/run-issues"
+mkdir -p "$RUNS"
+
+# Plant one run per class so by_class and the enum checks exercise every branch.
+# attention/blocked
+mkdir -p "$RUNS/20260601-100000-issue-1"
+cat > "$RUNS/20260601-100000-issue-1/run.json" <<JSON
+{"run_id":"r1","repo":"$REPO","issue_number":1,"status":"blocked","started_at":"2026-06-01T10:00:00Z","finished_at":"2026-06-01T10:05:00Z","host":"$HOST","current_state":"S6_CycleReview","blocked_reason":"cycle_review_blocker","remote":"origin","repo_slug":"repo-a","base_branch":"main"}
+JSON
+# pr_in_flight/pr_open_waiting (completed + WAIT_CI)
+mkdir -p "$RUNS/20260601-110000-issue-2"
+cat > "$RUNS/20260601-110000-issue-2/run.json" <<JSON
+{"run_id":"r2","repo":"$REPO","issue_number":2,"status":"completed","started_at":"2026-06-01T11:00:00Z","finished_at":"2026-06-01T11:30:00Z","host":"$HOST","current_state":"S12_Finalize","remote":"origin","repo_slug":"repo-a","base_branch":"main","pr_url":"https://github.com/o/r/pull/2"}
+JSON
+printf '{"event":"pr_classified","ts":"2026-06-01T11:31:00Z","data":{"decision":"WAIT_CI"}}\n' \
+  > "$RUNS/20260601-110000-issue-2/state.jsonl"
+# cleanup/pr_not_open (completed + SKIP_CLOSED)
+mkdir -p "$RUNS/20260601-120000-issue-3"
+cat > "$RUNS/20260601-120000-issue-3/run.json" <<JSON
+{"run_id":"r3","repo":"$REPO","issue_number":3,"status":"completed","started_at":"2026-06-01T12:00:00Z","finished_at":"2026-06-01T12:30:00Z","host":"$HOST","current_state":"S12_Finalize","remote":"origin","repo_slug":"repo-a","base_branch":"main"}
+JSON
+printf '{"event":"pr_classified","ts":"2026-06-01T12:31:00Z","data":{"decision":"SKIP_CLOSED"}}\n' \
+  > "$RUNS/20260601-120000-issue-3/state.jsonl"
+# cleanup/lost_race
+mkdir -p "$RUNS/20260601-130000-issue-4"
+cat > "$RUNS/20260601-130000-issue-4/run.json" <<JSON
+{"run_id":"r4","repo":"$REPO","issue_number":4,"status":"lost_race","started_at":"2026-06-01T13:00:00Z","finished_at":"2026-06-01T13:01:00Z","host":"$HOST","current_state":"S3_Claim","remote":"origin","repo_slug":"repo-a","base_branch":"main"}
+JSON
+# stalled/orphaned (initialized, old event, session dead)
+mkdir -p "$RUNS/20260101-000000-issue-6"
+cat > "$RUNS/20260101-000000-issue-6/run.json" <<JSON
+{"run_id":"r6","repo":"$REPO","issue_number":6,"status":"initialized","started_at":"2026-01-01T00:00:00Z","finished_at":null,"host":"$HOST","current_state":"S8_Implementer","remote":"origin","repo_slug":"repo-a","base_branch":"main"}
+JSON
+printf '{"event":"claude_started","ts":"2026-01-01T00:01:00Z","data":{}}\n' \
+  > "$RUNS/20260101-000000-issue-6/state.jsonl"
+
+WL="$FX/watchlist.json"
+cat > "$WL" <<JSON
+{"global_max_concurrent":2,"default_labels":["auto-run"],"repos":[{"path":"$REPO","labels":["auto-run"],"remotes":["origin"]}]}
+JSON
+
+OUT="$FX/out.json"
+HOME="$FX/home" RUN_ISSUES_WATCHLIST="$WL" bash "$STATUS" --json > "$OUT"; rc=$?
+check "exit code clean" "$rc" "0"
+
+# ---- valid JSON ----
+if jq -e . "$OUT" >/dev/null 2>&1; then ok "output is valid JSON"; else bad "output is not valid JSON"; fi
+
+# ---- top-level required keys ----
+for k in schema_version generated_at host stale_after_seconds enrichment sources totals runs read_errors; do
+  if jq -e "has(\"$k\")" "$OUT" >/dev/null 2>&1; then ok "top-level key: $k"; else bad "missing top-level key: $k"; fi
+done
+
+# ---- every run carries the required fields ----
+REQUIRED_FIELDS='["run_id","run_dir","repo_path","repo_slug","owner_repo","remote","issue_number","issue_url","host","is_local","status","blocked_reason","current_state","cycle_review_decision","started_at","finished_at","awaiting_answer_since","age_seconds","idle_seconds","retry_count","clarification_round","branch","worktree_path","worktree_exists","pr_url","pr_number","pr_local_verdict","pr_local_verdict_at","session_alive","lock_held","class","class_reason","class_confidence","schema_gaps","github"]'
+MISSING="$(jq -r --argjson req "$REQUIRED_FIELDS" '
+  [ .runs[] | keys as $k | ($req - $k) ] | add // [] | unique | join(",")' "$OUT")"
+check "every run has all required fields" "$MISSING" ""
+
+# ---- github is ALWAYS null this increment ----
+NON_NULL_GH="$(jq '[.runs[] | select(.github != null)] | length' "$OUT")"
+check "github always null" "$NON_NULL_GH" "0"
+
+# ---- totals.by_class sums to totals.runs ----
+SUM="$(jq '.totals.by_class | to_entries | map(.value) | add' "$OUT")"
+RUNS_TOTAL="$(jq '.totals.runs' "$OUT")"
+check "by_class sum == totals.runs" "$SUM" "$RUNS_TOTAL"
+check "totals.runs == runs length" "$RUNS_TOTAL" "$(jq '.runs | length' "$OUT")"
+
+# ---- every class is in the documented enum ----
+CLASS_ENUM='["running","stalled","attention","pr_in_flight","cleanup"]'
+BAD_CLASS="$(jq -r --argjson e "$CLASS_ENUM" '[.runs[] | .class | select(. as $c | ($e | index($c)) | not)] | unique | join(",")' "$OUT")"
+check "all classes in enum" "$BAD_CLASS" ""
+
+# ---- every class_reason is in the documented enum ----
+REASON_ENUM='["active_session","recent_progress","wedged_session","orphaned","awaiting_review","blocked","timed_out","pr_conflicted","awaiting_clarification","pr_unlabelled","pr_open_waiting","pr_state_unknown","pr_not_open","lost_race","cancelled"]'
+BAD_REASON="$(jq -r --argjson e "$REASON_ENUM" '[.runs[] | .class_reason | select(. as $c | ($e | index($c)) | not)] | unique | join(",")' "$OUT")"
+check "all class_reasons in enum" "$BAD_REASON" ""
+
+# ---- class_confidence enum ----
+BAD_CONF="$(jq -r '[.runs[] | .class_confidence | select(. != "high" and . != "low")] | unique | join(",")' "$OUT")"
+check "all class_confidence in {high,low}" "$BAD_CONF" ""
+
+# ---- enrichment provenance: mode local, gh fields inert ----
+check "enrichment.mode local" "$(jq -r '.enrichment.mode' "$OUT")" "local"
+check "enrichment.fetched_at null" "$(jq -r '.enrichment.fetched_at' "$OUT")" "null"
+
+echo "----------------------------------------"
+echo "status-schema: PASS=$PASS FAIL=$FAIL"
+[ "$FAIL" -eq 0 ]

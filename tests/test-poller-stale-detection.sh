@@ -50,10 +50,16 @@ mkdir -p "$REPO/.git"
 # shellcheck source=lib/issue.sh
 . "$HERE/../lib/issue.sh"
 
+# _iso_to_epoch moved from poller.sh to lib/status-read.sh (issue #59); the
+# poller now sources it, and so do we — extracting it here would find nothing.
+# status-read.sh is function-only, safe to source.
+# shellcheck source=lib/status-read.sh
+. "$HERE/../lib/status-read.sh"
+
 # Extract function bodies from poller.sh. The awk pattern walks from each
 # function header to its closing brace at column 0, mirroring the harness
-# used by test-poller-scan-timeout.sh. We need scan_stalled, finalize_stalled,
-# and the _iso_to_epoch helper they both rely on.
+# used by test-poller-scan-timeout.sh. We need scan_stalled and finalize_stalled;
+# _iso_to_epoch (which both rely on) comes from status-read.sh sourced above.
 extract_fn() {
   awk -v fname="$1" '
     $0 ~ "^"fname"\\(\\) \\{" { p=1 }
@@ -62,7 +68,6 @@ extract_fn() {
   ' "$POLLER"
 }
 
-eval "$(extract_fn _iso_to_epoch)"
 eval "$(extract_fn scan_stalled)"
 eval "$(extract_fn finalize_stalled)"
 
