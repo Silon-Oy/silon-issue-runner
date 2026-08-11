@@ -56,11 +56,13 @@ run_json() {
 JSON
 }
 
-run_json "$RUNS_A/r1" "$REPO_A" 1 1   # open, green, CLEAN  -> confidence bump
-run_json "$RUNS_A/r2" "$REPO_A" 2 2   # open, RED required   -> pr_ci_red
-run_json "$RUNS_A/r3" "$REPO_A" 3 3   # open, UNSTABLE red    -> NOT pr_ci_red
-run_json "$RUNS_A/r5" "$REPO_A" 5 5   # PR not in open set    -> NOT_OPEN/cleanup
-run_json "$RUNS_B/r9" "$REPO_B" 9 9   # repo-b fetch fails    -> repos_failed
+run_json "$RUNS_A/r1" "$REPO_A" 1 1   # open, green, CLEAN     -> confidence bump
+run_json "$RUNS_A/r2" "$REPO_A" 2 2   # open, RED required      -> pr_ci_red
+run_json "$RUNS_A/r3" "$REPO_A" 3 3   # open, UNSTABLE red      -> NOT pr_ci_red
+run_json "$RUNS_A/r5" "$REPO_A" 5 5   # PR not in open set      -> NOT_OPEN/cleanup
+run_json "$RUNS_A/r6" "$REPO_A" 6 6   # open, CHANGES_REQUESTED -> pr_changes_requested
+run_json "$RUNS_A/r7" "$REPO_A" 7 7   # open, draft, age > 7d   -> pr_draft_stale
+run_json "$RUNS_B/r9" "$REPO_B" 9 9   # repo-b fetch fails      -> repos_failed
 
 WL="$FX/watchlist.json"
 cat > "$WL" <<JSON
@@ -82,7 +84,9 @@ if [ "\$1" = "pr" ] && [ "\$2" = "list" ]; then
 [
  {"number":1,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}],"reviewDecision":"","headRefName":"h1","baseRefName":"main"},
  {"number":2,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE","name":"ci"}],"reviewDecision":"","headRefName":"h2","baseRefName":"main"},
- {"number":3,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"UNSTABLE","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE","name":"non-required-lint"}],"reviewDecision":"","headRefName":"h3","baseRefName":"main"}
+ {"number":3,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"UNSTABLE","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE","name":"non-required-lint"}],"reviewDecision":"","headRefName":"h3","baseRefName":"main"},
+ {"number":6,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}],"reviewDecision":"CHANGES_REQUESTED","headRefName":"h6","baseRefName":"main"},
+ {"number":7,"state":"OPEN","isDraft":true,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}],"reviewDecision":"","headRefName":"h7","baseRefName":"main"}
 ]
 JSON
       exit 0
@@ -152,6 +156,16 @@ check "#3 confidence high (confirmed)"   "$(gi 3 | jq -r '.class_confidence')" "
 check "#5 github.pr_state NOT_OPEN" "$(gi 5 | jq -r '.github.pr_state')" "NOT_OPEN"
 check "#5 class cleanup"            "$(gi 5 | jq -r '.class')" "cleanup"
 check "#5 reason pr_not_open"       "$(gi 5 | jq -r '.class_reason')" "pr_not_open"
+
+# #6 review CHANGES_REQUESTED (green CI) => attention/pr_changes_requested.
+check "#6 review_decision CHANGES_REQUESTED" "$(gi 6 | jq -r '.github.review_decision')" "CHANGES_REQUESTED"
+check "#6 class attention"                   "$(gi 6 | jq -r '.class')" "attention"
+check "#6 reason pr_changes_requested"       "$(gi 6 | jq -r '.class_reason')" "pr_changes_requested"
+
+# #7 draft PR whose run is older than 7d => attention/pr_draft_stale.
+check "#7 github.is_draft true"      "$(gi 7 | jq -r '.github.is_draft')" "true"
+check "#7 class attention"           "$(gi 7 | jq -r '.class')" "attention"
+check "#7 reason pr_draft_stale"     "$(gi 7 | jq -r '.class_reason')" "pr_draft_stale"
 
 # #9 repo-b failed => github null + low confidence (local classification untouched).
 check "#9 github null (repo failed)" "$(gi 9 | jq -r '.github')" "null"
