@@ -285,8 +285,9 @@ write_state() {
 if [ "$SHOULD_SEND" -eq 0 ]; then
   # Nothing to send. Start the silence clock on the very first run so the
   # heartbeat has a baseline; otherwise leave the file untouched so silence can
-  # accrue toward --max-silence.
-  if [ ! -f "$STATE_FILE" ]; then
+  # accrue toward --max-silence. --dry-run stays side-effect free (writes no
+  # fingerprint), so it never seeds the baseline here.
+  if [ "$OPT_DRY_RUN" -eq 0 ] && [ ! -f "$STATE_FILE" ]; then
     write_state "$NOW_EPOCH" || true
   fi
   printf 'status-digest.sh: no change (fingerprint unchanged, silence within %s d) — not sending\n' \
