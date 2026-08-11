@@ -185,6 +185,14 @@ LIB_STATUS_READ="${RUN_ISSUES_HOME}/lib/status-read.sh"
 # shellcheck source=lib/status-read.sh
 . "$LIB_STATUS_READ"
 
+# run_terminate is the safe live-run teardown extracted from finalize_stalled
+# (issue #63) so a future stop-run.sh can reuse it without duplicating a
+# safety-critical path. finalize_stalled below is now a thin caller. The lib is
+# function-only and pulls in its own deps, so sourcing it is safe.
+LIB_RUN_TERMINATE="${RUN_ISSUES_HOME}/lib/run-terminate.sh"
+# shellcheck source=lib/run-terminate.sh
+. "$LIB_RUN_TERMINATE"
+
 # _running_session_name <prefix> <remote> <repo-slug> <issue>
 # Prints the name of an existing tmux session for this (repo, remote, issue) and
 # returns 0, or returns 1 when none is running.
@@ -270,152 +278,31 @@ scan_stalled() {
   return 0
 }
 
-# finalize_stalled <issue-number> <run-dir> — terminate a stalled run:
-#   1. Kill any matching tmux session (run-issues-<N> / run-issues-restart-<N>
-#      / run-issues-continue-<N>) so it stops consuming GLOBAL_MAX.
-#   2. Finalize run.json as blocked/stalled_in_<current_state> via
-#      state_finalize (lib/state.sh).
-#   3. Best-effort: post a Finnish situation comment to the issue, add the
-#      needs-human label, release the per-issue advisory lock.
+# finalize_stalled <issue-number> <run-dir> — terminate a stalled run.
 #
-# All gh calls are `|| true` — a GitHub hiccup must never wedge the poller's
-# main loop. The lock teardown matches lib/locking.sh's path convention
-# (RUN_ISSUES_LOCK_ROOT/issue-<N>.lock) and is idempotent.
+# Thin wrapper over run_terminate (lib/run-terminate.sh, issue #63): the actual
+# teardown — host gate, exact tmux kill, blocked/<reason> finalize + event,
+# best-effort needs-human label + situation comment, lock release from the run's
+# own recorded identity — lives there so a future stop-run.sh can reuse it. Here
+# we only compute the stalled reason (`stalled_in_<current_state>`) and delegate.
+# run_terminate reads the issue number from run.json itself, so $1 is unused.
 #
 # After finalization the run carries terminal status=blocked + label
 # needs-human, so subsequent scan_timed_out/scan_answered/scan_stalled passes
 # will NOT re-pick it (terminal status), and the issue's needs-human label
 # blocks pick_oldest_unassigned from re-claiming it as new work.
 finalize_stalled() {
-  local issue="$1" run_dir="$2"
-  local rj="$run_dir/run.json"
-  [ -f "$rj" ] || return 0
-
-  local current_state repo host_in_run remote_in_run slug_in_run run_id_in_run
-  current_state=$(jq -r '.current_state // "unknown"' "$rj" 2>/dev/null || echo "unknown")
-  repo=$(jq -r '.repo // empty' "$rj" 2>/dev/null || echo "")
-  # run_id for the awaiting-answer marker (issue #57). Empty -> run-dir basename,
-  # which IS the run-id by construction. Only the marker's ts matters downstream
-  # (scan_blocked_answered reads ts=), but build_marker wants the run field too.
-  run_id_in_run=$(jq -r '.run_id // empty' "$rj" 2>/dev/null || echo "")
-  [ -n "$run_id_in_run" ] || run_id_in_run=$(basename "$run_dir")
-  host_in_run=$(jq -r '.host // empty' "$rj" 2>/dev/null || echo "")
-  # Multi-remote (issue #53): empty -> "origin" (legacy run.json predating the
-  # field). The remote drives tmux session naming and lock teardown below.
-  remote_in_run=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
-  # Repo namespacing (issue #67): the slug RECORDED BY THIS RUN, not one derived
-  # here. That distinction is the whole fix for cross-repo lock theft — we
-  # release exactly the lock this run holds. Empty = pre-#67 run holding the
-  # legacy repo-agnostic lock.
-  slug_in_run=$(jq -r '.repo_slug // ""' "$rj" 2>/dev/null || echo "")
-  # Defense in depth: scan_stalled host-gates, but a misalignment between
-  # caller and helper would otherwise let us tap a foreign session.
-  if [ -n "$host_in_run" ] && [ "$host_in_run" != "$THIS_HOST" ]; then
-    echo "$(date -u +%FT%TZ) poller: finalize_stalled refusing foreign host run (host=$host_in_run, this=$THIS_HOST)" >> "$LOG"
-    return 0
+  local run_dir="$2"
+  # run_terminate is sourced at the top of poller.sh; the guard here is for the
+  # stale-detection test, which extracts this function in isolation and evals it
+  # without sourcing the lib. In the poller the guard is always a no-op.
+  if ! declare -F run_terminate >/dev/null 2>&1; then
+    # shellcheck source=lib/run-terminate.sh
+    . "${RUN_ISSUES_HOME:-.}/lib/run-terminate.sh"
   fi
-  local reason="stalled_in_${current_state}"
-
-  echo "$(date -u +%FT%TZ) poller: STALLED issue=#${issue} remote=${remote_in_run} state=${current_state} run_dir=${run_dir} — killing tmux sessions and finalizing blocked/${reason}" >> "$LOG"
-
-  # Kill any tmux session for this run. There is exactly one orchestrator per
-  # (repo, remote, issue) triple (the per-issue lock guarantees it), but it could
-  # carry any of four prefixes depending on how it was launched. The suffix shape
-  # depends on the remote and the repo slug, so derive it from session_suffix.
-  #
-  # A pre-#67 run gets a second suffix probed: its ORIGINAL session carries the
-  # legacy repo-agnostic name, but if this poller version restarted/continued it,
-  # the newer session carries the repo-namespaced one. Both must die or the run
-  # keeps holding a GLOBAL_MAX slot. For a post-#67 run only its own name is
-  # touched — that is what keeps another repo's identically-numbered session safe.
-  local suffix suffix_alt sess
-  suffix=$(session_suffix "$remote_in_run" "$issue" "$slug_in_run")
-  suffix_alt=""
-  if [ -z "$slug_in_run" ] && [ -n "$repo" ]; then
-    suffix_alt=$(session_suffix "$remote_in_run" "$issue" "$(repo_slug "$repo" "$remote_in_run")")
-    [ "$suffix_alt" = "$suffix" ] && suffix_alt=""
-  fi
-  for sess in "run-issues-${suffix}" "run-issues-restart-${suffix}" \
-              "run-issues-continue-${suffix}" "run-issues-clean-${suffix}" \
-              ${suffix_alt:+"run-issues-${suffix_alt}"} \
-              ${suffix_alt:+"run-issues-restart-${suffix_alt}"} \
-              ${suffix_alt:+"run-issues-continue-${suffix_alt}"} \
-              ${suffix_alt:+"run-issues-clean-${suffix_alt}"}; do
-    # `=` forces an exact tmux target match; without it `run-issues-3` prefix-
-    # matches `run-issues-34` and we would kill an unrelated running session.
-    if tmux has-session -t "=$sess" 2>/dev/null; then
-      echo "$(date -u +%FT%TZ) poller: killing stalled tmux session $sess" >> "$LOG"
-      tmux kill-session -t "=$sess" 2>/dev/null || true
-    fi
-  done
-
-  # Finalize state. The orchestrator process is dead (or never had a chance to
-  # write a terminal status), so we own the run.json transition here.
-  state_finalize "$run_dir" "blocked" "$reason"
-  state_event "$run_dir" "stalled_finalized" \
-    "current_state=$current_state" \
-    "host=$THIS_HOST" \
-    "stale_after=${RUN_ISSUES_STALE_AFTER:-3600}"
-
-  # Best-effort label + comment via gh. We change into the repo (from run.json)
-  # so gh resolves the right repo even from the poller's cwd.
-  if [ -n "$repo" ]; then
-    # Diagnostics from the label helpers go to $LOG, not /dev/null: a silent
-    # best-effort label write is how the read:project scope breakage stayed
-    # invisible for five weeks. (poller.sh logs by appending to $LOG — there
-    # is no log() function here, and `log` is a macOS binary.)
-    ( cd "$repo" && labels_ensure "" needs-human B60205 \
-        "Vaatii ihmisen — automaattinen ajo ei onnistunut" ) 2>&1 \
-        | sed "s/^/$(date -u +%FT%TZ) poller: /" >> "$LOG" || true
-    ( cd "$repo" && labels_add "" "$issue" needs-human ) 2>&1 \
-        | sed "s/^/$(date -u +%FT%TZ) poller: /" >> "$LOG" || true
-
-    # Write the comment body to a temp file (heredoc inside $(...) has fragile
-    # parser interactions with bash's case-statement-aware tokenizer; the temp
-    # file is simpler and verifiable). The comment intentionally mirrors
-    # _post_situation_to_issue's headline + meta-list shape so an maintainer
-    # scanning issues sees the same skeleton across all hand-off paths.
-    local stale_after_log body_file stalled_marker
-    stale_after_log="${RUN_ISSUES_STALE_AFTER:-3600}"
-    # Answerable marker (issue #57): a human reply after this ts re-triggers a
-    # fresh run via scan_blocked_answered. build_marker + parse_marker/detect_answer
-    # are the SAME machinery the orchestrator uses, so the poller's stalled comment
-    # participates identically. Marker first (top of body) — parse_marker takes the
-    # newest by ts, and detect_answer skips this comment itself (it carries the
-    # "run-issues:" token).
-    stalled_marker=$(build_marker "$run_id_in_run" "$issue" "$(date -u +%FT%TZ)")
-    body_file=$(mktemp -t poller-stalled-body.XXXXXX)
-    {
-      echo "$stalled_marker"
-      echo "## /run-issues — Ajo jumitettu vaiheessa \`${current_state}\`"
-      echo
-      echo "- Issue: #${issue}"
-      echo "- Status/syy: \`${reason}\`"
-      echo "- Host: \`${THIS_HOST}\`"
-      echo "- Run-dir: \`${run_dir}\`"
-      echo
-      echo "Pollerin liveness-tarkistus havaitsi että rakenteinen etenemistila (\`state.jsonl\`-aikaleima) ei ole liikahtanut yli ${stale_after_log}s. Tmux-sessio tapettiin ja ajo viimeisteltiin \`blocked\`-tilaan, jotta yksittäinen jumi-ajo ei tukkisi \`GLOBAL_MAX\`-kapasiteettia loputtomiin (issue #49)."
-      echo
-      echo "**Kun este on selvitetty, kommentoi tähän issueen — ajo siivotaan ja yritetään uudelleen automaattisesti (≤5 min).** Vaihtoehtoisesti siivoa käsin koneella \`${THIS_HOST}\`: \`~/.claude/scripts/run-issues/cleanup-run.sh --issue ${issue} --force --yes\`."
-    } > "$body_file"
-    ( cd "$repo" && gh issue comment "$issue" --body-file "$body_file" >/dev/null 2>&1 ) || true
-    rm -f "$body_file"
-  fi
-
-  # Release the per-issue advisory lock (its owner is dead). Same path shape as
-  # lib/locking.sh; idempotent — a missing lock is fine.
-  #
-  # The label is built from the run's OWN recorded identity (repo slug + remote),
-  # so this removes exactly the lock this run holds. Deriving the label from the
-  # issue number alone was cross-repo lock theft (issue #67): finalizing a
-  # stalled run in repo A deleted repo B's LIVE lock for the same issue number,
-  # after which the next poller cycle could start a second run for B.
-  local lock_root="${RUN_ISSUES_LOCK_ROOT:-${HOME}/Library/Application Support/run-issues/locks}"
-  local lock_label
-  lock_label=$(remote_label "$remote_in_run" "$issue" "$slug_in_run")
-  rm -rf "${lock_root}/${lock_label}.lock" 2>/dev/null || true
-
-  return 0
+  local current_state
+  current_state=$(jq -r '.current_state // "unknown"' "$run_dir/run.json" 2>/dev/null || echo "unknown")
+  run_terminate "$run_dir" "stalled_in_${current_state}" "stalled"
 }
 
 # scan_timed_out <repo-path> [<remote>] — prints "<issue-number> <run-dir>"
