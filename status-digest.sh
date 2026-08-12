@@ -136,10 +136,16 @@ else
   INPUT="$(cat)"
 fi
 
-if [ -z "${INPUT// /}" ]; then
-  printf 'status-digest.sh: empty input (expected status.sh --json)\n' >&2
-  exit 1
-fi
+# Whitespace-only detection via glob match, NOT ${INPUT//…/}: bash 3.2 pattern
+# substitution is effectively quadratic and spins for minutes on a real
+# ~400 KB pretty-printed status document.
+case "$INPUT" in
+  *[![:space:]]*) : ;;
+  *)
+    printf 'status-digest.sh: empty input (expected status.sh --json)\n' >&2
+    exit 1
+    ;;
+esac
 
 # ---- validate JSON + schema_version ----
 if ! printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1; then

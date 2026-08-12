@@ -222,6 +222,29 @@ OUT="$(RUN_ISSUES_DIGEST_GWS="/nonexistent/gws" RUN_ISSUES_DIGEST_STATE_FILE="$S
 check "stdin input -> exit 0" "$RC" "0"
 if printf '%s' "$OUT" | grep -q "#92"; then ok "stdin: body built from stdin"; else bad "stdin: body missing"; fi
 
+# ---- large real-world input must complete (regression: bash 3.2 pattern
+# substitution on the whole input is effectively quadratic — a ~400 KB
+# pretty-printed document spun forever in ${INPUT// /}) ----
+if command -v timeout >/dev/null 2>&1; then
+  FXBIG="$FX/big.json"
+  jq -n '{schema_version: 1, generated_at: "2026-08-11T20:49:34Z", host: "host-a",
+          totals: {degraded: false},
+          runs: [range(400) | {run_id: "run-\(.)", repo_slug: "some-repo",
+                 issue_number: ., issue_url: "https://example.invalid/\(.)",
+                 status: "completed", class: "cleanup", class_reason: "pr_not_open",
+                 age_seconds: 1000, branch: "auto-run/issue-\(.)-padding-padding-padding",
+                 current_state: "S12_Finalize", blocked_reason: null, github: null}],
+          read_errors: []}' > "$FXBIG"
+  SIZE="$(wc -c < "$FXBIG" | tr -d ' ')"
+  rm -f "$STATE"
+  RUN_ISSUES_DIGEST_GWS="/nonexistent/gws" RUN_ISSUES_DIGEST_STATE_FILE="$STATE" \
+    RUN_ISSUES_DIGEST_ENV_FILE="/nonexistent/digest.env" \
+    timeout 15 bash "$DIGEST" --dry-run --from-file "$FXBIG" >/dev/null 2>&1; rc=$?
+  check "large input (${SIZE} bytes) completes within 15s" "$rc" "0"
+else
+  echo "SKIP: timeout not installed (large-input regression)"
+fi
+
 # ---- usage errors -> exit 1 ----
 RUN_ISSUES_DIGEST_ENV_FILE="/nonexistent/digest.env" bash "$DIGEST" --min-class bogus < "$FXA" >/dev/null 2>&1; rc=$?
 check "bad --min-class -> exit 1" "$rc" "1"
