@@ -348,6 +348,114 @@ Raportoi PHASE 6:ssa sovellettiinko migraatioita ja millä komennolla.
 
 ---
 
+## PHASE 3d — Vanhentunut generoitu ORM-client (ajetaan aina)
+
+Migraatiovaiheet (3a/3c) vastaavat kysymykseen *"onko kanta koodin skeeman tasalla"*.
+Ne eivät vastaa kysymykseen *"onko generoitu client skeeman tasalla"* — ja se on eri
+kysymys, koska generoitu client on **kolmas** tila kannan ja skeematiedoston rinnalla:
+
+| Taso | Mistä päivittyy |
+|---|---|
+| Postgres/SQLite-kanta | migraatioiden ajo (PHASE 3a/3c) |
+| `prisma/schema.prisma` | git pull |
+| Generoitu client (`node_modules/.prisma/`, `generated/`) | **vain** `prisma generate` |
+
+Nämä voivat olla epäsynkassa pareittain. Erityisesti kanta ja skeema voivat olla
+molemmat täysin ajan tasalla, mutta client vanhentunut — jolloin sovellus kaatuu
+ajonaikaisesti (`Unknown field ... for select statement`) vaikka `migrate status`
+sanoo *"up to date"* ja `BEHIND == 0`.
+
+Aiemmin generate ajettiin vain kahdessa tilanteessa, ja kumpikin on **tapahtuma**,
+ei tila:
+
+1. buildHint `prisma/schema.prisma` — vaatii että tiedosto muuttui **tässä** pullissa;
+2. `CONFIG.migrations.apply` — vaatii että migraatioita oli sovellettavana.
+
+Kumpikaan ei laukea, kun skeema tuli koneelle aiemmassa pullissa ja generate jäi
+ajamatta, kun `node_modules` on asennettu uudelleen skeeman päivityksen jälkeen, tai
+kun koodi saapui työpuuhun ohi komennon oman pullin (merge, rebase, `/run-issues`,
+cherry-pick). Oikea kysymys on jälleen **tila, ei tapahtuma**: onko generoitu client
+vanhempi kuin skeema.
+
+Vaihe ajetaan siksi **aina** — myös kun `BEHIND == 0` — ja **ennen PHASE 4:ää**, jottei
+dev-server nouse vanhentuneen clientin varaan.
+
+**Autodetektio, ei konfigia.** Aja vaihe vain jos repo-juuressa on `prisma/schema.prisma`.
+Muuten **ohita hiljaa** — ei virhettä, ei mainintaa raportissa. (Monorepo, jossa
+`prisma/` ei ole repo-juuressa, jää detektion ulkopuolelle; sama hyväksytty rajaus
+kuin PHASE 3a:lla.)
+
+Generoitu client ei ole aina samassa paikassa: Prisma 7:ssä `output` on tyypillisesti
+eksplisiittinen (esim. `generated/prisma`), vanhemmissa se on oletuksena
+`node_modules/.prisma/client`. Lue polku skeeman `generator`-lohkosta ja käytä
+oletusta vain jos `output`ia ei ole.
+
+```bash
+SCHEMA="$REPO_ROOT/prisma/schema.prisma"
+if [ ! -f "$SCHEMA" ]; then
+  echo "PHASE-3d: ei prisma/schema.prisma — ohitetaan hiljaa"
+else
+  # `output = "..."` generator-lohkosta; suhteellinen polku on suhteessa schema-tiedostoon.
+  OUT=$(sed -n 's/^[[:space:]]*output[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$SCHEMA" | head -1)
+  if [ -n "$OUT" ]; then
+    case "$OUT" in
+      /*) CLIENT_DIR="$OUT" ;;
+      *)  CLIENT_DIR="$REPO_ROOT/prisma/$OUT" ;;
+    esac
+  else
+    CLIENT_DIR="$REPO_ROOT/node_modules/.prisma/client"
+  fi
+
+  # Puuttuva client on aina vanhentunut. Muuten vertaa tuoreimman generoidun
+  # tiedoston mtimeä skeeman mtimeen: `-nt` yksin ei riitä, koska hakemiston oma
+  # mtime ei muutu kun sen sisällä olevia tiedostoja kirjoitetaan uusiksi.
+  if [ ! -d "$CLIENT_DIR" ]; then
+    CLIENT_STALE=1
+  else
+    NEWEST=$(find "$CLIENT_DIR" -type f \( -name '*.js' -o -name '*.ts' -o -name '*.node' \) \
+               -exec stat -f '%m %N' {} + 2>/dev/null \
+             || find "$CLIENT_DIR" -type f -printf '%T@ %p\n' 2>/dev/null)
+    NEWEST_TS=$(printf '%s\n' "$NEWEST" | sort -rn | head -1 | cut -d' ' -f1)
+    SCHEMA_TS=$(stat -f '%m' "$SCHEMA" 2>/dev/null || stat -c '%Y' "$SCHEMA" 2>/dev/null)
+    if [ -z "$NEWEST_TS" ] || [ "${NEWEST_TS%%.*}" -lt "${SCHEMA_TS%%.*}" ]; then
+      CLIENT_STALE=1
+    else
+      CLIENT_STALE=0
+    fi
+  fi
+  echo "PHASE-3d: CLIENT_DIR=$CLIENT_DIR CLIENT_STALE=$CLIENT_STALE"
+fi
+```
+
+Jos `CLIENT_STALE=1` → aja generate. Komento tulee `CONFIG.prismaGenerate`-kentästä jos
+se on määritelty; muuten `package.json`:n `prisma:generate`- tai `db:generate`-skriptistä
+(ensimmäinen löytyvä, ajettuna PHASE 0:ssa päätellyllä package managerilla); viimeisenä
+fallbackina `npx prisma generate`. Aja repo-juuressa login-shellissä, jotta `nvm` ja
+projektin `node_modules/.bin` latautuvat:
+
+```bash
+if [ "$CLIENT_STALE" = 1 ]; then
+  (cd "$REPO_ROOT" && bash -lc "$GENERATE_CMD") || {
+    echo "GENERATE_FAILED — STOP ennen PHASE 4:ää"
+    # STOP — ks. alla
+  }
+  SCHEMA_CHANGED=1
+fi
+```
+
+**Jos generate failaa** → tulosta stderr ja **STOP ennen PHASE 4:ää**, samoin kuin PHASE 3:n
+build-fail-käytäntö. Älä käynnistä dev-serveriä vanhentuneen clientin päälle: se kaatuisi
+vasta ensimmäisellä skeemariippuvaisella pyynnöllä, mistä syy on paljon vaikeampi nähdä
+kuin tästä.
+
+**Jos generate ajettiin, aseta `SCHEMA_CHANGED=1`** — käynnissä oleva dev-server ei seuraa
+generoidun clientin hakemistoa, joten PHASE 4b:n uudelleenkäynnistys on pakollinen, muuten
+prosessi jää juuri korjatun vanhentuneen clientin varaan.
+
+Raportoi PHASE 6:ssa ajettiinko generate ja miksi (client vanhempi kuin skeema / puuttui).
+
+---
+
 ## PHASE 4 — Dev-serverin detektio
 
 Tarkista kunkin CONFIG.services-palvelun osalta, kuunteleeko portti jo ja onko se
@@ -556,6 +664,9 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
 2b. **Pending-migraatiot (PHASE 3c)**: jos repolla on `CONFIG.migrations`, kerro
    sovellettiinko `apply`-komento vai ohitettiinko se (`check` totesi ei pendingiä). Tämä on
    PHASE 3a:n Prisma-polun vaihtoehto — kumpikin ajetaan myös kun `BEHIND == 0`.
+2c. **Generoitu client (PHASE 3d)**: jos generate ajettiin, kerro miksi — client oli
+   vanhempi kuin `prisma/schema.prisma`, tai puuttui kokonaan. Tämä on eri asia kuin
+   migraatiot: kanta voi olla täysin ajan tasalla ja client silti vanhentunut.
 3. **Uudelleenkäynnistys**: jos PHASE 4b ajettiin, kerro että käynnissä ollut dev-server
    pysäytettiin ja käynnistettiin uudelleen vanhentuneen Prisma Clientin takia (vanha
    PID → uusi `DEV_PID`), ja että se ajaa nyt taustalla.
@@ -592,6 +703,12 @@ Repo-juuren `.claude/refresh.json` ohjaa tätä komentoa. Kentät:
   - `whenChanged` *(string, glob)* — tiedostopolku/glob, jonka muutos diffissä laukaisee.
   - `run` *(string)* — ajettava komento.
   - `note` *(string, valinnainen)* — lisähuomio maintainerlle (esim. milloin harkita migraatiota).
+- **`prismaGenerate`** *(string, valinnainen)* — komento, jolla generoitu ORM-client
+  rakennetaan uudelleen, esim. `"npm run prisma:generate"`. PHASE 3d käyttää tätä kun se
+  havaitsee clientin olevan skeemaa vanhempi. Ilman kenttää komento päätellään
+  `package.json`:n `prisma:generate`- tai `db:generate`-skriptistä, ja viimeisenä
+  fallbackina `npx prisma generate`. Aseta tämä vain jos automaattinen päättely osuu väärin
+  (esim. monorepo, jossa generate ajetaan workspace-lipulla).
 - **`migrations`** *(object, valinnainen)* — pending-migraatioiden sovellus, jonka PHASE 3c
   ajaa **aina** (myös kun `BEHIND == 0`), riippumatta siitä pullasiko komento. Repo-agnostinen:
   komennot annetaan tässä, ei kovakoodattuna ORM:ään. Kentät:
@@ -679,3 +796,15 @@ varmista että kukin pätee yhä:
    on `origin` — eli valtaosassa — käytös on ennallaan (fallback osuu). Haara jolla ei ole
    upstreamia lainkaan käyttää `origin`ia kuten ennenkin. PHASE 6:n pull-yhteenveto raportoi
    käytetyn remoten aina.
+
+12. **Kanta ajan tasalla, client vanhentunut → generate + uudelleenkäynnistys.** Kun
+   `prisma/schema.prisma` on kantaa vastaava (`migrate status` sanoo *"up to date"* tai
+   `CONFIG.migrations.check` toteaa ei-pendingiä) mutta generoitu client on skeemaa vanhempi
+   — skeema tuli aiemmassa pullissa ja generate jäi ajamatta, `node_modules` asennettiin
+   uudelleen, tai koodi saapui työpuuhun ohi komennon pullin — PHASE 3d havaitsee sen
+   mtime-vertailulla ja ajaa generaten **ennen PHASE 4:ää**, myös kun `BEHIND == 0`.
+   `SCHEMA_CHANGED=1` saa PHASE 4b:n käynnistämään käynnissä olevan dev-serverin uudelleen.
+   Ilman tätä sovellus nousee vanhentuneella clientillä ja kaatuu vasta ensimmäiseen
+   skeemariippuvaiseen pyyntöön (`Unknown field ... for select statement`), vaikka sekä
+   kanta että skeema ovat kunnossa. Repo ilman `prisma/schema.prisma`:aa ohittaa vaiheen
+   hiljaa. Jos generate failaa → STOP, ei dev-serveriä.
