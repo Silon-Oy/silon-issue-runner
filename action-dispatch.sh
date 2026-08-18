@@ -147,10 +147,14 @@ action_resume() {
     local suffix session
     suffix="$(session_suffix "${REMOTE:-origin}" "$ISSUE" "$REPO_SLUG")"
     session="run-issues-restart-${suffix}"
-    # -d detaches immediately; the orchestrator's own per-issue lock prevents a
-    # double-run, and a duplicate session name makes tmux fail fast (surfaced).
+    # Pass the command as SEPARATE argv elements, not a single shell string:
+    # given multiple arguments tmux execvp's them directly instead of running
+    # `sh -c`, so RUN_DIR (which originates from the HTTP request body) cannot
+    # break out of quoting into a command. `env` sets the variable without a
+    # shell. -d detaches immediately; the orchestrator's own per-issue lock
+    # prevents a double-run, and a duplicate session name makes tmux fail fast.
     if tmux new-session -d -s "$session" \
-        "RUN_ISSUES_AUTO=1 '$orch' --restart '$RUN_DIR'"; then
+        env RUN_ISSUES_AUTO=1 "$orch" --restart "$RUN_DIR"; then
       printf 'restart launched (tmux session %s)\n' "$session"
       exit 0
     fi

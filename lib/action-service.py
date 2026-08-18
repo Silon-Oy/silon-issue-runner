@@ -271,6 +271,19 @@ def _s(body, key):
     return str(v)
 
 
+# Characters that must never appear in a path/identifier we forward to the shell
+# layer. The dispatch runs delegates via argv (no shell) and the tmux restart
+# uses execvp, so this is defence-in-depth — but a value carrying a quote, a
+# shell metacharacter, or a control byte is never a legitimate run_dir/repo_path
+# from this package, and rejecting it closes the class outright.
+_UNSAFE = set("'\"`$;|&<>\n\r\t\x00") | {chr(c) for c in range(0, 32)}
+
+
+def _path_ok(value):
+    """True when <value> is safe to forward as a path/identifier argument."""
+    return not any(ch in _UNSAFE for ch in value)
+
+
 def _target_label(body):
     parts = []
     if body.get("issue_number") is not None:
@@ -284,8 +297,16 @@ def _target_label(body):
 
 def build_argv(action, body):
     """Map an action + run fields to action-dispatch.sh argv, or None if the
-    action is unknown / a required selector is missing. Values go straight into
-    argv (no shell), so a hostile string can only be a bad argument, never code."""
+    action is unknown, a required selector is missing, or a path/identifier field
+    carries an unsafe character. Values go straight into argv (no shell), so a
+    hostile string can only be a bad argument; the _path_ok gate is an extra
+    guard against a value that would be dangerous if it ever reached a shell."""
+    # Reject any provided path/identifier field that is not shell-safe.
+    for key in ("run_dir", "repo_path", "owner_repo", "remote", "repo_slug"):
+        val = _s(body, key)
+        if val and not _path_ok(val):
+            return None
+
     if action == "stop":
         run_dir = _s(body, "run_dir")
         if not run_dir:

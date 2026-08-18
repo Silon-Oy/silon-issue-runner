@@ -253,6 +253,24 @@ else
   bad "audit log missing"
 fi
 
+# Injection defence-in-depth: a run_dir carrying shell metacharacters is rejected
+# (400) BEFORE any delegate runs, so nothing dangerous reaches the dispatch/tmux
+# layer. (The tmux restart also uses execvp, but this closes the class at the door.)
+echo "maintainer@example" > "$WHOIS_CTL"; : > "$DISP_ARGS"
+code="$(post -H "Origin: $ORIGIN" -H "Content-Type: application/json" -H "X-Run-Issues-Action: 1" \
+  -H "X-Run-Issues-Token: $TOKEN" \
+  --data '{"action":"resume","issue_number":7,"run_dir":"/x/$(touch /tmp/pwned).run","remote":"origin"}')"
+check "malicious run_dir rejected (400)" "$code" "400"
+if [ -s "$DISP_ARGS" ]; then bad "dispatch was invoked with a malicious run_dir"; else ok "dispatch NOT invoked for a malicious run_dir"; fi
+
+# The dispatch itself passes the tmux command as separate argv (no `sh -c` string),
+# so a quote in RUN_DIR is inert. Guard the code shape so a refactor cannot regress.
+if grep -qF 'env RUN_ISSUES_AUTO=1 "$orch" --restart "$RUN_DIR"' "$ROOT/action-dispatch.sh"; then
+  ok "dispatch launches restart via execvp argv (no shell string)"
+else
+  bad "dispatch builds a shell string for tmux (command-injection risk)"
+fi
+
 # CORS preflight: an allowlisted origin gets ACAO; a foreign one does not.
 acao_ok="$(curl -sS -X OPTIONS "$base/action" -H "Origin: $ORIGIN" \
   -H "Access-Control-Request-Method: POST" -D - -o /dev/null 2>/dev/null | grep -ci "access-control-allow-origin: $ORIGIN" || true)"
