@@ -59,7 +59,7 @@ preflight_report_tool() {
 }
 
 # preflight_install_hint <key> — echo the fix command for a dependency.
-#   key = git | gh | jq | npx | claude | gh-auth | timeout | tmux
+#   key = git | gh | jq | npx | claude | gh-auth | timeout | tmux | python3
 # Returns 1 without output for an unknown key.
 # Single source of truth for fix commands: install.sh reports them advisorily
 # and the orchestrator's S0 gate prints them fatally, so a wording change must
@@ -75,6 +75,7 @@ preflight_install_hint() {
     gh-auth) printf 'gh auth login\n' ;;
     timeout) printf 'brew install coreutils\n' ;;
     tmux)    printf 'brew install tmux\n' ;;
+    python3) printf 'xcode-select --install\n' ;;
     *)       return 1 ;;
   esac
 }

@@ -26,6 +26,7 @@ FAIL=0
 EXPECTED_FILES=(
   orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh
   cleanup-run.sh auto-clean.sh install.sh status.sh status-render.sh
+  action-server.sh action-dispatch.sh
   .gitignore CLAUDE.md README.md
 )
 EXPECTED_DIRS=(lib prompts tests db-clone agents commands skills docs/diagrams examples)
@@ -44,7 +45,7 @@ for d in "${EXPECTED_DIRS[@]}"; do
     echo "FAIL: root dir missing: $d"; FAIL=1
   fi
 done
-for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh install.sh status.sh status-render.sh; do
+for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh install.sh status.sh status-render.sh action-server.sh action-dispatch.sh; do
   if [ -x "$ROOT/$s" ]; then
     echo "PASS: executable: $s"
   else
@@ -71,6 +72,7 @@ PLISTS=(
   com.claude-issue-runner.run-issues-poller.plist
   com.claude-issue-runner.pr-watch-poller.plist
   com.claude-issue-runner.status-render.plist
+  com.claude-issue-runner.action-server.plist
 )
 for p in "${PLISTS[@]}"; do
   if [ -f "$ROOT/$p" ]; then

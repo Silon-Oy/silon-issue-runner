@@ -150,7 +150,8 @@ for id in \
   'db-clone.json' \
   'post-merge-migrate.sh' \
   'run-issues.json' \
-  'status-render.sh'
+  'status-render.sh' \
+  'action-server.sh'
 do
   if grep -qF -- "$id" "$README"; then
     echo "PASS: security-model identifier present: $id"

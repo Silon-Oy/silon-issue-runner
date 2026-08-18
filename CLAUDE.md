@@ -25,9 +25,10 @@ Sisältö:
 orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
 stop-run.sh                    status.sh              status-digest.sh
-status-render.sh               install.sh
+status-render.sh               action-server.sh       action-dispatch.sh
+install.sh
 provision-test-env.README.md   README.md              CLAUDE.md
-lib/       16 bash-moduulia (ks. §6)
+lib/       18 bash-moduulia + action-service.py (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
 tests/     plain-bash-testipaketti, ajuri run-all.sh
 db-clone/  opt-in-tietokantakloonaus
@@ -40,6 +41,7 @@ examples/  run-issues-watchlist.example.json, run-issues-poller.env.example,
 com.claude-issue-runner.run-issues-poller.plist
 com.claude-issue-runner.pr-watch-poller.plist
 com.claude-issue-runner.status-render.plist
+com.claude-issue-runner.action-server.plist
 .gitignore
 ```
 
@@ -403,10 +405,38 @@ awaiting-answer-markeria (scope-out: ei automaattista uudelleenkäynnistystä �
 | 4 | Vieras host — `run.json.host` ≠ `hostname -s`; ajo kuuluu toiselle koneelle, mihinkään ei koskettu |
 | 5 | Terminaalitila — ajon status ei ole `initialized`; `--force` pysäyttää silti (esim. `completed`-ajon elävän PR-kontekstin purkaminen vaatii tietoisen valinnan). Mihinkään ei koskettu |
 
+### Ohjaamon toimintopalvelu (`action-server.sh`, #77)
+
+Oma avaruus. Kääre omistaa elinkaaren ja delegoi socketin `lib/action-service.py`:lle
+`exec`illä, joten **Pythonin exit-koodi on prosessin exit-koodi** — siksi koodit jakautuvat
+siihen, mitä kääre päättää ennen `exec`iä (1/2) ja mitä palvelu päättää (0/3/4).
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Puhdas exit — host-portti no-op, `--check` OK, tai palvelu pysähtyi SIGTERMiin |
+| 1 | Käyttövirhe (tuntematon lippu) |
+| 2 | Puuttuva pakollinen riippuvuus (`python3` / `jq` / Tailscale-CLI) — ennen `exec`iä |
+| 3 | Bind epäonnistui — ei Tailscale-osoitetta johon sitoa (ei koskaan wildcard), tai portti varattu. **launchd `KeepAlive` yrittää uudelleen** — tämä on boot-ennen-tailnetiä-toipuminen |
+| 4 | Konfiguraatio kieltäytyy — ei sallittua identiteettiä, tokenia eikä originia (fail-closed) |
+
+### Ohjaamon toiminnon delegointi (`action-dispatch.sh`, #77)
+
+Oma avaruus. Ohut kuori: jokainen neljästä toiminnosta delegoi olemassa olevalle
+skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Delegoitu komento onnistui |
+| 1 | Käyttövirhe (tuntematon toiminto / puuttuva tai virheellinen selektori) |
+| 2 | Delegoitu komento **epäonnistui** — sen tuloste on stdout/stderrissä sellaisenaan (turvamalli 5: näytä virhe, älä yritä itse) |
+| 3 | Delegoitava puuttuu (skripti ei suoritettavissa, tmux puuttuu restartista) |
+
 ## 6. `lib/`-rakenne
 
 | Tiedosto | Vastuu |
 |---|---|
+| `action-token.sh` | Ohjaamon toimintokanavan jaettu CSRF-token (#77): `action_token_ensure` luo idempotentisti 256-bittisen tokenin tiedostoon (mode 0600), `status-render.sh` ja `action-server.sh` konvergoivat samaan arvoon (create-if-absent-hardlink-kilpailu). Bearer-salaisuus — ei koskaan `status.json`iin, audit-lokiin eikä situation-kommenttiin. Puhtaita funktiomääritelmiä |
+| `action-service.py` | **Ainoa Python-tiedosto.** Ohjaamon toimintopalvelun HTTP + auth -ydin (#77): `ThreadingHTTPServer`, `tailscale whois` fail-closed socket-peer-IP:stä (ei koskaan forwardattu header), kolmikerroksinen CSRF (Origin-valkolista + pakotettu preflight-header + jaettu token), audit-loki (avaa–append–sulje + kokorotaatio), ja `execve` `action-dispatch.sh`iin — **ei koskaan koske gh:hun/labeleihin/orkestraattoriin itse**. Python 3.9 stdlib |
 | `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi) |
 | `env-bootstrap.sh` | Pakettimanagerin tunnistus S7b:n fail-fast-asennusporttiin |
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |
@@ -547,6 +577,27 @@ joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
 | `RUN_ISSUES_RENDER_GITHUB` | `0` | **#78.** `1` = LaunchAgent-polku (ilman `--input`ia) ajaa `status.sh --github`in, jolloin sivulle tulee issue-otsikot (`github.issue_title` rivin pääteksti) ja CI/mergevalmius-chipit avoimen PR:n riveille. Fail-soft: jos `--github`-ajo epäonnistuu kokonaan (exit ≠ 0/3), skripti putoaa paikalliseen luentaan ja renderöi V1-sivun. `status.sh --github` on itsekin fail-soft (repon verkkovirhe → `repos_failed`, ei kaada), joten fallback on varajärjestely. `0` = pelkkä paikallinen luenta, bitilleen kuin ennen #78:aa. Vaikuttaa vain no-`--input`-polkuun. **Otsikot sivulla → sivua ei saa altistaa julkisesti (README §7.8).** Asennusesimerkissä (`examples/run-issues-poller.env.example`) oletukseksi `1` |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Skripti ohjaa oman stdout/stderrinsä `status-render.stdout.log`/`.stderr.log`-tiedostoihin täältä, kun ei aja TTY:llä (plistissä ei loki-avaimia, §11) |
 | `RUN_ISSUES_HOME` | *(scriptin oma hakemisto)* | Testien injektiopiste; myös `status.sh`:n sijainti LaunchAgent-polulla (ilman `--input`ia) |
+| `RUN_ISSUES_ACTION_BASE` | *(tyhjä)* | **#77.** Toimintopalvelun URL selaimen näkökulmasta (esim. `http://studio:8081`). Asetettuna `status-render.sh` upottaa sivulle base-URLin + jaetun tokenin (`<meta>`) ja renderöi neljä toimintonappia; JS POSTaa palveluun. **Tyhjä = puhdas V1-lukupinta, ei nappeja** (koko V2 opt-in). Token vain `index.html`iin, ei koskaan `status.json`iin |
+
+### Ohjaamon toimintopalvelu (`action-server.sh`, `action-dispatch.sh`, #77)
+
+Tailnetiin sidottu HTTP-toimintopalvelu, joka delegoi neljä Ohjaamo-nappia olemassa oleville
+skripteille/labeleille. `action-server.sh` (bash) omistaa elinkaaren; `lib/action-service.py`
+(Python-stdlib) omistaa socketin + autentikoinnin; `action-dispatch.sh` (bash) delegoi. **Sama
+host-portti ja lokirotaatio kuin pollereilla** (§7 poller-taulukko); `poller.env` on sama
+konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_ACTION_HOSTS` | *(legacy-lista, kuten pollerit)* | Host-portti, sama muoto ja semantiikka kuin `RUN_ISSUES_POLLER_HOSTS`. Ei osumaa ⇒ palvelu exittaa 0 luomatta mitään |
+| `RUN_ISSUES_ACTION_BIND` | `tailscale ip -4` ensimmäinen | Bind-osoite. **Ei koskaan wildcard**: jos tyhjä eikä Tailscale-osoitetta ratkea ⇒ exit 3 (launchd yrittää uudelleen — boot-ennen-tailnetiä-toipuminen). Testit asettavat `127.0.0.1` |
+| `RUN_ISSUES_ACTION_PORT` | `8081` | Kuunneltava portti (8080 on Caddyn) |
+| `RUN_ISSUES_ACTION_ALLOWED_USERS` | *(tämän noden oma tailnet-omistaja)* | Sallittujen LoginName-lista (CSV). Oletus resolvoidaan `tailscale status --json`illa. **Luottamusraja on tailnet-käyttäjä, ei laite** — myös puhelin/läppäri läpäisee (haluttu). Tyhjä ⇒ fail-closed exit 4 |
+| `RUN_ISSUES_ACTION_ORIGIN` | `http://<bind>:8080` | Sallittujen Origin-headerien valkolista (CSV). CSRF-kerros 1 |
+| `RUN_ISSUES_ACTION_TOKEN_FILE` | `$HOME/.config/run-issues/action-token` | Jaettu token (`lib/action-token.sh`, mode 0600). CSRF-kerros 3 |
+| `RUN_ISSUES_TAILSCALE_BIN` | *(resolvoidaan)* | Tailscale-CLI:n polku: env → `command -v` → app-nippu → brew. Ei raakaa LocalAPI:a (standalone-variantilla ei socketia). Testien shim-piste |
+| `RUN_ISSUES_ACTION_PYTHON` | `python3` | Python-tulkin ohitus |
+| `RUN_ISSUES_LOG_DIR`, `RUN_ISSUES_LOG_MAX_BYTES` | *(kuten pollerit)* | Palvelun stdout/stderr + audit-loki (`run-issues-action.audit.log`) tänne; rotaatio samalla rajalla. Audit-loki rotatoidaan **avaa–append–sulje**-kuviolla (pitkäikäinen daemon ei rotatoisi jo avattua fd:tä) |
 
 ### PR-vahti
 
@@ -670,6 +721,18 @@ no-op, ei virhe.
      luovutuskommentti lupaa.
 - **`lib/github-app-auth.sh`** — GitHub App -identiteetti henkilökohtaisen tokenin sijaan.
   Aktivoituu vain jos App-env-muuttujat on asetettu; muuten jokainen sivuvaikutus on vartioitu.
+- **Ohjaamon toimintopalvelu** (`action-server.sh`, #77) — statussivun mutaatiokanava. Kaksi
+  opt-in-porrasta, molemmat hyvänlaatuisia no-oppeja: (1) **sivun puoli** — ilman
+  `RUN_ISSUES_ACTION_BASE`ia `status-render.sh` ei upota tokenia eikä nappeja, ja sivu on
+  bitilleen V1-lukupinta (turvamalli 6: sivu toimii täysin vaikka palvelu olisi alhaalla); (2)
+  **palvelun puoli** — `install.sh --with-launchagents` deployaa `KeepAlive`-plistin, mutta host-portti
+  pitää sen no-oppina, kunnes kone matchaa `RUN_ISSUES_ACTION_HOSTS`:n. Palvelu delegoi neljä
+  toimintoa (`stop-run.sh` / `auto-clean`+`auto-merge`-labelit / `orchestrate.sh --restart` tai
+  `needs-human`-poisto) `execve`llä — **ei riviäkään uutta purku-, merge- tai restart-logiikkaa**
+  (turvamalli 5 rakenteellisena: Python ei koske gh:hun/labeleihin, `action-dispatch.sh` delegoi).
+  Autentikointi fail-closed `tailscale whois`illa socket-peer-IP:stä + kolmikerroksinen CSRF
+  (Origin + preflight-header + jaettu token). Ks. turvamalli README §7.9. Vartija:
+  `tests/test-action-server.sh`.
 
 ## 9. Soft-riippuvuus: `POST_COMMIT_SYNC=1`
 
@@ -731,6 +794,16 @@ Uusien agenttien **deploy on paketin oman `install.sh`:n vastuulla**, ei dotfile
 olevia tiedostoja. Konventio itsessään säilyy — `Label` == tiedostonimi ilman `.plist`,
 `plutil -lint` porttina. `tests/test-package-layout.sh` vartioi `Label`-invarianttia,
 joka on nyt kantava: asentaja johtaa tulostamansa `launchctl`-labelin tiedostonimestä.
+
+**`com.claude-issue-runner.action-server.plist` on paketin ainoa pitkäikäinen daemon** (#77):
+muut kolme agenttia tikkaavat `StartInterval`illä, mutta toimintopalvelu pitää kuuntelevaa
+socketia, joten se on `KeepAlive`-daemon. `KeepAlive.SuccessfulExit=false` hoitaa kaksi asiaa
+yhdellä: host-portti (vieras kone → exit 0 → **ei** uudelleenkäynnistystä) ja bind-toipuminen
+(Tailscale-osoite ei vielä ylhäällä bootissa → exit ≠ 0 → uusi yritys `ThrottleInterval`in
+päästä). §11:n invariantit ennallaan: ei `StandardOutPath`/`StandardErrorPath`-avaimia (palvelu
+omistaa lokipolkunsa itse), `$HOME` laajenee vain `ProgramArguments`issa, `Label` ==
+tiedostonimi, ohjelmapolku asentajan `scripts`-sidonnan alla. Asentaja ja `install.sh`:n
+per-plist-glob (`com.claude-issue-runner.*.plist`) poimivat sen automaattisesti.
 
 **`$HOME` laajenee plistissä vain `ProgramArguments`issa**, koska laajennuksen tekee
 `/bin/bash -l -c` -kääre, ei launchd. `StandardOutPath` ja `StandardErrorPath` ovat launchd:n

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    The Ohjaamo action service (issue #77) — the package's only long-lived
+    LaunchAgent. Unlike the pollers and status-render, which tick on a
+    StartInterval, this is a KeepAlive daemon: it holds a listening socket bound
+    to a Tailscale address.
+
+    KeepAlive.SuccessfulExit=false does double duty:
+      - host gate: a foreign machine exits 0 (success) and is NOT restarted;
+      - bind recovery: a boot where the Tailscale address is not up yet exits
+        non-zero, so launchd retries after ThrottleInterval until the bind
+        succeeds.
+
+    §11 invariants are unchanged:
+      - No StandardOutPath / StandardErrorPath keys — launchd performs no
+        variable expansion in them, so a literal $HOME would resolve to a
+        directory named "$HOME". action-server.sh owns its own log paths and
+        redirects into $RUN_ISSUES_LOG_DIR, exactly like the pollers.
+      - $HOME expands ONLY in ProgramArguments, via the /bin/bash -l -c wrapper.
+      - Label == filename stem (the deployer derives the launchctl label from it).
+      - The program lives under $HOME/.claude/scripts/run-issues/, the path
+        install.sh's scripts binding provides.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-issue-runner.action-server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-l</string>
+        <string>-c</string>
+        <string>$HOME/.claude/scripts/run-issues/action-server.sh</string>
+    </array>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

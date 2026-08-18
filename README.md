@@ -846,6 +846,54 @@ Verkkokerros on ainoa suoja. [`examples/status-caddy.example`](examples/status-c
 sitoo palvelimen Tailscale-osoitteeseen ja nimeää julkisen altistuksen riskin; älä kytke sitä
 julkisen tunnelin taakse ilman todennettua pääsynhallintaa.
 
+### 7.9 Ohjaamon toimintopalvelu on mutaatiokanava — turvamalli sitova
+
+Statussivu on lähtökohtaisesti **luku-pinta**. Kun asennat Ohjaamon toimintopalvelun
+([`action-server.sh`](action-server.sh)), sivulle tulee neljä toimintonappia (Pysäytä / Siivoa /
+Salli auto-merge / Jatka), joista jokainen on ohut kuori olemassa olevan skriptin tai labelin
+päälle — mutta se on myös **kirjoitusrajapinta**, joten turvamalli on tiukempi kuin sivulla.
+Kaikki alla oleva on **sitovaa**, ei suositus.
+
+**Palvelu on opt-in kolmella portaalla, joista jokainen puuttuessaan pitää sivun V1-lukupintana:**
+
+1. **Palvelua ei ole asennettu.** Ilman `action-server.sh`-daemonia napit yrittäisivät POSTata
+   olemattomaan palveluun ja disabloituvat viestillä "toimintopalvelu ei tavoitettavissa". Sivu
+   toimii täysin lukutilassa (turvamalli 6: sivun tarjoilu on eri prosessi, eri portti).
+2. **Sivulla ei ole base-URLia.** `status-render.sh` upottaa toimintonapit ja jaetun tokenin vain
+   kun `RUN_ISSUES_ACTION_BASE` on asetettu. Ilman sitä sivu on bitilleen V1 — ei nappeja, ei tokenia.
+3. **Host-portti.** Palvelu (kuten pollerit) exittaa hiljaa koneella, joka ei matchaa
+   `RUN_ISSUES_ACTION_HOSTS`:ia.
+
+**Neljä sitovaa turvaperiaatetta:**
+
+- **Vain Tailscale-osoite, ei koskaan wildcard.** Palvelu bindaa `tailscale ip -4`:n osoitteeseen
+  (portti 8081; 8080 on Caddyn). Jos Tailscale-osoitetta ei ratkea, palvelu **kieltäytyy
+  bindaamasta** (exit 3, launchd yrittää uudelleen) — se ei koskaan putoa `0.0.0.0`:aan.
+- **Identiteetti luetaan socketin peer-IP:stä `tailscale whois`illa, fail-closed.** Tuntematon
+  kutsuja, tyhjä tulos tai jäsennysvirhe → 403. **Palvelua ei saa laittaa reverse proxyn taakse:**
+  proxy korvaisi peer-IP:n omallaan, jolloin whois muuttuisi tautologiaksi. Palvelu **ei koskaan**
+  lue forwardattuja headereita — peer-IP tulee aina socketista.
+- **Luottamusraja on tailnet-käyttäjä, ei laite.** Sallittujen oletus on tämän noden oma
+  tailnet-omistaja; myös sama käyttäjä puhelimesta ja läppäriltä läpäisee (haluttu — Ohjaamoa
+  käytetään puhelimesta). Laajenna `RUN_ISSUES_ACTION_ALLOWED_USERS`illa.
+- **CSRF-suoja kolmena kerroksena.** `tailscale whois` todentaa *laitteen*, ei *sivua*: mikä
+  tahansa selaimessa avattu nettisivu voisi POSTata palveluun. Suoja: (1) pakollinen,
+  valkolistattu `Origin`; (2) pakotettu preflight (custom-header + JSON-content-type, jotka
+  vievät selaimen CORS-preflightiin); (3) jaettu token, jonka `status-render.sh` upottaa sivuun ja
+  palvelu vaatii joka pyynnössä — sivua lukematon kutsuja ei saa tokenia. Token on bearer-salaisuus:
+  se elää vain `index.html`issä (tailnet-only) eikä koskaan `status.json`issa tai audit-lokissa.
+
+**Jokainen toimenpide — myös hylätty — kirjataan audit-lokiin**
+(`$RUN_ISSUES_LOG_DIR/run-issues-action.audit.log`): aikaleima, LoginName, node, peer-IP, toiminto,
+kohde, lopputulos. Mutatoivat napit vaativat selaimessa vahvistuksen, joka **nimeää seuraukset**
+("Worktree, haara ja run-dir…"); massatoiminto (Siivoa kaikki N) nimeää lukumäärän. Delegoitava
+komento ratkaisee lopun: jos se puuttuu tai epäonnistuu, virhe näytetään sellaisenaan — palvelu ei
+yritä itse.
+
+Kuten statussivu, myös toimintopalvelu **on pidettävä vain tailnetissä** — sen napit mutatoivat
+tuotanto-orkestraatiota. Sen deploy: `install.sh --with-launchagents` (ks. §7.7 ja
+`examples/run-issues-poller.env.example`).
+
 ---
 
 ## 8. Perehdytys — miksi se käyttäytyy noin
