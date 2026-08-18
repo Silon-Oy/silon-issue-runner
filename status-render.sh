@@ -688,13 +688,17 @@ a:hover{text-decoration:underline}
 
     // Epic membership (#79): group epics by repo_slug, index runs by sub-key so
     // a lane can pull its sub-issue runs — and so those runs render ONCE, inside
-    // the lane, never also as a loose repo row (dedup, spec criterion 3).
+    // the lane, never also as a loose repo row (dedup, spec criterion 3). Only a
+    // VISIBLE epic dedups its subs: an epic with no lane would otherwise hide a
+    // sub-issue's lingering cleanup run from the group entirely (no lane + not a
+    // loose row), so it must stay a loose row when there is no lane to hold it.
     var epicsList = data.epics || [];
     var epicsByRepo = {}, epicMember = {}, runByKey = {};
     runs.forEach(function(r){ runByKey[subKey(r.repo_slug, r.issue_number)] = r; });
     epicsList.forEach(function(e){
       var k = e.repo_slug || "(tuntematon repo)";
       (epicsByRepo[k] = epicsByRepo[k] || []).push(e);
+      if (!epicLaneVisible(e, runByKey)) return;
       (e.sub_issues || []).forEach(function(s){ epicMember[subKey(k, s.number)] = true; });
     });
 
