@@ -8,6 +8,9 @@
 # pr_ci_red), a cache hit (the shim's call counter proves gh is NOT called), a
 # stale cache (--cache-ttl 0 refetches), a NOT_OPEN PR (=> cleanup), and one
 # repo whose fetch fails (repos_failed; the OTHER repo still enriches; exit 0).
+# Issue #78: also covers issue titles — github.issue_title joined per run (open
+# PR + no-PR issue-only rows), fetched ONCE per repo into the same TTL cache,
+# with the title never leaking to a top-level field.
 #
 # Run: bash tests/test-status-github.sh   (exit 0 = all pass)
 
@@ -64,6 +67,14 @@ run_json "$RUNS_A/r6" "$REPO_A" 6 6   # open, CHANGES_REQUESTED -> pr_changes_re
 run_json "$RUNS_A/r7" "$REPO_A" 7 7   # open, draft, age > 7d   -> pr_draft_stale
 run_json "$RUNS_B/r9" "$REPO_B" 9 9   # repo-b fetch fails      -> repos_failed
 
+# A run with an issue but NO PR yet (blocked): issue #78 gives it an issue-only
+# github object with a title and no chips (pr_state null). Its local class must
+# be untouched (attention/blocked, high) — enrichment adds a title, not a verdict.
+mkdir -p "$RUNS_A/r4"
+cat > "$RUNS_A/r4/run.json" <<JSON
+{"run_id":"r4","repo":"$REPO_A","issue_number":4,"status":"blocked","started_at":"2026-08-01T10:00:00Z","finished_at":"2026-08-01T10:05:00Z","host":"$HOST","current_state":"S6_CycleReview","blocked_reason":"cycle_review_blocker","remote":"origin","repo_slug":"repo-a"}
+JSON
+
 WL="$FX/watchlist.json"
 cat > "$WL" <<JSON
 {"global_max_concurrent":2,"repos":[{"path":"$REPO_A","remotes":["origin"]},{"path":"$REPO_B","remotes":["origin"]}]}
@@ -99,6 +110,31 @@ JSON
     *) echo "[]"; exit 0 ;;
   esac
 fi
+if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
+  case "\$repo" in
+    o/repo-a)
+      # Titles for the open issues, including a special-char title (#1) to prove
+      # the JSON round-trip preserves it, and issue 4 (the no-PR blocked run).
+      cat <<'JSON'
+[
+ {"number":1,"title":"Fix <b>bug</b> & ship ä title"},
+ {"number":2,"title":"Red CI issue"},
+ {"number":3,"title":"Unstable issue"},
+ {"number":4,"title":"Blocked no-PR issue"},
+ {"number":5,"title":"Closed-PR issue"},
+ {"number":6,"title":"Changes requested issue"},
+ {"number":7,"title":"Draft issue"}
+]
+JSON
+      exit 0
+      ;;
+    o/repo-b)
+      echo "gh: could not fetch (simulated failure)" >&2
+      exit 1
+      ;;
+    *) echo "[]"; exit 0 ;;
+  esac
+fi
 exit 0
 SHIM
 chmod +x "$BIN/gh"
@@ -112,6 +148,7 @@ run_status() {
 # grep -c prints "0" even on no match (then exits 1); swallow that exit so the
 # count is a single clean integer.
 pr_list_calls() { grep -c 'pr list' "$CALLS" 2>/dev/null || true; }
+issue_list_calls() { grep -c 'issue list' "$CALLS" 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------
 # 1) First --github run: fetches, enriches repo-a, fails repo-b.
@@ -130,6 +167,9 @@ check "enrichment.cache_age_seconds is a number" "$(jq -r '.enrichment.cache_age
 
 # gh pr list called ONCE per owner/repo (repo-a + repo-b = 2), not per run.
 check "gh pr list called once per owner/repo (2)" "$(pr_list_calls)" "2"
+# gh issue list called ONCE for repo-a; repo-b fails the PR fetch first so its
+# issue titles are never fetched (a failed repo gets no enrichment at all).
+check "gh issue list called once (repo-a only)" "$(issue_list_calls)" "1"
 
 # by-issue lookups.
 gi() { jq -c --argjson n "$1" '.runs[] | select(.issue_number==$n)' "$OUT"; }
@@ -140,6 +180,21 @@ check "#1 confidence bumped to high" "$(gi 1 | jq -r '.class_confidence')" "high
 check "#1 class pr_in_flight"        "$(gi 1 | jq -r '.class')" "pr_in_flight"
 check "#1 github.ci GREEN"           "$(gi 1 | jq -r '.github.ci')" "GREEN"
 check "#1 verdict from pr_decide"    "$(gi 1 | jq -r '.github.pr_decide_verdict')" "MERGE"
+# #1 issue title joined into the github sub-object, special chars preserved
+# verbatim (JSON round-trip), and NOT leaked to a top-level field (provenance).
+check "#1 github.issue_title set"    "$(gi 1 | jq -r '.github.issue_title')" 'Fix <b>bug</b> & ship ä title'
+check "#1 no top-level issue_title"  "$(gi 1 | jq -r 'has("issue_title")')" "false"
+
+# #4 issue but no PR => issue-only github object: title present, pr_state null,
+# no chips, and the LOCAL class is untouched (enrichment adds a title, not a
+# verdict). This is what puts titles on attention/running rows, not just PR rows.
+check "#4 github not null (issue-only)" "$(gi 4 | jq -r '.github != null')" "true"
+check "#4 github.pr_state null"         "$(gi 4 | jq -r '.github.pr_state')" "null"
+check "#4 github.ci null (no chips)"    "$(gi 4 | jq -r '.github.ci')" "null"
+check "#4 github.issue_title set"       "$(gi 4 | jq -r '.github.issue_title')" "Blocked no-PR issue"
+check "#4 class attention (untouched)"  "$(gi 4 | jq -r '.class')" "attention"
+check "#4 reason blocked (untouched)"   "$(gi 4 | jq -r '.class_reason')" "blocked"
+check "#4 confidence high (untouched)"  "$(gi 4 | jq -r '.class_confidence')" "high"
 
 # #2 required check red => attention/pr_ci_red.
 check "#2 class attention"        "$(gi 2 | jq -r '.class')" "attention"
@@ -178,8 +233,13 @@ check "#9 confidence low"            "$(gi 9 | jq -r '.class_confidence')" "low"
 : > "$CALLS"
 run_status --json --github > "$FX/out2.json" 2>/dev/null
 check "cache hit: repo-a NOT refetched (repo-b retried => 1 call)" "$(pr_list_calls)" "1"
+# Issue titles come from the SAME cache entry: repo-a is a cache hit (0 issue
+# calls), repo-b fails the PR fetch again so its issue titles are never fetched.
+check "cache hit: no issue list calls (repo-a cached, repo-b fails first)" "$(issue_list_calls)" "0"
 check "cache hit: #1 still enriched from cache" \
   "$(jq -r '.runs[] | select(.issue_number==1) | .github.pr_state' "$FX/out2.json")" "OPEN"
+check "cache hit: #1 title served from cache" \
+  "$(jq -r '.runs[] | select(.issue_number==1) | .github.issue_title' "$FX/out2.json")" 'Fix <b>bug</b> & ship ä title'
 check "cache hit: cache_age_seconds >= 0" \
   "$(jq -r '.enrichment.cache_age_seconds >= 0' "$FX/out2.json")" "true"
 

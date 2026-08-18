@@ -34,6 +34,13 @@
 # `reviewDecision` fill schema fields the watcher does not read.
 _STATUS_GH_PR_FIELDS='number,state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName,isDraft,reviewDecision'
 
+# _STATUS_GH_ISSUE_FIELDS — the --json field set for `gh issue list` (issue #78).
+# We fetch ONLY number+title: the title is the one gh-only datum the status page
+# shows as a row's main text, and pulling nothing else keeps the payload small
+# and the provenance obvious (gh data lives in the `github` sub-object, never at
+# the run's top level).
+_STATUS_GH_ISSUE_FIELDS='number,title'
+
 # status_github_cache_file — resolve the cache path (env override, else the
 # XDG/macOS caches dir). Pure: reads env, prints a path, creates nothing.
 status_github_cache_file() {
@@ -80,6 +87,30 @@ status_github_fetch_open_prs() {
     --json "$_STATUS_GH_PR_FIELDS" --limit 100 2>/dev/null
 }
 
+# status_github_fetch_open_issues <owner/repo> — the ONE issue-title network call
+# per repo (issue #78): every OPEN issue with number+title. Auth via
+# gha_with_token, exactly like the PR fetch. Prints the JSON array on stdout;
+# returns gh's exit code. Best-effort: the caller treats a failure as "no titles
+# for this repo" WITHOUT marking the repo failed — the PR fetch is the primary
+# enrichment and owns repos_failed; a missing title only drops a row's main text.
+# `--state open` matches the spec example: a closed issue's title may be absent
+# (documented edge case), and open issues are the cheap, common case.
+status_github_fetch_open_issues() {
+  local owner_repo="$1"
+  gha_with_token gh issue list --repo "$owner_repo" --state open \
+    --json "$_STATUS_GH_ISSUE_FIELDS" --limit 200 2>/dev/null
+}
+
+# status_github_build_issue_map <issues-json> — map every issue to its title,
+# keyed by issue number as a string: { "42": "Fix the thing", … }. status.sh
+# joins this against each run's issue_number. Empty/invalid array => `{}`.
+status_github_build_issue_map() {
+  local issues="$1"
+  jq -c 'if type == "array"
+         then (reduce .[] as $i ({}; .[($i.number|tostring)] = ($i.title // null)))
+         else {} end' <<<"$issues" 2>/dev/null || printf '{}'
+}
+
 # status_github_closed_state <owner/repo> <pr-number> — used ONLY under
 # --github-full to split a NOT_OPEN PR into MERGED vs CLOSED (one `gh pr view`
 # per closed PR). Prints "MERGED", "CLOSED", or empty on any failure. Both values
@@ -117,7 +148,8 @@ status_github_pr_object() {
       ci: $ci,
       labels: [.labels[]?.name],
       review_decision: (if (.reviewDecision // "") == "" then null else .reviewDecision end),
-      pr_decide_verdict: $v
+      pr_decide_verdict: $v,
+      issue_title: null
     }' <<<"$pr"
 }
 
@@ -162,6 +194,33 @@ status_github_not_open_object() {
       labels: null,
       review_decision: null,
       pr_decide_verdict: null,
-      closed_as: (if $ca == "" then null else $ca end)
+      closed_as: (if $ca == "" then null else $ca end),
+      issue_title: null
+    }'
+}
+
+# status_github_issue_only_object <fetched_at> <cache_age>
+# The `github` sub-object for a run that has an issue but NO PR yet (issue #78:
+# a running/blocked/stalled run). It carries the same key set as the PR objects
+# with every PR field null and pr_state null (so the view shows a title but no CI
+# chips — chips are for OPEN-PR rows only), plus issue_title which status.sh
+# fills from the issue map. This is what lets titles reach attention/running rows,
+# not just PR rows.
+status_github_issue_only_object() {
+  local fetched_at="$1" age="$2"
+  jq -nc --arg fa "$fetched_at" --argjson age "$age" '
+    {
+      fetched_at: $fa,
+      cache_age_seconds: $age,
+      pr_state: null,
+      is_draft: null,
+      mergeable: null,
+      merge_state_status: null,
+      ci: null,
+      labels: null,
+      review_decision: null,
+      pr_decide_verdict: null,
+      closed_as: null,
+      issue_title: null
     }'
 }

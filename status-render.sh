@@ -32,12 +32,18 @@
 # not by this script's markup (which is static and data-free):
 #   1. status.sh assembles each runs[] object from explicitly named fields
 #      (repo slug, issue number + URL, PR URL, class, class_reason, ages,
-#      current_state, branch, blocked_reason, …). It never copies issue
-#      title/body, agent output, logs, prompts or absolute paths into runs[].
-#   2. The inline JS reads ONLY those named fields and inserts every data string
-#      with textContent (never innerHTML), so a branch literally named
+#      current_state, branch, blocked_reason, …). It never copies issue BODY,
+#      agent output, logs, prompts or absolute paths into runs[]. The one gh-only
+#      datum shown is the issue TITLE, and it lives ONLY inside the run's `github`
+#      sub-object as github.issue_title (#78) — never at the run's top level, so
+#      the provenance stays obvious (gh data is confined to `github`). Titles are
+#      shown deliberately for a tailnet-only page; see README §7.8.
+#   2. The inline JS reads ONLY those named fields — including github.issue_title,
+#      github.ci, github.pr_decide_verdict, github.cache_age_seconds and
+#      github.pr_state as an explicit allowlist — and inserts every data string
+#      with textContent (never innerHTML), so a title or branch literally named
 #      "<script>" is shown as text and never executes. The JS never iterates the
-#      run object, so a field the schema grows later cannot leak onto the page.
+#      run or github object, so a field the schema grows later cannot leak.
 #
 # Usage:
 #   status-render.sh [--input <file>|-] [--out-dir <dir>]
@@ -58,9 +64,22 @@
 #      the previous status.json / index.html stay intact — the web server never
 #      serves a half-written file.
 #
+# GITHUB ENRICHMENT (#78). With RUN_ISSUES_RENDER_GITHUB=1 the LaunchAgent path
+# (no --input) runs `status.sh --github` instead of a plain read, so the page
+# shows issue titles (github.issue_title) as each row's main text and CI /
+# merge-readiness chips on open-PR rows. It is FAIL-SOFT: if the enrichment run
+# fails outright the script falls back to a plain local read and renders exactly
+# the V1 page. status.sh --github is itself fail-soft (an unreachable repo lands
+# in repos_failed and its runs stay github:null), so the fallback is belt-and-
+# suspenders. Default 0 = local-only, byte-for-byte the pre-#78 behaviour.
+#
 # Environment:
 #   RUN_ISSUES_STATUS_OUT_DIR  output directory (default:
 #                              ${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www)
+#   RUN_ISSUES_RENDER_GITHUB   1 = drive status.sh with --github on the
+#                              LaunchAgent path (issue titles + CI chips);
+#                              0 (default) = plain local read. Only affects the
+#                              no --input path; ignored when --input is given.
 #   RUN_ISSUES_LOG_DIR         stdout/stderr under launchd go here (default:
 #                              $HOME/Library/Logs). The LaunchAgent plist carries
 #                              no StandardOutPath/StandardErrorPath keys (launchd
@@ -73,6 +92,20 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
+
+# ---- machine config: source poller.env, the LaunchAgent config channel ----
+# launchd hands this agent no environment of its own, so — exactly like the
+# pollers — the one place a machine can set RUN_ISSUES_RENDER_GITHUB (and the
+# output/log dirs) for the LaunchAgent path is poller.env. Sourced => THE FILE
+# WINS over an inherited variable. Missing file = plain defaults; a flag still
+# overrides (--out-dir is parsed after this). No secrets here (README §7.8).
+POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-${HOME}/.config/run-issues/poller.env}"
+if [ -f "$POLLER_ENV_FILE" ]; then
+  set +u
+  # shellcheck disable=SC1090
+  . "$POLLER_ENV_FILE"
+  set -u
+fi
 
 SCHEMA_VERSION=1
 
@@ -134,8 +167,22 @@ if [ -n "$INPUT_FILE" ]; then
     exit 2
   fi
 else
-  RAW="$("$RUN_ISSUES_HOME/status.sh" --json)"
-  rc=$?
+  # --github enrichment is opt-in (#78). status.sh exit 3 is a DEGRADED-but-valid
+  # document (rendered with a warning), so only a genuinely non-zero, non-3 exit
+  # is a failure. When enrichment fails outright, fall back to a plain local read
+  # so the page still renders with V1 data (fail-soft).
+  if [ "${RUN_ISSUES_RENDER_GITHUB:-0}" = "1" ]; then
+    RAW="$("$RUN_ISSUES_HOME/status.sh" --json --github)"
+    rc=$?
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+      err "status.sh --github failed (exit $rc); falling back to local data"
+      RAW="$("$RUN_ISSUES_HOME/status.sh" --json)"
+      rc=$?
+    fi
+  else
+    RAW="$("$RUN_ISSUES_HOME/status.sh" --json)"
+    rc=$?
+  fi
   if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
     err "status.sh produced no usable document (exit $rc); leaving existing page in place"
     exit 2
@@ -231,7 +278,15 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .badge.pr_in_flight{background:var(--c-pr)}
 .badge.cleanup{background:var(--c-cleanup)}
 .reason{font-weight:500}
+.title{font-weight:600;flex:1 1 100%;order:9;margin-top:.1rem}
 .age{color:var(--muted);font-size:.85rem}
+.gh-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.25rem;align-items:center}
+.gh-chip{font-size:.72rem;padding:.08rem .45rem;border-radius:4px;white-space:nowrap;
+  border:1px solid var(--border);color:var(--fg);background:var(--card)}
+.gh-chip.ci-green{color:#fff;background:var(--c-pr);border-color:var(--c-pr)}
+.gh-chip.ci-red{color:#fff;background:var(--c-stalled);border-color:var(--c-stalled)}
+.gh-chip.ci-pending{color:#fff;background:var(--c-attention);border-color:var(--c-attention)}
+.gh-age{color:var(--muted);font-size:.72rem}
 .row-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
 .row-sub{color:var(--muted);font-size:.78rem;margin-top:.15rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -302,6 +357,27 @@ a:hover{text-decoration:underline}
     pr_ci_red:             {label:"CI punainen",             next:"PR:n CI on punainen — korjaa tai anna vahdin korjata."},
     pr_changes_requested:  {label:"Muutoksia pyydetty",      next:"PR:ään on pyydetty muutoksia — käsittele katselmointi."},
     pr_draft_stale:        {label:"Draft jäänyt",            next:"PR on jäänyt draftiksi — merkitse valmiiksi tai sulje."}
+  };
+
+  // github.ci -> {label, css}. An unknown/absent ci renders no chip.
+  var CI = {
+    GREEN:   {label:"CI vihreä",  css:"ci-green"},
+    RED:     {label:"CI punainen", css:"ci-red"},
+    PENDING: {label:"CI kesken",  css:"ci-pending"}
+  };
+
+  // github.pr_decide_verdict -> plain-Finnish "what the watcher would do next".
+  // Mirrors lib/pr-watch-lib.sh's pr_decide verdicts; an unknown code falls back
+  // to the raw code so a new verdict never crashes or hides.
+  var VERDICTS = {
+    MERGE:        "vahti mergeää seuraavalla tikillä",
+    WAIT_CI:      "odottaa CI:tä",
+    WAIT_DIRTY:   "odottaa (työpuu likainen)",
+    REBASE:       "vahti rebasettaa",
+    FIX_CI:       "vahti korjaa CI:n",
+    SKIP_NO_LABEL:"ei auto-merge-labelia",
+    SKIP_CLOSED:  "PR suljettu",
+    SKIP_BLOCKED: "estetty riippuvuudesta"
   };
 
   // View state. Default filter shows attention + stalled + running only.
@@ -416,11 +492,17 @@ a:hover{text-decoration:underline}
     return ab - aa;
   }
 
+  // gh(r) — the run's github sub-object or null. Read ONLY named fields off it;
+  // never iterate it, so a field the schema grows later cannot leak (allowlist).
+  function ghTitle(g){ return (g && typeof g.issue_title === "string") ? g.issue_title : null; }
+
   function renderRow(r){
     var row = el("div", "row cls-" + r.class);
     row.setAttribute("data-class", r.class);
     row.setAttribute("data-repo", r.repo_slug || "");
     var info = reasonInfo(r.class_reason);
+    var g = r.github;                       // null in local mode / failed repo
+    var title = ghTitle(g);
 
     var main = el("div", "row-main");
     main.appendChild(el("span", "badge " + r.class, classLabel(r.class)));
@@ -432,7 +514,28 @@ a:hover{text-decoration:underline}
     if (r.pr_url) {
       main.appendChild(link(r.pr_url, "PR" + (r.pr_number != null ? " #" + r.pr_number : "") + " ↗"));
     }
+    // Issue title as the row's main text (#78). textContent-inserted, so a title
+    // literally named "<script>" is shown as text. Without enrichment (title
+    // null) the row keeps the V1 shape and the branch shows in the sub-line.
+    if (title) main.appendChild(el("span", "title", title));
     row.appendChild(main);
+
+    // CI + merge-readiness chips, only for a row whose PR is OPEN (#78: chips are
+    // for PR-in-flight rows). Each datum read by name and textContent-inserted.
+    if (g && g.pr_state === "OPEN") {
+      var chips = el("div", "gh-chips");
+      var ci = CI[g.ci];
+      if (ci) chips.appendChild(el("span", "gh-chip " + ci.css, ci.label));
+      var v = g.pr_decide_verdict;
+      if (typeof v === "string" && v) {
+        chips.appendChild(el("span", "gh-chip",
+          Object.prototype.hasOwnProperty.call(VERDICTS, v) ? VERDICTS[v] : v));
+      }
+      if (g.cache_age_seconds != null) {
+        chips.appendChild(el("span", "gh-age", "gh " + dur(g.cache_age_seconds) + " sitten"));
+      }
+      if (chips.firstChild) row.appendChild(chips);
+    }
 
     if (info.next) row.appendChild(el("div", "row-next", info.next));
 

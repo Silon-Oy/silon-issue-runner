@@ -163,6 +163,56 @@ if [ -f "$HTML" ]; then
   present "noscript fallback" "<noscript>" "$HTML"
 fi
 
+# ---- Case 4b: github enrichment (#78) — issue title + CI/verdict chips ----
+# A document whose run carries a `github` sub-object with the allowlisted fields
+# PLUS a bogus extra field. The page markup is data-free, so no value appears in
+# it; the allowlist is enforced by the JS reading only NAMED github fields. This
+# case asserts the JS references exactly those names (and not the bogus one) and
+# that the Finnish CI/verdict wordings are present.
+GH_TITLE="GH-ISSUE-TITLE-marker-xyz"
+GH_LEAK="GHFIELD-LEAK-should-not-appear"
+cat > "$FX/gh.json" <<JSON
+{"schema_version":1,"generated_at":"2026-08-11T22:00:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "enrichment":{"mode":"github","fetched_at":"2026-08-11T22:00:00Z","cache_age_seconds":120,"repos_enriched":1,"repos_failed":[]},
+ "totals":{"runs":1,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":1,"cleanup":0},"degraded":false},
+ "read_errors":[],
+ "runs":[
+  {"repo_slug":"acme-site","issue_number":42,
+   "issue_url":"https://github.com/acme/acme-site/issues/42",
+   "class":"pr_in_flight","class_reason":"pr_open_waiting","class_confidence":"high",
+   "current_state":"S12_Finalize","branch":"auto-run/x",
+   "age_seconds":9300,"idle_seconds":null,
+   "pr_url":"https://github.com/acme/acme-site/pull/9","pr_number":9,
+   "github":{"pr_state":"OPEN","ci":"RED","pr_decide_verdict":"WAIT_CI",
+             "cache_age_seconds":120,"issue_title":"$GH_TITLE","is_draft":false,
+             "secret_gh_field":"$GH_LEAK"}}
+ ]}
+JSON
+OUTGH="$FX/wwwgh"
+RUN_ISSUES_STATUS_OUT_DIR="$OUTGH" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/gh.json"; rcgh=$?
+HTMLGH="$OUTGH/index.html"
+check "github doc renders (exit 0)" "$rcgh" "0"
+if [ -f "$HTMLGH" ]; then
+  # Data-free page: neither the title value nor the bogus field value appear.
+  absent "issue title value not embedded (data fetched at runtime)" "$GH_TITLE" "$HTMLGH"
+  absent "bogus github field value not embedded" "$GH_LEAK" "$HTMLGH"
+  # Allowlist: the JS reads these NAMED github fields...
+  present "JS reads github.issue_title" "issue_title" "$HTMLGH"
+  present "JS reads github.pr_state" "pr_state" "$HTMLGH"
+  present "JS reads github.pr_decide_verdict" "pr_decide_verdict" "$HTMLGH"
+  present "JS reads github.cache_age_seconds" "cache_age_seconds" "$HTMLGH"
+  # ...and NOT the bogus one (and never iterates the github object).
+  absent "JS does not reference bogus github field" "secret_gh_field" "$HTMLGH"
+  # Finnish CI + verdict wordings from the spec.
+  presenti "verdict MERGE wording" "vahti mergeää seuraavalla tikillä" "$HTMLGH"
+  presenti "verdict WAIT_CI wording" "odottaa CI:tä" "$HTMLGH"
+  presenti "verdict SKIP_NO_LABEL wording" "ei auto-merge-labelia" "$HTMLGH"
+  presenti "CI green label" "CI vihreä" "$HTMLGH"
+  presenti "CI red label" "CI punainen" "$HTMLGH"
+fi
+
 # ---- Case 5b: degraded + zero-runs document still renders (exit 0, verbatim) ----
 # The page markup is data-free, so it is identical regardless of input; this case
 # exercises the schema gate + verbatim status.json on a different document.
@@ -218,6 +268,41 @@ if [ -f "$OUT4/index.html" ] && [ -f "$OUT4/status.json" ]; then
 else
   bad "LaunchAgent path did not produce both files"
 fi
+
+# ---- Case 8: RUN_ISSUES_RENDER_GITHUB toggle drives status.sh --github (#78) ----
+# A fake status.sh records its args and emits a valid schema-v1 document, so we
+# can assert the toggle passes (or omits) --github WITHOUT any gh/network access.
+FAKEHOME="$FX/fakehome"
+mkdir -p "$FAKEHOME"
+ARGSFILE="$FX/statusargs.txt"
+cat > "$FAKEHOME/status.sh" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$ARGSFILE"
+cat <<'JSON'
+{"schema_version":1,"generated_at":"2026-08-11T23:00:00Z","host":"studio",
+ "totals":{"runs":0,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":0},"degraded":false},
+ "read_errors":[],"runs":[]}
+JSON
+FAKE
+chmod +x "$FAKEHOME/status.sh"
+
+# Toggle ON: status.sh invoked with --github.
+: > "$ARGSFILE"
+OUT5="$FX/www5"
+RUN_ISSUES_HOME="$FAKEHOME" RUN_ISSUES_RENDER_GITHUB=1 \
+  RUN_ISSUES_STATUS_OUT_DIR="$OUT5" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER"; rc5=$?
+check "RENDER_GITHUB=1 renders (exit 0)" "$rc5" "0"
+present "RENDER_GITHUB=1 passes --github to status.sh" "--github" "$ARGSFILE"
+
+# Toggle OFF: plain local read, no --github anywhere.
+: > "$ARGSFILE"
+OUT6="$FX/www6"
+RUN_ISSUES_HOME="$FAKEHOME" RUN_ISSUES_RENDER_GITHUB=0 \
+  RUN_ISSUES_STATUS_OUT_DIR="$OUT6" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER"; rc6=$?
+check "RENDER_GITHUB=0 renders (exit 0)" "$rc6" "0"
+absent "RENDER_GITHUB=0 does NOT pass --github" "--github" "$ARGSFILE"
 
 echo "----------------------------------------"
 echo "status-render: PASS=$PASS FAIL=$FAIL"

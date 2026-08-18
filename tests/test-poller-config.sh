@@ -206,7 +206,10 @@ done
 # ---- Case 9: the example env file documents variables that exist ----
 # An example is the only documentation an operator reads before editing, and a
 # variable named there that nothing reads is indistinguishable from a working
-# setting that silently does nothing.
+# setting that silently does nothing. poller.env is the shared LaunchAgent config
+# channel: both pollers AND status-render.sh source it (#78), so a variable is
+# "read" if any of those three (or the lib) reads it.
+EXAMPLE_READERS=("${POLLERS[@]}" "$LIB" "$ROOT/status-render.sh")
 EXAMPLE="$ROOT/examples/run-issues-poller.env.example"
 if [ ! -f "$EXAMPLE" ]; then
   bad "case9 examples/run-issues-poller.env.example is missing"
@@ -223,7 +226,7 @@ else
   unknown=""
   while IFS= read -r var; do
     [ -n "$var" ] || continue
-    if ! grep -q "$var" "${POLLERS[@]}" "$LIB" 2>/dev/null; then
+    if ! grep -q "$var" "${EXAMPLE_READERS[@]}" 2>/dev/null; then
       unknown="$unknown $var"
     fi
   done < <(grep -oE 'RUN_ISSUES_[A-Z0-9_]+' "$EXAMPLE" | sort -u)

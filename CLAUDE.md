@@ -315,7 +315,7 @@ kertovat vain lukemisen onnistumisesta — ei mitään lukittua, claimattua tai 
 | 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
 | 3 | Vajaa luenta — ≥1 `run.json` oli lukukelvoton/virheellinen; dokumentti silti validi ja täydellinen muun osan osalta (`degraded: true`), rikkinäiset polut `read_errors`-listassa. Kaksitasoinen luenta (bulk → per-file-fallback) eristää rikkinäisen, muut luetaan |
 
-### Statussivun renderöinti (`status-render.sh`, #62, #76)
+### Statussivun renderöinti (`status-render.sh`, #62, #76, #78)
 
 Oma avaruus. `status.sh`:n JSONin ensimmäinen kuluttaja: kirjoittaa `index.html`in ja
 `status.json`in atomisesti (`RUN_ISSUES_STATUS_OUT_DIR`, oletus
@@ -351,6 +351,23 @@ paikoilleen. Altistuspäätös (Caddy-vhost, Tailscale-bind) ei kuulu pakettiin 
 `examples/status-caddy.example`. Turvamalli: README §7.8. Vartija: `tests/test-status-render.sh`
 (ml. `class_reason`-selitekartan kattavuus, `textContent`-todennus, ulkoisten resurssien
 poissaolo).
+
+**#78 toi gh-rikastuksen sivulle asti** ilman keräyspuolen skeemamuutosta. Renderöijän
+`RUN_ISSUES_RENDER_GITHUB=1` ajaa LaunchAgent-polulla `status.sh --github`in (§7), jolloin
+jokaisen ajon `github`-aliobjekti täyttyy (#60). JS lukee siitä **vain nimetyt** kentät osana
+samaa valkolistaa: `github.issue_title` (rivin pääteksti — ilman rikastusta rivi näyttää V1:n
+tapaan haaranimen alarivillä), sekä avoimen PR:n riveille `github.ci` (GREEN/RED/PENDING →
+suomenkielinen CI-chip), `github.pr_decide_verdict` (→ "vahti mergeää seuraavalla tikillä" /
+"odottaa CI:tä" / "ei auto-merge-labelia" jne., tuntematon koodi näkyy raakana) ja
+`github.cache_age_seconds` (tuoreus). Chipit **vain** kun `github.pr_state == "OPEN"`.
+**Provenienssi:** issue-otsikko elää *vain* `github.issue_title`ssä, ei ajon päätasolla —
+`status.sh`:n keräyspuoli lisää sen `github`-aliobjektiin (`lib/status-github.sh`:n
+`gh issue list --json number,title` **kerran per owner/repo** samaan TTL-cacheen kuin PR-lista,
+best-effort: issue-haun virhe pudottaa vain otsikot, ei merkitse repoa `repos_failed`iksi).
+**Otsikot sivulla nostavat altistusrimaa: sivu on pidettävä vain tailnetissä (README §7.8).**
+Vartijat: `tests/test-status-github.sh` (otsikot + cache + provenienssi), `test-status-render.sh`
+(RENDER_GITHUB-toggle, gh-kenttien valkolista, chip-sanamuodot), `test-status-schema.sh`
+(ei päätason `issue_title`ia).
 
 | Koodi | Merkitys |
 |---|---|
@@ -409,7 +426,7 @@ awaiting-answer-markeria (scope-out: ei automaattista uudelleenkäynnistystä �
 | `run-terminate.sh` | Elävän ajon turvallinen lopetus kutsuttavana funktiona (#63): `run_terminate <run-dir> <reason-slug> [<context>]` — host-portti, eksakti tmux-tappo, `state_finalize`+`state_event`, best-effort `needs-human`-label + tilannekommentti, lukon purku ajon **omasta** tallennetusta identiteetistä (`repo_slug`+`remote`, #67). Irrotettu `poller.sh:finalize_stalled`in rungosta, joka `exit 0`si source-hetkellä vieraalla koneella eikä siksi ollut kutsuttavissa muualta; `stop-run.sh` (#64) käyttää samaa polkua monistamatta turvakriittistä logiikkaa. Puhtaasti funktiomääritelmiä, sourcetaan turvallisesti (sourcaa omat riippuvuutensa). Loki `_run_terminate_log`illa (`declare -F log` → `$LOG` → stderr). Tilannekommentti haarautuu `context`in mukaan (#64): `stalled` kantaa awaiting-answer-markerin (`scan_blocked_answered` uusii ajon vastauksella, #57), `stopped` **ei** kanna markeria (scope-out: ei automaattista uudelleenkäynnistystä) ja osoittaa siivoukseen. `finalize_stalled` on nyt ohut kutsuja joka välittää `stalled_in_<current_state>`; vartija `tests/test-poller-stale-detection.sh` (muuttumaton) + `tests/test-run-terminate.sh` |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot (#59): `_STATUS_NORMALIZE_JQ` (heterogeenisen `run.json`in normalisointi + `schema_gaps`), `status_read_bulk`/`status_read_perfile` (kaksitasoinen luenta), `_STATUS_CLASSIFY_JQ` + `status_classify` (viisi luokkaa prioriteettijärjestyksessä, INV-STATUS lukee vain `status`ia, INV-UNKNOWN fail-closed), `_STATUS_GITHUB_RECLASSIFY_JQ` (`_github_reclassify`, #60: `--github`-rikastuksen jälkeen ajettava jälkiluokittelu — no-op kun `github == null`, muuten nostaa `class_confidence`in `low`→`high` varmistuneelle PR:lle ja lisää `pr_ci_red`/`pr_changes_requested`/`pr_draft_stale`/`pr_not_open`-refinoinnit), ja `_iso_to_epoch` (siirretty poller.sh:sta; poller sourcaa sen täältä, jotta `scan_stalled`in liveness-kello ja `status.sh`:n `idle_seconds` lasketaan identtisesti) |
-| `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta |
+| `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60, #78): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta. **#78:** issue-otsikot (`status_github_fetch_open_issues` `gh issue list --json number,title`, `status_github_build_issue_map` number→title) samaan per-owner TTL-cacheen; `status.sh` injektoi otsikon jokaisen ajon `github.issue_title`ksi issue-numerolla (myös ei-PR-ajoille `status_github_issue_only_object`illa, jolloin rivi saa otsikon mutta ei chippejä). Issue-haku on best-effort: virhe pudottaa vain otsikot, ei merkitse repoa `repos_failed`iksi (PR-haku on primäärinen ja omistaa `repos_failed`in) |
 | `version.sh` | Ajossa olevan runner-version näkyväksi teko (#32): `runner_version` (lyhyt HEAD), `runner_behind_origin` (jäljessä `origin/main`ia), `runner_version_summary` (raporttirivi) ja `runner_fetch_throttled` (throttlattu `git fetch`). Fail-soft: puuttuva `.git`/verkko ⇒ `?`. Pollerit lokittavat tikin alussa, `orchestrate.sh --version` ja situation-kommentin `Runner-version:` lukevat samasta lähteestä |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 
@@ -478,6 +495,10 @@ mitään run-issues-kohtaista, joten LaunchAgent-ajossa — ainoassa tuotantotil
 **tiedosto voittaa ympäristömuuttujan**. Poikkeuksia kaksi, molemmat rakenteellisia:
 `RUN_ISSUES_HOME` ja `RUN_ISSUES_POLLER_ENV_FILE` resolvoidaan ennen sourcea, joten ne
 luetaan vain ympäristöstä. Malli: `examples/run-issues-poller.env.example`.
+**`status-render.sh` sourceaa saman `poller.env`in (#78)**, koska se on samanlainen
+LaunchAgent samassa ympäristöttömyydessä: yksi konekohtainen tiedosto konfiguroi kaikki kolme
+LaunchAgentia, ja `RUN_ISSUES_RENDER_GITHUB` luetaan sitä kautta LaunchAgent-polulla.
+`tests/test-poller-config.sh` case 9 laskee siksi myös `status-render.sh`:n poller.env-lukijaksi.
 
 **Pollerit eivät lue `$HOME/.config/run-issues/env`-tiedostoa.** Se sisältää salaisuuksia,
 jotka `orchestrate.sh` ja `pr-watch.sh` sourceavat itse. Poller ei tarvitse niistä yhtäkään ja
@@ -518,11 +539,12 @@ joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
 | `RUN_ISSUES_DIGEST_GWS` | `gws` | Lähetyskomento. Testien injektiopiste (osoita olemattomaan ⇒ stdout-polku) |
 | `RUN_ISSUES_DIGEST_STATE_FILE` | `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha` | Sormenjälkitiedosto. Rivi 1 = sha256, rivi 2 = viimeisin lähetys-epoch. Kirjoitetaan atomisesti (`mktemp` + `mv -f`) |
 
-### Statussivun renderöinti (`status-render.sh`, #62)
+### Statussivun renderöinti (`status-render.sh`, #62, #78)
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_STATUS_OUT_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www` | Hakemisto, johon `index.html` ja `status.json` kirjoitetaan. `--out-dir` ohittaa |
+| `RUN_ISSUES_RENDER_GITHUB` | `0` | **#78.** `1` = LaunchAgent-polku (ilman `--input`ia) ajaa `status.sh --github`in, jolloin sivulle tulee issue-otsikot (`github.issue_title` rivin pääteksti) ja CI/mergevalmius-chipit avoimen PR:n riveille. Fail-soft: jos `--github`-ajo epäonnistuu kokonaan (exit ≠ 0/3), skripti putoaa paikalliseen luentaan ja renderöi V1-sivun. `status.sh --github` on itsekin fail-soft (repon verkkovirhe → `repos_failed`, ei kaada), joten fallback on varajärjestely. `0` = pelkkä paikallinen luenta, bitilleen kuin ennen #78:aa. Vaikuttaa vain no-`--input`-polkuun. **Otsikot sivulla → sivua ei saa altistaa julkisesti (README §7.8).** Asennusesimerkissä (`examples/run-issues-poller.env.example`) oletukseksi `1` |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Skripti ohjaa oman stdout/stderrinsä `status-render.stdout.log`/`.stderr.log`-tiedostoihin täältä, kun ei aja TTY:llä (plistissä ei loki-avaimia, §11) |
 | `RUN_ISSUES_HOME` | *(scriptin oma hakemisto)* | Testien injektiopiste; myös `status.sh`:n sijainti LaunchAgent-polulla (ilman `--input`ia) |
 

@@ -4,10 +4,12 @@
 # Later increments (gh enrichment, an email digest, a static HTML page) consume
 # this JSON, so the schema is the real interface. This test asserts the shape,
 # not the values: valid JSON; every top-level key present; every run carries the
-# required fields; github is ALWAYS null in this increment (gh data lives only
-# in that sub-object, so a consumer cannot read a missing gh field as
-# authoritative); totals.by_class sums to totals.runs; and every class /
-# class_reason is a documented enum member.
+# required fields; github is ALWAYS null in local mode (gh data lives only in
+# that sub-object, so a consumer cannot read a missing gh field as
+# authoritative); the issue TITLE never leaks to a run's top level — it lives
+# only in github.issue_title (issue #78), so with github null it is simply absent;
+# totals.by_class sums to totals.runs; and every class / class_reason is a
+# documented enum member.
 #
 # Run: bash tests/test-status-schema.sh   (exit 0 = all pass)
 
@@ -91,9 +93,14 @@ MISSING="$(jq -r --argjson req "$REQUIRED_FIELDS" '
   [ .runs[] | keys as $k | ($req - $k) ] | add // [] | unique | join(",")' "$OUT")"
 check "every run has all required fields" "$MISSING" ""
 
-# ---- github is ALWAYS null this increment ----
+# ---- github is ALWAYS null in local mode ----
 NON_NULL_GH="$(jq '[.runs[] | select(.github != null)] | length' "$OUT")"
 check "github always null" "$NON_NULL_GH" "0"
+
+# ---- provenance: the issue title never lands at a run's top level (issue #78).
+# It lives only in github.issue_title; with github null it is simply absent. ----
+TOP_TITLE="$(jq '[.runs[] | select(has("issue_title"))] | length' "$OUT")"
+check "no top-level issue_title on any run" "$TOP_TITLE" "0"
 
 # ---- totals.by_class sums to totals.runs ----
 SUM="$(jq '.totals.by_class | to_entries | map(.value) | add' "$OUT")"

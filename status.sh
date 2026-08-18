@@ -375,24 +375,29 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   GH_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
   GH_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
 
-  # Github enum: run-index <tab> pr_number <tab> owner/repo, only for runs that
-  # have BOTH a PR URL and a resolved owner (edge cases: no pr_url => no query;
-  # unresolvable remote => no enrichment for it).
+  # Github enum: run-index <tab> issue_number <tab> pr_number <tab> owner/repo,
+  # for every run that has an issue_number and a resolved owner (issue #78:
+  # broadened from PR-only, so issue titles reach attention/running rows, not just
+  # PR rows). pr_number is "-" (a sentinel, not empty) when the run has no PR yet:
+  # `IFS=$'\t' read` collapses a genuinely empty field because tab is whitespace,
+  # which would shift the owner into the wrong variable. Edge cases: no
+  # issue_number => no query; unresolvable remote => no enrichment for that run.
   GH_ENUM="$TMPD/gh_enum.tsv"
   jq -r --slurpfile owners "$TMPD/owners.json" '
     ($owners[0]) as $om
     | to_entries[]
     | .key as $idx | .value as $r
     | ($om[$r.repo_path + "\t" + $r.remote].owner // "") as $owner
-    | (if (($r.pr_url // "") | length) == 0 then null
-       else (($r.pr_url | capture("/(?<n>[0-9]+)/?$") | .n)? // null) end) as $pn
-    | select($pn != null and $owner != "")
-    | [$idx, $pn, $owner] | @tsv
+    | (if (($r.pr_url // "") | length) == 0 then ""
+       else ((($r.pr_url | capture("/(?<n>[0-9]+)/?$") | .n)?) // "") end) as $pn
+    | select($r.issue_number != null and $owner != "")
+    | [$idx, ($r.issue_number | tostring),
+       (if $pn == "" then "-" else $pn end), $owner] | @tsv
   ' "$TMPD/normalized.json" > "$GH_ENUM" 2>/dev/null || : > "$GH_ENUM"
 
-  # Distinct owner/repos to query (one gh pr list each).
+  # Distinct owner/repos to query (one gh pr list + one gh issue list each).
   GH_OWNERS="$TMPD/gh_owners.txt"
-  cut -f3 "$GH_ENUM" 2>/dev/null | sort -u | sed '/^$/d' > "$GH_OWNERS" || : > "$GH_OWNERS"
+  cut -f4 "$GH_ENUM" 2>/dev/null | sort -u | sed '/^$/d' > "$GH_OWNERS" || : > "$GH_OWNERS"
 
   CACHE_FILE="$(status_github_cache_file)"
   CACHE_IN="$(status_github_load_cache "$CACHE_FILE")"
@@ -408,11 +413,14 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   while IFS= read -r owner; do
     [ -n "$owner" ] || continue
     prs=""
+    issues=""
     fetched_at=""
     fetched_epoch=""
     used_cache=0
 
-    # Cache hit? Entry present, fresh, and caching not disabled.
+    # Cache hit? Entry present, fresh, and caching not disabled. One entry per
+    # owner holds BOTH the PR list and the issue-title list (issue #78), fetched
+    # together under one TTL, so a cache hit serves both with no gh call.
     if [ "$NO_CACHE" -ne 1 ]; then
       cached="$(printf '%s' "$CACHE_IN" | jq -c --arg k "$owner" '.[$k] // empty' 2>/dev/null || true)"
       if [ -n "$cached" ]; then
@@ -421,6 +429,7 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
           age=$((NOW_EPOCH - c_epoch))
           if [ "$age" -ge 0 ] && [ "$age" -le "$CACHE_TTL" ]; then
             prs="$(printf '%s' "$cached" | jq -c '.prs // []' 2>/dev/null || echo '[]')"
+            issues="$(printf '%s' "$cached" | jq -c '.issues // []' 2>/dev/null || echo '[]')"
             fetched_at="$(printf '%s' "$cached" | jq -r '.fetched_at // empty' 2>/dev/null || true)"
             fetched_epoch="$c_epoch"
             used_cache=1
@@ -429,23 +438,32 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
       fi
     fi
 
-    # Cache miss / stale / disabled => fetch once.
+    # Cache miss / stale / disabled => fetch once. The PR fetch is the PRIMARY
+    # enrichment and owns repos_failed; the issue-title fetch is best-effort on
+    # top (a failure only drops titles for this repo, never marks it failed).
     if [ "$used_cache" -ne 1 ]; then
       if prs="$(status_github_fetch_open_prs "$owner")" && [ -n "$prs" ] \
          && printf '%s' "$prs" | jq -e 'type == "array"' >/dev/null 2>&1; then
         fetched_at="$GENERATED_AT"
         fetched_epoch="$NOW_EPOCH"
-        # Refresh this owner's cache entry.
+        # Best-effort issue titles: empty array on any failure (=> no titles).
+        if ! issues="$(status_github_fetch_open_issues "$owner")" \
+           || [ -z "$issues" ] \
+           || ! printf '%s' "$issues" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          issues="[]"
+        fi
+        # Refresh this owner's cache entry (PRs + issue titles together).
         CACHE_OUT="$(printf '%s' "$CACHE_OUT" | jq -c \
-          --arg k "$owner" --argjson prs "$prs" \
+          --arg k "$owner" --argjson prs "$prs" --argjson issues "$issues" \
           --arg fa "$fetched_at" --argjson fe "$fetched_epoch" \
-          '.[$k] = {fetched_at:$fa, fetched_epoch:$fe, prs:$prs}' 2>/dev/null || printf '%s' "$CACHE_OUT")"
+          '.[$k] = {fetched_at:$fa, fetched_epoch:$fe, prs:$prs, issues:$issues}' 2>/dev/null || printf '%s' "$CACHE_OUT")"
       else
         # Network failure / rate limit / bad payload => this repo failed.
         printf '%s\n' "$owner" >> "$FAILED_FILE"
         continue
       fi
     fi
+    [ -n "$issues" ] || issues="[]"
 
     age=$((NOW_EPOCH - fetched_epoch))
     [ "$age" -ge 0 ] || age=0
@@ -457,9 +475,12 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
       MIN_FETCHED_AT="$fetched_at"
     fi
 
-    # Build the number->github map for this owner (ci + verdict per open PR).
+    # Build the number->github map for this owner (ci + verdict per open PR) and
+    # the issue_number->title map (issue #78).
     prmap="$(status_github_build_pr_map "$prs" "$fetched_at" "$age" "$GH_LABEL" "$GH_RES" "$GH_REPAIR")"
     printf '%s' "$prmap" > "$TMPD/gh/$gh_i.prmap.json"
+    issuemap="$(status_github_build_issue_map "$issues")"
+    printf '%s' "$issuemap" > "$TMPD/gh/$gh_i.issuemap.json"
     printf '%s\t%s\t%s\n' "$owner" "$gh_i" "$age" >> "$OWNER_META"
     printf '%s\t%s\n' "$owner" "$fetched_at" >> "$TMPD/gh_owner_fetched.tsv"
     ENRICH_REPOS_ENRICHED=$((ENRICH_REPOS_ENRICHED + 1))
@@ -475,34 +496,48 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   fi
 
   # Map each enumerated run to its ghmap entry.
-  # owner -> prmap index + age lookup (built above).
+  # owner -> prmap/issuemap index + age lookup (built above). Every run carries a
+  # github object: an OPEN-PR object, a NOT_OPEN object, or (no PR yet) an
+  # issue-only object — and each gets issue_title joined in from the issue map
+  # by issue_number (issue #78).
   GHMAP_FILE="$TMPD/ghmap.jsonl"; : > "$GHMAP_FILE"
-  while IFS=$'\t' read -r idx pn owner; do
+  while IFS=$'\t' read -r idx issue pn owner; do
     [ -n "$idx" ] || continue
+    [ "$pn" = "-" ] && pn=""   # sentinel back to empty (no PR)
     # Failed repo?
     if grep -Fxq "$owner" "$FAILED_FILE" 2>/dev/null; then
       jq -nc --arg i "$idx" '{($i): {failed:true}}' >> "$GHMAP_FILE"
       continue
     fi
-    # Look up this owner's prmap index + age.
+    # Look up this owner's prmap/issuemap index + age.
     meta="$(grep -F "$owner"$'\t' "$OWNER_META" 2>/dev/null | head -n1 || true)"
     [ -n "$meta" ] || continue
     pmi="$(printf '%s' "$meta" | cut -f2)"
     page="$(printf '%s' "$meta" | cut -f3)"
     fetched_at="$(grep -F "$owner"$'\t' "$TMPD/gh_owner_fetched.tsv" 2>/dev/null | head -n1 | cut -f2 || true)"
-    obj="$(jq -c --arg k "$pn" '.[$k] // empty' "$TMPD/gh/$pmi.prmap.json" 2>/dev/null || true)"
+    obj=""
+    if [ -n "$pn" ]; then
+      obj="$(jq -c --arg k "$pn" '.[$k] // empty' "$TMPD/gh/$pmi.prmap.json" 2>/dev/null || true)"
+    fi
     if [ -n "$obj" ]; then
       # Open PR.
-      jq -nc --arg i "$idx" --argjson o "$obj" '{($i): {github:$o}}' >> "$GHMAP_FILE"
-    else
-      # Not in the open set => NOT_OPEN. Optionally resolve MERGED/CLOSED.
+      base="$obj"
+    elif [ -n "$pn" ]; then
+      # Has a PR URL but it is not in the open set => NOT_OPEN. Optionally
+      # resolve MERGED/CLOSED.
       closed_as=""
       if [ "$GITHUB_FULL" -eq 1 ]; then
         closed_as="$(status_github_closed_state "$owner" "$pn")"
       fi
-      nobj="$(status_github_not_open_object "$fetched_at" "$page" "$closed_as")"
-      jq -nc --arg i "$idx" --argjson o "$nobj" '{($i): {github:$o}}' >> "$GHMAP_FILE"
+      base="$(status_github_not_open_object "$fetched_at" "$page" "$closed_as")"
+    else
+      # No PR yet => an issue-only object (title, no PR fields / chips).
+      base="$(status_github_issue_only_object "$fetched_at" "$page")"
     fi
+    # Join the issue title in by issue_number (null when absent / closed issue).
+    jq -nc --arg i "$idx" --argjson o "$base" \
+      --slurpfile im "$TMPD/gh/$pmi.issuemap.json" --arg k "$issue" \
+      '{($i): {github: ($o + {issue_title: ($im[0][$k] // null)})}}' >> "$GHMAP_FILE"
   done < "$GH_ENUM"
 
   if [ -s "$GHMAP_FILE" ]; then

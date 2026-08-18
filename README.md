@@ -641,6 +641,14 @@ selaimessa 60 s välein). Sivun altistaminen verkkoon on koneen omistajan asia �
 osio [7.8](#78-statussivun-web-esitys-on-uusi-altistuspinta) ja `examples/status-caddy.example`
 ennen kuin tarjoilet sitä mistään.
 
+**Valinnainen gh-rikastus (#78).** Ympäristömuuttujalla `RUN_ISSUES_RENDER_GITHUB=1`
+`status-render.sh` ajaa LaunchAgent-polulla `status.sh --github`in, jolloin sivulle tulee issuen
+**otsikko** rivin pääteksinä (`github.issue_title`) sekä avoimen PR:n **CI-tila** ja
+**mergevalmius** chippeinä. Fail-soft: jos rikastus epäonnistuu, sivu renderöityy paikallisella
+datalla kuten ennen. Oletus `0` = pelkkä paikallinen näkymä. **Otsikot paljastavat
+asiakaskontekstia — pidä sivu tailnetissä, älä altista julkisesti (osio
+[7.8](#78-statussivun-web-esitys-on-uusi-altistuspinta)).**
+
 ---
 
 ## 7. Turvamalli
@@ -817,13 +825,21 @@ pääsynhallintaa ne olisivat maailmanlaajuisesti luettavissa.
 Kaksi rakenteellista suojaa pienentää vuotoa jo lähteellä:
 
 - **Kenttävalkolista, ei mustalista.** `status.sh` kokoaa jokaisen `runs[]`-objektin nimetyistä
-  kentistä, ja selain-JS lukee vain noita nimettyjä kenttiä eikä koskaan itereoi run-objektia.
-  Kielletyt kentät — issuen otsikko ja runko, agenttien tuloste, lokit, promptit, absoluuttiset
-  polut — eivät koskaan päädy `runs[]`iin eivätkä sivulle. Mustalista vuotaisi aina myöhemmin
-  skeemaan lisätyn kentän; valkolista ei voi.
+  kentistä, ja selain-JS lukee vain noita nimettyjä kenttiä eikä koskaan itereoi run- tai
+  `github`-objektia. Kielletyt kentät — issuen **runko**, agenttien tuloste, lokit, promptit,
+  absoluuttiset polut — eivät koskaan päädy `runs[]`iin eivätkä sivulle. Mustalista vuotaisi
+  aina myöhemmin skeemaan lisätyn kentän; valkolista ei voi.
 - **Turvallinen DOM-insertointi.** Selain-JS insertoi jokaisen datamerkkijonon `textContent`illä
-  (ei koskaan `innerHTML`illä), joten `<script>`-niminen haara renderöityy tekstinä, ei
-  suoritettavana koodina.
+  (ei koskaan `innerHTML`illä), joten `<script>`-niminen haara tai issue-otsikko renderöityy
+  tekstinä, ei suoritettavana koodina.
+
+**Issue-otsikot ovat opt-in-poikkeus tähän (#78).** Kun `RUN_ISSUES_RENDER_GITHUB=1`, sivulle
+tulee issuen **otsikko** (`gh`-datana, `runs[].github.issue_title`-kentässä — ei ajon päätasolla,
+jotta provenienssi säilyy) rivin pääteksinä, sekä avoimen PR:n CI-tila ja mergevalmius. Otsikko on
+tietoinen valinta: se paljastaa asiakas- ja projektikontekstia selväsanaisemmin kuin repo-slug tai
+haaranimi, joten **se on sallittu vain niin kauan kuin sivu on pelkässä tailnetissä.** Ilman lippua
+(oletus `0`) sivu on bitilleen kuin ennen: ei otsikoita, vain V1-näkymä. Otsikoiden näyttäminen
+nostaa siis julkisen altistuksen rimaa entisestään — älä kytke sivua julkisen tunnelin taakse.
 
 Mutta valkolista ei korvaa pääsynhallintaa: **`index.html` ei sisällä autentikointia.**
 Verkkokerros on ainoa suoja. [`examples/status-caddy.example`](examples/status-caddy.example)
