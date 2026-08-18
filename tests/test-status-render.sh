@@ -213,6 +213,58 @@ if [ -f "$HTMLGH" ]; then
   presenti "CI red label" "CI punainen" "$HTMLGH"
 fi
 
+# ---- Case 4c: epic rollup lane (#79) --------------------------------------
+# A document with an epics[] list and an epic title that is an XSS payload. The
+# page markup is data-free, so no epic value appears in it; the epic lane is
+# rendered client-side. This case asserts the JS references the named epic fields
+# (and renders lanes) and carries the spec's Finnish wordings, and that the epic
+# title value never lands in the static markup.
+EPIC_TITLE_LEAK="EPIC-TITLE-<script>alert(2)</script>-SECRET"
+cat > "$FX/epic.json" <<JSON
+{"schema_version":1,"generated_at":"2026-08-11T22:30:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "enrichment":{"mode":"github","fetched_at":"2026-08-11T22:30:00Z","cache_age_seconds":60,"repos_enriched":1,"repos_failed":[]},
+ "totals":{"runs":1,"by_class":{"running":1,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":0},"degraded":false},
+ "read_errors":[],
+ "runs":[
+  {"repo_slug":"acme-site","issue_number":11,
+   "issue_url":"https://github.com/acme/acme-site/issues/11",
+   "class":"running","class_reason":"active_session","class_confidence":"high",
+   "current_state":"S8_Implementer","branch":"auto-run/x",
+   "age_seconds":300,"idle_seconds":60,"github":null}
+ ],
+ "epics":[
+  {"repo_slug":"acme-site","epic_number":10,"epic_title":"$EPIC_TITLE_LEAK",
+   "epic_url":"https://github.com/acme/acme-site/issues/10","source":"sub_issues",
+   "sub_issues":[{"number":11,"state":"open"},{"number":12,"state":"open"},{"number":13,"state":"closed"}]}
+ ]}
+JSON
+OUTEP="$FX/wwwep"
+RUN_ISSUES_STATUS_OUT_DIR="$OUTEP" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/epic.json"; rcep=$?
+HTMLEP="$OUTEP/index.html"
+check "epic doc renders (exit 0)" "$rcep" "0"
+if [ -f "$HTMLEP" ]; then
+  # Data-free page: the epic title value (incl. its XSS payload) never appears.
+  absent "epic title value not embedded" "$EPIC_TITLE_LEAK" "$HTMLEP"
+  absent "epic title XSS not embedded" "<script>alert(2)" "$HTMLEP"
+  # Allowlist: the JS reads these NAMED epic fields and renders lanes.
+  present "JS reads data.epics" "data.epics" "$HTMLEP"
+  present "JS renders epic lanes" "renderEpicLane" "$HTMLEP"
+  present "JS reads sub_issues" "sub_issues" "$HTMLEP"
+  present "JS reads epic_title" "epic_title" "$HTMLEP"
+  present "JS reads epic_number" "epic_number" "$HTMLEP"
+  present "JS reads epic_url" "epic_url" "$HTMLEP"
+  # Spec-mandated epic wordings.
+  present "epic badge" "EPIC" "$HTMLEP"
+  presenti "progress valmis wording" "valmis" "$HTMLEP"
+  presenti "queue blocker wording" "jonossa · estäjä #" "$HTMLEP"
+  presenti "odottaa poimintaa wording" "odottaa poimintaa" "$HTMLEP"
+  # Dedup: epic-member runs are shown inside the lane, not as loose rows. Guard
+  # the mechanism (epicMember set + subKey join) is present.
+  present "epic dedup via epicMember" "epicMember" "$HTMLEP"
+fi
+
 # ---- Case 5b: degraded + zero-runs document still renders (exit 0, verbatim) ----
 # The page markup is data-free, so it is identical regardless of input; this case
 # exercises the schema gate + verbatim status.json on a different document.

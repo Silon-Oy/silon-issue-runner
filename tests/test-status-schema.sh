@@ -83,9 +83,15 @@ check "exit code clean" "$rc" "0"
 if jq -e . "$OUT" >/dev/null 2>&1; then ok "output is valid JSON"; else bad "output is not valid JSON"; fi
 
 # ---- top-level required keys ----
-for k in schema_version generated_at host stale_after_seconds enrichment sources totals runs read_errors; do
+for k in schema_version generated_at host stale_after_seconds enrichment sources totals runs epics read_errors; do
   if jq -e "has(\"$k\")" "$OUT" >/dev/null 2>&1; then ok "top-level key: $k"; else bad "missing top-level key: $k"; fi
 done
+
+# ---- epics[] is an array, and EMPTY in local mode (issue #79). Epic membership
+# is a gh-enrichment product; without --github there are no epics, exactly as
+# github is null. ----
+check "epics is an array" "$(jq -r '.epics | type' "$OUT")" "array"
+check "epics empty in local mode" "$(jq '.epics | length' "$OUT")" "0"
 
 # ---- every run carries the required fields ----
 REQUIRED_FIELDS='["run_id","run_dir","repo_path","repo_slug","owner_repo","remote","issue_number","issue_url","host","is_local","status","blocked_reason","current_state","cycle_review_decision","started_at","finished_at","awaiting_answer_since","age_seconds","idle_seconds","retry_count","clarification_round","branch","worktree_path","worktree_exists","pr_url","pr_number","pr_local_verdict","pr_local_verdict_at","session_alive","lock_held","class","class_reason","class_confidence","schema_gaps","github"]'

@@ -315,7 +315,7 @@ kertovat vain lukemisen onnistumisesta — ei mitään lukittua, claimattua tai 
 | 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
 | 3 | Vajaa luenta — ≥1 `run.json` oli lukukelvoton/virheellinen; dokumentti silti validi ja täydellinen muun osan osalta (`degraded: true`), rikkinäiset polut `read_errors`-listassa. Kaksitasoinen luenta (bulk → per-file-fallback) eristää rikkinäisen, muut luetaan |
 
-### Statussivun renderöinti (`status-render.sh`, #62, #76, #78)
+### Statussivun renderöinti (`status-render.sh`, #62, #76, #78, #79)
 
 Oma avaruus. `status.sh`:n JSONin ensimmäinen kuluttaja: kirjoittaa `index.html`in ja
 `status.json`in atomisesti (`RUN_ISSUES_STATUS_OUT_DIR`, oletus
@@ -368,6 +368,29 @@ best-effort: issue-haun virhe pudottaa vain otsikot, ei merkitse repoa `repos_fa
 Vartijat: `tests/test-status-github.sh` (otsikot + cache + provenienssi), `test-status-render.sh`
 (RENDER_GITHUB-toggle, gh-kenttien valkolista, chip-sanamuodot), `test-status-schema.sh`
 (ei päätason `issue_title`ia).
+
+**#79 toi epic-rollupin näkymään** ilman `runs[]`-skeemamuutosta. `status.sh --github` emittoi
+uuden top-level-listan `epics[]` (avoimet `epic`-labeloidut issuet + niiden alaissueet;
+skeema alla). JS renderöi yhden epic-kaistan per epic sen **repo-ryhmän sisällä**: edistymispalkki
+(suljetut/kaikki alaissueet), ajossa oleva alaissue korostettuna, jonossa olevat lista- eli
+riippuvuusjärjestyksessä estäjineen ("jonossa · estäjä #N" = lähin edeltävä yhä avoin alaissue;
+ensimmäinen ilman ajoa → "odottaa poimintaa"), ja suljetut alaissueet yliviivattuina
+kuittausriveinä niin kauan kuin epic on auki. **Dedup:** alaissueen ajo näkyy **kerran** —
+kaistalla, ei myös irtorivinä repo-ryhmässä (`epicMember`-joukko + `subKey`-liitos). Epic ilman
+avointa alaissuetta ja ilman elävää (ei-`cleanup`) ajoa **ei tuota kaistaa**. Suljetun alaissueen
+`cleanup`-ajo säilyy silti top-level `cleanup`-laskurissa (kuittausrivi ei poista sitä
+siivousjonon lukumäärästä). Otsikot (epic + alaissue) kulkevat saman valkolistatun,
+`textContent`-insertoidun polun kuin V3 (escapattu, vain tailnet). Sivu on yhä dataton runko —
+`epics[]` haetaan `status.json`ista selaimessa. Vartijat: `tests/test-status-github.sh`
+(epic-keräys: sub_issues-API + task-lista-fallback + cache), `test-status-render.sh` (epic-kaistan
+kentät + sanamuodot + XSS-escape), `test-status-schema.sh` (`epics[]` tyhjä paikallisessa tilassa).
+
+**`epics[]`-skeema (schema_version 1):** jokainen alkio on
+`{repo_slug, epic_number, epic_title, epic_url, sub_issues: [{number, state}], source}`, missä
+`state` on `"open"|"closed"` ja `source` on `"sub_issues"` (natiivi sub-issues-rajapinta,
+ensisijainen) tai `"task_list"` (rungon `- [ ] … #N` -fallback vanhoille epiceille). Lista on
+`[]` ilman `--github`-rikastusta, aivan kuten `github`-aliobjekti on `null`. `runs[]`-skeemaan ei
+kosketa (#79 scope-out).
 
 | Koodi | Merkitys |
 |---|---|
@@ -426,7 +449,7 @@ awaiting-answer-markeria (scope-out: ei automaattista uudelleenkäynnistystä �
 | `run-terminate.sh` | Elävän ajon turvallinen lopetus kutsuttavana funktiona (#63): `run_terminate <run-dir> <reason-slug> [<context>]` — host-portti, eksakti tmux-tappo, `state_finalize`+`state_event`, best-effort `needs-human`-label + tilannekommentti, lukon purku ajon **omasta** tallennetusta identiteetistä (`repo_slug`+`remote`, #67). Irrotettu `poller.sh:finalize_stalled`in rungosta, joka `exit 0`si source-hetkellä vieraalla koneella eikä siksi ollut kutsuttavissa muualta; `stop-run.sh` (#64) käyttää samaa polkua monistamatta turvakriittistä logiikkaa. Puhtaasti funktiomääritelmiä, sourcetaan turvallisesti (sourcaa omat riippuvuutensa). Loki `_run_terminate_log`illa (`declare -F log` → `$LOG` → stderr). Tilannekommentti haarautuu `context`in mukaan (#64): `stalled` kantaa awaiting-answer-markerin (`scan_blocked_answered` uusii ajon vastauksella, #57), `stopped` **ei** kanna markeria (scope-out: ei automaattista uudelleenkäynnistystä) ja osoittaa siivoukseen. `finalize_stalled` on nyt ohut kutsuja joka välittää `stalled_in_<current_state>`; vartija `tests/test-poller-stale-detection.sh` (muuttumaton) + `tests/test-run-terminate.sh` |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot (#59): `_STATUS_NORMALIZE_JQ` (heterogeenisen `run.json`in normalisointi + `schema_gaps`), `status_read_bulk`/`status_read_perfile` (kaksitasoinen luenta), `_STATUS_CLASSIFY_JQ` + `status_classify` (viisi luokkaa prioriteettijärjestyksessä, INV-STATUS lukee vain `status`ia, INV-UNKNOWN fail-closed), `_STATUS_GITHUB_RECLASSIFY_JQ` (`_github_reclassify`, #60: `--github`-rikastuksen jälkeen ajettava jälkiluokittelu — no-op kun `github == null`, muuten nostaa `class_confidence`in `low`→`high` varmistuneelle PR:lle ja lisää `pr_ci_red`/`pr_changes_requested`/`pr_draft_stale`/`pr_not_open`-refinoinnit), ja `_iso_to_epoch` (siirretty poller.sh:sta; poller sourcaa sen täältä, jotta `scan_stalled`in liveness-kello ja `status.sh`:n `idle_seconds` lasketaan identtisesti) |
-| `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60, #78): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta. **#78:** issue-otsikot (`status_github_fetch_open_issues` `gh issue list --json number,title`, `status_github_build_issue_map` number→title) samaan per-owner TTL-cacheen; `status.sh` injektoi otsikon jokaisen ajon `github.issue_title`ksi issue-numerolla (myös ei-PR-ajoille `status_github_issue_only_object`illa, jolloin rivi saa otsikon mutta ei chippejä). Issue-haku on best-effort: virhe pudottaa vain otsikot, ei merkitse repoa `repos_failed`iksi (PR-haku on primäärinen ja omistaa `repos_failed`in) |
+| `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60, #78, #79): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta. **#78:** issue-otsikot (`status_github_fetch_open_issues` `gh issue list --json number,title`, `status_github_build_issue_map` number→title) samaan per-owner TTL-cacheen; `status.sh` injektoi otsikon jokaisen ajon `github.issue_title`ksi issue-numerolla (myös ei-PR-ajoille `status_github_issue_only_object`illa, jolloin rivi saa otsikon mutta ei chippejä). Issue-haku on best-effort: virhe pudottaa vain otsikot, ei merkitse repoa `repos_failed`iksi (PR-haku on primäärinen ja omistaa `repos_failed`in). **#79:** epic-jäsenyys (`status_github_fetch_epics` `gh issue list --label epic --state open --json number,title,body`, `status_github_fetch_sub_issues` `gh api …/issues/{n}/sub_issues`, `status_github_parse_task_list` rungon `- [ ] … #N`-listasta fallbackina, `status_github_build_epics` koostaa) samaan per-owner TTL-cacheen **täysin resolvoituna** (cache-osuma ei tee yhtään gh/api-kutsua). Task-listan tila resolvoidaan avoimien issueiden karttaa vasten (kartassa → `open`, ei-kartassa+ruksi → `closed`, ei-kartassa+tyhjä → ohitetaan). `status.sh` injektoi `repo_slug`in (ajojen efektiivinen slug) ja emittoi top-level `epics[]`in; best-effort, ei omista `repos_failed`ia |
 | `version.sh` | Ajossa olevan runner-version näkyväksi teko (#32): `runner_version` (lyhyt HEAD), `runner_behind_origin` (jäljessä `origin/main`ia), `runner_version_summary` (raporttirivi) ja `runner_fetch_throttled` (throttlattu `git fetch`). Fail-soft: puuttuva `.git`/verkko ⇒ `?`. Pollerit lokittavat tikin alussa, `orchestrate.sh --version` ja situation-kommentin `Runner-version:` lukevat samasta lähteestä |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 
@@ -860,4 +883,6 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   sub-issuet, task-lista fallbackina), auto-run-propagoinnin ja `/run-epic`-komennon. Kirjattu
   löydös: poimintahaku (`lib/issue.sh:pick_oldest_unassigned`, `poller.sh` inline) **ei suodata
   `epic`-labelia**, joten epic-issue jolla on `auto-run` poimitaan tänään tavallisena issuena —
-  §2:n ennakkoehto ennen kaikkea muuta epic-automaatiota.
+  §2:n ennakkoehto ennen kaikkea muuta epic-automaatiota. **Näkymäpuoli on jo toteutettu (#79):**
+  Ohjaamon epic-rollup (`epics[]` + kaista) tekee epicin ajosta näkyvän, mutta *orkestrointi*
+  (auto-run epic-tasolla, `/run-epic`) on yhä tämä avoin kehityslinja.

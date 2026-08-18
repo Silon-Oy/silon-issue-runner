@@ -649,6 +649,16 @@ datalla kuten ennen. Oletus `0` = pelkkä paikallinen näkymä. **Otsikot paljas
 asiakaskontekstia — pidä sivu tailnetissä, älä altista julkisesti (osio
 [7.8](#78-statussivun-web-esitys-on-uusi-altistuspinta)).**
 
+**Epic-rollup (#79).** gh-rikastus (`--github`) tuottaa myös top-level-listan `epics[]` —
+avoimet `epic`-labeloidut issuet ja niiden alaissueet (ensisijaisesti GitHubin natiivista
+sub-issues-rajapinnasta, fallbackina epicin rungon `- [ ] … #N` -task-listasta). Sivu renderöi
+per epic **epic-kaistan** sen repo-ryhmän sisään: edistymispalkki (suljetut/kaikki alaissueet),
+ajossa oleva alaissue korostettuna, jonossa olevat riippuvuusjärjestyksessä estäjineen
+("jonossa · estäjä #N") ja suljetut alaissueet yliviivattuina kuittausriveinä niin kauan kuin
+epic on auki. Alaissueen ajo näkyy vain kerran — kaistalla, ei irtorivinä. Ilman `--github`iä
+`epics[]` on tyhjä ja näkymä on entisellään. Epic- ja alaissue-otsikot ovat samaa
+tailnet-rajattua otsikkopolkua kuin #78. Skeema ja tekninen referenssi: CLAUDE.md §5 / §6.
+
 ---
 
 ## 7. Turvamalli

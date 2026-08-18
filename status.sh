@@ -27,8 +27,10 @@
 #                      the poller: RUN_ISSUES_STALE_AFTER).
 #   --github           opt-in GitHub enrichment (lib/status-github.sh): fill each
 #                      run's `github` sub-object from `gh pr list` (ONCE per
-#                      owner/repo) via a TTL cache. Without it every run's
-#                      `github` is null and behaviour is bit-for-bit as before.
+#                      owner/repo) via a TTL cache, AND emit the top-level epics[]
+#                      list (open epic-labelled issues + sub-issues, issue #79).
+#                      Without it every run's `github` is null, epics[] is empty,
+#                      and behaviour is bit-for-bit as before.
 #                      Enrichment never crashes output nor changes the local
 #                      classification: an unreachable repo lands in
 #                      enrichment.repos_failed, its runs stay github:null + low
@@ -359,6 +361,7 @@ GENERATED_AT="$(date -u +%FT%TZ)"
 # A ghmap entry is one of: {failed:true} (repo enrichment failed, force low
 # confidence) or {github:<obj>} (an OPEN or NOT_OPEN sub-object).
 GHMAP_JSON="{}"
+EPICS_JSON="[]"          # top-level epics[] (issue #79); [] in local mode
 ENRICH_MODE="local"
 ENRICH_FETCHED_AT="null"
 ENRICH_CACHE_AGE="null"
@@ -399,6 +402,25 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   GH_OWNERS="$TMPD/gh_owners.txt"
   cut -f4 "$GH_ENUM" 2>/dev/null | sort -u | sed '/^$/d' > "$GH_OWNERS" || : > "$GH_OWNERS"
 
+  # owner -> repo_slug (issue #79): epics are keyed by owner on the GitHub side
+  # but the page groups by repo_slug (a LOCAL watchlist concept), so each epic
+  # object needs its repo_slug injected — and it MUST match the EFFECTIVE slug the
+  # runs carry (repo_slug_raw from run.json, else the computed slug), or the epic
+  # lane would not join to its repo group. So derive the map from the runs' own
+  # effective slug, keyed by owner; the first run per owner wins (a duplicate
+  # owner from two local clones is a scope-out cross-repo case).
+  OWNER_SLUG_JSON="$(jq -c --slurpfile owners "$TMPD/owners.json" '
+    ($owners[0]) as $om
+    | [ .[]
+        | ($om[.repo_path + "\t" + .remote] // {}) as $o
+        | ($o.owner // "") as $owner
+        | select($owner != "")
+        | {owner: $owner,
+           slug: (if (.repo_slug_raw // "") != "" then .repo_slug_raw else ($o.slug // "") end)} ]
+    | reduce .[] as $e ({}; if has($e.owner) then . else . + {($e.owner): $e.slug} end)
+  ' "$TMPD/normalized.json" 2>/dev/null || echo '{}')"
+  EPICS_FILE="$TMPD/epics.jsonl"; : > "$EPICS_FILE"
+
   CACHE_FILE="$(status_github_cache_file)"
   CACHE_IN="$(status_github_load_cache "$CACHE_FILE")"
   CACHE_OUT="$CACHE_IN"
@@ -414,6 +436,7 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     [ -n "$owner" ] || continue
     prs=""
     issues=""
+    epics=""
     fetched_at=""
     fetched_epoch=""
     used_cache=0
@@ -430,6 +453,10 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
           if [ "$age" -ge 0 ] && [ "$age" -le "$CACHE_TTL" ]; then
             prs="$(printf '%s' "$cached" | jq -c '.prs // []' 2>/dev/null || echo '[]')"
             issues="$(printf '%s' "$cached" | jq -c '.issues // []' 2>/dev/null || echo '[]')"
+            # Epics are cached fully RESOLVED (sub_issues already fetched), so a
+            # cache hit serves them with no gh/api call (issue #79). Legacy cache
+            # entries without .epics degrade to [].
+            epics="$(printf '%s' "$cached" | jq -c '.epics // []' 2>/dev/null || echo '[]')"
             fetched_at="$(printf '%s' "$cached" | jq -r '.fetched_at // empty' 2>/dev/null || true)"
             fetched_epoch="$c_epoch"
             used_cache=1
@@ -452,11 +479,24 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
            || ! printf '%s' "$issues" | jq -e 'type == "array"' >/dev/null 2>&1; then
           issues="[]"
         fi
-        # Refresh this owner's cache entry (PRs + issue titles together).
+        # Best-effort epics (issue #79): fetch the open epic-labelled issues and
+        # resolve each one's sub-issues (native API, task-list fallback). The
+        # open-issue TITLE map doubles as the authoritative open/closed source for
+        # the task-list fallback. A failure => no epics for this repo, never a
+        # repos_failed mark (the PR fetch owns that).
+        epics_raw="$(status_github_fetch_epics "$owner")"
+        if [ -z "$epics_raw" ] || ! printf '%s' "$epics_raw" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          epics_raw="[]"
+        fi
+        openmap="$(status_github_build_issue_map "$issues")"
+        epics="$(status_github_build_epics "$owner" "$epics_raw" "$openmap")"
+        [ -n "$epics" ] || epics="[]"
+        # Refresh this owner's cache entry (PRs + issue titles + resolved epics).
         CACHE_OUT="$(printf '%s' "$CACHE_OUT" | jq -c \
           --arg k "$owner" --argjson prs "$prs" --argjson issues "$issues" \
+          --argjson epics "$epics" \
           --arg fa "$fetched_at" --argjson fe "$fetched_epoch" \
-          '.[$k] = {fetched_at:$fa, fetched_epoch:$fe, prs:$prs, issues:$issues}' 2>/dev/null || printf '%s' "$CACHE_OUT")"
+          '.[$k] = {fetched_at:$fa, fetched_epoch:$fe, prs:$prs, issues:$issues, epics:$epics}' 2>/dev/null || printf '%s' "$CACHE_OUT")"
       else
         # Network failure / rate limit / bad payload => this repo failed.
         printf '%s\n' "$owner" >> "$FAILED_FILE"
@@ -464,6 +504,14 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
       fi
     fi
     [ -n "$issues" ] || issues="[]"
+    [ -n "$epics" ] || epics="[]"
+
+    # Emit this owner's epics to the top-level epics[] accumulator, injecting the
+    # repo_slug the page groups by (issue #79). One JSONL line per epic.
+    slug_for_epic="$(printf '%s' "$OWNER_SLUG_JSON" | jq -r --arg o "$owner" '.[$o] // ""' 2>/dev/null || true)"
+    printf '%s' "$epics" | jq -c --arg slug "$slug_for_epic" \
+      'if type == "array" then .[] else empty end | {repo_slug: $slug} + .' \
+      >> "$EPICS_FILE" 2>/dev/null || true
 
     age=$((NOW_EPOCH - fetched_epoch))
     [ "$age" -ge 0 ] || age=0
@@ -542,6 +590,11 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
 
   if [ -s "$GHMAP_FILE" ]; then
     GHMAP_JSON="$(jq -s -c 'add // {}' "$GHMAP_FILE")"
+  fi
+
+  # Assemble the top-level epics[] from the per-owner accumulator (issue #79).
+  if [ -s "$EPICS_FILE" ]; then
+    EPICS_JSON="$(jq -s -c '.' "$EPICS_FILE" 2>/dev/null || echo '[]')"
   fi
 
   # Top-level enrichment provenance: stalest age wins.
@@ -652,6 +705,7 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
       degraded: (\$read_errors | length > 0)
     },
     runs: \$runs_final,
+    epics: \$epics,
     read_errors: \$read_errors
   }
 "
@@ -662,6 +716,7 @@ DOC="$(jq -n \
   --slurpfile probe "$TMPD/probe.json" \
   --slurpfile state "$TMPD/state.json" \
   --slurpfile ghmap "$TMPD/ghmap.json" \
+  --argjson epics "$EPICS_JSON" \
   --argjson now "$NOW_EPOCH" \
   --argjson stale "$STALE_AFTER" \
   --argjson repos_configured "$REPOS_CONFIGURED" \
