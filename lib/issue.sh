@@ -248,6 +248,40 @@ count_open_blockers() {
   printf '%s' "$out"
 }
 
+# list_blocked_by <repo-root> <N> [<owner/repo>]
+# Prints one blocker per line as "<number>\t<state>" (state "open"/"closed") for
+# issue N's blocked_by dependency graph, and returns 0 on a good read (including
+# the empty case — an issue with no blockers prints nothing). Returns 2 (printing
+# nothing) when the graph could NOT be read — the caller MUST treat that as
+# "assume blocked" (fail-closed, same contract as count_open_blockers).
+#
+# count_open_blockers answers "how many open blockers?"; this answers "WHICH
+# issues block N and in what state?", which /run-epic (issue #82) needs to build
+# the child-set dependency graph (cycle check + run order) and to name the
+# blocker in its report. Reading the same GET .../dependencies/blocked_by graph
+# keeps the two helpers consistent. Stays on the personal gh-CLI identity — a
+# read with no privacy boundary, like count_open_blockers.
+list_blocked_by() {
+  local repo="$1"
+  local n="$2"
+  local owner_repo="${3:-}"
+  local path
+  if [ -n "$owner_repo" ]; then
+    path="repos/$owner_repo/issues/$n/dependencies/blocked_by"
+  else
+    path="repos/{owner}/{repo}/issues/$n/dependencies/blocked_by"
+  fi
+  local out
+  if ! out=$(
+    cd "$repo" || exit 1
+    gh api --paginate "$path" --jq '.[] | "\(.number)\t\(.state)"' 2>/dev/null
+  ); then
+    return 2
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 # is_epic <repo-root> <N> [<owner/repo>]
 # Prints "1" when issue N carries the `epic` label, "0" when it demonstrably
 # does not, and returns 0 in both cases. Returns 2 (printing nothing) when the

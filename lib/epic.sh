@@ -95,6 +95,21 @@ epic_list_open() {
   ) || true
 }
 
+# _epic_parse_child_line <tsv-line> — split one list_epic_children line
+#   <number>\t<state>\t<labels-csv>\t<title>
+# into the globals REPLY_NUM / REPLY_STATE / REPLY_LABELS / REPLY_TITLE,
+# PRESERVING an empty labels column. `IFS=$'\t' read -r a b c d` cannot be used
+# here: tab is an IFS-whitespace character, so a run of two tabs (the empty
+# labels column of an unlabelled child) collapses to one, shifting the title into
+# the labels slot and blanking the title. Splitting by hand keeps every column.
+_epic_parse_child_line() {
+  local line="$1" rest
+  REPLY_NUM="${line%%$'\t'*}";   rest="${line#*$'\t'}"
+  REPLY_STATE="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+  REPLY_LABELS="${rest%%$'\t'*}"
+  REPLY_TITLE="${rest#*$'\t'}"
+}
+
 # _epic_csv_has <csv> <needle> — 0 if the comma-separated list contains the exact
 # element, 1 otherwise. Empty csv never matches.
 _epic_csv_has() {
@@ -120,6 +135,62 @@ _epic_missing_labels() {
     fi
   done
   printf '%s' "$out"
+}
+
+# _epic_propagate_child <epic-N> <owner/repo> <child-N> <child-labels-csv> <run-labels-csv>
+# The SINGLE run-label propagation decision for one child, shared by the poller's
+# epic_process_one and run-epic.sh (#82, AC4: `grep` must not find two label-
+# propagation implementations). Best-effort, always returns 0.
+#
+# It assumes the child is OPEN (closed children are dropped by the callers before
+# they get here — closed is not "skip propagation", it is "already done" and the
+# poller must still count it). It skips a `wip` child (§3.3 human opt-out) and
+# adds only the run labels the child is MISSING (idempotent via _epic_missing_labels;
+# labels_add is itself additive). Diagnostics go to the epic log, never stdout, so
+# a poller that redirects epic_process_one's stdout to its logfile stays clean.
+_epic_propagate_child() {
+  local epic="$1" owner_repo="$2" num="$3" child_labels="$4" labels_csv="$5"
+  if _epic_csv_has "$child_labels" "wip"; then
+    _epic_log "epic #$epic: child #$num is wip — skipping propagation"
+    return 0
+  fi
+  local missing
+  missing=$(_epic_missing_labels "$child_labels" "$labels_csv")
+  if [ -n "$missing" ]; then
+    if labels_add "$owner_repo" "$num" "$missing" 2>&1 | while IFS= read -r _l; do _epic_log "$_l"; done; then :; fi
+    _epic_log "epic #$epic: propagated [$missing] to child #$num"
+  fi
+  return 0
+}
+
+# propagate_run_labels <repo-root> <epic-N> <run-labels-csv> [<owner/repo>]
+# Resolve the epic's children (the canonical native → task-list resolver) and
+# propagate the run labels to every OPEN child through _epic_propagate_child. This
+# is the shared apply path M4 (docs/epic-orchestration.md §6.2) that /run-epic
+# calls at its write step: the poller's per-tick epic_process_one and the one-shot
+# command therefore share ONE propagation implementation (AC4). Best-effort and
+# idempotent — always returns 0; an unreadable child graph logs and does nothing
+# (fail-closed: a false "propagated" would be worse than waiting a tick).
+propagate_run_labels() {
+  local repo="$1" epic="$2" labels_csv="${3:-}" owner_repo="${4:-}"
+  local children rc=0
+  children=$(list_epic_children "$repo" "$epic" "$owner_repo") || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _epic_log "epic #$epic: children unreadable (rc=$rc) — cannot propagate"
+    return 0
+  fi
+  local line num state child_labels
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    _epic_parse_child_line "$line"
+    num="$REPLY_NUM"; state="$REPLY_STATE"; child_labels="$REPLY_LABELS"
+    [ -n "$num" ] || continue
+    [ "$state" = "closed" ] && continue
+    _epic_propagate_child "$epic" "$owner_repo" "$num" "$child_labels" "$labels_csv"
+  done <<EOF
+$children
+EOF
+  return 0
 }
 
 # _epic_issue_has_comment_marker <issue-json-file> <marker> — 0 if any comment
@@ -195,9 +266,12 @@ epic_process_one() {
   epic_title=$(jq -r '.title // ""' "$epic_json" 2>/dev/null || echo "")
 
   local total=0 closed=0
-  local num state child_labels title
+  local num state child_labels title line
   # 1. PROPAGATION + 2. ESCALATION, per child.
-  while IFS=$'\t' read -r num state child_labels title; do
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    _epic_parse_child_line "$line"
+    num="$REPLY_NUM"; state="$REPLY_STATE"; child_labels="$REPLY_LABELS"; title="$REPLY_TITLE"
     [ -n "$num" ] || continue
     total=$((total + 1))
     if [ "$state" = "closed" ]; then
@@ -207,19 +281,17 @@ epic_process_one() {
 
     # --- opt-out: a human parks a child with `wip` (§3.3). Detectable only on
     # the native path (fallback children carry no label data); that is fine —
-    # the realistic epics use native sub-issues.
+    # the realistic epics use native sub-issues. A wip child skips BOTH
+    # propagation and escalation (it is a deliberate human hold).
     if _epic_csv_has "$child_labels" "wip"; then
-      _epic_log "epic #$epic: child #$num is wip — skipping propagation"
+      _epic_log "epic #$epic: child #$num is wip — skipping"
       continue
     fi
 
-    # --- propagate the run labels the child is missing (idempotent).
-    local missing
-    missing=$(_epic_missing_labels "$child_labels" "$labels_csv")
-    if [ -n "$missing" ]; then
-      if labels_add "$owner_repo" "$num" "$missing" 2>&1 | while IFS= read -r _l; do _epic_log "$_l"; done; then :; fi
-      _epic_log "epic #$epic: propagated [$missing] to child #$num"
-    fi
+    # --- propagate the run labels the child is missing (idempotent). This goes
+    # through the SINGLE propagation primitive shared with run-epic.sh (#82,
+    # AC4: no second label-propagation implementation).
+    _epic_propagate_child "$epic" "$owner_repo" "$num" "$child_labels" "$labels_csv"
 
     # --- escalate a stalled child to the epic, once per child.
     if _epic_csv_has "$child_labels" "needs-human"; then
@@ -288,8 +360,11 @@ _epic_announce_complete() {
     echo "Epicin \`${epic_title:-#$epic}\` jokainen alaissue on suljettu. Runner **ei sulje epiciä** — sulkupäätös jää ihmiselle (epicin runko voi sisältää hyväksyntäkriteereitä, jotka on tarkistettava). Jos repo käyttää GitHubin natiivia auto-closea, se sulkee epicin itse."
     echo
     echo "**Alaissueet:**"
-    local num state _labels title prs
-    while IFS=$'\t' read -r num state _labels title; do
+    local line num title prs
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      _epic_parse_child_line "$line"
+      num="$REPLY_NUM"; title="$REPLY_TITLE"
       [ -n "$num" ] || continue
       prs=$(_epic_child_pr_refs "$repo" "$num" "$owner_repo")
       if [ -n "$prs" ]; then
