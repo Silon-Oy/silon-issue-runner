@@ -99,6 +99,17 @@ for d in agents commands; do
   done
 done
 
+# A newly shipped command must arrive via the glob with no installer change
+# (#82: /run-epic). This is the acceptance criterion "install.sh linkittää uuden
+# komennon (globi kattaa — todennettava testissä)" made explicit for run-epic.md.
+if [ -L "$H1/.claude/commands/run-epic.md" ] \
+   && [ "$(readlink "$H1/.claude/commands/run-epic.md")" = "$ROOT/commands/run-epic.md" ]; then
+  echo "PASS: case1 commands/run-epic.md linked via the glob (no installer change)"
+else
+  echo "FAIL: case1 commands/run-epic.md not linked — the command glob missed a new command"
+  FAIL=1
+fi
+
 if [ -d "$H1/.claude/agents" ] && [ ! -L "$H1/.claude/agents" ]; then
   echo "PASS: case1 \$HOME/.claude/agents is a real directory, not a directory symlink"
 else
