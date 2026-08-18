@@ -183,8 +183,8 @@ nimeää korjauskomennon. Puuttuva timeout-binääri on vain varoitus (ajo jatku
 Portti on top-levelissä, joten se koskee kaikkia neljää moodia (start / `--resume` / `--restart` /
 `--continue`). Ohitus: `RUN_ISSUES_SKIP_PREFLIGHT=1`.
 
-**Vaihe A** — S1 PickIssue → S2 Lock → **S2b BlockedCheck** → S3 Claim → S4 Worktree →
-S5 DBClone → S6 CycleReview
+**Vaihe A** — S1 PickIssue → S2 Lock → **S2b BlockedCheck** → **S2c EpicCheck** → S3 Claim →
+S4 Worktree → S5 DBClone → S6 CycleReview
 
 - **S2b BlockedCheck** (#28) on autoritatiivinen esto-portti lukon ja claimin välissä.
   Poimintahaun `-is:blocked` lukee GitHubin *eventually consistent* -hakuindeksiä; kerran
@@ -196,6 +196,17 @@ S5 DBClone → S6 CycleReview
   lukko vapautetaan, exit 9. Estäjien lukumäärä lokitetaan kummassakin tapauksessa, joten väärä
   poiminta näkyy lokista eikä vasta törmäävistä PR:istä. Nimetyn ajon voi pakottaa `--force`illa;
   `-is:blocked` jää halvaksi esikarsinnaksi, ei korvaudu.
+
+- **S2c EpicCheck** (#81) on autoritatiivinen epic-portti S2b:n vieressä, samalla mallilla ja
+  samasta syystä. Epic-issue **kokoaa** ajettavat alaissueet mutta ei ole itse ajettava; jos se
+  poimittaisiin, implementer ajettaisiin epicin kokoavaa runkoa vasten ja polttaisi koko
+  timeout-budjetin tehtävään jota ei ole. Poimintahaun `-label:epic` (M1) lukee saman *eventually
+  consistent* -indeksin kuin `-is:blocked`, joten portti tarkistaa labelin **suoraan**
+  (`gh issue view --json labels`, `lib/issue.sh:is_epic`) lukon jälkeen ja claimia ennen. **Fail-closed**:
+  lukukelvoton labelilista tulkitaan epiciksi. Epic ⇒ `blocked/is_epic_not_runnable`,
+  lukukelvoton ⇒ `blocked/epic_check_failed`, lukko vapautetaan, exit 12. **Ei `needs-human`-labelia**
+  (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`illa. Ks. epic-tason
+  automaatio alla ja `docs/epic-orchestration.md`.
 
 - **S4 Worktree** ratkaisee feature-haaran base-refin **arvaamatta**: eksplisiittinen
   `base_branch` → `<remote>/<base_branch>`, muuten `<remote>/HEAD`. Jos remotella on refit
@@ -244,7 +255,9 @@ esto pysäytti kuuden issuen riippuvuusketjun yön yli). Labelin elinkaari on va
 **Poikkeus: claimia edeltävät portit eivät labeloi.** `blocked_by_dependency` ja
 `blocked_check_failed` (S2b) poistuvat ennen claimia, issue ei ole assignattuna meille, ja
 aito `blocked_by` jatkuu itsestään kun estäjä sulkeutuu — se on odotustila, ei ihmisen
-tarve. Sama koskee S0-preflightiä (exit 8), joka poistuu ennen lukkoa.
+tarve. Sama koskee `is_epic_not_runnable` / `epic_check_failed` -portteja (S2c, #81): epic ei
+kuulu poimintaan lainkaan, joten sen kohdalla `needs-human` olisi väärä signaali. Sama koskee
+S0-preflightiä (exit 8), joka poistuu ennen lukkoa.
 
 **Blocked-ajon uusintayritys ihmiskommentilla (#57).** Jokainen yllä lueteltu terminaalinen
 `blocked/*`-esto, joka postaa situation-kommentin, upottaa siihen `awaiting-answer`-markerin
@@ -269,6 +282,38 @@ päättyvä ajo postaa **uuden** markerin, ja `scan_blocked_answered` vaatii vas
 markerin jälkeen ⇒ yksi kommentti = korkeintaan yksi yritys. Suljettu issue tai markeriton
 legacy-ajo ohitetaan hiljaa. `fetch_issue_json` palauttaa nyt myös issuen `state`n, jotta
 avoimuustarkistus tehdään samasta hausta kuin markeri/vastaus.
+
+**Epic-tason automaatio (#81).** `auto-run` epic-issuella on **propagointisignaali**, ei
+ajosignaali: se tarkoittaa "aja tämä epic" = "lisää `auto-run` epicin avoimille alaissueille ja
+anna pollerin ajaa ketju normaalisti S2b-järjestyksen varassa". Epic itse ei koskaan aja (M1
+poissulku + S2c-portti). Koneisto on ohut kerros olemassa olevan riippuvuusajon *päällä* eikä aja
+alaissueita itse — se **valmistelee** ne (`docs/epic-orchestration.md`, #80). Pollerin uusi
+**`scan_epics`-vaihe** (poller.sh, ennen poimintaa jotta samalla tikillä propagoitu lapsi on heti
+poimittavissa) hakee avoimet epicit (`is:open label:epic` + watchlistin ajolabelit,
+`lib/epic.sh:epic_list_open`) ja ajaa kullekin `epic_process_one`in, joka on **best-effort ja
+idempotentti** (aina rc 0 — yhden epicin GitHub-häiriö ei kaada tikkiä):
+
+- **Propagointi** — lisää ajolabelit (`auto-run` + watchlistin vaatimat) epicin **avoimille**
+  alaissueille joilta ne puuttuvat (`labels_add`). Ohittaa suljetut, jo-labeloidut ja `wip`-lapset
+  (`wip` on ihmisen opt-out, ei uutta labelia). Lapsijoukko resolvoidaan **jaetulla**
+  `lib/issue.sh:list_epic_children`illä (natiivit `sub_issues` kanoninen, rungon task-lista
+  fallback vain kun natiiveja on nolla; cross-repo-lapset ohitetaan varoituksella) — sama funktio
+  palvelee Ohjaamon V4-näkymää, joten näkymä ja ajo eivät voi olla eri mieltä epicin lapsista.
+- **Eskalaatio** — kun alaissue saa `needs-human`-labelin, epic-issuelle postataan **kerran per
+  lapsi** tilannekommentti (piilomarker `<!-- run-issues:epic-attention child=<N> -->` epicin
+  kommenteissa vartioi kertaluonteisuuden, #65:n SKIP_CLOSED-vaimennuksen hengessä) + kevyt
+  suodatettava `epic-attention`-label. Riippumattomat haarat jatkavat itsestään (S2b ajaa vain ne
+  lapset, joiden estäjät ovat kiinni).
+- **Valmius (elinkaari)** — kun **kaikki** alaissueet ovat suljettuja, epic saa **kerran**
+  yhteenvetokommentin (listaa alaissueet + best-effort PR:t) ja `epic-complete`-labelin. **Runner
+  ei sulje epiciä** — sulkupäätös jää ihmiselle (epicin runko voi sisältää hyväksyntäkriteereitä),
+  ja GitHubin natiivi auto-close voittaa jos repo on niin konfiguroitu (avoin päätös F; #81:n cycle
+  review pinnasi tämän additiivisen muodon: kommentti + label, ei sulkua). Idempotenssi: label tai
+  completion-marker läsnä ⇒ ei toistoa.
+
+Epic-labelit (`epic`, `epic-attention`, `epic-complete`) ovat **kiinteitä nimiä**, eivät
+konfiguroitavia — sama päätös kuin `epic`-labelilla itsellään (`docs/epic-orchestration.md` §6).
+`/run-epic`-komento (M6) ja epicin keskeytys jäävät erilliseen issueen (scope-out).
 
 **Jatkomoodit:**
 
@@ -302,6 +347,7 @@ README-riviä on punainen testi.
 | 9 | Issue on estetty avoimella `blocked_by`-riippuvuudella — S2b-portti (#28) kieltäytyi lukon ja claimin välissä; ajo finalisoitu `blocked/blocked_by_dependency`, lukko vapautettu, ei claimia. Fail-closed (lukukelvoton graafi = esto). Nimetyn ajon voi pakottaa `--force`illa |
 | 10 | Odottaa ihmisen katselmointia — jatka `--resume` |
 | 11 | Odottaa tarkennusta — cycle review palautti NEEDS_CLARIFICATION; ajo finalisoitu `awaiting_clarification`, pollerin `scan_answered` jatkaa `--continue`lla |
+| 12 | Issue kantaa `epic`-labelia — S2c-portti (#81) kieltäytyi lukon ja claimin välissä. Epic kokoaa ajettavat alaissueet mutta ei ole itse ajettava; ajo finalisoitu `blocked/is_epic_not_runnable` (tai `blocked/epic_check_failed` jos labelit lukukelvottomat), lukko vapautettu, ei claimia, **ei `needs-human`-labelia** (claimia edeltävä portti kuten S2b). Fail-closed. Nimetyn ajon voi pakottaa `--force`illa |
 
 ### Kokonaistila (`status.sh`, #59)
 
@@ -437,8 +483,9 @@ awaiting-answer-markeria (scope-out: ei automaattista uudelleenkäynnistystä �
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon jaettu resolvointi natiivi→fallback, #81; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
+| `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartija `tests/test-epic.sh` |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `poller-config.sh` | Pollerien host-portti ja watchlistin resolvointi puhtaina funktioina. Erillinen lib siksi, että molemmat pollerit tarvitsevat saman päätöksen ja se on testattava **sourcaamalla** — poller itse exittaa source-hetkellä vieraalla koneella |
@@ -878,11 +925,14 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   kuin kumpikaan puhdas vaihtoehto, joten #9 jätti tämän tietoisesti tekemättä. Toiminnallista
   vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei nimellä
   (`lib/issue.sh`).
-- **Epic-ajon arkkitehtuuri on suunniteltu (`docs/epic-orchestration.md`, #80) mutta ei
-  toteutettu.** Dokumentti määrittelee epicin kanonisen muodon (`epic`-label + natiivit
-  sub-issuet, task-lista fallbackina), auto-run-propagoinnin ja `/run-epic`-komennon. Kirjattu
-  löydös: poimintahaku (`lib/issue.sh:pick_oldest_unassigned`, `poller.sh` inline) **ei suodata
-  `epic`-labelia**, joten epic-issue jolla on `auto-run` poimitaan tänään tavallisena issuena —
-  §2:n ennakkoehto ennen kaikkea muuta epic-automaatiota. **Näkymäpuoli on jo toteutettu (#79):**
-  Ohjaamon epic-rollup (`epics[]` + kaista) tekee epicin ajosta näkyvän, mutta *orkestrointi*
-  (auto-run epic-tasolla, `/run-epic`) on yhä tämä avoin kehityslinja.
+- **Epic-ajon auto-run-semantiikka on toteutettu (#81); `/run-epic` ja keskeytys eivät.**
+  `docs/epic-orchestration.md` (#80) määrittelee koko arkkitehtuurin. #81 toteutti sen
+  auto-run-tason muutoskohdat M1–M5 ja M7: epicin poissulku poiminnasta (`-label:epic`
+  molemmissa hauissa) + S2c-portti (`is_epic`, exit 12), lapsijoukon jaettu resolvointi
+  (`list_epic_children`), ajolabelien idempotentti propagointi + `needs-human`-eskalaatio +
+  valmiuskommentti/-label (`lib/epic.sh`, pollerin `scan_epics`). **Toteuttamatta jäävät (oma
+  issue):** `/run-epic`-komento (M6: dokumentin §5 UX, validointi ml. syklintarkistus ja
+  topologinen ajojärjestys, `--dry-run`, `--start-now`) ja epicin **keskeytys** (§4.3:
+  elävien lapsiajojen `stop-run.sh`-pysäytys + jonossa olevien `auto-run`-poisto). Näiden
+  scope-out on issuen #81 nimenomainen rajaus. Cross-repo-epicit jäävät myös ulkopuolelle
+  (Rajaukset): `list_epic_children` ohittaa cross-repo-lapsen varoituksella.

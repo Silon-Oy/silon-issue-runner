@@ -416,6 +416,36 @@ lenkki kerrallaan itsestään.
 Estotieto tulee GitHubin hakuindeksistä, joten se päivittyy pienellä viiveellä juuri suljetun
 estäjän jälkeen. Käytännössä viive mahtuu pollerin 5 minuutin tikkiväliin.
 
+#### Epicit — usean issuen ketjun ajaminen `auto-run`illa
+
+Kun kokonaisuus koostuu monesta issuesta, voit koota ne **epic-issueen** ja ajaa koko ketjun
+yhdellä signaalilla. Epic on GitHub-issue jolla on **`epic`-label**; sen alaissueet liitetään
+GitHubin natiivilla **sub-issue**-toiminnolla (vanhoissa epiceissä rungon task-lista
+`- [ ] Otsikko #123` toimii varamuotona). Ajojärjestys tulee alaissueiden keskinäisistä
+`blocked_by`-riippuvuuksista aivan kuten yllä.
+
+- **Epic ei koskaan itse aja.** `epic`-label pitää epicin poiminnan ulkopuolella (sama tapa kuin
+  `waiting`/`wip`), ja lukon jälkeinen S2c-portti varmistaa saman autoritatiivisesti — epicin
+  "toteutus" on sen alaissueiden toteutus, ei epicin runko.
+- **`auto-run` epicillä propagoituu alaissueille.** Lisää `auto-run` (ja mahdolliset muut repon
+  vaatimat ajolabelit) **epiciin**, niin poller lisää ne epicin **avoimille** alaissueille joka
+  tikki. Jo labeloidut, suljetut ja `wip`-merkityt lapset ohitetaan. Propagointi on jatkuvaa:
+  myöhemmin lisätty alaissue saa labelin seuraavalla tikillä.
+- **Jätä yksittäinen alaissue ajon ulkopuolelle `wip`illä** — älä poista siltä `auto-run`ia
+  (propagointi palauttaisi sen).
+- **Jumittunut alaissue nostetaan näkyviin.** Kun alaissue päätyy `needs-human`-tilaan, epiciin
+  postataan **kerran** kommentti joka nimeää lapsen, ja epic saa suodatettavan
+  `epic-attention`-labelin. Riippumattomat haarat jatkavat normaalisti.
+- **Valmistuminen näkyy, sulkeminen jää sinulle.** Kun epicin **kaikki** alaissueet ovat kiinni,
+  epic saa **kerran** yhteenvetokommentin (listaa alaissueet ja niiden PR:t) ja
+  `epic-complete`-labelin. **Runner ei sulje epiciä** — tarkista epicin hyväksyntäkriteerit ja
+  sulje itse (tai anna GitHubin natiivin auto-closen hoitaa se, jos repo on niin konfiguroitu).
+
+Labelit `epic`, `epic-attention` ja `epic-complete` ovat kiinteitä nimiä. Cross-repo-alaissueet
+(toisessa repossa) ovat tuen ulkopuolella: ne ohitetaan lokivaroituksella. `/run-epic`-komento
+(joka propagoisi labelit heti odottamatta seuraavaa tikkiä) on erillinen, vielä toteuttamaton
+lisä — tällä hetkellä lisää `auto-run` epiciin käsin ja poller hoitaa loput.
+
 ### 6.6 Käyttötapaukset
 
 Kahdeksan tilannetta, joissa ihmistä tarvitaan tai kannattaa tietää mitä tapahtuu.
@@ -973,6 +1003,7 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (`-is:blocked`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia: se on odotustila, joka jatkuu itsestään kun estäjä sulkeutuu. Nimetyn ajon voi pakottaa `--force`-lipulla |
 | 10 | Odottaa ihmisen katselmointia — jatka komennolla `--resume` |
 | 11 | Odottaa tarkennusta — vastaa issuelle, poller jatkaa `--continue`-ajolla |
+| 12 | **Issue kantaa `epic`-labelia** — S2c-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota (issue #81). Epic kokoaa ajettavat alaissueet mutta ei ole itse ajettava; ajo viimeisteltiin `blocked`-tilaan (`is_epic_not_runnable`, tai `epic_check_failed` jos labelit lukukelvottomat) ja lukko vapautettiin. Portti lukee labelin suoraan (`-label:epic`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`-lipulla |
 
 ### Asennin (`install.sh`)
 

@@ -27,7 +27,7 @@ Poiminta on **yksi GitHub-haku**. Issue lähtee ajoon täsmälleen kun **kaikki 
 1. Issue on **avoin**.
 2. Issuella **ei ole yhtään assigneeta** (`no:assignee`) — ei sinua, ei ketään muuta.
 3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa (`-is:blocked`).
-4. Issuella **ei ole** labelia `waiting`, `wip` eikä `auto-clean`.
+4. Issuella **ei ole** labelia `waiting`, `wip`, `epic` eikä `auto-clean`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: yksi label, `auto-run`).
 6. Se on vanhin ehdot täyttävä issue — yksi issue per tikki per remote.
 
@@ -48,6 +48,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa käsin ennen 
 |---|---|---|---|
 | `auto-run` | **sinä** | sinä | Poimintaehto. Nimi tulee konfiguraatiosta, ei koodista — oletus, ei kiinteä |
 | `wip` | **sinä** | sinä | Estää poiminnan. "Teen tämän itse" -merkintä |
+| `epic` | **sinä** | sinä | Merkitsee kokoavan epic-issuen. **Estää poiminnan** — epic ei ole itse ajettava, vaan sen `auto-run` propagoituu avoimille alaissueille. Jätä alaissue ajon ulkopuolelle `wip`illä, ei `auto-run`ia poistamalla (propagointi palauttaisi sen) |
 | `auto-clean` (konfiguroitava: `RUN_ISSUES_CLEAN_LABEL`) | **sinä** | automaatio siivouksen jälkeen | Pyytää siivoamaan ajojäänteet ja sulkemaan issuen. **Ei koskaan poimintalabeliksi** |
 | `auto-merge` (konfiguroitava: `PR_WATCH_MERGE_LABEL`) | **sinä** issuelle | — | Propagoituu issuelta PR:lle; `pr-watch` mergeää vain labeloidun PR:n |
 | `waiting` | automaatio, kun ajo odottaa vastaustasi | automaatio, kun jatkat | Estää poiminnan tarkennuksen ajaksi |

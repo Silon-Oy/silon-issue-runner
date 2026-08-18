@@ -193,6 +193,14 @@ LIB_RUN_TERMINATE="${RUN_ISSUES_HOME}/lib/run-terminate.sh"
 # shellcheck source=lib/run-terminate.sh
 . "$LIB_RUN_TERMINATE"
 
+# epic_list_open / epic_process_one live in lib/epic.sh (issue #81): the epic
+# scan phase below propagates auto-run to an epic's children, escalates stalled
+# children to the epic, and announces completion — all idempotently. Pure
+# functions (pulls in its own issue.sh/labels.sh deps); safe to source.
+LIB_EPIC="${RUN_ISSUES_HOME}/lib/epic.sh"
+# shellcheck source=lib/epic.sh
+. "$LIB_EPIC"
+
 # _running_session_name <prefix> <remote> <repo-slug> <issue>
 # Prints the name of an existing tmux session for this (repo, remote, issue) and
 # returns 0, or returns 1 when none is running.
@@ -748,6 +756,19 @@ while IFS= read -r repo_json; do
         "'$CLEANUP' --repo '$REPO_PATH' --issue '$BLOCKED_ISSUE' --remote '$REMOTE' --yes 2>&1 | tee -a '$RUNS_LOG'"
     done < <(scan_blocked_answered "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
+    # ----- Scan epics: propagate auto-run + lifecycle markers (issue #81) ---
+    # BEFORE pickup, so a child that just received auto-run in this same tick is
+    # already pickable below. An epic is never spawned as a run (S2c + the pickup
+    # search's -label:epic keep it out); this phase only PREPARES its children so
+    # the normal dependency-run picks up the chain. epic_process_one is entirely
+    # best-effort (always returns 0) — a single epic's GitHub hiccup must not
+    # abort the tick — and idempotent, so repeating it every tick is safe.
+    while IFS= read -r epic_num; do
+      [ -n "$epic_num" ] || continue
+      epic_process_one "$REPO_PATH" "$epic_num" "$LABELS_CSV" "$OWNER_REPO" "$REMOTE" \
+        >> "$LOG" 2>&1 || true
+    done < <(epic_list_open "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO")
+
     # ----- Pick a new candidate issue (per remote) -------------------------
     # gh issue list is routed via `--repo owner/repo` when known so a
     # non-origin remote sees its own org's issues. REPO_ARGS is an array so
@@ -772,7 +793,7 @@ while IFS= read -r repo_json; do
       # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
       # no longer accepts standalone --sort/--order flags on `issue list`.
       gh issue list "${REPO_ARGS[@]}" \
-        --search "is:open no:assignee -is:blocked -label:waiting -label:wip -label:$RUN_ISSUES_CLEAN_LABEL sort:created-asc$extra" \
+        --search "is:open no:assignee -is:blocked -label:waiting -label:wip -label:epic -label:$RUN_ISSUES_CLEAN_LABEL sort:created-asc$extra" \
         --limit 1 \
         --json number \
         --jq '.[0].number // empty' 2>/dev/null || true
