@@ -628,13 +628,18 @@ Rikastus on **fail-soft**: yhden repon verkkovirhe vie sen `enrichment.repos_fai
 sen ajot jäävät `github: null`, muut repot rikastuvat ja exit-koodi on ennallaan. Ilman lippua
 käytös on bitilleen kuin ennen (`github: null` joka ajossa). Tekninen referenssi: CLAUDE.md §8.
 
-**Staattinen web-esitys.** [`status-render.sh`](status-render.sh) on JSONin ensimmäinen
+**Selainpohjainen web-esitys.** [`status-render.sh`](status-render.sh) on JSONin ensimmäinen
 kuluttaja: se kirjoittaa `index.html`in ja `status.json`in atomisesti hakemistoon
 `RUN_ISSUES_STATUS_OUT_DIR` (oletus `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`),
-ilman JavaScriptiä ja ilman ulkoisia resursseja. Valinnainen LaunchAgent
-`com.claude-issue-runner.status-render.plist` regeneroi sivun 300 s välein. Sivun altistaminen
-verkkoon on koneen omistajan asia — lue turvamallin osio [7.8](#78-statussivun-web-esitys-on-uusi-altistuspinta)
-ja `examples/status-caddy.example` ennen kuin tarjoilet sitä mistään.
+ilman ulkoisia resursseja. `index.html` on **itsenäinen selainsovellus**: staattinen runko +
+inline-CSS + inline-JS, joka hakee `status.json`in `fetch`illä 60 s välein ja renderöi näkymän
+selaimessa — ryhmittely repoittain, suodatinchipit, järjestysvalinta, suomenkieliset
+tilaselitteet ja vaalea/tumma teema. Kaikki datateksti insertoidaan `textContent`illä, joten
+sivu on turvallinen tarjoiltavaksi. Valinnainen LaunchAgent
+`com.claude-issue-runner.status-render.plist` regeneroi rungon 300 s välein (itse data päivittyy
+selaimessa 60 s välein). Sivun altistaminen verkkoon on koneen omistajan asia — lue turvamallin
+osio [7.8](#78-statussivun-web-esitys-on-uusi-altistuspinta) ja `examples/status-caddy.example`
+ennen kuin tarjoilet sitä mistään.
 
 ---
 
@@ -795,26 +800,30 @@ polun, johon kosketaan.
 
 ### 7.8 Statussivun web-esitys on uusi altistuspinta
 
-[`status-render.sh`](status-render.sh) muuntaa `status.sh`:n JSONin staattiseksi web-sivuksi
-(`index.html` + `status.json`) hakemistoon `RUN_ISSUES_STATUS_OUT_DIR` (oletus
-`${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`). Valinnainen LaunchAgent
-`com.claude-issue-runner.status-render.plist` regeneroi sivun 300 s välein.
+[`status-render.sh`](status-render.sh) muuntaa `status.sh`:n JSONin selainpohjaiseksi
+web-esitykseksi (`index.html` + `status.json`) hakemistoon `RUN_ISSUES_STATUS_OUT_DIR` (oletus
+`${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`). `index.html` on itsenäinen
+selainsovellus, joka hakee `status.json`in `fetch`illä; **molemmat tiedostot tarjoillaan samasta
+hakemistosta ja ovat siis saman pääsynhallinnan takana.** Valinnainen LaunchAgent
+`com.claude-issue-runner.status-render.plist` regeneroi rungon 300 s välein.
 
 **Paketti tuottaa vain tiedostot. Se ei koskaan päätä, miten sivu altistetaan** — ei vhostia,
 ei domainia, ei tunnelia. Altistuspäätös (Caddy-vhost, Tailscale-bind, todennettu proxy) on
-koneen omistajan konfiguraatiota, ei tämän repon sisältöä. Syy on vuotoraja: **sivulla on
+koneen omistajan konfiguraatiota, ei tämän repon sisältöä. Syy on vuotoraja: **datassa on
 repo-slugit, issue-numerot, PR-URLit ja haaranimet** — ja haaranimet ja repo-slugit paljastavat
 rutiininomaisesti asiakasnimiä ja sisäistä projektirakennetta. Julkisen tunnelin takana ilman
 pääsynhallintaa ne olisivat maailmanlaajuisesti luettavissa.
 
 Kaksi rakenteellista suojaa pienentää vuotoa jo lähteellä:
 
-- **Kenttävalkolista, ei mustalista.** Renderöijä poimii nimetyt kentät `jq`:lla eikä koskaan
-  itereoi run-objektia. Kielletyt kentät — issuen otsikko ja runko, agenttien tuloste, lokit,
-  promptit, absoluuttiset polut — eivät koskaan päädy sivulle. Mustalista vuotaisi aina
-  myöhemmin skeemaan lisätyn kentän; valkolista ei voi.
-- **HTML-escapaus.** Jokainen datasta tuleva merkkijono escapataan (`jq @html`), joten
-  `<script>`-niminen haara renderöityy tekstinä, ei suoritettavana koodina.
+- **Kenttävalkolista, ei mustalista.** `status.sh` kokoaa jokaisen `runs[]`-objektin nimetyistä
+  kentistä, ja selain-JS lukee vain noita nimettyjä kenttiä eikä koskaan itereoi run-objektia.
+  Kielletyt kentät — issuen otsikko ja runko, agenttien tuloste, lokit, promptit, absoluuttiset
+  polut — eivät koskaan päädy `runs[]`iin eivätkä sivulle. Mustalista vuotaisi aina myöhemmin
+  skeemaan lisätyn kentän; valkolista ei voi.
+- **Turvallinen DOM-insertointi.** Selain-JS insertoi jokaisen datamerkkijonon `textContent`illä
+  (ei koskaan `innerHTML`illä), joten `<script>`-niminen haara renderöityy tekstinä, ei
+  suoritettavana koodina.
 
 Mutta valkolista ei korvaa pääsynhallintaa: **`index.html` ei sisällä autentikointia.**
 Verkkokerros on ainoa suoja. [`examples/status-caddy.example`](examples/status-caddy.example)

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # test-status-render.sh — status-render.sh turns status.sh's --json document into
-# a static, leak-safe web page. This test guards the properties that make it
-# safe to serve from a read-only directory:
+# a self-contained web app: a static, data-free HTML page with inline CSS + inline
+# JS that fetches status.json in the browser and renders a grouped, filterable,
+# Finnish-explained view (#76). This test guards the properties that keep it safe
+# to serve from a read-only directory AND the new client-side structure:
 #
 #   1. It writes both files atomically; status.json is the input verbatim.
-#   2. The HTML is self-contained: inline CSS, no <script>, no fetched resource.
-#   3. FIELD ALLOWLIST: forbidden fields (issue title, log content) never appear,
-#      even when present in the input data.
-#   4. HTML ESCAPING: a branch literally named "<script>" renders escaped.
-#   5. cache age + generated_at are always shown; degraded:true shows a warning;
-#      zero runs still renders a valid page.
+#   2. Self-contained: inline <style> + inline <script>, NO external resource
+#      (no <link>, no src=, no http URL in src/href except github.com links the
+#      JS builds at runtime). The page fetches status.json (same directory).
+#   3. FIELD ALLOWLIST: forbidden fields (issue title, log content) never appear
+#      in the page markup — the JS reads only named fields, never the raw object.
+#   4. SAFE INSERTION: data is inserted with textContent, never innerHTML, so a
+#      branch literally named "<script>" can never execute.
+#   5. Every class_reason documented in lib/status-read.sh has a Finnish entry in
+#      the JS REASONS map; grouping/filter structure (data-class/data-repo,
+#      cleanup summary, chips, auto-refresh) is present.
 #   6. A document with an unknown schema_version leaves the previous page intact
 #      (exit 2), never overwriting a good page with a broken render.
 #   7. The LaunchAgent path works: invoked with no --input it drives status.sh
@@ -35,6 +41,7 @@ bad() { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n' "$1"; }
 check(){ if [ "$2" = "$3" ]; then ok "$1 ($2)"; else bad "$1: got=[$2] expected=[$3]"; fi; }
 absent(){ if grep -qF -- "$2" "$3"; then bad "$1: '$2' present in $3"; else ok "$1"; fi; }
 present(){ if grep -qF -- "$2" "$3"; then ok "$1"; else bad "$1: '$2' missing from $3"; fi; }
+presenti(){ if grep -qiF -- "$2" "$3"; then ok "$1"; else bad "$1: '$2' missing from $3"; fi; }
 
 FX="$(mktemp -d "${TMPDIR:-/tmp}/status-render-test.XXXXXX")"
 trap 'rm -rf "$FX"' EXIT
@@ -42,8 +49,8 @@ LOGS="$FX/logs"
 
 # A document that deliberately carries FORBIDDEN fields (issue title + log
 # content) alongside the allowlisted ones, and a branch name that is an XSS
-# payload. The renderer must show neither forbidden field and must escape the
-# branch.
+# payload. The page markup must show neither forbidden field; the JS must insert
+# the branch with textContent (verified structurally — no browser here).
 TITLE_LEAK="TOP-SECRET-CLIENT-ACME-CORP"
 LOG_LEAK="AGENT-LOG-EXCERPT-abc123-should-not-appear"
 cat > "$FX/doc.json" <<JSON
@@ -72,7 +79,7 @@ RUN_ISSUES_STATUS_OUT_DIR="$OUT" RUN_ISSUES_LOG_DIR="$LOGS" \
 HTML="$OUT/index.html"
 JSONOUT="$OUT/status.json"
 
-# ---- Case 1: both files written; status.json == input ----
+# ---- Case 1: both files written; status.json == input verbatim ----
 check "exit code clean" "$rc" "0"
 if [ -f "$HTML" ]; then ok "index.html written"; else bad "index.html missing"; fi
 if [ -f "$JSONOUT" ]; then ok "status.json written"; else bad "status.json missing"; fi
@@ -82,41 +89,83 @@ else
   bad "status.json differs from the input"
 fi
 
-# ---- Case 2: self-contained HTML ----
+# ---- Case 2: self-contained page, no external resource ----
 if [ -f "$HTML" ]; then
   present "inline <style> present" "<style>" "$HTML"
-  absent  "no <script> tag" "<script" "$HTML"
+  present "inline <script> present" "<script>" "$HTML"
+  present "fetches status.json" 'fetch("status.json"' "$HTML"
   absent  "no external stylesheet <link>" "<link" "$HTML"
-  # No embedded resource the browser would fetch (img/script/iframe src). Note
-  # <a href> links are user navigation, not fetched resources, so they are fine.
+  # No embedded/fetched resource or inline event handler. <a href> links are
+  # user navigation, not fetched resources, so they are fine.
   if grep -Eq '(src=|<iframe|onload=|javascript:)' "$HTML"; then
-    bad "HTML pulls an external/embedded resource or inline JS"
+    bad "HTML pulls an external/embedded resource or inline JS handler"
   else
     ok "no fetched resource / inline JS handler"
   fi
+  # Criterion 5: no http(s) URL in a src/href attribute (github.com excepted —
+  # the JS builds those links at runtime, they are not in the static markup).
+  EXT="$(grep -oE '(src|href)="[^"]*"' "$HTML" | grep -oE 'https?://[^"]*' | grep -v 'github.com' || true)"
+  if [ -z "$EXT" ]; then ok "no external resource URL in static markup"; else bad "external URL in markup: $EXT"; fi
 fi
 
-# ---- Case 3: field allowlist — forbidden fields never appear ----
+# ---- Case 3: field allowlist — forbidden fields never in the page markup ----
 if [ -f "$HTML" ]; then
   absent "issue title does not leak into HTML" "$TITLE_LEAK" "$HTML"
   absent "log content does not leak into HTML" "$LOG_LEAK" "$HTML"
+  # The JS must not reference the forbidden log field name at all.
+  absent "JS does not read log_excerpt" "log_excerpt" "$HTML"
 fi
 
-# ---- Case 4: HTML escaping of a <script> branch name ----
+# ---- Case 4: safe insertion via textContent, never innerHTML ----
 if [ -f "$HTML" ]; then
-  absent  "raw <script>alert not present" "<script>alert" "$HTML"
-  present "branch rendered HTML-escaped" "&lt;script&gt;alert(1)&lt;/script&gt;" "$HTML"
+  absent  "raw <script>alert not present (data is fetched, not embedded)" "<script>alert" "$HTML"
+  present "data inserted via textContent" "textContent" "$HTML"
+  absent  "no .innerHTML property use" ".innerHTML" "$HTML"
 fi
 
-# ---- Case 5: cache age + generated_at + counters ----
+# ---- Case 5: reason coverage + client-side structure ----
 if [ -f "$HTML" ]; then
-  present "generated_at shown" "2026-08-11T20:00:00Z" "$HTML"
-  present "cache age label shown" "Cachen ikä" "$HTML"
-  present "allowlisted repo_slug shown" "acme-site" "$HTML"
-  present "PR link shown" "https://github.com/acme/acme-site/pull/9" "$HTML"
+  # Every documented class_reason (lib/status-read.sh) has a Finnish entry.
+  MISSING=""
+  while read -r reason; do
+    [ -n "$reason" ] || continue
+    grep -qF "$reason" "$HTML" || MISSING="$MISSING $reason"
+  done < <(grep -oE 'class_reason:"[a-z_]+"' "$ROOT/lib/status-read.sh" \
+             | sed 's/class_reason:"//; s/"//' | sort -u)
+  if [ -z "$MISSING" ]; then ok "every class_reason has a Finnish explanation"
+  else bad "class_reason(s) without explanation:$MISSING"; fi
+
+  # Spec-mandated exact wordings.
+  presenti "awaiting_clarification wording" "botin kysymys odottaa vastaustasi issuessa" "$HTML"
+  presenti "pr_unlabelled wording" "PR ilman auto-merge-labelia — vahti ei koske siihen" "$HTML"
+
+  # Grouping / filter / sort structure.
+  present "row carries data-class" 'data-class' "$HTML"
+  present "row carries data-repo" 'data-repo' "$HTML"
+  present "filter chips present" "Huomiota" "$HTML"
+  present "PR matkalla chip present" "PR matkalla" "$HTML"
+  present "Siivousjono chip present" "Siivousjono" "$HTML"
+  present "cleanup summary row" "valmista ajoa" "$HTML"
+  present "empty view text" "Ei ajoja" "$HTML"
+  present "degraded warning text" "Vajaa luenta" "$HTML"
+  present "connection-lost text" "Yhteys katkennut" "$HTML"
+  present "first-load recovery hint" "status.sh --human" "$HTML"
+
+  # Auto-refresh every 60 s.
+  present "auto-refresh interval" "setInterval" "$HTML"
+  present "60 second cadence" "60000" "$HTML"
+
+  # Light default theme + dark via media query.
+  present "light default background" "#ffffff" "$HTML"
+  present "dark theme media query" "prefers-color-scheme: dark" "$HTML"
+
+  # noscript fallback.
+  present "noscript fallback" "<noscript>" "$HTML"
 fi
 
-# ---- Case 5b: degraded warning + zero runs ----
+# ---- Case 5b: degraded + zero-runs document still renders (exit 0, verbatim) ----
+# The page markup is data-free, so it is identical regardless of input; this case
+# exercises the schema gate + verbatim status.json on a different document.
 cat > "$FX/degraded.json" <<'JSON'
 {"schema_version":1,"generated_at":"2026-08-11T21:00:00Z","host":"studio",
  "enrichment":{"mode":"local","cache_age_seconds":120},
@@ -127,10 +176,10 @@ OUT2="$FX/www2"
 RUN_ISSUES_STATUS_OUT_DIR="$OUT2" RUN_ISSUES_LOG_DIR="$LOGS" \
   bash "$RENDER" --input "$FX/degraded.json"; rc2=$?
 check "degraded doc renders (exit 0)" "$rc2" "0"
-if [ -f "$OUT2/index.html" ]; then
-  present "degraded warning shown" "Vajaa luenta" "$OUT2/index.html"
-  present "zero runs renders empty page" "Ei ajoja" "$OUT2/index.html"
-  present "cache age value shown" "2 min" "$OUT2/index.html"
+if [ -f "$OUT2/status.json" ] && diff -q <(jq -S . "$FX/degraded.json") <(jq -S . "$OUT2/status.json") >/dev/null 2>&1; then
+  ok "degraded status.json is the input verbatim"
+else
+  bad "degraded status.json differs from the input"
 fi
 
 # ---- Case 6: unknown schema_version leaves the old page intact ----
@@ -165,7 +214,7 @@ HOME="$FX/home" RUN_ISSUES_WATCHLIST="$FX/watchlist.json" \
 check "LaunchAgent path exits 0 (status.sh exit 3 degraded-ok tolerated)" "$rc4" "0"
 if [ -f "$OUT4/index.html" ] && [ -f "$OUT4/status.json" ]; then
   ok "LaunchAgent path produced both files"
-  present "rendered from real status.sh output" "run-issues status" "$OUT4/index.html"
+  present "rendered the status page" "run-issues status" "$OUT4/index.html"
 else
   bad "LaunchAgent path did not produce both files"
 fi

@@ -315,20 +315,42 @@ kertovat vain lukemisen onnistumisesta — ei mitään lukittua, claimattua tai 
 | 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
 | 3 | Vajaa luenta — ≥1 `run.json` oli lukukelvoton/virheellinen; dokumentti silti validi ja täydellinen muun osan osalta (`degraded: true`), rikkinäiset polut `read_errors`-listassa. Kaksitasoinen luenta (bulk → per-file-fallback) eristää rikkinäisen, muut luetaan |
 
-### Statussivun renderöinti (`status-render.sh`, #62)
+### Statussivun renderöinti (`status-render.sh`, #62, #76)
 
 Oma avaruus. `status.sh`:n JSONin ensimmäinen kuluttaja: kirjoittaa `index.html`in ja
 `status.json`in atomisesti (`RUN_ISSUES_STATUS_OUT_DIR`, oletus
-`${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`). HTML on itsenäinen: inline-CSS, ei
-ulkoisia resursseja, ei JavaScriptiä. **Kenttävalkolista, ei mustalista**: renderöijä poimii
-nimetyt kentät (repo-slug, issue-numero + URL, PR-URL, `class`/`class_reason`, iät,
-`current_state`, haara, `blocked_reason`, cachen ikä, `generated_at`) `jq`:lla eikä koskaan
-itereoi run-objektia, jottei myöhemmin skeemaan lisätty kenttä (issuen otsikko, lokit,
-promptit, polut) vuoda sivulle. Jokainen datamerkkijono escapataan (`jq @html`). Ilman
-`--input`ia skripti ajaa `status.sh --json`in itse (LaunchAgent-polku); `status.sh`:n exit 3
-(degraded) siedetään, muu ei-nolla ⇒ vanha sivu jää paikoilleen. Altistuspäätös (Caddy-vhost,
-Tailscale-bind) ei kuulu pakettiin — vain `examples/status-caddy.example`. Turvamalli:
-README §7.8. Vartija: `tests/test-status-render.sh`.
+`${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www`).
+
+**#76 muutti `index.html`in kevyeksi selainsovellukseksi.** Ennen (#62) skripti renderöi
+`jq`:lla staattisen, tumman insinööritaulukon suoraan datasta. Nyt `index.html` on **staattinen,
+dataton runko** + inline-CSS + inline-JS: JS hakee `status.json`in (samasta hakemistosta)
+`fetch`illä 60 s välein ja renderöi näkymän **selaimessa** — ryhmittely repoittain (kiireisin
+ryhmä ensin: pahin luokka `stalled > attention > running > pr_in_flight > cleanup`, sitten
+vanhin ikä), suodatinchipit (oletus: `attention`+`stalled`+`running` näkyvissä; `cleanup` näkyy
+ryhmän hännässä yhteenvetorivinä myös piilotettuna), rivitason järjestysvalinta (ikä/repo/luokka),
+suomenkieliset `class_reason`-selitteet + suositeltu seuraava askel, vaalea perusteema (tumma
+`prefers-color-scheme: dark`illa), ja tuoreus/degraded/yhteysvirhe-tilat. **Keräyspuoleen
+(`status.sh`, `status.json`-skeema) ei kosketa** — sama versioitu JSON, sama kenttäjoukko.
+
+**Kenttävalkolista säilyy, mutta se on nyt kahden invariantin varassa** (ei enää renderöijän
+`jq`-poiminnan): (1) `status.sh` kokoaa jokaisen `runs[]`-objektin **nimetyistä** kentistä
+(repo-slug, issue-numero + URL, PR-URL, `class`/`class_reason`, iät, `current_state`, haara,
+`blocked_reason`) eikä koskaan kopioi issuen otsikkoa/runkoa, lokeja, prompteja tai
+absoluuttisia polkuja `runs[]`iin; (2) inline-JS lukee **vain** noita nimettyjä kenttiä ja
+insertoi jokaisen datamerkkijonon `textContent`illä (**ei koskaan** `innerHTML`illä) eikä
+itereoi run-objektia — joten `<script>`-niminen haara näkyy tekstinä eikä suoriudu, eikä
+skeemaan myöhemmin lisätty kenttä vuoda sivulle. `status.json` kirjoitetaan yhä verbatim (kone
+lukee sitä), ja se tarjoillaan samasta pääsynhallitusta hakemistosta kuin `index.html` (README
+§7.8) — sama altistusraja kuin #62:ssa.
+
+Sivun markup on dataton, joten se ei voi kaatua dataan; skripti silti portittaa
+`schema_version`in (JS on kirjoitettu skeema-v1:n kenttänimille, väärän muotoinen dokumentti
+tuottaisi hiljaa väärän sivun). Ilman `--input`ia skripti ajaa `status.sh --json`in itse
+(LaunchAgent-polku); `status.sh`:n exit 3 (degraded) siedetään, muu ei-nolla ⇒ vanha sivu jää
+paikoilleen. Altistuspäätös (Caddy-vhost, Tailscale-bind) ei kuulu pakettiin — vain
+`examples/status-caddy.example`. Turvamalli: README §7.8. Vartija: `tests/test-status-render.sh`
+(ml. `class_reason`-selitekartan kattavuus, `textContent`-todennus, ulkoisten resurssien
+poissaolo).
 
 | Koodi | Merkitys |
 |---|---|
