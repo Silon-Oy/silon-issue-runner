@@ -811,3 +811,9 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   kuin kumpikaan puhdas vaihtoehto, joten #9 jätti tämän tietoisesti tekemättä. Toiminnallista
   vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei nimellä
   (`lib/issue.sh`).
+- **Epic-ajon arkkitehtuuri on suunniteltu (`docs/epic-orchestration.md`, #80) mutta ei
+  toteutettu.** Dokumentti määrittelee epicin kanonisen muodon (`epic`-label + natiivit
+  sub-issuet, task-lista fallbackina), auto-run-propagoinnin ja `/run-epic`-komennon. Kirjattu
+  löydös: poimintahaku (`lib/issue.sh:pick_oldest_unassigned`, `poller.sh` inline) **ei suodata
+  `epic`-labelia**, joten epic-issue jolla on `auto-run` poimitaan tänään tavallisena issuena —
+  §2:n ennakkoehto ennen kaikkea muuta epic-automaatiota.
