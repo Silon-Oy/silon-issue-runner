@@ -356,6 +356,48 @@ RUN_ISSUES_HOME="$FAKEHOME" RUN_ISSUES_RENDER_GITHUB=0 \
 check "RENDER_GITHUB=0 renders (exit 0)" "$rc6" "0"
 absent "RENDER_GITHUB=0 does NOT pass --github" "--github" "$ARGSFILE"
 
+# ---- Case 9: action channel (#77) — opt-in buttons + token confinement ----
+# With RUN_ISSUES_ACTION_BASE set, the page embeds the base URL and the shared
+# token as <meta> tags and renders the four buttons. The token must reach ONLY
+# index.html, never status.json. Without the base, neither appears (V1 surface).
+ACT_TOKFILE="$FX/act-token"
+OUT7="$FX/www7"
+RUN_ISSUES_ACTION_BASE="http://studio:8081" RUN_ISSUES_ACTION_TOKEN_FILE="$ACT_TOKFILE" \
+  RUN_ISSUES_STATUS_OUT_DIR="$OUT7" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/doc.json"; rc7=$?
+check "action-base doc renders (exit 0)" "$rc7" "0"
+HTML7="$OUT7/index.html"
+if [ -f "$HTML7" ]; then
+  present "action base meta filled" 'run-issues-action-base" content="http://studio:8081"' "$HTML7"
+  present "action buttons rendered (Pysäytä)" "Pysäytä" "$HTML7"
+  present "action buttons rendered (Salli auto-merge)" "Salli auto-merge" "$HTML7"
+  present "JS posts to the action endpoint" '"/action"' "$HTML7"
+  present "JS sends the CSRF header" "X-Run-Issues-Action" "$HTML7"
+  present "JS probes /healthz for service liveness" "/healthz" "$HTML7"
+  # Turvamalli 6 / edge case: buttons disable with a message when the service is
+  # down. The page still renders (read surface); the JS carries the disabled path.
+  present "service-down disables buttons with a message" "Toimintopalvelu ei tavoitettavissa" "$HTML7"
+  present "confirmation names the consequences (worktree/haara/run-dir)" "run-dir" "$HTML7"
+  if [ -s "$ACT_TOKFILE" ]; then
+    ok "token file created (0600 in production)"
+    TOKVAL="$(head -n1 "$ACT_TOKFILE")"
+    present "token embedded in index.html" "$TOKVAL" "$HTML7"
+    absent  "token NEVER in status.json" "$TOKVAL" "$OUT7/status.json"
+  else
+    bad "token file not created"
+  fi
+fi
+
+# Without the base: no buttons, no token embedded (pure V1 read surface).
+OUT8="$FX/www8"
+RUN_ISSUES_STATUS_OUT_DIR="$OUT8" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/doc.json" >/dev/null 2>&1
+HTML8="$OUT8/index.html"
+if [ -f "$HTML8" ]; then
+  present "action-base meta empty without config" 'run-issues-action-base" content=""' "$HTML8"
+  present "action-token meta empty without config" 'run-issues-action-token" content=""' "$HTML8"
+fi
+
 echo "----------------------------------------"
 echo "status-render: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

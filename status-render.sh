@@ -120,6 +120,30 @@ fi
 
 SCHEMA_VERSION=1
 
+# ---- Ohjaamo action channel (#77): opt-in mutation buttons -------------------
+# The page grows four action buttons (Pysäytä / Siivoa / Salli auto-merge /
+# Jatka) ONLY when RUN_ISSUES_ACTION_BASE names the reachable action service
+# (action-server.sh, on a Tailscale address). When it does, we embed the service
+# base URL and the shared CSRF token (lib/action-token.sh) as <meta> tags; the
+# inline JS reads them and POSTs to the service. Without the base the page stays
+# a pure V1 read surface — the buttons never render. The token is a bearer
+# secret confined to index.html (served tailnet-only, README §7.8/§7.9); it is
+# NEVER written into status.json.
+# Sourced from HERE (the script's own dir), NOT RUN_ISSUES_HOME: the token lib
+# ships alongside this script, whereas RUN_ISSUES_HOME is the test injection point
+# for where status.sh lives and may point at a fixture with no lib/.
+# shellcheck source=lib/action-token.sh
+. "$HERE/lib/action-token.sh"
+
+ACTION_BASE="${RUN_ISSUES_ACTION_BASE:-}"
+ACTION_TOKEN=""
+if [ -n "$ACTION_BASE" ]; then
+  # Strip attribute-breaking characters (operator-configured, but be safe): the
+  # value lands in a content="..." attribute.
+  ACTION_BASE="$(printf '%s' "$ACTION_BASE" | tr -d '"'"'"'<>[:space:]')"
+  ACTION_TOKEN="$(action_token_ensure 2>/dev/null || printf '')"
+fi
+
 OUT_DIR="${RUN_ISSUES_STATUS_OUT_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/www}"
 INPUT_FILE=""
 
@@ -227,6 +251,8 @@ IFS= read -r -d '' HTML <<'HTML' || true
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="run-issues-action-base" content="__ACTION_BASE__">
+<meta name="run-issues-action-token" content="__ACTION_TOKEN__">
 <title>run-issues status</title>
 <style>
 :root{
@@ -303,6 +329,22 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cleanup-summary{padding:.45rem .8rem;border-top:1px solid var(--border);
   color:var(--muted);font-size:.85rem;border-left:5px solid var(--c-cleanup)}
+.actions{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.35rem;align-items:center}
+.act{font-size:.8rem;padding:.2rem .6rem;border-radius:6px;cursor:pointer;
+  border:1px solid var(--border);background:var(--card);color:var(--fg);
+  font-family:inherit;line-height:1.3}
+.act:hover:not(:disabled){border-color:var(--link)}
+.act:disabled{opacity:.45;cursor:not-allowed}
+.act.danger{border-color:var(--c-stalled)}
+.act.danger:hover:not(:disabled){background:var(--c-stalled);color:#fff}
+.act.go{border-color:var(--c-pr)}
+.act.go:hover:not(:disabled){background:var(--c-pr);color:#fff}
+.act-msg{font-size:.78rem;margin-top:.25rem}
+.act-msg.ok{color:var(--c-pr)}
+.act-msg.err{color:var(--c-stalled);white-space:pre-wrap;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.act-note{color:var(--muted);font-size:.78rem;margin-top:.3rem}
+.group-actions{padding:.4rem .8rem;border-top:1px solid var(--border)}
 /* Epic rollup lane (#79) */
 .epic{border-top:1px solid var(--border);border-left:5px solid var(--c-running);
   padding:.5rem .8rem;background:var(--card)}
@@ -408,6 +450,143 @@ a:hover{text-decoration:underline}
     SKIP_CLOSED:  "PR suljettu",
     SKIP_BLOCKED: "estetty riippuvuudesta"
   };
+
+  // ---- Ohjaamo action channel (#77) --------------------------------------
+  // The four buttons are opt-in: they exist only when a base URL is embedded
+  // (RUN_ISSUES_ACTION_BASE) AND the service answers a /healthz probe. Without
+  // the base the page is a pure V1 read surface. The token is read once here and
+  // sent in a header on every POST — a page that cannot be read (cross-origin)
+  // cannot read it, which is the CSRF defence.
+  function metaContent(name){
+    var m = document.querySelector('meta[name="' + name + '"]');
+    return (m && m.getAttribute("content")) || "";
+  }
+  var ACTION_BASE  = metaContent("run-issues-action-base");
+  var ACTION_TOKEN = metaContent("run-issues-action-token");
+  var actionsConfigured = !!(ACTION_BASE && ACTION_TOKEN);
+  var serviceUp = false;    // set by probeService()
+
+  // postAction — POST one action to the service. The custom header forces a CORS
+  // preflight that only the allowlisted origin passes; the token proves the
+  // request came from this page. Returns a promise of {ok, code, output}.
+  function postAction(payload){
+    return fetch(ACTION_BASE + "/action", {
+      method: "POST",
+      mode: "cors",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Run-Issues-Action": "1",
+        "X-Run-Issues-Token": ACTION_TOKEN
+      },
+      body: JSON.stringify(payload)
+    }).then(function(resp){
+      return resp.json().then(function(j){ return j; }, function(){
+        return {ok: resp.ok, code: resp.status, output: "HTTP " + resp.status};
+      });
+    });
+  }
+
+  // probeService — a GET /healthz to decide whether the buttons are live. On any
+  // failure the buttons render disabled with an explanation (edge case: service
+  // down -> page still works read-only).
+  function probeService(){
+    if (!actionsConfigured){ serviceUp = false; return; }
+    fetch(ACTION_BASE + "/healthz", {mode:"cors", cache:"no-store"})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){ serviceUp = !!(j && j.ok); render(); })
+      .catch(function(){ serviceUp = false; render(); });
+  }
+
+  // The payload the service needs to address a run. Only named fields — never the
+  // whole object — so a field the schema grows later is not forwarded blindly.
+  function actionPayload(action, r){
+    return {
+      action: action,
+      run_dir: r.run_dir || null,
+      repo_path: r.repo_path || null,
+      owner_repo: r.owner_repo || null,
+      issue_number: (r.issue_number != null ? r.issue_number : null),
+      pr_number: (r.pr_number != null ? r.pr_number : null),
+      remote: r.remote || null,
+      repo_slug: r.repo_slug || null
+    };
+  }
+
+  // Run one action after a confirmation that NAMES the consequences (security
+  // model rule 4). msgNode receives the ok/error result inline.
+  function doAction(action, r, confirmText, msgNode){
+    if (!window.confirm(confirmText)) return;
+    msgNode.className = "act-msg";
+    msgNode.textContent = "…";
+    postAction(actionPayload(action, r)).then(function(res){
+      if (res && res.ok){
+        msgNode.className = "act-msg ok";
+        msgNode.textContent = "✓ " + (res.output || "valmis");
+      } else {
+        msgNode.className = "act-msg err";
+        // Rule 5: show the delegate's error verbatim, do not paper over it.
+        msgNode.textContent = "✗ " + ((res && res.output) || "toiminto epäonnistui");
+      }
+    }).catch(function(){
+      msgNode.className = "act-msg err";
+      msgNode.textContent = "✗ toimintopalvelu ei tavoitettavissa";
+    });
+  }
+
+  // Which actions a row offers, by the identifiers it carries.
+  function canStop(r){ return !!r.run_dir && r.status === "initialized"; }
+  function canClean(r){ return r.issue_number != null && r.class !== "running"; }
+  function canMerge(r){
+    if (r.pr_number == null) return false;
+    return !r.github || r.github.pr_state === "OPEN" || r.github.pr_state == null;
+  }
+  function canResume(r){
+    if (r.issue_number == null) return false;
+    return r.class === "attention" || r.class_reason === "timed_out" || r.class_reason === "blocked";
+  }
+
+  function mkBtn(label, cls){
+    var b = el("button", "act" + (cls ? " " + cls : ""), label);
+    b.type = "button";
+    return b;
+  }
+
+  // renderActions — the per-row action bar. Returns null when no action applies
+  // or the channel is not configured (keeps the V1 look on rows without actions).
+  function renderActions(r){
+    if (!actionsConfigured) return null;
+    var stop = canStop(r), clean = canClean(r), merge = canMerge(r), resume = canResume(r);
+    if (!(stop || clean || merge || resume)) return null;
+
+    var wrap = el("div", null);
+    var bar = el("div", "actions");
+    var msg = el("div", "act-msg");
+    var disabled = !serviceUp;
+
+    function add(cond, label, cls, action, confirmText){
+      if (!cond) return;
+      var b = mkBtn(label, cls);
+      b.disabled = disabled;
+      if (disabled) b.title = "Toimintopalvelu ei tavoitettavissa";
+      else b.addEventListener("click", function(){ doAction(action, r, confirmText, msg); });
+      bar.appendChild(b);
+    }
+    var idn = (r.issue_number != null ? " #" + r.issue_number : "");
+    add(stop, "Pysäytä", "danger", "stop",
+        "Pysäytä ajo" + idn + "?\n\ntmux-istunto tapetaan; worktree, haara ja run-dir SÄILYVÄT.");
+    add(clean, "Siivoa", "danger", "clean",
+        "Siivoa ajo" + idn + "?\n\nLisää auto-clean-label — poller poistaa worktreen, haaran, run-dirin ja assignaation turvaportteineen.");
+    add(merge, "Salli auto-merge", "go", "allow-merge",
+        "Salli auto-merge PR #" + (r.pr_number != null ? r.pr_number : "?") + "?\n\nLisää auto-merge-label — vahti mergeää (ja ratkaisee konfliktin) kun CI on vihreä.");
+    add(resume, "Jatka", null, "resume",
+        "Jatka ajoa" + idn + "?\n\nTimed_out-ajo käynnistetään uudelleen; muuten needs-human-label poistetaan ja ajo vapautetaan uudelleenkäsittelyyn.");
+
+    if (!bar.firstChild) return null;
+    wrap.appendChild(bar);
+    if (disabled) wrap.appendChild(el("div", "act-note", "Toimintopalvelu ei tavoitettavissa — napit poissa käytöstä."));
+    wrap.appendChild(msg);
+    return wrap;
+  }
 
   // View state. Default filter shows attention + stalled + running only.
   var active = {attention:true, running:true, stalled:true, pr_in_flight:false, cleanup:false};
@@ -574,7 +753,47 @@ a:hover{text-decoration:underline}
     if (r.blocked_reason) tech.push(r.blocked_reason);
     if (r.branch) tech.push(r.branch);
     if (tech.length) row.appendChild(el("div", "row-sub", tech.join(" · ")));
+
+    var acts = renderActions(r);
+    if (acts) row.appendChild(acts);
     return row;
+  }
+
+  // Mass clean: one confirmation NAMING the count, then N sequential clean
+  // POSTs. Partial failure is reported per run in the shared message node.
+  function renderMassClean(slug, cleanupRuns){
+    if (!actionsConfigured) return null;
+    var targets = cleanupRuns.filter(function(r){ return r.issue_number != null; });
+    if (targets.length === 0) return null;
+    var wrap = el("div", "group-actions");
+    var b = mkBtn("Siivoa kaikki " + targets.length, "danger");
+    b.disabled = !serviceUp;
+    if (!serviceUp) b.title = "Toimintopalvelu ei tavoitettavissa";
+    var msg = el("div", "act-msg");
+    b.addEventListener("click", function(){
+      if (!window.confirm("Siivoa kaikki " + targets.length + " valmista ajoa repossa " + slug +
+        "?\n\nJokaiseen lisätään auto-clean-label; poller purkaa ne turvaportteineen.")) return;
+      msg.className = "act-msg";
+      msg.textContent = "Siivotaan 0/" + targets.length + "…";
+      var done = 0, failed = 0;
+      targets.forEach(function(r){
+        postAction(actionPayload("clean", r)).then(function(res){
+          done++;
+          if (!(res && res.ok)) failed++;
+          msg.className = "act-msg" + (failed ? " err" : (done === targets.length ? " ok" : ""));
+          msg.textContent = (failed ? "✗ " : (done === targets.length ? "✓ " : "")) +
+            "Siivottu " + (done - failed) + "/" + targets.length +
+            (failed ? " (" + failed + " epäonnistui)" : "");
+        }).catch(function(){
+          done++; failed++;
+          msg.className = "act-msg err";
+          msg.textContent = "✗ Siivottu " + (done - failed) + "/" + targets.length + " (" + failed + " epäonnistui)";
+        });
+      });
+    });
+    wrap.appendChild(b);
+    wrap.appendChild(msg);
+    return wrap;
   }
 
   // --- epic rollup (#79) ------------------------------------------------
@@ -767,6 +986,9 @@ a:hover{text-decoration:underline}
           group.appendChild(el("div", "cleanup-summary",
             "Siivousjono: " + cleanupRuns.length + " valmista ajoa"));
         }
+        // Mass "Siivoa kaikki N" for the group's cleanup runs (opt-in channel).
+        var mass = renderMassClean(g.slug, cleanupRuns);
+        if (mass) group.appendChild(mass);
       }
       view.appendChild(group);
     });
@@ -793,12 +1015,23 @@ a:hover{text-decoration:underline}
   });
 
   fetchData();
+  probeService();                  // enable the action buttons if the service is up
   setInterval(fetchData, 60000);   // auto-refresh every 60 s
+  setInterval(probeService, 60000);
 })();
 </script>
 </body>
 </html>
 HTML
+
+# ---- inject the action channel config (base + token) ----
+# The heredoc is single-quoted so it carries literal __ACTION_BASE__ /
+# __ACTION_TOKEN__ placeholders; fill them via bash parameter expansion (no sed:
+# the base URL contains slashes and the replacement is taken literally here, so
+# there is nothing to escape). Empty values => the JS sees no base and renders
+# the pure V1 read surface. The token reaches ONLY index.html, never status.json.
+HTML="${HTML//__ACTION_BASE__/$ACTION_BASE}"
+HTML="${HTML//__ACTION_TOKEN__/$ACTION_TOKEN}"
 
 # ---- atomic write: temp in OUT_DIR (same filesystem) + mv -f ----
 # Writing both files then renaming them means a concurrent web request never
