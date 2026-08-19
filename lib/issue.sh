@@ -105,7 +105,15 @@ pick_oldest_unassigned() {
   local clean_label="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
   # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
   # no longer accepts standalone --sort/--order flags on `issue list`.
-  local search="is:open no:assignee -is:blocked -label:waiting -label:wip -label:${clean_label} sort:created-asc"
+  #
+  # `-label:epic` excludes epic issues from pickup (issue #81). An epic COLLECTS
+  # runnable sub-issues; it is never itself runnable (its "implementation" is its
+  # children's). Without this an epic carrying auto-run matches the pickup filter
+  # exactly like a leaf issue and would be launched against its aggregating body
+  # (docs/epic-orchestration.md §2). Like -is:blocked this reads GitHub's
+  # eventually-consistent SEARCH index, so orchestrate.sh re-checks authoritatively
+  # (is_epic) after the lock — the same second-line-of-defence pattern as S2b.
+  local search="is:open no:assignee -is:blocked -label:waiting -label:wip -label:epic -label:${clean_label} sort:created-asc"
 
   local extra=""
   if [ -n "$labels_csv" ]; then
@@ -238,6 +246,195 @@ count_open_blockers() {
     ''|*[!0-9]*) return 2 ;;  # empty or non-numeric body → fail-closed
   esac
   printf '%s' "$out"
+}
+
+# list_blocked_by <repo-root> <N> [<owner/repo>]
+# Prints one blocker per line as "<number>\t<state>" (state "open"/"closed") for
+# issue N's blocked_by dependency graph, and returns 0 on a good read (including
+# the empty case — an issue with no blockers prints nothing). Returns 2 (printing
+# nothing) when the graph could NOT be read — the caller MUST treat that as
+# "assume blocked" (fail-closed, same contract as count_open_blockers).
+#
+# count_open_blockers answers "how many open blockers?"; this answers "WHICH
+# issues block N and in what state?", which /run-epic (issue #82) needs to build
+# the child-set dependency graph (cycle check + run order) and to name the
+# blocker in its report. Reading the same GET .../dependencies/blocked_by graph
+# keeps the two helpers consistent. Stays on the personal gh-CLI identity — a
+# read with no privacy boundary, like count_open_blockers.
+list_blocked_by() {
+  local repo="$1"
+  local n="$2"
+  local owner_repo="${3:-}"
+  local path
+  if [ -n "$owner_repo" ]; then
+    path="repos/$owner_repo/issues/$n/dependencies/blocked_by"
+  else
+    path="repos/{owner}/{repo}/issues/$n/dependencies/blocked_by"
+  fi
+  local out
+  if ! out=$(
+    cd "$repo" || exit 1
+    gh api --paginate "$path" --jq '.[] | "\(.number)\t\(.state)"' 2>/dev/null
+  ); then
+    return 2
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
+# is_epic <repo-root> <N> [<owner/repo>]
+# Prints "1" when issue N carries the `epic` label, "0" when it demonstrably
+# does not, and returns 0 in both cases. Returns 2 (printing nothing) when the
+# label list could NOT be read — the caller MUST treat that as "assume epic"
+# (fail-closed, issue #81), mirroring count_open_blockers' contract exactly.
+#
+# This is the authoritative backstop behind the pickup search's `-label:epic`,
+# which reads GitHub's eventually-consistent SEARCH index. orchestrate.sh calls
+# it AFTER the lock and BEFORE the claim: an epic that leaked into pickup during
+# an index lag is caught here before it is ever assigned to us and launched
+# against its aggregating body (docs/epic-orchestration.md §2.3, avoin päätös B).
+# FAIL-CLOSED for the same asymmetry as S2b: refusing a leaf issue costs one
+# skipped tick; running an epic burns the whole implementer timeout on a body
+# that is not a task. Stays on the personal gh-CLI identity — a pick-time read
+# with no privacy boundary, like pick_oldest_unassigned / count_open_blockers.
+is_epic() {
+  local repo="$1"
+  local n="$2"
+  local owner_repo="${3:-}"
+  local out
+  if ! out=$(
+    cd "$repo" || exit 1
+    # shellcheck disable=SC2046
+    gh issue view "$n" $(_repo_args "$owner_repo") --json labels \
+      --jq 'if ([.labels[].name] | any(. == "epic")) then "1" else "0" end' 2>/dev/null
+  ); then
+    return 2
+  fi
+  case "$out" in
+    0|1) printf '%s' "$out" ;;
+    *)   return 2 ;;  # unexpected body → fail-closed
+  esac
+}
+
+# list_epic_children <repo-root> <N> [<owner/repo>]
+# Resolves the child issues of epic N and prints one TAB-separated line per
+# child on stdout:
+#
+#   <number>\t<state>\t<labels-csv>\t<title>
+#
+# where <state> is "open"/"closed". This is the SINGLE shared resolver both the
+# running poller (issue #81) and Ohjaamo's V4 epic view consume, so the two can
+# never disagree about which issues belong to an epic (AC5,
+# docs/epic-orchestration.md §1.3). Returns 0 on a successful read (including
+# the empty case — an epic with no children prints nothing), 2 when the native
+# read failed (fail-closed: the caller must not treat "unreadable" as "done").
+#
+# Resolution order (docs/epic-orchestration.md §1.2): native GitHub sub-issues
+# are CANONICAL. The body task-list is read ONLY as a fallback, and ONLY when
+# there are zero native sub-issues — merging the two sources would produce ghost
+# or duplicate children, so native wins whenever it has ANY child.
+#
+#   labels-csv is populated in native mode (the sub_issues API returns each
+#   child's full label set for free) and EMPTY in fallback mode (the task-list
+#   carries no label data). Callers that need child labels (propagation skip,
+#   needs-human escalation) therefore have them without a per-child read on the
+#   canonical path.
+#
+# Cross-repo children are out of scope (Rajaukset): a native child in another
+# repo is filtered out (and would otherwise be mislabelled in the epic's OWN
+# repo, since propagation writes with the epic's owner/repo), and a fallback
+# `owner/repo#N` reference is skipped. Both cases emit a one-line warning on
+# stderr so the exclusion is visible, never silent.
+list_epic_children() {
+  local repo="$1"
+  local n="$2"
+  local owner_repo="${3:-}"
+
+  # Expected owner/repo for the cross-repo filter. In multi-remote mode it is
+  # passed explicitly; in origin mode it is empty, so resolve it once from the
+  # working copy (cheap, cached for the call) — otherwise a native cross-repo
+  # child could be labelled against the epic's repo by number.
+  local expected="$owner_repo"
+  if [ -z "$expected" ]; then
+    expected=$(cd "$repo" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
+  fi
+
+  local api_path
+  if [ -n "$owner_repo" ]; then
+    api_path="repos/$owner_repo/issues/$n/sub_issues"
+  else
+    api_path="repos/{owner}/{repo}/issues/$n/sub_issues"
+  fi
+
+  # 1. Native sub-issues (canonical). --paginate handles an epic with many
+  # children; each page is a JSON array, so `jq -s 'add // []'` concatenates them.
+  local native
+  if ! native=$(cd "$repo" && gh api --paginate "$api_path" 2>/dev/null); then
+    return 2  # unreadable native graph → fail-closed
+  fi
+
+  local native_count
+  native_count=$(printf '%s' "$native" | jq -s '[.[][]?] | length' 2>/dev/null || echo 0)
+  case "$native_count" in ''|*[!0-9]*) native_count=0 ;; esac
+
+  if [ "$native_count" -gt 0 ]; then
+    # Warn about (and drop) any native child that lives in another repo.
+    local skipped
+    skipped=$(printf '%s' "$native" | jq -s -r --arg exp "$expected" '
+      ([.[][]?] | map(select(.number != null)))
+      | map(select(($exp != "") and ((.repository_url // "" | sub(".*/repos/"; "")) != $exp)))
+      | .[] | "\(.repository_url // "" | sub(".*/repos/"; ""))#\(.number)"
+    ' 2>/dev/null || true)
+    if [ -n "$skipped" ]; then
+      local ref
+      while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        printf 'list_epic_children: epic #%s: cross-repo child %s skipped (scope-out)\n' "$n" "$ref" >&2
+      done <<EOF
+$skipped
+EOF
+    fi
+    printf '%s' "$native" | jq -s -r --arg exp "$expected" '
+      ([.[][]?] | map(select(.number != null)))
+      | map(select($exp == "" or ((.repository_url // "" | sub(".*/repos/"; "")) == $exp)))
+      | .[]
+      | [ (.number|tostring), .state, ([.labels[]?.name] | join(",")), (.title // "") ]
+      | @tsv
+    ' 2>/dev/null
+    return 0
+  fi
+
+  # 2. Fallback: parse the epic body's task-list (legacy epics, pre native
+  # sub-issues). Only reached when there are zero native children.
+  local body
+  if ! body=$(cd "$repo" && gh issue view "$n" $(_repo_args "$owner_repo") --json body --jq '.body // ""' 2>/dev/null); then
+    return 2
+  fi
+  local line cbox num state title
+  while IFS= read -r line; do
+    # Require a GitHub task-list checkbox: `- [ ]` / `- [x]` (also * and +).
+    [[ "$line" =~ ^[[:space:]]*[-*+][[:space:]]+\[([ xX])\][[:space:]] ]] || continue
+    cbox="${BASH_REMATCH[1]}"
+    # Cross-repo `owner/repo#N` reference → skip with a warning (scope-out).
+    if [[ "$line" =~ ([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+) ]]; then
+      printf 'list_epic_children: epic #%s: cross-repo child %s#%s skipped (scope-out)\n' \
+        "$n" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >&2
+      continue
+    fi
+    # Same-repo `#N` reference.
+    [[ "$line" =~ \#([0-9]+) ]] || continue
+    num="${BASH_REMATCH[1]}"
+    # Checkbox state is the fallback's only truth about the child (§1.2 rule 3):
+    # [x]/[X] = done (closed, not run), [ ] = open.
+    if [ "$cbox" = " " ]; then state="open"; else state="closed"; fi
+    # Title: the line minus the leading checkbox and the trailing `#N …`.
+    title=$(printf '%s' "$line" \
+      | sed -E 's/^[[:space:]]*[-*+][[:space:]]+\[[ xX]\][[:space:]]*//; s/[[:space:]]*#[0-9]+.*$//; s/[[:space:]]*$//')
+    printf '%s\t%s\t\t%s\n' "$num" "$state" "$title"
+  done <<EOF
+$body
+EOF
+  return 0
 }
 
 # comment_issue <repo-root> <N> <text> [<owner/repo>] [<remote>]

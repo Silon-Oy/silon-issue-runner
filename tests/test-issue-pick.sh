@@ -95,7 +95,7 @@ case "$s" in
 esac
 
 # --- 2. standing filters always present ----------------------------------
-for term in 'is:open' 'no:assignee' '-is:blocked' '-label:waiting' '-label:wip' '-label:auto-clean' 'sort:created-asc'; do
+for term in 'is:open' 'no:assignee' '-is:blocked' '-label:waiting' '-label:wip' '-label:epic' '-label:auto-clean' 'sort:created-asc'; do
   case "$s" in
     *"$term"*) : ;;
     *) fail "search missing standing filter '$term': $s" ;;
@@ -111,6 +111,17 @@ done
 case "$s" in
   *'-is:blocked'*) : ;;
   *) fail "search missing exact '-is:blocked': $s" ;;
+esac
+
+# --- 2b. epic issues are excluded from pickup (issue #81) ------------------
+# An epic collects runnable sub-issues but is never itself runnable; running it
+# would launch the implementer against an aggregating body. -label:epic keeps it
+# out of pickup (orchestrate.sh re-checks authoritatively via is_epic after the
+# lock, mirroring the -is:blocked / S2b pattern). Pinned exactly here for the
+# same fail-open reason as -is:blocked: a typo would silently leak epics.
+case "$s" in
+  *'-label:epic'*) : ;;
+  *) fail "search missing exact '-label:epic': $s" ;;
 esac
 
 # --- 3. empty labels CSV → no label: term added --------------------------

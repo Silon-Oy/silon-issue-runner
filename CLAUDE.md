@@ -26,14 +26,14 @@ orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
 stop-run.sh                    status.sh              status-digest.sh
 status-render.sh               action-server.sh       action-dispatch.sh
-install.sh
+install.sh                     run-epic.sh
 provision-test-env.README.md   README.md              CLAUDE.md
 lib/       18 bash-moduulia + action-service.py (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
 tests/     plain-bash-testipaketti, ajuri run-all.sh
 db-clone/  opt-in-tietokantakloonaus
 agents/    Claude-agenttimäärittelyt (architect, developer, reviewer, refactorer)
-commands/  slash-komennot (run-issues, cleanup-run, pr-watch, refresh, factory-*)
+commands/  slash-komennot (run-issues, run-epic, cleanup-run, pr-watch, refresh, factory-*)
 skills/    Claude-skillit (run-issues-workflow: issue-konventiot kohderepoon)
 docs/diagrams/  mermaid-kaaviot (.mmd)
 examples/  run-issues-watchlist.example.json, run-issues-poller.env.example,
@@ -185,8 +185,8 @@ nimeää korjauskomennon. Puuttuva timeout-binääri on vain varoitus (ajo jatku
 Portti on top-levelissä, joten se koskee kaikkia neljää moodia (start / `--resume` / `--restart` /
 `--continue`). Ohitus: `RUN_ISSUES_SKIP_PREFLIGHT=1`.
 
-**Vaihe A** — S1 PickIssue → S2 Lock → **S2b BlockedCheck** → S3 Claim → S4 Worktree →
-S5 DBClone → S6 CycleReview
+**Vaihe A** — S1 PickIssue → S2 Lock → **S2b BlockedCheck** → **S2c EpicCheck** → S3 Claim →
+S4 Worktree → S5 DBClone → S6 CycleReview
 
 - **S2b BlockedCheck** (#28) on autoritatiivinen esto-portti lukon ja claimin välissä.
   Poimintahaun `-is:blocked` lukee GitHubin *eventually consistent* -hakuindeksiä; kerran
@@ -198,6 +198,17 @@ S5 DBClone → S6 CycleReview
   lukko vapautetaan, exit 9. Estäjien lukumäärä lokitetaan kummassakin tapauksessa, joten väärä
   poiminta näkyy lokista eikä vasta törmäävistä PR:istä. Nimetyn ajon voi pakottaa `--force`illa;
   `-is:blocked` jää halvaksi esikarsinnaksi, ei korvaudu.
+
+- **S2c EpicCheck** (#81) on autoritatiivinen epic-portti S2b:n vieressä, samalla mallilla ja
+  samasta syystä. Epic-issue **kokoaa** ajettavat alaissueet mutta ei ole itse ajettava; jos se
+  poimittaisiin, implementer ajettaisiin epicin kokoavaa runkoa vasten ja polttaisi koko
+  timeout-budjetin tehtävään jota ei ole. Poimintahaun `-label:epic` (M1) lukee saman *eventually
+  consistent* -indeksin kuin `-is:blocked`, joten portti tarkistaa labelin **suoraan**
+  (`gh issue view --json labels`, `lib/issue.sh:is_epic`) lukon jälkeen ja claimia ennen. **Fail-closed**:
+  lukukelvoton labelilista tulkitaan epiciksi. Epic ⇒ `blocked/is_epic_not_runnable`,
+  lukukelvoton ⇒ `blocked/epic_check_failed`, lukko vapautetaan, exit 12. **Ei `needs-human`-labelia**
+  (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`illa. Ks. epic-tason
+  automaatio alla ja `docs/epic-orchestration.md`.
 
 - **S4 Worktree** ratkaisee feature-haaran base-refin **arvaamatta**: eksplisiittinen
   `base_branch` → `<remote>/<base_branch>`, muuten `<remote>/HEAD`. Jos remotella on refit
@@ -246,7 +257,9 @@ esto pysäytti kuuden issuen riippuvuusketjun yön yli). Labelin elinkaari on va
 **Poikkeus: claimia edeltävät portit eivät labeloi.** `blocked_by_dependency` ja
 `blocked_check_failed` (S2b) poistuvat ennen claimia, issue ei ole assignattuna meille, ja
 aito `blocked_by` jatkuu itsestään kun estäjä sulkeutuu — se on odotustila, ei ihmisen
-tarve. Sama koskee S0-preflightiä (exit 8), joka poistuu ennen lukkoa.
+tarve. Sama koskee `is_epic_not_runnable` / `epic_check_failed` -portteja (S2c, #81): epic ei
+kuulu poimintaan lainkaan, joten sen kohdalla `needs-human` olisi väärä signaali. Sama koskee
+S0-preflightiä (exit 8), joka poistuu ennen lukkoa.
 
 **Blocked-ajon uusintayritys ihmiskommentilla (#57).** Jokainen yllä lueteltu terminaalinen
 `blocked/*`-esto, joka postaa situation-kommentin, upottaa siihen `awaiting-answer`-markerin
@@ -271,6 +284,39 @@ päättyvä ajo postaa **uuden** markerin, ja `scan_blocked_answered` vaatii vas
 markerin jälkeen ⇒ yksi kommentti = korkeintaan yksi yritys. Suljettu issue tai markeriton
 legacy-ajo ohitetaan hiljaa. `fetch_issue_json` palauttaa nyt myös issuen `state`n, jotta
 avoimuustarkistus tehdään samasta hausta kuin markeri/vastaus.
+
+**Epic-tason automaatio (#81).** `auto-run` epic-issuella on **propagointisignaali**, ei
+ajosignaali: se tarkoittaa "aja tämä epic" = "lisää `auto-run` epicin avoimille alaissueille ja
+anna pollerin ajaa ketju normaalisti S2b-järjestyksen varassa". Epic itse ei koskaan aja (M1
+poissulku + S2c-portti). Koneisto on ohut kerros olemassa olevan riippuvuusajon *päällä* eikä aja
+alaissueita itse — se **valmistelee** ne (`docs/epic-orchestration.md`, #80). Pollerin uusi
+**`scan_epics`-vaihe** (poller.sh, ennen poimintaa jotta samalla tikillä propagoitu lapsi on heti
+poimittavissa) hakee avoimet epicit (`is:open label:epic` + watchlistin ajolabelit,
+`lib/epic.sh:epic_list_open`) ja ajaa kullekin `epic_process_one`in, joka on **best-effort ja
+idempotentti** (aina rc 0 — yhden epicin GitHub-häiriö ei kaada tikkiä):
+
+- **Propagointi** — lisää ajolabelit (`auto-run` + watchlistin vaatimat) epicin **avoimille**
+  alaissueille joilta ne puuttuvat (`labels_add`). Ohittaa suljetut, jo-labeloidut ja `wip`-lapset
+  (`wip` on ihmisen opt-out, ei uutta labelia). Lapsijoukko resolvoidaan **jaetulla**
+  `lib/issue.sh:list_epic_children`illä (natiivit `sub_issues` kanoninen, rungon task-lista
+  fallback vain kun natiiveja on nolla; cross-repo-lapset ohitetaan varoituksella) — sama funktio
+  palvelee Ohjaamon V4-näkymää, joten näkymä ja ajo eivät voi olla eri mieltä epicin lapsista.
+- **Eskalaatio** — kun alaissue saa `needs-human`-labelin, epic-issuelle postataan **kerran per
+  lapsi** tilannekommentti (piilomarker `<!-- run-issues:epic-attention child=<N> -->` epicin
+  kommenteissa vartioi kertaluonteisuuden, #65:n SKIP_CLOSED-vaimennuksen hengessä) + kevyt
+  suodatettava `epic-attention`-label. Riippumattomat haarat jatkavat itsestään (S2b ajaa vain ne
+  lapset, joiden estäjät ovat kiinni).
+- **Valmius (elinkaari)** — kun **kaikki** alaissueet ovat suljettuja, epic saa **kerran**
+  yhteenvetokommentin (listaa alaissueet + best-effort PR:t) ja `epic-complete`-labelin. **Runner
+  ei sulje epiciä** — sulkupäätös jää ihmiselle (epicin runko voi sisältää hyväksyntäkriteereitä),
+  ja GitHubin natiivi auto-close voittaa jos repo on niin konfiguroitu (avoin päätös F; #81:n cycle
+  review pinnasi tämän additiivisen muodon: kommentti + label, ei sulkua). Idempotenssi: label tai
+  completion-marker läsnä ⇒ ei toistoa.
+
+Epic-labelit (`epic`, `epic-attention`, `epic-complete`) ovat **kiinteitä nimiä**, eivät
+konfiguroitavia — sama päätös kuin `epic`-labelilla itsellään (`docs/epic-orchestration.md` §6).
+`/run-epic`-komento (M6) toteutettiin #82:ssa (`run-epic.sh`, ks. §5 exit-koodit); epicin
+keskeytys (`--stop`) jää yhä erilliseen issueen (scope-out).
 
 **Jatkomoodit:**
 
@@ -304,6 +350,7 @@ README-riviä on punainen testi.
 | 9 | Issue on estetty avoimella `blocked_by`-riippuvuudella — S2b-portti (#28) kieltäytyi lukon ja claimin välissä; ajo finalisoitu `blocked/blocked_by_dependency`, lukko vapautettu, ei claimia. Fail-closed (lukukelvoton graafi = esto). Nimetyn ajon voi pakottaa `--force`illa |
 | 10 | Odottaa ihmisen katselmointia — jatka `--resume` |
 | 11 | Odottaa tarkennusta — cycle review palautti NEEDS_CLARIFICATION; ajo finalisoitu `awaiting_clarification`, pollerin `scan_answered` jatkaa `--continue`lla |
+| 12 | Issue kantaa `epic`-labelia — S2c-portti (#81) kieltäytyi lukon ja claimin välissä. Epic kokoaa ajettavat alaissueet mutta ei ole itse ajettava; ajo finalisoitu `blocked/is_epic_not_runnable` (tai `blocked/epic_check_failed` jos labelit lukukelvottomat), lukko vapautettu, ei claimia, **ei `needs-human`-labelia** (claimia edeltävä portti kuten S2b). Fail-closed. Nimetyn ajon voi pakottaa `--force`illa |
 
 ### Kokonaistila (`status.sh`, #59)
 
@@ -317,7 +364,7 @@ kertovat vain lukemisen onnistumisesta — ei mitään lukittua, claimattua tai 
 | 2 | Ei watchlistiä, ei yhtään levyllä olevaa repoa, tai `jq` puuttuu |
 | 3 | Vajaa luenta — ≥1 `run.json` oli lukukelvoton/virheellinen; dokumentti silti validi ja täydellinen muun osan osalta (`degraded: true`), rikkinäiset polut `read_errors`-listassa. Kaksitasoinen luenta (bulk → per-file-fallback) eristää rikkinäisen, muut luetaan |
 
-### Statussivun renderöinti (`status-render.sh`, #62, #76, #78)
+### Statussivun renderöinti (`status-render.sh`, #62, #76, #78, #79)
 
 Oma avaruus. `status.sh`:n JSONin ensimmäinen kuluttaja: kirjoittaa `index.html`in ja
 `status.json`in atomisesti (`RUN_ISSUES_STATUS_OUT_DIR`, oletus
@@ -371,6 +418,29 @@ Vartijat: `tests/test-status-github.sh` (otsikot + cache + provenienssi), `test-
 (RENDER_GITHUB-toggle, gh-kenttien valkolista, chip-sanamuodot), `test-status-schema.sh`
 (ei päätason `issue_title`ia).
 
+**#79 toi epic-rollupin näkymään** ilman `runs[]`-skeemamuutosta. `status.sh --github` emittoi
+uuden top-level-listan `epics[]` (avoimet `epic`-labeloidut issuet + niiden alaissueet;
+skeema alla). JS renderöi yhden epic-kaistan per epic sen **repo-ryhmän sisällä**: edistymispalkki
+(suljetut/kaikki alaissueet), ajossa oleva alaissue korostettuna, jonossa olevat lista- eli
+riippuvuusjärjestyksessä estäjineen ("jonossa · estäjä #N" = lähin edeltävä yhä avoin alaissue;
+ensimmäinen ilman ajoa → "odottaa poimintaa"), ja suljetut alaissueet yliviivattuina
+kuittausriveinä niin kauan kuin epic on auki. **Dedup:** alaissueen ajo näkyy **kerran** —
+kaistalla, ei myös irtorivinä repo-ryhmässä (`epicMember`-joukko + `subKey`-liitos). Epic ilman
+avointa alaissuetta ja ilman elävää (ei-`cleanup`) ajoa **ei tuota kaistaa**. Suljetun alaissueen
+`cleanup`-ajo säilyy silti top-level `cleanup`-laskurissa (kuittausrivi ei poista sitä
+siivousjonon lukumäärästä). Otsikot (epic + alaissue) kulkevat saman valkolistatun,
+`textContent`-insertoidun polun kuin V3 (escapattu, vain tailnet). Sivu on yhä dataton runko —
+`epics[]` haetaan `status.json`ista selaimessa. Vartijat: `tests/test-status-github.sh`
+(epic-keräys: sub_issues-API + task-lista-fallback + cache), `test-status-render.sh` (epic-kaistan
+kentät + sanamuodot + XSS-escape), `test-status-schema.sh` (`epics[]` tyhjä paikallisessa tilassa).
+
+**`epics[]`-skeema (schema_version 1):** jokainen alkio on
+`{repo_slug, epic_number, epic_title, epic_url, sub_issues: [{number, state}], source}`, missä
+`state` on `"open"|"closed"` ja `source` on `"sub_issues"` (natiivi sub-issues-rajapinta,
+ensisijainen) tai `"task_list"` (rungon `- [ ] … #N` -fallback vanhoille epiceille). Lista on
+`[]` ilman `--github`-rikastusta, aivan kuten `github`-aliobjekti on `null`. `runs[]`-skeemaan ei
+kosketa (#79 scope-out).
+
 | Koodi | Merkitys |
 |---|---|
 | 0 | Renderöity — molemmat tiedostot kirjoitettu atomisesti (temp + `mv -f`) |
@@ -404,6 +474,31 @@ awaiting-answer-markeria (scope-out: ei automaattista uudelleenkäynnistystä �
 | 3 | `--issue` osui useampaan ajoon (esim. kaksi remotea) — kieltäytyy arvaamasta, tarkenna `--run-dir`illä. Mitään ei tehty |
 | 4 | Vieras host — `run.json.host` ≠ `hostname -s`; ajo kuuluu toiselle koneelle, mihinkään ei koskettu |
 | 5 | Terminaalitila — ajon status ei ole `initialized`; `--force` pysäyttää silti (esim. `completed`-ajon elävän PR-kontekstin purkaminen vaatii tietoisen valinnan). Mihinkään ei koskettu |
+
+### Epicin käynnistys (`run-epic.sh`, #82)
+
+Oma avaruus. `/run-epic`-slash-komennon taustaskripti: epicin eksplisiittinen käynnistyspinta,
+symmetrinen `stop-run.sh`:n kanssa (ohut operaattoripinta, suunnittele–sovella kuten
+`install.sh`). Validoi epicin rakenteen **ennen mitään kirjoitusta** (avoin + olemassa,
+≥1 alaissue natiivi/task-lista, `blocked_by`-graafi syklitön, alaissueet samassa repossa),
+lisää sitten `epic`-labelin jos puuttuu (idempotentti; `docs/epic-orchestration.md` §5.2
+avoin päätös I — muuntaa kokoavan issuen epiciksi) ja propagoi ajolabelit avoimille
+alaissueille **jaetulla `propagate_run_labels`illa** (lib/epic.sh) — sama polku kuin pollerin
+`scan_epics`illa, ei toista toteutusta (AC4). `--dry-run` tulostaa saman raportin (ensimmäinen
+ajokelpoinen lapsi, estetyt + estäjät, ketjun pituus) kirjoittamatta mitään; `--start-now`
+käynnistää ensimmäisen ajokelpoisen lapsen heti (`orchestrate.sh`, `RUN_EPIC_ORCHESTRATE`
+testien injektiopisteenä). Syklintarkistus on Kahnin algoritmi ilman assosiatiivisia taulukoita
+(bash 3.2). Fail-closed: lukukelvoton lapsi-/estäjägraafi ⇒ exit 5, ei ajoa. Vartija:
+`tests/test-run-epic.sh`. Keskeytys (`--stop`) on scope-out (erillinen issue).
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Validoitu + propagoitu (tai `--dry-run` tulosti suunnitelman) |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero) |
+| 2 | Epic-issueta ei löytynyt tai se ei ole avoin — mitään ei luettu fetchin jälkeen |
+| 3 | Epic ilman alaissueita (ei natiiveja, ei task-listaa) — ei propagoitavaa |
+| 4 | Syklinen `blocked_by`-graafi alaissueiden välillä — sykli nimetään, ei kirjoituksia |
+| 5 | Lukuvirhe — lapsijoukkoa tai jonkin lapsen `blocked_by`-graafia ei saatu luettua (fail-closed) |
 
 ### Ohjaamon toimintopalvelu (`action-server.sh`, #77)
 
@@ -444,8 +539,9 @@ skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon jaettu resolvointi natiivi→fallback, #81; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
+| `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Propagoinnin **yksi jaettu primitiivi** `_epic_propagate_child` (AC4, #82): sekä `epic_process_one` että julkinen `propagate_run_labels` (lapsijoukon resolvointi + propagointi, `/run-epic`in kirjoituspolku) kutsuvat sitä — ei kahta label-propagointitoteutusta. `_epic_parse_child_line` säilyttää `list_epic_children`in tyhjän label-sarakkeen (tab on IFS-whitespace ⇒ `IFS=$'\t' read` romahduttaisi sen). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartijat `tests/test-epic.sh`, `tests/test-run-epic.sh` |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `poller-config.sh` | Pollerien host-portti ja watchlistin resolvointi puhtaina funktioina. Erillinen lib siksi, että molemmat pollerit tarvitsevat saman päätöksen ja se on testattava **sourcaamalla** — poller itse exittaa source-hetkellä vieraalla koneella |
@@ -456,7 +552,7 @@ skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
 | `run-terminate.sh` | Elävän ajon turvallinen lopetus kutsuttavana funktiona (#63): `run_terminate <run-dir> <reason-slug> [<context>]` — host-portti, eksakti tmux-tappo, `state_finalize`+`state_event`, best-effort `needs-human`-label + tilannekommentti, lukon purku ajon **omasta** tallennetusta identiteetistä (`repo_slug`+`remote`, #67). Irrotettu `poller.sh:finalize_stalled`in rungosta, joka `exit 0`si source-hetkellä vieraalla koneella eikä siksi ollut kutsuttavissa muualta; `stop-run.sh` (#64) käyttää samaa polkua monistamatta turvakriittistä logiikkaa. Puhtaasti funktiomääritelmiä, sourcetaan turvallisesti (sourcaa omat riippuvuutensa). Loki `_run_terminate_log`illa (`declare -F log` → `$LOG` → stderr). Tilannekommentti haarautuu `context`in mukaan (#64): `stalled` kantaa awaiting-answer-markerin (`scan_blocked_answered` uusii ajon vastauksella, #57), `stopped` **ei** kanna markeria (scope-out: ei automaattista uudelleenkäynnistystä) ja osoittaa siivoukseen. `finalize_stalled` on nyt ohut kutsuja joka välittää `stalled_in_<current_state>`; vartija `tests/test-poller-stale-detection.sh` (muuttumaton) + `tests/test-run-terminate.sh` |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot (#59): `_STATUS_NORMALIZE_JQ` (heterogeenisen `run.json`in normalisointi + `schema_gaps`), `status_read_bulk`/`status_read_perfile` (kaksitasoinen luenta), `_STATUS_CLASSIFY_JQ` + `status_classify` (viisi luokkaa prioriteettijärjestyksessä, INV-STATUS lukee vain `status`ia, INV-UNKNOWN fail-closed), `_STATUS_GITHUB_RECLASSIFY_JQ` (`_github_reclassify`, #60: `--github`-rikastuksen jälkeen ajettava jälkiluokittelu — no-op kun `github == null`, muuten nostaa `class_confidence`in `low`→`high` varmistuneelle PR:lle ja lisää `pr_ci_red`/`pr_changes_requested`/`pr_draft_stale`/`pr_not_open`-refinoinnit), ja `_iso_to_epoch` (siirretty poller.sh:sta; poller sourcaa sen täältä, jotta `scan_stalled`in liveness-kello ja `status.sh`:n `idle_seconds` lasketaan identtisesti) |
-| `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60, #78): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta. **#78:** issue-otsikot (`status_github_fetch_open_issues` `gh issue list --json number,title`, `status_github_build_issue_map` number→title) samaan per-owner TTL-cacheen; `status.sh` injektoi otsikon jokaisen ajon `github.issue_title`ksi issue-numerolla (myös ei-PR-ajoille `status_github_issue_only_object`illa, jolloin rivi saa otsikon mutta ei chippejä). Issue-haku on best-effort: virhe pudottaa vain otsikot, ei merkitse repoa `repos_failed`iksi (PR-haku on primäärinen ja omistaa `repos_failed`in) |
+| `status-github.sh` | `status.sh --github`-rikastuksen opt-in-moduuli (#60, #78, #79): avoimet PR:t `gh pr list`illä **kerran per owner/repo** TTL-cachella, `github`-aliobjektin rakennus per PR (`status_github_pr_object`/`status_github_build_pr_map`), cache-primitiivit (`status_github_cache_file`/`status_github_load_cache`/`status_github_write_cache`, atominen `mktemp`+`mv -f` kuten `lib/state.sh`), verkkokutsu (`status_github_fetch_open_prs` `gha_with_token`in kautta) ja `NOT_OPEN`-objekti (`status_github_not_open_object`, `--github-full` erottaa `MERGED`/`CLOSED`in `status_github_closed_state`illä). **Ei omaa CI-rollupia eikä merge-päätöstä**: `ci` = `pr_ci_state`, `pr_decide_verdict` = `pr_decide` (`lib/pr-watch-lib.sh`), samalla `--json`-kenttäjoukolla kuin PR-vahti. Fail-soft: repon verkkovirhe → `repos_failed`, ei kaada tulostetta. **#78:** issue-otsikot (`status_github_fetch_open_issues` `gh issue list --json number,title`, `status_github_build_issue_map` number→title) samaan per-owner TTL-cacheen; `status.sh` injektoi otsikon jokaisen ajon `github.issue_title`ksi issue-numerolla (myös ei-PR-ajoille `status_github_issue_only_object`illa, jolloin rivi saa otsikon mutta ei chippejä). Issue-haku on best-effort: virhe pudottaa vain otsikot, ei merkitse repoa `repos_failed`iksi (PR-haku on primäärinen ja omistaa `repos_failed`in). **#79:** epic-jäsenyys (`status_github_fetch_epics` `gh issue list --label epic --state open --json number,title,body`, `status_github_fetch_sub_issues` `gh api …/issues/{n}/sub_issues`, `status_github_parse_task_list` rungon `- [ ] … #N`-listasta fallbackina, `status_github_build_epics` koostaa) samaan per-owner TTL-cacheen **täysin resolvoituna** (cache-osuma ei tee yhtään gh/api-kutsua). Task-listan tila resolvoidaan avoimien issueiden karttaa vasten (kartassa → `open`, ei-kartassa+ruksi → `closed`, ei-kartassa+tyhjä → ohitetaan). `status.sh` injektoi `repo_slug`in (ajojen efektiivinen slug) ja emittoi top-level `epics[]`in; best-effort, ei omista `repos_failed`ia |
 | `version.sh` | Ajossa olevan runner-version näkyväksi teko (#32): `runner_version` (lyhyt HEAD), `runner_behind_origin` (jäljessä `origin/main`ia), `runner_version_summary` (raporttirivi) ja `runner_fetch_throttled` (throttlattu `git fetch`). Fail-soft: puuttuva `.git`/verkko ⇒ `?`. Pollerit lokittavat tikin alussa, `orchestrate.sh --version` ja situation-kommentin `Runner-version:` lukevat samasta lähteestä |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 
@@ -928,9 +1024,17 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   kuin kumpikaan puhdas vaihtoehto, joten #9 jätti tämän tietoisesti tekemättä. Toiminnallista
   vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei nimellä
   (`lib/issue.sh`).
-- **Epic-ajon arkkitehtuuri on suunniteltu (`docs/epic-orchestration.md`, #80) mutta ei
-  toteutettu.** Dokumentti määrittelee epicin kanonisen muodon (`epic`-label + natiivit
-  sub-issuet, task-lista fallbackina), auto-run-propagoinnin ja `/run-epic`-komennon. Kirjattu
-  löydös: poimintahaku (`lib/issue.sh:pick_oldest_unassigned`, `poller.sh` inline) **ei suodata
-  `epic`-labelia**, joten epic-issue jolla on `auto-run` poimitaan tänään tavallisena issuena —
-  §2:n ennakkoehto ennen kaikkea muuta epic-automaatiota.
+- **Epic-ajon auto-run-semantiikka on toteutettu (#81); `/run-epic` ja keskeytys eivät.**
+  `docs/epic-orchestration.md` (#80) määrittelee koko arkkitehtuurin. #81 toteutti sen
+  auto-run-tason muutoskohdat M1–M5 ja M7: epicin poissulku poiminnasta (`-label:epic`
+  molemmissa hauissa) + S2c-portti (`is_epic`, exit 12), lapsijoukon jaettu resolvointi
+  (`list_epic_children`), ajolabelien idempotentti propagointi + `needs-human`-eskalaatio +
+  valmiuskommentti/-label (`lib/epic.sh`, pollerin `scan_epics`). **#82 toteutti M6:n**
+  `/run-epic`-komennon (`commands/run-epic.md` + `run-epic.sh`): validointi (avoin, ei-tyhjä,
+  syklitön `blocked_by`-graafi, sama repo) suunnittele–sovella-jaolla, `epic`-labelin lisäys jos
+  puuttuu, ajolabelien propagointi jaetulla `propagate_run_labels`illa (AC4), `--dry-run` ja
+  `--start-now`. **Toteuttamatta jää (oma issue):** epicin **keskeytys** (§4.3: elävien
+  lapsiajojen `stop-run.sh`-pysäytys + jonossa olevien `auto-run`-poisto; `/run-epic --stop`) —
+  dokumentin §5 signatuurin `--stop` on tietoisesti scope-out (#82:n rajaus; dokumentti voittaa
+  rungon, ristiriita kirjattu PR-kuvaukseen). Cross-repo-epicit jäävät myös ulkopuolelle
+  (Rajaukset): `list_epic_children` ohittaa cross-repo-lapsen varoituksella.

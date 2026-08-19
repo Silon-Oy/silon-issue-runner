@@ -76,6 +76,15 @@
 #       run is finalized as awaiting_clarification with the waiting label and an
 #       answerable situation comment. Poller's scan_answered restarts it via
 #       --continue once maintainer replies.
+#  12   issue carries the epic label — refused between the lock and the claim
+#       (S2c, issue #81), before the issue is assigned to us. An epic collects
+#       runnable sub-issues but is never itself runnable; the pickup search's
+#       `-label:epic` reads GitHub's eventually-consistent SEARCH index, so this
+#       gate re-checks the label authoritatively and is FAIL-CLOSED (unreadable
+#       labels count as epic). The run dir is finalized blocked/is_epic_not_runnable
+#       (or blocked/epic_check_failed when unreadable) and the lock released;
+#       nothing is claimed and NO needs-human label is added (a pre-claim gate,
+#       like S2b). A named run can override with --force.
 #
 # --restart <run-dir> resumes a timed_out run with a ramped, capped timeout
 # (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). It skips pick/claim
@@ -742,6 +751,38 @@ phase_a() {
     state_finalize "$RUN_DIR" "blocked" "blocked_check_failed"
     state_event "$RUN_DIR" "blocked_check_failed"
     exit 9
+  fi
+
+  # ---------- S2c: authoritative epic gate (issue #81) ----------
+  # The pickup search's `-label:epic` reads GitHub's eventually-consistent SEARCH
+  # index, the same class of lag that once leaked 25 blocked issues past
+  # `-is:blocked` (issue #28). An epic COLLECTS runnable sub-issues; it is never
+  # itself runnable — running it launches the implementer against an aggregating
+  # body and burns the whole timeout budget. Re-check the label authoritatively
+  # here — AFTER the lock (only the lock winner pays the read) and BEFORE the
+  # claim (an epic is never assigned to us). Same placement, cost and fail-closed
+  # posture as S2b (docs/epic-orchestration.md §2.3). No needs-human label: like
+  # S2b's pre-claim gates the issue is not ours, and an epic reaching here is a
+  # rare index-lag artefact, not a human task. --force overrides (a named run may
+  # deliberately target an epic). Lock is released by the EXIT trap (rc != 10).
+  local is_epic_flag=""
+  if [ "$FORCE" = "1" ]; then
+    log "S2c_EpicCheck: --force set — bypassing epic gate for issue=$ISSUE_NUM"
+    state_event "$RUN_DIR" "epic_check_forced"
+  elif is_epic_flag=$(is_epic "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"); then
+    log "S2c_EpicCheck: issue=$ISSUE_NUM is_epic=$is_epic_flag"
+    state_event "$RUN_DIR" "epic_check_done" "is_epic=$is_epic_flag"
+    if [ "$is_epic_flag" = "1" ]; then
+      log "issue #$ISSUE_NUM carries the epic label — not runnable; refusing (pass --force to override)"
+      state_finalize "$RUN_DIR" "blocked" "is_epic_not_runnable"
+      state_event "$RUN_DIR" "is_epic_not_runnable"
+      exit 12
+    fi
+  else
+    log "issue #$ISSUE_NUM: labels unreadable — assuming epic (fail-closed; pass --force to override)"
+    state_finalize "$RUN_DIR" "blocked" "epic_check_failed"
+    state_event "$RUN_DIR" "epic_check_failed"
+    exit 12
   fi
 
   # ---------- S3: claim ----------

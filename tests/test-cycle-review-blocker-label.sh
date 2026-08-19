@@ -57,6 +57,7 @@ cat > "$BIN/gh" <<SH
 echo "\$*" >> "$GH_LOG"
 case "\$*" in
   *"dependencies/blocked_by"*) echo "0" ;;                        # S2b: no blockers
+  *"issue view"*"--json labels"*) echo "0" ;;                     # S2c is_epic: not an epic (--jq reduces to "0")
   *"issue view"*"--json assignees"*) echo "testbot" ;;            # verify_claim
   *"issue view"*) echo '{"title":"Contradictory issue","body":"b","labels":[],"author":{"login":"x"},"comments":[]}' ;;
   *"api user"*) echo "testbot" ;;                                  # me == assignee

@@ -43,7 +43,18 @@
 #      github.pr_state as an explicit allowlist — and inserts every data string
 #      with textContent (never innerHTML), so a title or branch literally named
 #      "<script>" is shown as text and never executes. The JS never iterates the
-#      run or github object, so a field the schema grows later cannot leak.
+#      run or github object, so a field the schema grows later cannot leak. The
+#      epics[] lane (#79) reads only its named fields too — repo_slug, epic_number,
+#      epic_title, epic_url, sub_issues[].{number,state}, source — the same way.
+#
+# EPIC ROLLUP (#79). status.sh --github also emits a top-level epics[] list (open
+# epic-labelled issues + their sub-issues). The JS renders one lane per epic
+# inside its repo group: a progress bar (closed/total), the running sub-issue
+# highlighted, queued sub-issues in list (dependency) order with their blocker
+# ("jonossa · estäjä #N"), and closed sub-issues as strikethrough ack rows while
+# the epic is open. A sub-issue's run is shown ONCE — inside the lane, deduped out
+# of the loose repo rows. Without --github, epics[] is empty and the view is the
+# V3 page unchanged.
 #
 # Usage:
 #   status-render.sh [--input <file>|-] [--out-dir <dir>]
@@ -334,6 +345,24 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .act-note{color:var(--muted);font-size:.78rem;margin-top:.3rem}
 .group-actions{padding:.4rem .8rem;border-top:1px solid var(--border)}
+/* Epic rollup lane (#79) */
+.epic{border-top:1px solid var(--border);border-left:5px solid var(--c-running);
+  padding:.5rem .8rem;background:var(--card)}
+.epic-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:.5rem}
+.epic-badge{font-size:.68rem;padding:.06rem .4rem;border-radius:4px;color:#fff;
+  background:var(--c-running);white-space:nowrap;letter-spacing:.03em}
+.epic-title{font-weight:600}
+.epic-progress-count{color:var(--muted);font-size:.82rem;margin-left:auto;white-space:nowrap}
+.epic-bar{height:.5rem;border-radius:999px;background:var(--border);margin:.4rem 0;overflow:hidden}
+.epic-bar-fill{height:100%;background:var(--c-pr);border-radius:999px}
+.epic-sub{display:flex;align-items:baseline;gap:.5rem;padding:.2rem 0 .2rem .4rem;font-size:.88rem}
+.epic-sub .epic-mark{width:1rem;text-align:center;color:var(--muted)}
+.epic-sub.active{font-weight:600}
+.epic-sub.active .epic-mark{color:var(--c-running)}
+.epic-sub.done .epic-mark{color:var(--c-pr)}
+.epic-sub.done .done-title{text-decoration:line-through;color:var(--muted)}
+.epic-sub.queued{color:var(--muted)}
+.epic-sub-state{color:var(--muted);font-size:.82rem}
 a{color:var(--link);text-decoration:none}
 a:hover{text-decoration:underline}
 .empty{color:var(--muted);padding:1rem 0}
@@ -767,6 +796,84 @@ a:hover{text-decoration:underline}
     return wrap;
   }
 
+  // --- epic rollup (#79) ------------------------------------------------
+  // subKey(repo_slug, number) — the join key between a sub-issue and its run.
+  function subKey(slug, n){ return (slug || "(tuntematon repo)") + "#" + n; }
+
+  // A run is "live" when it is not in the cleanup class (a finished run lingering
+  // on disk). A closed sub-issue keeps its lane row (ack) while the epic is open.
+  function isLiveRun(r){ return r && r.class !== "cleanup"; }
+
+  // epicLaneVisible — an epic produces a lane while it has any OPEN sub-issue OR
+  // any sub-issue still backed by a live run (spec goal 3: an epic with no live
+  // run and no open sub-issue produces no lane).
+  function epicLaneVisible(e, runByKey){
+    var subs = e.sub_issues || [];
+    if (subs.some(function(s){ return s.state === "open"; })) return true;
+    return subs.some(function(s){ return isLiveRun(runByKey[subKey(e.repo_slug, s.number)]); });
+  }
+
+  function renderEpicLane(e, runByKey){
+    var subs = e.sub_issues || [];
+    var total = subs.length;
+    var closed = subs.filter(function(s){ return s.state === "closed"; }).length;
+    var lane = el("div", "epic");
+    lane.setAttribute("data-epic", e.epic_number != null ? e.epic_number : "");
+
+    var head = el("div", "epic-head");
+    head.appendChild(el("span", "epic-badge", "EPIC"));
+    if (e.epic_number != null) head.appendChild(link(e.epic_url, "#" + e.epic_number + " ↗"));
+    if (typeof e.epic_title === "string" && e.epic_title)
+      head.appendChild(el("span", "epic-title", e.epic_title));
+    head.appendChild(el("span", "epic-progress-count", closed + "/" + total + " valmis"));
+    lane.appendChild(head);
+
+    // Progress bar: closed / total. Width set via style property (never innerHTML).
+    var bar = el("div", "epic-bar");
+    var fill = el("div", "epic-bar-fill");
+    fill.style.width = (total > 0 ? Math.round((closed / total) * 100) : 0) + "%";
+    bar.appendChild(fill);
+    lane.appendChild(bar);
+
+    // Sub-issue rows in list (dependency) order. The blocker of a queued open
+    // sub-issue is the nearest PRECEDING still-open sub-issue.
+    var blocker = null;
+    subs.forEach(function(s){
+      var r = runByKey[subKey(e.repo_slug, s.number)];
+      var title = r ? ghTitle(r.github) : null;
+      var row;
+      if (s.state === "closed") {
+        // Acknowledgement row: strikethrough, green check. Stays while epic open.
+        row = el("div", "epic-sub done");
+        row.appendChild(el("span", "epic-mark", "✓"));
+        row.appendChild(r ? link(r.issue_url, "#" + s.number) : el("span", "epic-sub-num", "#" + s.number));
+        if (title) row.appendChild(el("span", "epic-sub-title done-title", title));
+        lane.appendChild(row);
+        return;   // closed subs do not shift the blocker
+      }
+      if (isLiveRun(r)) {
+        // Active: the sub-issue currently has a live run (highlighted).
+        row = el("div", "epic-sub active");
+        row.appendChild(el("span", "epic-mark", "▶"));
+        row.appendChild(link(r.issue_url, "#" + s.number + " ↗"));
+        row.appendChild(el("span", "epic-sub-state", reasonInfo(r.class_reason).label));
+        if (title) row.appendChild(el("span", "epic-sub-title", title));
+      } else {
+        // Queued: no live run. Blocked by the nearest preceding open sub-issue,
+        // else waiting to be picked up.
+        row = el("div", "epic-sub queued");
+        row.appendChild(el("span", "epic-mark", "•"));
+        row.appendChild(r ? link(r.issue_url, "#" + s.number) : el("span", "epic-sub-num", "#" + s.number));
+        row.appendChild(el("span", "epic-sub-state",
+          blocker != null ? ("jonossa · estäjä #" + blocker) : "odottaa poimintaa"));
+        if (title) row.appendChild(el("span", "epic-sub-title", title));
+      }
+      lane.appendChild(row);
+      blocker = s.number;   // this open sub-issue blocks the ones after it
+    });
+    return lane;
+  }
+
   function groupCounts(runs){
     var c = {};
     runs.forEach(function(r){ c[r.class] = (c[r.class] || 0) + 1; });
@@ -798,25 +905,51 @@ a:hover{text-decoration:underline}
       return;
     }
 
-    // Group by repo_slug.
+    // Epic membership (#79): group epics by repo_slug, index runs by sub-key so
+    // a lane can pull its sub-issue runs — and so those runs render ONCE, inside
+    // the lane, never also as a loose repo row (dedup, spec criterion 3). Only a
+    // VISIBLE epic dedups its subs: an epic with no lane would otherwise hide a
+    // sub-issue's lingering cleanup run from the group entirely (no lane + not a
+    // loose row), so it must stay a loose row when there is no lane to hold it.
+    var epicsList = data.epics || [];
+    var epicsByRepo = {}, epicMember = {}, runByKey = {};
+    runs.forEach(function(r){ runByKey[subKey(r.repo_slug, r.issue_number)] = r; });
+    epicsList.forEach(function(e){
+      var k = e.repo_slug || "(tuntematon repo)";
+      (epicsByRepo[k] = epicsByRepo[k] || []).push(e);
+      if (!epicLaneVisible(e, runByKey)) return;
+      (e.sub_issues || []).forEach(function(s){ epicMember[subKey(k, s.number)] = true; });
+    });
+
+    // Group by repo_slug. allRuns drives counts + ordering; rows excludes runs
+    // that belong to an epic lane; epics holds the visible lanes.
     var groups = {};
+    function grp(k){ return groups[k] || (groups[k] = {slug:k, rows:[], allRuns:[], epics:[]}); }
     runs.forEach(function(r){
       var k = r.repo_slug || "(tuntematon repo)";
-      (groups[k] = groups[k] || []).push(r);
+      var g = grp(k);
+      g.allRuns.push(r);
+      if (!epicMember[subKey(k, r.issue_number)]) g.rows.push(r);
+    });
+    Object.keys(epicsByRepo).forEach(function(k){
+      grp(k).epics = epicsByRepo[k].filter(function(e){ return epicLaneVisible(e, runByKey); });
     });
 
     // Order groups busiest first: worst class (lowest priority number), then
     // oldest age. Uses ALL of a group's runs so ordering is stable under filters.
     var order = Object.keys(groups).map(function(k){
-      var rs = groups[k];
+      var g = groups[k];
       var worst = 99, oldest = -1;
-      rs.forEach(function(r){
+      g.allRuns.forEach(function(r){
         var p = PRIORITY[r.class] != null ? PRIORITY[r.class] : 99;
         if (p < worst) worst = p;
         var a = r.age_seconds != null ? r.age_seconds : -1;
         if (a > oldest) oldest = a;
       });
-      return {slug:k, runs:rs, worst:worst, oldest:oldest};
+      // A repo with only epic lanes (no runs of its own) still needs an order
+      // slot; treat it as running-priority so it sits among active work.
+      if (g.epics.length && worst === 99) worst = PRIORITY.running;
+      return {slug:k, rows:g.rows, allRuns:g.allRuns, epics:g.epics, worst:worst, oldest:oldest};
     });
     order.sort(function(a, b){
       return (a.worst - b.worst) || (b.oldest - a.oldest) || a.slug.localeCompare(b.slug);
@@ -824,18 +957,18 @@ a:hover{text-decoration:underline}
 
     var shown = 0;
     order.forEach(function(g){
-      var visible = g.runs.filter(function(r){ return active[r.class]; });
-      var cleanupRuns = g.runs.filter(function(r){ return r.class === "cleanup"; });
-      // A group with only-cleanup runs and the Siivousjono chip off has no
-      // visible rows -> hidden entirely (spec edge case).
-      if (visible.length === 0) return;
+      var visible = g.rows.filter(function(r){ return active[r.class]; });
+      var cleanupRuns = g.rows.filter(function(r){ return r.class === "cleanup"; });
+      // Show the group if it has visible rows OR any epic lane. A group of only
+      // cleanup runs with the Siivousjono chip off (and no epic) collapses away.
+      if (visible.length === 0 && g.epics.length === 0) return;
       shown++;
 
       var group = el("div", "group");
       var head = el("div", "group-head");
       head.setAttribute("data-repo", g.slug);
       head.appendChild(el("span", "slug", g.slug));
-      head.appendChild(el("span", "gcounts", groupCounts(g.runs)));
+      head.appendChild(el("span", "gcounts", groupCounts(g.allRuns)));
       var isCollapsed = !!collapsed[g.slug];
       head.appendChild(el("span", "caret", isCollapsed ? "▸" : "▾"));
       head.addEventListener("click", function(){
@@ -845,6 +978,8 @@ a:hover{text-decoration:underline}
       group.appendChild(head);
 
       if (!isCollapsed) {
+        // Epic lanes first, then the loose (non-epic) rows.
+        g.epics.forEach(function(e){ group.appendChild(renderEpicLane(e, runByKey)); });
         visible.slice().sort(rowCompare).forEach(function(r){ group.appendChild(renderRow(r)); });
         // Cleanup tail: when cleanup rows are not individually shown, summarise.
         if (!active.cleanup && cleanupRuns.length > 0) {

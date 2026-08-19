@@ -416,6 +416,45 @@ lenkki kerrallaan itsestään.
 Estotieto tulee GitHubin hakuindeksistä, joten se päivittyy pienellä viiveellä juuri suljetun
 estäjän jälkeen. Käytännössä viive mahtuu pollerin 5 minuutin tikkiväliin.
 
+#### Epicit — usean issuen ketjun ajaminen `auto-run`illa
+
+Kun kokonaisuus koostuu monesta issuesta, voit koota ne **epic-issueen** ja ajaa koko ketjun
+yhdellä signaalilla. Epic on GitHub-issue jolla on **`epic`-label**; sen alaissueet liitetään
+GitHubin natiivilla **sub-issue**-toiminnolla (vanhoissa epiceissä rungon task-lista
+`- [ ] Otsikko #123` toimii varamuotona). Ajojärjestys tulee alaissueiden keskinäisistä
+`blocked_by`-riippuvuuksista aivan kuten yllä.
+
+- **Epic ei koskaan itse aja.** `epic`-label pitää epicin poiminnan ulkopuolella (sama tapa kuin
+  `waiting`/`wip`), ja lukon jälkeinen S2c-portti varmistaa saman autoritatiivisesti — epicin
+  "toteutus" on sen alaissueiden toteutus, ei epicin runko.
+- **`auto-run` epicillä propagoituu alaissueille.** Lisää `auto-run` (ja mahdolliset muut repon
+  vaatimat ajolabelit) **epiciin**, niin poller lisää ne epicin **avoimille** alaissueille joka
+  tikki. Jo labeloidut, suljetut ja `wip`-merkityt lapset ohitetaan. Propagointi on jatkuvaa:
+  myöhemmin lisätty alaissue saa labelin seuraavalla tikillä.
+- **Jätä yksittäinen alaissue ajon ulkopuolelle `wip`illä** — älä poista siltä `auto-run`ia
+  (propagointi palauttaisi sen).
+- **Jumittunut alaissue nostetaan näkyviin.** Kun alaissue päätyy `needs-human`-tilaan, epiciin
+  postataan **kerran** kommentti joka nimeää lapsen, ja epic saa suodatettavan
+  `epic-attention`-labelin. Riippumattomat haarat jatkavat normaalisti.
+- **Valmistuminen näkyy, sulkeminen jää sinulle.** Kun epicin **kaikki** alaissueet ovat kiinni,
+  epic saa **kerran** yhteenvetokommentin (listaa alaissueet ja niiden PR:t) ja
+  `epic-complete`-labelin. **Runner ei sulje epiciä** — tarkista epicin hyväksyntäkriteerit ja
+  sulje itse (tai anna GitHubin natiivin auto-closen hoitaa se, jos repo on niin konfiguroitu).
+
+Labelit `epic`, `epic-attention` ja `epic-complete` ovat kiinteitä nimiä. Cross-repo-alaissueet
+(toisessa repossa) ovat tuen ulkopuolella: ne ohitetaan lokivaroituksella.
+
+**Yhden komennon käynnistys — `/run-epic`.** Sen sijaan että lisäisit `auto-run`in epiciin käsin
+ja odottaisit tikkiä, `/run-epic #N` (skripti `run-epic.sh`) tekee sen heti: se **validoi**
+epicin rakenteen (avoin, alaissueita on, `blocked_by`-graafi on syklitön, alaissueet samassa
+repossa) **ennen mitään kirjoitusta**, lisää `epic`-labelin jos se puuttuu, propagoi ajolabelit
+avoimille alaissueille (**sama jaettu propagointi** kuin pollerilla), ja raportoi mikä alaissue
+ajaa ensin, mitkä ovat estettyjä ja minkä takana, ja kuinka pitkä ketju on. `--dry-run` tulostaa
+saman raportin kirjoittamatta mitään; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen
+heti (hyödyllinen koneella jolla poller ei aja). Ks. exit-koodit osiossa 9 ja ohje
+[`commands/run-epic.md`](commands/run-epic.md). Epicin **keskeytys** (`--stop`) ei ole vielä
+toteutettu — pysäytä yksittäinen ajo `stop-run.sh`:llä ja poista `auto-run` käsin.
+
 ### 6.6 Käyttötapaukset
 
 Kahdeksan tilannetta, joissa ihmistä tarvitaan tai kannattaa tietää mitä tapahtuu.
@@ -534,6 +573,7 @@ Claude Codessa, kohderepon juuressa:
 | Komento | Argumentit | Mitä tekee |
 |---|---|---|
 | `/run-issues` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/run-issues.md`](commands/run-issues.md) |
+| `/run-epic` | `[#N] [--dry-run] [--start-now]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan (6.5). Ohje: [`commands/run-epic.md`](commands/run-epic.md) |
 | `/pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/pr-watch.md`](commands/pr-watch.md) |
 | `/cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/cleanup-run.md`](commands/cleanup-run.md) |
 | `/refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/refresh.md`](commands/refresh.md) |
@@ -557,6 +597,7 @@ käytettävissä.
 | Skripti | Tyypillinen kutsu | Mitä tekee |
 |---|---|---|
 | `orchestrate.sh` | `orchestrate.sh <repo> <N\|poll>` | Yksi issue → yksi PR. Muut moodit: `--resume <run-dir> --decision …`, `--restart <run-dir>`, `--continue <run-dir>`, `--remote <nimi>` |
+| `run-epic.sh` | `run-epic.sh <N> --repo <polku>` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille. `--dry-run`, `--start-now`, `--remote`, `--labels` |
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run` |
@@ -648,6 +689,16 @@ ennen kuin tarjoilet sitä mistään.
 datalla kuten ennen. Oletus `0` = pelkkä paikallinen näkymä. **Otsikot paljastavat
 asiakaskontekstia — pidä sivu tailnetissä, älä altista julkisesti (osio
 [7.8](#78-statussivun-web-esitys-on-uusi-altistuspinta)).**
+
+**Epic-rollup (#79).** gh-rikastus (`--github`) tuottaa myös top-level-listan `epics[]` —
+avoimet `epic`-labeloidut issuet ja niiden alaissueet (ensisijaisesti GitHubin natiivista
+sub-issues-rajapinnasta, fallbackina epicin rungon `- [ ] … #N` -task-listasta). Sivu renderöi
+per epic **epic-kaistan** sen repo-ryhmän sisään: edistymispalkki (suljetut/kaikki alaissueet),
+ajossa oleva alaissue korostettuna, jonossa olevat riippuvuusjärjestyksessä estäjineen
+("jonossa · estäjä #N") ja suljetut alaissueet yliviivattuina kuittausriveinä niin kauan kuin
+epic on auki. Alaissueen ajo näkyy vain kerran — kaistalla, ei irtorivinä. Ilman `--github`iä
+`epics[]` on tyhjä ja näkymä on entisellään. Epic- ja alaissue-otsikot ovat samaa
+tailnet-rajattua otsikkopolkua kuin #78. Skeema ja tekninen referenssi: CLAUDE.md §5 / §6.
 
 ---
 
@@ -1011,6 +1062,7 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (`-is:blocked`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia: se on odotustila, joka jatkuu itsestään kun estäjä sulkeutuu. Nimetyn ajon voi pakottaa `--force`-lipulla |
 | 10 | Odottaa ihmisen katselmointia — jatka komennolla `--resume` |
 | 11 | Odottaa tarkennusta — vastaa issuelle, poller jatkaa `--continue`-ajolla |
+| 12 | **Issue kantaa `epic`-labelia** — S2c-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota (issue #81). Epic kokoaa ajettavat alaissueet mutta ei ole itse ajettava; ajo viimeisteltiin `blocked`-tilaan (`is_epic_not_runnable`, tai `epic_check_failed` jos labelit lukukelvottomat) ja lukko vapautettiin. Portti lukee labelin suoraan (`-label:epic`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`-lipulla |
 
 ### Asennin (`install.sh`)
 
@@ -1085,6 +1137,22 @@ kun olet hoitanut asian, jos haluat siivouksen yrittävän uudelleen.
 ole siivous** — worktree, haara ja run-dir jäävät koskematta (purku jää `cleanup-run.sh`ille tai
 `auto-clean`-labelille). Ei `--all`-lippua eikä oletuskohdetta: massapysäytys on koko
 orkestraattorin pysäyttäminen (`launchctl`), ei tämän skriptin asia.
+
+### Epicin käynnistys (`run-epic.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Validoitu + propagoitu (tai `--dry-run` tulosti suunnitelman) |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero) |
+| 2 | Epic-issueta ei löytynyt tai se ei ole avoin |
+| 3 | Epic ilman alaissueita — ei propagoitavaa |
+| 4 | Syklinen `blocked_by`-graafi alaissueiden välillä — sykli nimetään, mitään ei kirjoiteta |
+| 5 | Lukuvirhe — lapsijoukkoa tai `blocked_by`-graafia ei saatu luettua (fail-closed) |
+
+`run-epic.sh` validoi epicin rakenteen **ennen mitään kirjoitusta** (suunnittele–sovella kuten
+`install.sh`) ja propagoi sitten ajolabelit alaissueille **samalla jaetulla funktiolla** kuin
+pollerin epic-skannaus. `--dry-run` tulostaa raportin kirjoittamatta; `--start-now` käynnistää
+ensimmäisen ajokelpoisen alaissueen heti. Keskeytystä (`--stop`) ei ole vielä toteutettu.
 
 ### Mistä lokit löytyvät
 

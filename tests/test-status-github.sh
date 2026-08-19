@@ -111,11 +111,34 @@ JSON
   esac
 fi
 if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
-  case "\$repo" in
-    o/repo-a)
-      # Titles for the open issues, including a special-char title (#1) to prove
-      # the JSON round-trip preserves it, and issue 4 (the no-PR blocked run).
-      cat <<'JSON'
+  # An epic list (--label epic) is distinct from the title list (no label).
+  case "\$*" in
+  *"--label epic"*)
+    case "\$repo" in
+      o/repo-a)
+        # Two epics: #10 has native sub-issues (API path below), #20 is a legacy
+        # epic whose sub-issues live in a body task-list (API returns empty).
+        cat <<'JSON'
+[
+ {"number":10,"title":"Epic Alpha","body":"An epic with native sub-issues."},
+ {"number":20,"title":"Epic Beta (legacy)","body":"Legacy epic\n- [x] Done thing #1\n- [ ] Pending thing #2\n- [ ] Ghost thing #999\n"}
+]
+JSON
+        exit 0
+        ;;
+      o/repo-b)
+        echo "gh: could not fetch (simulated failure)" >&2
+        exit 1
+        ;;
+      *) echo "[]"; exit 0 ;;
+    esac
+    ;;
+  *)
+    case "\$repo" in
+      o/repo-a)
+        # Titles for the open issues, including a special-char title (#1) to prove
+        # the JSON round-trip preserves it, and issue 4 (the no-PR blocked run).
+        cat <<'JSON'
 [
  {"number":1,"title":"Fix <b>bug</b> & ship ä title"},
  {"number":2,"title":"Red CI issue"},
@@ -126,11 +149,34 @@ if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
  {"number":7,"title":"Draft issue"}
 ]
 JSON
+        exit 0
+        ;;
+      o/repo-b)
+        echo "gh: could not fetch (simulated failure)" >&2
+        exit 1
+        ;;
+      *) echo "[]"; exit 0 ;;
+    esac
+    ;;
+  esac
+fi
+# Sub-issues API: repos/{owner}/{repo}/issues/{n}/sub_issues (issue #79).
+if [ "\$1" = "api" ]; then
+  case "\$2" in
+    repos/o/repo-a/issues/10/sub_issues)
+      # Native sub-issues: #11 open, #12 closed.
+      cat <<'JSON'
+[
+ {"number":11,"state":"open","title":"Alpha sub one"},
+ {"number":12,"state":"closed","title":"Alpha sub two"}
+]
+JSON
       exit 0
       ;;
-    o/repo-b)
-      echo "gh: could not fetch (simulated failure)" >&2
-      exit 1
+    repos/o/repo-a/issues/20/sub_issues)
+      # Legacy epic: no native sub-issues => caller falls back to the task list.
+      echo "[]"
+      exit 0
       ;;
     *) echo "[]"; exit 0 ;;
   esac
@@ -148,7 +194,10 @@ run_status() {
 # grep -c prints "0" even on no match (then exits 1); swallow that exit so the
 # count is a single clean integer.
 pr_list_calls() { grep -c 'pr list' "$CALLS" 2>/dev/null || true; }
-issue_list_calls() { grep -c 'issue list' "$CALLS" 2>/dev/null || true; }
+# Title-list calls only (exclude the epic list, which also uses `issue list`).
+issue_list_calls() { grep 'issue list' "$CALLS" 2>/dev/null | grep -vc 'label epic' || true; }
+epic_list_calls() { grep -c 'label epic' "$CALLS" 2>/dev/null || true; }
+sub_issue_calls() { grep -c 'api repos/' "$CALLS" 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------
 # 1) First --github run: fetches, enriches repo-a, fails repo-b.
@@ -226,6 +275,41 @@ check "#7 reason pr_draft_stale"     "$(gi 7 | jq -r '.class_reason')" "pr_draft
 check "#9 github null (repo failed)" "$(gi 9 | jq -r '.github')" "null"
 check "#9 confidence low"            "$(gi 9 | jq -r '.class_confidence')" "low"
 
+# ---- epic collection (issue #79) ------------------------------------------
+# Epics are fetched ONCE per repo: repo-a succeeds (1 epic-list call, 2 sub-issue
+# API calls), repo-b fails the PR fetch first so it is never queried for epics.
+check "epic list called once (repo-a)" "$(epic_list_calls)" "1"
+check "sub-issue API called per epic (2)" "$(sub_issue_calls)" "2"
+check "epics[] has 2 entries" "$(jq '.epics | length' "$OUT")" "2"
+
+# by-epic-number lookup.
+ge() { jq -c --argjson n "$1" '.epics[] | select(.epic_number==$n)' "$OUT"; }
+
+# Epic #10: native sub-issues => source "sub_issues", verbatim {number,state}.
+check "epic #10 repo_slug"       "$(ge 10 | jq -r '.repo_slug')" "repo-a"
+check "epic #10 title"           "$(ge 10 | jq -r '.epic_title')" "Epic Alpha"
+check "epic #10 url"             "$(ge 10 | jq -r '.epic_url')" "https://github.com/o/repo-a/issues/10"
+check "epic #10 source sub_issues" "$(ge 10 | jq -r '.source')" "sub_issues"
+check "epic #10 sub_issues count" "$(ge 10 | jq '.sub_issues | length')" "2"
+check "epic #10 sub #11 open"    "$(ge 10 | jq -r '.sub_issues[] | select(.number==11) | .state')" "open"
+check "epic #10 sub #12 closed"  "$(ge 10 | jq -r '.sub_issues[] | select(.number==12) | .state')" "closed"
+# sub_issues carry ONLY number+state (no title/body leak from the API payload).
+check "epic #10 sub keys number+state" \
+  "$(ge 10 | jq -r '.sub_issues[0] | keys | sort | join(",")')" "number,state"
+
+# Epic #20: no native sub-issues => task-list fallback (source "task_list"). The
+# open-issue map is authoritative for state (#1 is checked but IS open => open),
+# and a reference to a non-existent issue (#999, unchecked, not in the map) is
+# skipped silently (spec edge).
+check "epic #20 source task_list" "$(ge 20 | jq -r '.source')" "task_list"
+check "epic #20 sub_issues count (ghost skipped)" "$(ge 20 | jq '.sub_issues | length')" "2"
+check "epic #20 sub #1 open (map authoritative over checkbox)" \
+  "$(ge 20 | jq -r '.sub_issues[] | select(.number==1) | .state')" "open"
+check "epic #20 sub #2 open" \
+  "$(ge 20 | jq -r '.sub_issues[] | select(.number==2) | .state')" "open"
+check "epic #20 ghost #999 absent" \
+  "$(ge 20 | jq '[.sub_issues[] | select(.number==999)] | length')" "0"
+
 # ---------------------------------------------------------------------------
 # 2) Cache hit: rerun within TTL => the shim is NOT called for repo-a.
 #    (repo-b failed and was not cached, so it is retried — 1 call, not 2.)
@@ -240,6 +324,11 @@ check "cache hit: #1 still enriched from cache" \
   "$(jq -r '.runs[] | select(.issue_number==1) | .github.pr_state' "$FX/out2.json")" "OPEN"
 check "cache hit: #1 title served from cache" \
   "$(jq -r '.runs[] | select(.issue_number==1) | .github.issue_title' "$FX/out2.json")" 'Fix <b>bug</b> & ship ä title'
+# Epics are cached fully resolved: a cache hit makes NO epic-list and NO
+# sub-issue API call, yet epics[] is still served (issue #79).
+check "cache hit: no epic list call" "$(epic_list_calls)" "0"
+check "cache hit: no sub-issue API call" "$(sub_issue_calls)" "0"
+check "cache hit: epics[] still served (2)" "$(jq '.epics | length' "$FX/out2.json")" "2"
 check "cache hit: cache_age_seconds >= 0" \
   "$(jq -r '.enrichment.cache_age_seconds >= 0' "$FX/out2.json")" "true"
 
