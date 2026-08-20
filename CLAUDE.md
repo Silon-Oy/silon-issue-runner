@@ -316,7 +316,10 @@ idempotentti** (aina rc 0 — yhden epicin GitHub-häiriö ei kaada tikkiä):
 Epic-labelit (`epic`, `epic-attention`, `epic-complete`) ovat **kiinteitä nimiä**, eivät
 konfiguroitavia — sama päätös kuin `epic`-labelilla itsellään (`docs/epic-orchestration.md` §6).
 `/run-epic`-komento (M6) toteutettiin #82:ssa (`run-epic.sh`, ks. §5 exit-koodit); epicin
-keskeytys (`--stop`) jää yhä erilliseen issueen (scope-out).
+**keskeytys** (`--stop`) toteutettiin #90:ssä samaan skriptiin: pysäyttää elävät lapsiajot
+delegoimalla `stop-run.sh`:lle ja poistaa ajolabelit **ensin epiciltä, sitten avoimilta lapsilta**
+(järjestys estää `scan_epics`in re-propagoinnin), plan-then-apply-jaolla; osittaisuus (vieras
+kone / terminaalitila) erottuu täydestä exit-koodilla 6. Ks. §5 exit-koodit.
 
 **Jatkomoodit:**
 
@@ -475,11 +478,13 @@ awaiting-answer-markeria (scope-out: ei automaattista uudelleenkäynnistystä �
 | 4 | Vieras host — `run.json.host` ≠ `hostname -s`; ajo kuuluu toiselle koneelle, mihinkään ei koskettu |
 | 5 | Terminaalitila — ajon status ei ole `initialized`; `--force` pysäyttää silti (esim. `completed`-ajon elävän PR-kontekstin purkaminen vaatii tietoisen valinnan). Mihinkään ei koskettu |
 
-### Epicin käynnistys (`run-epic.sh`, #82)
+### Epicin käynnistys ja keskeytys (`run-epic.sh`, #82 + #90)
 
-Oma avaruus. `/run-epic`-slash-komennon taustaskripti: epicin eksplisiittinen käynnistyspinta,
-symmetrinen `stop-run.sh`:n kanssa (ohut operaattoripinta, suunnittele–sovella kuten
-`install.sh`). Validoi epicin rakenteen **ennen mitään kirjoitusta** (avoin + olemassa,
+Oma avaruus. `/run-epic`-slash-komennon taustaskripti: epicin eksplisiittinen käynnistys- ja
+keskeytyspinta, symmetrinen `stop-run.sh`:n kanssa (ohut operaattoripinta, suunnittele–sovella
+kuten `install.sh`).
+
+**Käynnistys (#82).** Validoi epicin rakenteen **ennen mitään kirjoitusta** (avoin + olemassa,
 ≥1 alaissue natiivi/task-lista, `blocked_by`-graafi syklitön, alaissueet samassa repossa),
 lisää sitten `epic`-labelin jos puuttuu (idempotentti; `docs/epic-orchestration.md` §5.2
 avoin päätös I — muuntaa kokoavan issuen epiciksi) ja propagoi ajolabelit avoimille
@@ -488,17 +493,33 @@ alaissueille **jaetulla `propagate_run_labels`illa** (lib/epic.sh) — sama polk
 ajokelpoinen lapsi, estetyt + estäjät, ketjun pituus) kirjoittamatta mitään; `--start-now`
 käynnistää ensimmäisen ajokelpoisen lapsen heti (`orchestrate.sh`, `RUN_EPIC_ORCHESTRATE`
 testien injektiopisteenä). Syklintarkistus on Kahnin algoritmi ilman assosiatiivisia taulukoita
-(bash 3.2). Fail-closed: lukukelvoton lapsi-/estäjägraafi ⇒ exit 5, ei ajoa. Vartija:
-`tests/test-run-epic.sh`. Keskeytys (`--stop`) on scope-out (erillinen issue).
+(bash 3.2). Fail-closed: lukukelvoton lapsi-/estäjägraafi ⇒ exit 5, ei ajoa.
+
+**Keskeytys (`--stop`, #90).** Symmetrinen käynnistyksen kanssa, sama plan-then-apply ja **sama
+jaettu lapsijoukon resolvointi** (`list_epic_children`). Haarautuu launch-polusta **ennen**
+`blocked_by`-graafia ja syklintarkistusta (joita pysäytys ei tarvitse). Kaksiosainen: (1)
+**elävät lapsiajot** pysäytetään **delegoimalla** `stop-run.sh`:lle (`RUN_EPIC_STOP_RUN` testien
+injektiopisteenä) — turvakriittistä lopetuslogiikkaa (tmux-tappo, `state_finalize`, lukonpurku)
+**ei monisteta** (AC3); vieraan koneen ajoa ei kosketa (host-portti) eikä terminaalitilan ajoa
+pakoteta; (2) **jonossa olevat** vapautetaan poistamalla ajolabelit `labels_remove`illa
+(`labels_add`in sisar, AC2) **ensin epiciltä, sitten avoimilta lapsilta** — järjestys estää
+`scan_epics`in re-propagoinnin. Ajot luokitellaan run-dirien `run.json`ista lukemalla (host +
+status, read-only preview; `stop-run.sh` on gate-autoriteetti apply-hetkellä). `--dry-run` ei
+kirjoita mitään. `--stop` + `--start-now` = käyttövirhe (exit 1). Osittainen onnistuminen
+erottuu täydestä: exit 6 jos ≥1 elävää ajoa jäi pysäyttämättä. Ei siivoa
+worktreetä/haaraa/run-diriä (ei cleanup). Vartija: `tests/test-run-epic.sh`.
+
+Koodit 1/2/3/5 ovat yhteisiä molemmille moodeille; 4 on vain käynnistys, 6 vain `--stop`.
 
 | Koodi | Merkitys |
 |---|---|
-| 0 | Validoitu + propagoitu (tai `--dry-run` tulosti suunnitelman) |
-| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero) |
+| 0 | Käynnistys: validoitu + propagoitu. `--stop`: epic kokonaan pysäytetty (kaikki elävät lapsiajot pysäytetty, ajolabelit poistettu). Tai `--dry-run` tulosti suunnitelman |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero / `--stop` yhdessä `--start-now`n kanssa) |
 | 2 | Epic-issueta ei löytynyt tai se ei ole avoin — mitään ei luettu fetchin jälkeen |
-| 3 | Epic ilman alaissueita (ei natiiveja, ei task-listaa) — ei propagoitavaa |
-| 4 | Syklinen `blocked_by`-graafi alaissueiden välillä — sykli nimetään, ei kirjoituksia |
+| 3 | Epic ilman alaissueita (ei natiiveja, ei task-listaa) — ei propagoitavaa/pysäytettävää |
+| 4 | Käynnistys: syklinen `blocked_by`-graafi alaissueiden välillä — sykli nimetään, ei kirjoituksia |
 | 5 | Lukuvirhe — lapsijoukkoa tai jonkin lapsen `blocked_by`-graafia ei saatu luettua (fail-closed) |
+| 6 | `--stop`: osittainen — epic vapautettiin mutta ≥1 elävää lapsiajoa ei voitu pysäyttää (vieras kone / terminaalitila ilman `--force`ia / moniselitteinen / delegoitu `stop-run.sh` epäonnistui). Muu käsiteltiin; täysi pysäytys on 0 |
 
 ### Ohjaamon toimintopalvelu (`action-server.sh`, #77)
 
@@ -539,7 +560,7 @@ skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon jaettu resolvointi natiivi→fallback, #81; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon jaettu resolvointi natiivi→fallback (jaettu käynnistyksen, pollerin ja #90:n `--stop`-keskeytyksen kesken), #81; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
 | `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Propagoinnin **yksi jaettu primitiivi** `_epic_propagate_child` (AC4, #82): sekä `epic_process_one` että julkinen `propagate_run_labels` (lapsijoukon resolvointi + propagointi, `/run-epic`in kirjoituspolku) kutsuvat sitä — ei kahta label-propagointitoteutusta. `_epic_parse_child_line` säilyttää `list_epic_children`in tyhjän label-sarakkeen (tab on IFS-whitespace ⇒ `IFS=$'\t' read` romahduttaisi sen). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartijat `tests/test-epic.sh`, `tests/test-run-epic.sh` |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
@@ -1024,7 +1045,7 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   kuin kumpikaan puhdas vaihtoehto, joten #9 jätti tämän tietoisesti tekemättä. Toiminnallista
   vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei nimellä
   (`lib/issue.sh`).
-- **Epic-ajon auto-run-semantiikka on toteutettu (#81); `/run-epic` ja keskeytys eivät.**
+- **Epic-ajon auto-run-semantiikka (#81), `/run-epic` (#82) ja keskeytys (#90) on toteutettu.**
   `docs/epic-orchestration.md` (#80) määrittelee koko arkkitehtuurin. #81 toteutti sen
   auto-run-tason muutoskohdat M1–M5 ja M7: epicin poissulku poiminnasta (`-label:epic`
   molemmissa hauissa) + S2c-portti (`is_epic`, exit 12), lapsijoukon jaettu resolvointi
@@ -1033,8 +1054,8 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   `/run-epic`-komennon (`commands/run-epic.md` + `run-epic.sh`): validointi (avoin, ei-tyhjä,
   syklitön `blocked_by`-graafi, sama repo) suunnittele–sovella-jaolla, `epic`-labelin lisäys jos
   puuttuu, ajolabelien propagointi jaetulla `propagate_run_labels`illa (AC4), `--dry-run` ja
-  `--start-now`. **Toteuttamatta jää (oma issue):** epicin **keskeytys** (§4.3: elävien
-  lapsiajojen `stop-run.sh`-pysäytys + jonossa olevien `auto-run`-poisto; `/run-epic --stop`) —
-  dokumentin §5 signatuurin `--stop` on tietoisesti scope-out (#82:n rajaus; dokumentti voittaa
-  rungon, ristiriita kirjattu PR-kuvaukseen). Cross-repo-epicit jäävät myös ulkopuolelle
-  (Rajaukset): `list_epic_children` ohittaa cross-repo-lapsen varoituksella.
+  `--start-now`. **#90 toteutti keskeytyksen** (`--stop`, §4.3, päätös H) samaan skriptiin:
+  elävien lapsiajojen pysäytys delegoimalla `stop-run.sh`:lle (turvalogiikkaa ei monisteta) +
+  ajolabelien poisto `labels_remove`illa **ensin epiciltä, sitten avoimilta lapsilta** (estää
+  `scan_epics`in re-propagoinnin), plan-then-apply, exit 6 osittaisuudelle. **Toteuttamatta jää:**
+  cross-repo-epicit (Rajaukset): `list_epic_children` ohittaa cross-repo-lapsen varoituksella.

@@ -12,10 +12,13 @@
 > - **#82 toteutti `/run-epic`-komennon** — M6 (§6): `run-epic.sh` + `commands/run-epic.md`,
 >   validointi suunnittele–sovella-jaolla, `epic`-labelin idempotentti lisäys, ajolabelien
 >   propagointi jaetulla `propagate_run_labels`illa, `--dry-run` ja `--start-now`.
+> - **#90 toteutti epicin keskeytyksen** — M6:n täydennys (§6) ja päätös H: `run-epic.sh --stop`
+>   pysäyttää elävät lapsiajot delegoimalla `stop-run.sh`:lle ja poistaa ajolabelit (epiciltä
+>   ensin, sitten avoimilta lapsilta), plan-then-apply-jaolla kuten käynnistyspolku.
 >
-> Kymmenestä alla luetellusta avoimesta päätöksestä (§"Avoimet päätökset") **yhdeksän on
+> Kymmenestä alla luetellusta avoimesta päätöksestä (§"Avoimet päätökset") **kaikki on
 > ratkaistu koodissa**; kunkin ratkaisukohta on nimetty päätöstaulukon ratkaisusarakkeessa.
-> Vain **H (epicin keskeytys)** on aidosti auki → **#90**. Osin avoinna ovat vielä lapsijoukon
+> Viimeisenä ratkesi **H (epicin keskeytys)** → #90. Osin avoinna ovat vielä lapsijoukon
 > jaettu resolvointi (§1.3, → **#91**) ja cross-repo-rajaus (§Rajaukset, → **#92**).
 >
 > Dokumentin arvo ei ole enää suunnitelmana vaan **perusteluna**: se kertoo *miksi* koneisto on
@@ -390,6 +393,9 @@ Tämä nojaa olemassa olevaan käytökseen (§7.1 hyötykäyttönä):
 
 ### 4.3 Keskeytyksen semantiikka
 
+> **Toteutettu #90:ssä** — `run-epic.sh <N> --stop` (ks. §5). Tämä osio kuvaa semantiikan; alla
+> oleva vastaa toteutusta.
+
 **Ehdotus (issuen mukainen):** epicin keskeytys = **elävän ajon pysäytys + jonossa olevien
 vapautus poiminnasta**.
 
@@ -400,20 +406,19 @@ Kaksi osaa, molemmat olemassa olevalla koneistolla:
    ei-destruktiivisesti. Epicin keskeytys iteroi elävät lapsiajot ja kutsuu `stop-run.sh`:n
    (tai suoraan `lib/run-terminate.sh`:n `run_terminate`in) kullekin.
 2. **Jonossa olevat:** alaissuet, jotka eivät vielä aja, vapautetaan poiminnasta **poistamalla
-   `auto-run`** niiltä (propagoinnin käänteisoperaatio). Ilman `auto-run`ia poller ei poimi
-   niitä. Vaihtoehtoisesti epiciltä poistetaan `auto-run`, jolloin propagointi lakkaa, mutta jo
-   lisätyt lapsilabelit pitää poistaa erikseen — siksi keskeytys poistaa labelit lapsilta
-   suoraan.
+   ajolabelit** (propagoinnin käänteisoperaatio, `labels_remove` = `labels_add`in sisar). Ilman
+   `auto-run`ia poller ei poimi niitä. **Järjestys on olennainen:** labelit poistetaan **ensin
+   epiciltä, sitten avoimilta lapsilta** — toisin päin `scan_epics` ehtisi propagoida labelit
+   takaisin kesken operaation. Epiciltä poisto lakkauttaa propagoinnin; lapsilta poisto siivoaa
+   jo lisätyt labelit. Toteutus tekee molemmat tässä järjestyksessä.
 
-> **Avoin päätös H — keskeytyskomennon muoto.** — **AVOIN → #90.** Tämä on ainoa yhä avoin
-> päätös. #82 rajasi keskeytyksen tietoisesti scope-outiin (`--start` toteutettiin, `--stop` ei);
-> §5-signatuurin `--stop` on toistaiseksi vain suunnitelmarivi eikä `run-epic.sh` toteuta sitä.
-> Alkuperäinen suositus (yhä voimassa suunnitelmana):
-> Onko keskeytys osa `/run-epic`-komentoa (`/run-epic <N> --stop`) vai erillinen
-> `/stop-epic <N>`? **Suositus:** `/run-epic <N> --stop` (tai `--cancel`), symmetrinen ajon
+> **Päätös H — keskeytyskomennon muoto. RATKAISTU #90:ssä → `/run-epic <N> --stop`.**
+> Keskeytys on osa `/run-epic`-komentoa (ei erillistä `/stop-epic`iä), symmetrinen ajon
 > käynnistyksen kanssa, koska molemmat operoivat samaa lapsijoukkoa samalla resolvointilogiikalla.
 > Se delegoi elävien ajojen pysäytyksen `stop-run.sh`:lle monistamatta turvakriittistä
-> lopetuslogiikkaa (sama periaate kuin #64 ↔ #63).
+> lopetuslogiikkaa (sama periaate kuin #64 ↔ #63). Toteutettu `run-epic.sh --stop`ina
+> plan-then-apply-jaolla; osittainen onnistuminen (vieras kone / terminaalitila) erottuu
+> täydestä exit-koodilla 6.
 
 ---
 
@@ -509,7 +514,8 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
 
 ### 6.2 Tarvitsee muutoksen
 
-> **Toteutustila.** M1–M5 ja M7 toteutettiin **#81:ssä**, M6 **#82:ssa**, ja M8 on suurelta
+> **Toteutustila.** M1–M5 ja M7 toteutettiin **#81:ssä**, M6 **#82:ssa** (keskeytys `--stop`
+> täydennettiin **#90:ssä**), ja M8 on suurelta
 > osin tehty (README + CLAUDE.md + tämä statuspäivitys). Kunkin kohdan alla kerrotaan, mihin se
 > päätyi. Alkuperäinen "tehdään näin" -kuvaus on säilytetty; toteutus seurasi sitä ellei toisin
 > mainita.
@@ -554,14 +560,15 @@ AVOIN (#91).**
   poiminnan eteen, jotta juuri propagoitu lapsi on poimittavissa samalla tikillä. Host-portti ja
   watchlist-resolvointi kuten muillakin poller-vaiheilla (`lib/poller-config.sh`).
 
-**M6 — `/run-epic`-komento (§5).** — **TOTEUTETTU (#82):** komento **ja** ohut skripti; `--stop`
-scope-out (→ #90).
+**M6 — `/run-epic`-komento (§5).** — **TOTEUTETTU (#82), täydennetty (#90):** komento **ja**
+ohut skripti; keskeytys `--stop` tuli #90:ssä.
 - `commands/run-epic.md` (slash-komento, Claude Code lukee sen suoraan) **ja** `run-epic.sh`
   repo-juuressa, koska komento tarvitsi ei-triviaalia bash-logiikkaa (syklintarkistus Kahnin
   algoritmilla bash 3.2:ssa ilman assosiatiivisia taulukoita, topologinen järjestys) —
   symmetrinen `stop-run.sh`:n kanssa. Validointi suunnittele–sovella-jaolla, delegoi propagoinnin
   jaettuun `propagate_run_labels`iin (M4). `--dry-run`, `--start-now`; keskeytys `--stop` jäi
-  tietoisesti pois (→ #90, päätös H).
+  #82:ssa tietoisesti pois ja toteutettiin **#90:ssä** (päätös H) samalla
+  plan-then-apply-jaolla, delegoiden elävien ajojen pysäytyksen `stop-run.sh`:lle.
 - Asennus: `install.sh` linkittää `commands/*.md` jo globilla, joten komento tuli asennukseen
   pelkällä nimeämisellä (CLAUDE.md §3). Juuren skripti näkyy automaattisesti litteässä juuressa
   (CLAUDE.md §2).
@@ -572,11 +579,13 @@ scope-out (→ #90).
   `pr_last_decision`-hengessä (kertaluonteinen per lapsi). Lisäksi valmiuden merkintä
   (`_epic_announce_complete`: yhteenvetokommentti + `epic-complete`-label, päätös F).
 
-**M8 — Dokumentaatio.** — **TOTEUTETTU (#82) + tämä statuspäivitys (#93):**
+**M8 — Dokumentaatio.** — **TOTEUTETTU (#82) + statuspäivitys (#93) + keskeytys (#90):**
 - `README.md`: alaluku "Epicit — usean issuen ketjun ajaminen `auto-run`illa" ihmiselle (#82).
 - `CLAUDE.md`: epic-koneisto kuvattu §4:ssä ja §6:ssa; viittaus tähän dokumenttiin.
 - Uudet exit-koodit (12 orkestraattori; `run-epic.sh`-avaruus) ja labelit CLAUDE.md §4/§5:ssä.
-- **Tämä PR (#93):** dokumentin statuspäivitys — suunnitelmasta toteutustilan kuvaukseksi.
+- **#93:** dokumentin statuspäivitys — suunnitelmasta toteutustilan kuvaukseksi.
+- **#90:** `--stop` dokumentoitu README §6.5:ssä, `commands/run-epic.md`:ssä ja CLAUDE.md §5:n
+  `run-epic.sh`-exit-koodeissa; §4.3 ja päätös H merkitty ratkaistuiksi.
 
 ### 6.3 Muutosten kokoluokka
 
@@ -603,8 +612,8 @@ minimimuutos, ja se toteutui suunnitellusti (#81 M1–M5 + M7, #82 M6).
 
 ## Avoimet päätökset — yhteenveto
 
-**Yhdeksän kymmenestä on ratkaistu koodissa** (#81, #82). Ratkaisusarake nimeää kunkin
-toteutuskohdan tiedosto/funktio-tasolla; vain **H** on aidosti auki. Suositus-sarake on
+**Kaikki kymmenen on ratkaistu koodissa** (#81, #82, #90). Ratkaisusarake nimeää kunkin
+toteutuskohdan tiedosto/funktio-tasolla. Suositus-sarake on
 säilytetty osoittamaan, että toteutus seurasi (tai poikkesi) alkuperäisestä suosituksesta —
 perustelut ovat laatikoissa yllä. Ristiriitatilanteessa **koodi (ja CLAUDE.md §12) voittaa**.
 
@@ -617,6 +626,6 @@ perustelut ovat laatikoissa yllä. Ristiriitatilanteessa **koodi (ja CLAUDE.md �
 | E | Mitkä labelit propagoituvat? | Watchlistin repolle vaatima joukko | **Ratkaistu (#81):** watchlistin ajolabelit (`auto-run` + repon vaatimat) → `lib/epic.sh:propagate_run_labels` |
 | F | Kuka sulkee valmiin epicin? | Ihminen oletuksena; GitHubin auto-close jos konfiguroitu | **Ratkaistu (#81):** runner ei sulje — merkitsee valmiuden (yhteenvetokommentti + `epic-complete`-label, `lib/epic.sh:_epic_announce_complete`); ihminen sulkee, GitHubin natiivi auto-close voittaa jos konfiguroitu |
 | G | Epic-merkinnän muoto jumittuneesta lapsesta? | Kommentti + suodatettava `epic-attention`-label | **Ratkaistu (#81):** kommentti (per-child piilomarker, kertaluonteinen) + `epic-attention`-label → `lib/epic.sh:_epic_escalate_child` |
-| H | Keskeytyskomennon muoto? | `/run-epic <N> --stop`, delegoi `stop-run.sh`:lle | **Avoin → #90.** Ei toteutettu #82:ssa (tietoinen scope-out). `docs/…` §5-signatuurin `--stop` on toistaiseksi vain suunnitelmarivi |
+| H | Keskeytyskomennon muoto? | `/run-epic <N> --stop`, delegoi `stop-run.sh`:lle | **Ratkaistu (#90):** `/run-epic <N> --stop` osana samaa komentoa, plan-then-apply-jaolla → `run-epic.sh`; elävien ajojen pysäytys delegoidaan `stop-run.sh`:lle, osittainen onnistuminen (vieras kone / terminaalitila) erottuu **exit-koodilla 6** |
 | I | Lisääkö `/run-epic` puuttuvan `epic`-labelin? | Kyllä, idempotentisti | **Ratkaistu (#82):** `run-epic.sh` lisää `epic`-labelin idempotentisti jos puuttuu (`--dry-run` ei lisää) |
 | J | Käynnistääkö komento ajon vai pelkkä labelointi? | Labelointi + poller oletuksena, `--start-now` synkroniseen | **Ratkaistu (#82):** oletus labelointi + poller; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen heti (`run-epic.sh`) |

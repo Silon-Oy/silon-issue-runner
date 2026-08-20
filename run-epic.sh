@@ -4,6 +4,8 @@
 # Usage:
 #   run-epic.sh <epic-N> [--repo <path>] [--remote <name>]
 #               [--labels <csv>] [--dry-run] [--start-now]
+#   run-epic.sh <epic-N> --stop [--repo <path>] [--remote <name>]
+#               [--labels <csv>] [--dry-run]
 #
 # An epic is a GitHub issue carrying the `epic` label that COLLECTS runnable
 # sub-issues; it never runs itself (docs/epic-orchestration.md §1). The poller's
@@ -30,17 +32,34 @@
 # via orchestrate.sh so the chain begins on a machine with no poller (docs §5.3
 # avoin päätös J, recommendation (ii) behind the flag).
 #
-# Exit codes (own space — not the orchestrator's, not stop-run's):
-#   0  validated + propagated (or --dry-run plan printed)
-#   1  usage error (bad flag / missing or non-numeric epic number)
+# --stop is the symmetric CANCEL path (issue #90): it HALTS the epic instead of
+# launching it. Same plan-then-apply discipline and the SAME child set — it stops
+# every live child run by DELEGATING to stop-run.sh (the teardown of #64, never
+# reimplemented here), and releases the queued children from pickup by removing
+# the run labels FIRST from the epic, THEN from its open children (that order
+# stops the poller's scan_epics from re-propagating the labels mid-cancel). It
+# does NOT --force a terminal run and does NOT touch a foreign machine's run; both
+# are reported and make the overall exit non-zero (partial). --dry-run prints the
+# same stop plan and writes nothing.
+#
+# Exit codes (own space — not the orchestrator's, not stop-run's). Codes 1/2/3/5
+# are shared by both modes; 4 is launch-only, 6 is --stop-only:
+#   0  launch: validated + propagated. --stop: epic fully stopped (every live
+#      child run stopped, run labels removed). Or --dry-run plan printed (either mode)
+#   1  usage error (bad flag / missing or non-numeric epic number /
+#      --stop combined with --start-now)
 #   2  epic issue not found or not open — nothing was read past the fetch
-#   3  empty epic — no sub-issues (native or task-list); nothing to propagate
-#   4  cyclic dependency graph among the children — the cycle is named, no writes
+#   3  empty epic — no sub-issues (native or task-list); nothing to propagate/stop
+#   4  launch: cyclic dependency graph among the children — cycle named, no writes
 #   5  read failure — the child set or a blocked_by graph was unreadable
 #      (fail-closed: an unreadable graph must not be treated as runnable)
+#   6  --stop: partial — the epic was released but ≥1 live child run could not be
+#      stopped (foreign host / terminal without --force / ambiguous / a delegated
+#      stop-run.sh call failed). The rest was handled; a full stop is exit 0
 #
 # Run: run-epic.sh 101 --repo /path/to/repo
 #      run-epic.sh 101 --dry-run
+#      run-epic.sh 101 --stop
 
 set -uo pipefail
 
@@ -58,6 +77,7 @@ REMOTE=""
 LABELS_CSV=""
 DRY_RUN=0
 START_NOW=0
+STOP=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -66,6 +86,7 @@ while [ "$#" -gt 0 ]; do
     --labels)    LABELS_CSV="${2:-}"; shift 2 ;;
     --dry-run)   DRY_RUN=1; shift ;;
     --start-now) START_NOW=1; shift ;;
+    --stop)      STOP=1; shift ;;
     -h|--help)   usage 0 ;;
     --*)         echo "run-epic: unknown flag '$1'" >&2; usage 1 ;;
     *)
@@ -82,6 +103,13 @@ EPIC="${EPIC#\#}"
 case "$EPIC" in
   ''|*[!0-9]*) echo "run-epic: epic issue number is required (e.g. run-epic.sh 101)" >&2; usage 1 ;;
 esac
+
+# --stop and --start-now are opposite intents (cancel vs launch): refuse rather
+# than guess which one the operator meant (issue #90 edge case).
+if [ "$STOP" -eq 1 ] && [ "$START_NOW" -eq 1 ]; then
+  echo "run-epic: --stop and --start-now are mutually exclusive" >&2
+  usage 1
+fi
 
 [ -n "$REPO_ROOT" ] || REPO_ROOT="$(pwd)"
 if [ ! -d "$REPO_ROOT/.git" ]; then
@@ -182,6 +210,210 @@ done
 
 # _in_set <needle> <space-list> — 0 if the space-delimited list contains needle.
 _in_set() { case "$2" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# ======================================================================
+# STOP mode (issue #90) — cancel the epic. Branches out of the launch path
+# BEFORE the blocked_by graph + cycle detection (which stopping does not
+# need): it reuses only the child set built above (list_epic_children, the
+# SHARED resolver — AC2) and the label primitive family of propagation
+# (labels_remove is labels_add's sister in lib/labels.sh — AC2, no second
+# implementation). Live-run teardown is DELEGATED to stop-run.sh, never
+# reimplemented here (AC3). Plan-then-apply like launch: classify every
+# child first, write nothing until the plan is whole; --dry-run writes
+# nothing at all.
+# ======================================================================
+
+# _stop_is_live_status <status> — mirrors stop-run.sh's is_stoppable_status: a
+# live run carries status "initialized" throughout its life (S8 restart/continue
+# reset it back), and state_finalize is the only writer of a terminal status. An
+# empty/malformed field is treated as live (stop-run's own gate is the authority
+# at apply time; this is only the plan-phase preview).
+_stop_is_live_status() {
+  case "${1:-}" in
+    initialized|"") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# _stop_scan_child_run <child-N> — read-only scan of the repo's run directories
+# for a run of this child. Sets _SCAN_COUNT (0/1/N), and for a single match
+# _SCAN_DIR / _SCAN_HOST / _SCAN_STATUS. Mirrors stop-run.sh's own resolution
+# (issue_number [+ remote] match) so the plan and the delegate agree on the run;
+# it reads named fields only — NO tmux kill, lock release or state_finalize lives
+# here (AC3).
+_stop_scan_child_run() {
+  local child="$1"
+  _SCAN_DIR=""; _SCAN_HOST=""; _SCAN_STATUS=""; _SCAN_COUNT=0
+  local runs="$REPO_ROOT/.claude/run-issues"
+  [ -d "$runs" ] || return 0
+  local d n r
+  shopt -s nullglob
+  for d in "$runs"/*/; do
+    d="${d%/}"
+    [ -f "$d/run.json" ] || continue
+    n=$(jq -r '.issue_number // empty' "$d/run.json" 2>/dev/null || echo "")
+    [ "$n" = "$child" ] || continue
+    if [ -n "$REMOTE" ]; then
+      r=$(jq -r '.remote // "origin"' "$d/run.json" 2>/dev/null || echo "origin")
+      [ "$r" = "$REMOTE" ] || continue
+    fi
+    _SCAN_COUNT=$((_SCAN_COUNT + 1))
+    _SCAN_DIR="$d"
+    _SCAN_HOST=$(jq -r '.host // empty' "$d/run.json" 2>/dev/null || echo "")
+    _SCAN_STATUS=$(jq -r '.status // empty' "$d/run.json" 2>/dev/null || echo "")
+  done
+  shopt -u nullglob
+}
+
+if [ "$STOP" -eq 1 ]; then
+  THIS_HOST="$(hostname -s 2>/dev/null || echo unknown)"
+  STOP_RUN="${RUN_EPIC_STOP_RUN:-$SCRIPT_DIR/stop-run.sh}"
+  # The epic's own label set — its run labels are what we remove FIRST.
+  EPIC_LABELS_CSV="$(jq -r '[.labels[]?.name] | join(",")' "$EPIC_JSON" 2>/dev/null || echo "")"
+
+  # Does the epic carry any of the run labels? (drives the report + apply.)
+  epic_has_any=0
+  for _lbl in $(printf '%s' "$LABELS_CSV" | tr ',' ' '); do
+    [ -n "$_lbl" ] || continue
+    if _epic_csv_has "$EPIC_LABELS_CSV" "$_lbl"; then epic_has_any=1; break; fi
+  done
+
+  # Classify each child into parallel arrays (bash 3.2, no assoc arrays). CLASS:
+  #   closed | wip | stoppable | foreign | terminal | ambiguous | norun
+  CLASS=(); RUN_HOST_I=(); RUN_STATUS_I=(); HAS_LABEL_I=()
+  for i in $(seq 0 $((TOTAL - 1))); do
+    CLASS[$i]=""; RUN_HOST_I[$i]=""; RUN_STATUS_I[$i]=""; HAS_LABEL_I[$i]=0
+    # does the child carry any run label we would remove?
+    for _lbl in $(printf '%s' "$LABELS_CSV" | tr ',' ' '); do
+      [ -n "$_lbl" ] || continue
+      if _epic_csv_has "${LABELS[$i]}" "$_lbl"; then HAS_LABEL_I[$i]=1; break; fi
+    done
+    if [ "${STATES[$i]}" = "closed" ]; then CLASS[$i]="closed"; continue; fi
+    if _epic_csv_has "${LABELS[$i]}" "wip"; then CLASS[$i]="wip"; continue; fi
+    _stop_scan_child_run "${NUMS[$i]}"
+    if [ "$_SCAN_COUNT" -eq 0 ]; then
+      CLASS[$i]="norun"
+    elif [ "$_SCAN_COUNT" -gt 1 ]; then
+      CLASS[$i]="ambiguous"
+    else
+      RUN_HOST_I[$i]="$_SCAN_HOST"; RUN_STATUS_I[$i]="$_SCAN_STATUS"
+      if [ -n "$_SCAN_HOST" ] && [ "$_SCAN_HOST" != "$THIS_HOST" ]; then
+        CLASS[$i]="foreign"
+      elif _stop_is_live_status "$_SCAN_STATUS"; then
+        CLASS[$i]="stoppable"
+      else
+        CLASS[$i]="terminal"
+      fi
+    fi
+  done
+
+  # ---------- report ----------
+  stop_tag="[stop]"; [ "$DRY_RUN" -eq 1 ] && stop_tag="[stop — dry-run, no changes]"
+  {
+    echo "run-epic $stop_tag — epic #$EPIC: ${EPIC_TITLE:-（ei otsikkoa）}"
+    echo "  repo:          $REPO_ROOT${OWNER_REPO:+ ($OWNER_REPO)}"
+    echo "  run labels:    $LABELS_CSV"
+    if [ "$epic_has_any" -eq 1 ]; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  epic labels:   present — would be removed (first, before children)"
+      else
+        echo "  epic labels:   present — will be removed (first, before children)"
+      fi
+    else
+      echo "  epic labels:   none of the run labels present on the epic"
+    fi
+    echo "  sub-issues:    $TOTAL total ($OPEN_COUNT open, $CLOSED closed)"
+    echo
+    echo "  actions per sub-issue:"
+    for i in $(seq 0 $((TOTAL - 1))); do
+      sfx=""; [ "${HAS_LABEL_I[$i]}" -eq 1 ] && sfx=" · release from pickup"
+      case "${CLASS[$i]}" in
+        closed)    echo "    #${NUMS[$i]} ${TITLES[$i]} — closed, skipped" ;;
+        wip)       echo "    #${NUMS[$i]} ${TITLES[$i]} — wip (human opt-out), left untouched" ;;
+        stoppable) echo "    #${NUMS[$i]} ${TITLES[$i]} — live run on '$THIS_HOST' → stop$sfx" ;;
+        foreign)   echo "    #${NUMS[$i]} ${TITLES[$i]} — run on '${RUN_HOST_I[$i]}' NOT stopped (foreign host)$sfx" ;;
+        terminal)  echo "    #${NUMS[$i]} ${TITLES[$i]} — run status '${RUN_STATUS_I[$i]}' (terminal) NOT stopped (stop does not --force)$sfx" ;;
+        ambiguous) echo "    #${NUMS[$i]} ${TITLES[$i]} — multiple runs match; narrow with stop-run --run-dir$sfx" ;;
+        norun)     [ -n "$sfx" ] && echo "    #${NUMS[$i]} ${TITLES[$i]} — no live run$sfx" \
+                                 || echo "    #${NUMS[$i]} ${TITLES[$i]} — no live run, nothing to do" ;;
+      esac
+    done
+    if [ -s "$CHILD_WARN_FILE" ]; then
+      echo
+      echo "  warnings:"
+      sed 's/^/    /' "$CHILD_WARN_FILE"
+    fi
+  } >&1
+
+  # --dry-run: write nothing (AC4).
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo
+    echo "run-epic: dry-run complete — nothing was written."
+    exit 0
+  fi
+
+  # ---------- apply ----------
+  echo
+  echo "run-epic: stopping…"
+  PARTIAL=0
+
+  # 1. Remove the run labels from the EPIC FIRST (AC1 ordering: epic before any
+  #    child, so a poller tick cannot re-propagate the labels mid-cancel).
+  for _lbl in $(printf '%s' "$LABELS_CSV" | tr ',' ' '); do
+    [ -n "$_lbl" ] || continue
+    if _epic_csv_has "$EPIC_LABELS_CSV" "$_lbl"; then
+      ( cd "$REPO_ROOT" && labels_remove "$OWNER_REPO" "$EPIC" "$_lbl" ) 2>&1 | sed 's/^/  /'
+      [ "${PIPESTATUS[0]}" -eq 0 ] || PARTIAL=1
+    fi
+  done
+  [ "$epic_has_any" -eq 1 ] && echo "  removed run labels from epic #$EPIC"
+
+  # 2. Per OPEN, non-wip child: stop a live run (DELEGATE to stop-run.sh, AC3),
+  #    then remove the run labels the child carries. Closed/wip children skipped.
+  for i in $(seq 0 $((TOTAL - 1))); do
+    case "${CLASS[$i]}" in closed|wip) continue ;; esac
+    num="${NUMS[$i]}"
+    case "${CLASS[$i]}" in
+      stoppable)
+        if [ -n "$REMOTE" ] && [ "$REMOTE" != "origin" ]; then
+          "$STOP_RUN" --repo "$REPO_ROOT" --issue "$num" --remote "$REMOTE" --yes 2>&1 | sed 's/^/  /'
+        else
+          "$STOP_RUN" --repo "$REPO_ROOT" --issue "$num" --yes 2>&1 | sed 's/^/  /'
+        fi
+        rc=${PIPESTATUS[0]}
+        if [ "$rc" -eq 0 ]; then
+          echo "  #$num: run stopped (delegated to stop-run.sh)"
+        else
+          PARTIAL=1
+          echo "  #$num: stop-run.sh exited $rc — run NOT stopped"
+        fi ;;
+      foreign|terminal|ambiguous)
+        # A live/terminal/ambiguous run we deliberately did not stop (foreign
+        # host, terminal without --force, or ambiguous). Reported above; the
+        # release still happens below, but the overall stop is partial.
+        PARTIAL=1 ;;
+    esac
+    # release the child from pickup: remove the run labels it actually carries.
+    for _lbl in $(printf '%s' "$LABELS_CSV" | tr ',' ' '); do
+      [ -n "$_lbl" ] || continue
+      if _epic_csv_has "${LABELS[$i]}" "$_lbl"; then
+        ( cd "$REPO_ROOT" && labels_remove "$OWNER_REPO" "$num" "$_lbl" ) 2>&1 | sed 's/^/  /'
+        [ "${PIPESTATUS[0]}" -eq 0 ] || PARTIAL=1
+      fi
+    done
+  done
+
+  echo
+  if [ "$PARTIAL" -eq 1 ]; then
+    echo "run-epic: stop INCOMPLETE — the epic was released but ≥1 live child run"
+    echo "was left running or un-handled (see the report above). Exit 6."
+    exit 6
+  fi
+  echo "run-epic: stop complete — epic #$EPIC released from pickup and every live"
+  echo "child run stopped. Worktrees/branches/run-dirs are left intact (cleanup-run.sh"
+  echo "or the auto-clean label tears them down)."
+  exit 0
+fi
 
 # --- already-complete short-circuit (issue #82 edge case) ---
 # Every sub-issue closed ⇒ nothing to propagate and nothing to run. Report the

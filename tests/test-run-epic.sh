@@ -46,7 +46,21 @@ mkdir -p "$STATE/labels" "$STATE/body" "$STATE/title" "$STATE/state" \
 REC="$WORK/rec"; mkdir -p "$REC"
 : > "$REC/labels_add"     # <number>:<csv>
 : > "$REC/labels_ensure"  # <label>
+: > "$REC/labels_remove"  # <number>:<label>
 : > "$REC/orchestrate"    # start-now shim arg line
+: > "$REC/stoprun"        # stop-run shim arg line
+
+THISHOST="$(hostname -s 2>/dev/null || echo unknown)"
+
+# seed_run <dir-id> <issue> <host> <status> [remote] — write a run.json fixture
+# under the repo's run-issues dir so run-epic's --stop scan can find (and classify)
+# a live/foreign/terminal run of a child.
+seed_run() {
+  mkdir -p "$REPO/.claude/run-issues/$1"
+  jq -n --argjson n "$2" --arg h "$3" --arg s "$4" --arg r "${5:-origin}" \
+    '{issue_number:$n, host:$h, status:$s, remote:$r}' \
+    > "$REPO/.claude/run-issues/$1/run.json"
+}
 
 seed()          { printf '%s' "$3" > "$STATE/$1/$2"; touch "$STATE/exists/$2"; }
 seed_labels()   { seed labels "$1" "$2"; }
@@ -107,6 +121,12 @@ case "\$sub" in
       prev="\$a"
     done
     case "\$path" in
+      *"/issues/"*"/labels/"*)
+        # DELETE repos/o/r/issues/N/labels/<label> — labels_remove. Record it so
+        # the order invariant (epic before children) is verifiable.
+        n="\${path##*/issues/}"; n="\${n%%/*}"
+        lbl="\${path##*/labels/}"
+        printf '%s:%s\n' "\$n" "\$lbl" >> "\$REC/labels_remove" ;;
       *"/sub_issues")
         n="\${path##*/issues/}"; n="\${n%%/*}"
         [ -f "\$STATE/subissues_fail/\$n" ] && exit 1
@@ -145,12 +165,25 @@ exit 0
 SH
 chmod +x "$BIN/orch-shim"
 
-run_epic() { PATH="$BIN:$PATH" RUN_EPIC_ORCHESTRATE="$BIN/orch-shim" bash "$RUN_EPIC" "$@"; }
+# stop-run shim for --stop: record the invocation, exit with STOPRUN_RC (default
+# 0 = stopped). This is the delegate run-epic --stop must call for live runs —
+# recording it end-to-end proves the teardown is delegated, not reimplemented.
+cat > "$BIN/stoprun-shim" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$REC/stoprun"
+exit \${STOPRUN_RC:-0}
+SH
+chmod +x "$BIN/stoprun-shim"
+
+run_epic() { PATH="$BIN:$PATH" RUN_EPIC_ORCHESTRATE="$BIN/orch-shim" RUN_EPIC_STOP_RUN="$BIN/stoprun-shim" bash "$RUN_EPIC" "$@"; }
 # grep -c prints the count on stdout and exits 1 on zero matches; the count is
 # what we want, so capture stdout and ignore the exit status (a `|| echo 0` would
 # append a SECOND "0" and break the numeric compare).
 adds_for() { grep -c "^$1:" "$REC/labels_add" 2>/dev/null; true; }
-reset_rec() { : > "$REC/labels_add"; : > "$REC/labels_ensure"; : > "$REC/orchestrate"; }
+removes_for() { grep -c "^$1:" "$REC/labels_remove" 2>/dev/null; true; }
+# first line number in the labels_remove record whose issue is $1 (0 if absent).
+remove_line() { grep -n "^$1:" "$REC/labels_remove" 2>/dev/null | head -1 | cut -d: -f1; }
+reset_rec() { : > "$REC/labels_add"; : > "$REC/labels_ensure"; : > "$REC/labels_remove"; : > "$REC/orchestrate"; : > "$REC/stoprun"; }
 
 # ===========================================================================
 # 1. Happy path — dry-run reports and writes nothing (AC2)
@@ -317,6 +350,139 @@ defs=$(grep -c '^_epic_propagate_child()' "$ROOT/lib/epic.sh")
 grep -q 'propagate_run_labels' "$RUN_EPIC" \
   && pass "AC4: run-epic.sh delegates propagation to propagate_run_labels" \
   || fail "AC4: run-epic.sh does not use the shared propagate_run_labels"
+
+# ===========================================================================
+# 10. --stop mode (issue #90)
+# ===========================================================================
+
+# 10a. --stop + --start-now → usage error (exit 1), no guessing which was meant.
+out=$(run_epic 100 --repo "$REPO" --stop --start-now 2>&1); rc=$?
+[ "$rc" = 1 ] && pass "stop: --stop + --start-now is a usage error (exit 1)" \
+  || fail "stop: --stop --start-now exited $rc (out: $out)"
+
+# 10b–c. --stop on a MIXED epic: live + foreign + closed + wip + no-run.
+#   601 open auto-run     — LIVE run on this host   → stop + release
+#   602 open auto-run     — run on a FOREIGN host   → not stopped, release, partial
+#   603 closed            — skipped entirely
+#   604 open auto-run,wip — human opt-out           → untouched
+#   605 open auto-run     — NO live run             → release only
+seed_title 300 "Cancel-me epic"; seed_labels 300 "epic,auto-run"; seed_state 300 OPEN
+seed_subs 300 '[
+  {"number":601,"state":"open","title":"Live","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":602,"state":"open","title":"Foreign","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":603,"state":"closed","title":"Done","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":604,"state":"open","title":"Parked","labels":[{"name":"auto-run"},{"name":"wip"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":605,"state":"open","title":"Queued","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
+]'
+touch "$STATE/exists/601" "$STATE/exists/602" "$STATE/exists/603" "$STATE/exists/604" "$STATE/exists/605"
+seed_run r601 601 "$THISHOST" initialized
+seed_run r602 602 "otherhost-xyz" initialized
+
+# 10b. dry-run writes nothing (AC4) yet classifies every child.
+reset_rec
+out=$(run_epic 300 --repo "$REPO" --stop --dry-run 2>&1); rc=$?
+[ "$rc" = 0 ] && pass "stop --dry-run exits 0" || fail "stop dry-run exited $rc (out: $out)"
+[ ! -s "$REC/labels_remove" ] && [ ! -s "$REC/stoprun" ] \
+  && pass "stop --dry-run wrote nothing (no labels_remove/stoprun)" \
+  || fail "stop dry-run wrote: remove=[$(cat "$REC/labels_remove")] stoprun=[$(cat "$REC/stoprun")]"
+printf '%s\n' "$out" | grep -q "#601 Live — live run" && pass "stop dry-run: #601 classified live → stop" \
+  || fail "stop dry-run: #601 not shown live (out: $out)"
+printf '%s\n' "$out" | grep -q "#602 Foreign — run on 'otherhost-xyz' NOT stopped" \
+  && pass "stop dry-run: #602 classified foreign host" \
+  || fail "stop dry-run: #602 not shown foreign (out: $out)"
+printf '%s\n' "$out" | grep -q "#604 Parked — wip" && pass "stop dry-run: #604 shown as wip opt-out" \
+  || fail "stop dry-run: #604 not shown wip (out: $out)"
+
+# 10c. apply: order invariant + classifications + partial exit.
+reset_rec
+out=$(run_epic 300 --repo "$REPO" --stop 2>&1); rc=$?
+[ "$rc" = 6 ] && pass "stop apply exits 6 (partial — #602 on a foreign host)" \
+  || fail "stop apply exited $rc (out: $out)"
+# ordering (AC1/AC6): epic 300's label removed BEFORE any child's.
+ep=$(remove_line 300); c1=$(remove_line 601); c5=$(remove_line 605)
+if [ -n "$ep" ] && [ -n "$c1" ] && [ -n "$c5" ] && [ "$ep" -lt "$c1" ] && [ "$ep" -lt "$c5" ]; then
+  pass "stop apply: epic label removed BEFORE children (order invariant)"
+else
+  fail "stop apply: epic-before-children order broken (epic@$ep 601@$c1 605@$c5; rec: $(cat "$REC/labels_remove"))"
+fi
+grep -q "issue 601" "$REC/stoprun" && pass "stop apply: live #601 stopped via stop-run.sh (delegated)" \
+  || fail "stop apply: #601 not delegated to stop-run (rec: $(cat "$REC/stoprun"))"
+grep -q "issue 602" "$REC/stoprun" && fail "stop apply: #602 foreign run was (wrongly) stopped" \
+  || pass "stop apply: foreign #602 NOT stopped (host gate respected)"
+if [ "$(removes_for 601)" -ge 1 ] && [ "$(removes_for 602)" -ge 1 ] && [ "$(removes_for 605)" -ge 1 ]; then
+  pass "stop apply: auto-run removed from open children 601/602/605"
+else
+  fail "stop apply: open children not released (rec: $(cat "$REC/labels_remove"))"
+fi
+[ "$(removes_for 603)" = 0 ] && pass "stop apply: closed child 603 not de-labelled" \
+  || fail "stop apply: closed 603 was de-labelled"
+[ "$(removes_for 604)" = 0 ] && pass "stop apply: wip child 604 left untouched (no de-label)" \
+  || fail "stop apply: wip 604 was de-labelled"
+grep -q "issue 604" "$REC/stoprun" && fail "stop apply: wip #604 was stopped" \
+  || pass "stop apply: wip #604 not stopped"
+
+# 10d. Clean stop — every child stoppable/no-run/closed → exit 0.
+seed_title 310 "Clean stop epic"; seed_labels 310 "epic,auto-run"; seed_state 310 OPEN
+seed_subs 310 '[
+  {"number":611,"state":"open","title":"Live","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":612,"state":"open","title":"Queued","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":613,"state":"closed","title":"Done","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
+]'
+touch "$STATE/exists/611" "$STATE/exists/612" "$STATE/exists/613"
+seed_run r611 611 "$THISHOST" initialized
+reset_rec
+out=$(run_epic 310 --repo "$REPO" --stop 2>&1); rc=$?
+[ "$rc" = 0 ] && pass "stop: clean stop exits 0 (nothing left running)" || fail "clean stop exited $rc (out: $out)"
+grep -q "issue 611" "$REC/stoprun" && pass "stop: clean stop delegated live #611 to stop-run" \
+  || fail "clean stop: #611 not delegated (rec: $(cat "$REC/stoprun"))"
+
+# 10e. Epic with NO live run — labels removed, no stop-run call, exit 0.
+seed_title 320 "Quiet epic"; seed_labels 320 "epic,auto-run"; seed_state 320 OPEN
+seed_subs 320 '[
+  {"number":621,"state":"open","title":"A","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":622,"state":"open","title":"B","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
+]'
+touch "$STATE/exists/621" "$STATE/exists/622"
+reset_rec
+out=$(run_epic 320 --repo "$REPO" --stop 2>&1); rc=$?
+[ "$rc" = 0 ] && pass "stop: no-live-run epic exits 0" || fail "no-live-run stop exited $rc (out: $out)"
+[ ! -s "$REC/stoprun" ] && pass "stop: no-live-run epic never calls stop-run.sh" \
+  || fail "no-live-run stop called stop-run (rec: $(cat "$REC/stoprun"))"
+if [ "$(removes_for 621)" -ge 1 ] && [ "$(removes_for 622)" -ge 1 ] && [ "$(removes_for 320)" -ge 1 ]; then
+  pass "stop: no-live-run epic released epic 320 and both children"
+else
+  fail "stop: no-live-run epic did not release fully (rec: $(cat "$REC/labels_remove"))"
+fi
+
+# 10f. Terminal-status run → not stopped without --force, partial exit 6, still released.
+seed_title 330 "Terminal-run epic"; seed_labels 330 "epic,auto-run"; seed_state 330 OPEN
+seed_subs 330 '[
+  {"number":631,"state":"open","title":"Completed","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
+]'
+touch "$STATE/exists/631"
+seed_run r631 631 "$THISHOST" completed
+reset_rec
+out=$(run_epic 330 --repo "$REPO" --stop 2>&1); rc=$?
+[ "$rc" = 6 ] && pass "stop: terminal-status run → partial exit 6 (not forced)" \
+  || fail "terminal-run stop exited $rc (out: $out)"
+grep -q "issue 631" "$REC/stoprun" && fail "stop: terminal #631 was force-stopped" \
+  || pass "stop: terminal #631 NOT stopped (stop does not --force)"
+[ "$(removes_for 631)" -ge 1 ] && pass "stop: terminal #631 still released from pickup" \
+  || fail "stop: terminal #631 not released"
+
+# 10g. Static guards — AC2 (shared removal primitive) / AC3 (delegated teardown).
+grep -q 'labels_remove' "$RUN_EPIC" \
+  && pass "AC2: run-epic.sh removes labels via labels_remove (labels_add's sister, no new impl)" \
+  || fail "AC2: run-epic.sh does not use labels_remove"
+# Strip comment lines first — the header prose legitimately NAMES the teardown it
+# delegates; the guard is about CODE, not documentation.
+if grep -vE '^[[:space:]]*#' "$RUN_EPIC" | grep -Eq 'tmux|state_finalize|run_terminate'; then
+  fail "AC3: run-epic.sh reimplements teardown (tmux/state_finalize/run_terminate in code)"
+else
+  pass "AC3: run-epic.sh has no tmux/state_finalize/run_terminate in code (teardown delegated)"
+fi
+grep -q 'stop-run.sh' "$RUN_EPIC" && pass "AC3: run-epic.sh delegates live-run stop to stop-run.sh" \
+  || fail "AC3: run-epic.sh does not reference stop-run.sh"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "run-epic: all passed" || echo "run-epic: FAILURES"

@@ -452,8 +452,20 @@ avoimille alaissueille (**sama jaettu propagointi** kuin pollerilla), ja raporto
 ajaa ensin, mitkä ovat estettyjä ja minkä takana, ja kuinka pitkä ketju on. `--dry-run` tulostaa
 saman raportin kirjoittamatta mitään; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen
 heti (hyödyllinen koneella jolla poller ei aja). Ks. exit-koodit osiossa 9 ja ohje
-[`commands/run-epic.md`](commands/run-epic.md). Epicin **keskeytys** (`--stop`) ei ole vielä
-toteutettu — pysäytä yksittäinen ajo `stop-run.sh`:llä ja poista `auto-run` käsin.
+[`commands/run-epic.md`](commands/run-epic.md).
+
+**Epicin keskeytys — `/run-epic #N --stop`.** Symmetrinen käynnistyksen kanssa ja samalla
+suunnittele–sovella-jaolla. Se tekee kaksi asiaa olemassa olevalla koneistolla: (1) pysäyttää
+epicin **elävät lapsiajot** delegoimalla `stop-run.sh`:lle (turvakriittistä lopetuslogiikkaa ei
+monisteta — sama periaate kuin `stop-run.sh` ↔ `lib/run-terminate.sh`), ja (2) vapauttaa
+**jonossa olevat** poistamalla ajolabelit **ensin epiciltä, sitten avoimilta lapsilta** (toisin
+päin poller ehtisi propagoida labelit takaisin kesken operaation). Raportti kertoo mitkä ajot
+pysäytettiin, mitkä lapset vapautettiin, ja mitkä jäivät koskematta ja miksi (suljettu / vieras
+kone / `wip` / terminaalitila). Se **ei pakota** terminaalitilan ajoa (avoin PR -kontekstin
+repiminen ei ole keskeytys) eikä koske vieraan koneen ajoon — molemmat raportoidaan ja tekevät
+kokonaisexitistä osittaisen (6). `--stop --dry-run` tulostaa saman suunnitelman kirjoittamatta.
+Keskeytys **ei siivoa** worktreetä/haaraa/run-diriä (se ei ole cleanup — käytä `cleanup-run.sh`ia
+tai `auto-clean`-labelia).
 
 ### 6.6 Käyttötapaukset
 
@@ -573,7 +585,7 @@ Claude Codessa, kohderepon juuressa:
 | Komento | Argumentit | Mitä tekee |
 |---|---|---|
 | `/run-issues` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/run-issues.md`](commands/run-issues.md) |
-| `/run-epic` | `[#N] [--dry-run] [--start-now]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan (6.5). Ohje: [`commands/run-epic.md`](commands/run-epic.md) |
+| `/run-epic` | `[#N] [--dry-run] [--start-now] [--stop]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan. `--stop` keskeyttää epicin (6.5). Ohje: [`commands/run-epic.md`](commands/run-epic.md) |
 | `/pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/pr-watch.md`](commands/pr-watch.md) |
 | `/cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/cleanup-run.md`](commands/cleanup-run.md) |
 | `/refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/refresh.md`](commands/refresh.md) |
@@ -597,7 +609,7 @@ käytettävissä.
 | Skripti | Tyypillinen kutsu | Mitä tekee |
 |---|---|---|
 | `orchestrate.sh` | `orchestrate.sh <repo> <N\|poll>` | Yksi issue → yksi PR. Muut moodit: `--resume <run-dir> --decision …`, `--restart <run-dir>`, `--continue <run-dir>`, `--remote <nimi>` |
-| `run-epic.sh` | `run-epic.sh <N> --repo <polku>` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille. `--dry-run`, `--start-now`, `--remote`, `--labels` |
+| `run-epic.sh` | `run-epic.sh <N> --repo <polku>` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille. `--stop` keskeyttää (pysäyttää elävät lapsiajot + poistaa ajolabelit). `--dry-run`, `--start-now`, `--remote`, `--labels` |
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run` |
@@ -1140,19 +1152,24 @@ orkestraattorin pysäyttäminen (`launchctl`), ei tämän skriptin asia.
 
 ### Epicin käynnistys (`run-epic.sh`)
 
+Koodit 1/2/3/5 ovat yhteisiä molemmille moodeille; 4 on vain käynnistys, 6 vain `--stop`.
+
 | Koodi | Merkitys |
 |---|---|
-| 0 | Validoitu + propagoitu (tai `--dry-run` tulosti suunnitelman) |
-| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero) |
+| 0 | Käynnistys: validoitu + propagoitu. `--stop`: epic kokonaan pysäytetty (kaikki elävät lapsiajot pysäytetty, ajolabelit poistettu). Tai `--dry-run` tulosti suunnitelman |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero / `--stop` yhdessä `--start-now`n kanssa) |
 | 2 | Epic-issueta ei löytynyt tai se ei ole avoin |
-| 3 | Epic ilman alaissueita — ei propagoitavaa |
-| 4 | Syklinen `blocked_by`-graafi alaissueiden välillä — sykli nimetään, mitään ei kirjoiteta |
+| 3 | Epic ilman alaissueita — ei propagoitavaa/pysäytettävää |
+| 4 | Käynnistys: syklinen `blocked_by`-graafi alaissueiden välillä — sykli nimetään, mitään ei kirjoiteta |
 | 5 | Lukuvirhe — lapsijoukkoa tai `blocked_by`-graafia ei saatu luettua (fail-closed) |
+| 6 | `--stop`: osittainen — epic vapautettiin poiminnasta mutta ≥1 elävää lapsiajoa ei voitu pysäyttää (vieras kone / terminaalitila ilman `--force`ia / moniselitteinen / delegoitu `stop-run.sh` epäonnistui). Muu käsiteltiin; täysi pysäytys on 0 |
 
 `run-epic.sh` validoi epicin rakenteen **ennen mitään kirjoitusta** (suunnittele–sovella kuten
 `install.sh`) ja propagoi sitten ajolabelit alaissueille **samalla jaetulla funktiolla** kuin
 pollerin epic-skannaus. `--dry-run` tulostaa raportin kirjoittamatta; `--start-now` käynnistää
-ensimmäisen ajokelpoisen alaissueen heti. Keskeytystä (`--stop`) ei ole vielä toteutettu.
+ensimmäisen ajokelpoisen alaissueen heti. `--stop` **keskeyttää** epicin: se pysäyttää elävät
+lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla ajolabelit
+**ensin epiciltä, sitten avoimilta lapsilta** (järjestys estää pollerin re-propagoinnin).
 
 ### Mistä lokit löytyvät
 
