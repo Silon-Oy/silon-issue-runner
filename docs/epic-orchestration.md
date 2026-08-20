@@ -1,10 +1,33 @@
 # Epic-ajon arkkitehtuuri
 
-Tämä on **suunnitteludokumentti**, ei toteutus. Se määrittelee, miten `/run-issues`-runner
-ajaa kokonaisen *epicin* — usean toisiinsa liittyvän issuen ketjun — ilman ihmistä silmukassa.
-Kohdeyleisö on ne toteutusissueet (auto-run epic-tasolla; `/run-epic`-komento), jotka
-kirjoitetaan suoraan tämän dokumentin pohjalta. Kaikki *ehdotukset* ja *avoimet päätökset* on
-merkitty näkyvästi; lopullinen päätös tehdään PR-katselmoinnissa.
+> **Toteutustila (päivitetty #93).** Tämä oli alun perin **suunnitteludokumentti** (#80),
+> kirjoitettu *ennen* toteutusta. Sittemmin epic-koneisto on rakennettu:
+>
+> - **#81 toteutti auto-run-tason semantiikan** — muutoskohdat M1–M5 ja M7 (§6): epicin
+>   poissulku poiminnasta (`-label:epic` molemmissa hauissa), autoritatiivinen **S2c
+>   EpicCheck** -portti (`orchestrate.sh` + `lib/issue.sh:is_epic`, exit 12), lapsijoukon
+>   resolvointi (`lib/issue.sh:list_epic_children`), ajolabelien idempotentti propagointi +
+>   `needs-human`-lapsen eskalaatio + valmiuskommentti/-label (`lib/epic.sh`, pollerin
+>   `scan_epics`-vaihe).
+> - **#82 toteutti `/run-epic`-komennon** — M6 (§6): `run-epic.sh` + `commands/run-epic.md`,
+>   validointi suunnittele–sovella-jaolla, `epic`-labelin idempotentti lisäys, ajolabelien
+>   propagointi jaetulla `propagate_run_labels`illa, `--dry-run` ja `--start-now`.
+>
+> Kymmenestä alla luetellusta avoimesta päätöksestä (§"Avoimet päätökset") **yhdeksän on
+> ratkaistu koodissa**; kunkin ratkaisukohta on nimetty päätöstaulukon ratkaisusarakkeessa.
+> Vain **H (epicin keskeytys)** on aidosti auki → **#90**. Osin avoinna ovat vielä lapsijoukon
+> jaettu resolvointi (§1.3, → **#91**) ja cross-repo-rajaus (§Rajaukset, → **#92**).
+>
+> Dokumentin arvo ei ole enää suunnitelmana vaan **perusteluna**: se kertoo *miksi* koneisto on
+> tällainen. Alkuperäiset ehdotukset ja "avoin päätös" -laatikot on säilytetty, mutta kukin on
+> merkitty ratkaistuksi tai avoimeksi, jottei niitä lueta nykytilan kuvauksena.
+
+Alla oleva dokumentti määrittelee, miten `/run-issues`-runner ajaa kokonaisen *epicin* — usean
+toisiinsa liittyvän issuen ketjun — ilman ihmistä silmukassa. Kohdeyleisö oli alun perin ne
+toteutusissueet (auto-run epic-tasolla; `/run-epic`-komento), jotka kirjoitettiin suoraan tämän
+dokumentin pohjalta; nyt se palvelee epic-koneiston kokonaisesityksenä. Alkuperäiset
+*ehdotukset* ja *avoimet päätökset* on merkitty näkyvästi; niiden toteutumistila kerrotaan yllä
+ja päätöskohtaisesti.
 
 **Lähtökohta.** Runnerilla on jo ajettu kokonaisia epicejä — mm. tämän repon statusnäkymä-epic
 (#59–#65) — mutta **käsityönä**: ihminen kirjoittaa alaissueet, luo `blocked_by`-riippuvuudet,
@@ -33,9 +56,14 @@ uutta, ja mikä on jo olemassa.
 
 ## Nykytila-analyysi lyhyesti (§2:n löydös etukäteen)
 
-> **Löydös:** epic-labelillinen issue, jolla on `auto-run` eikä estäjää, **poimitaan tänään
-> tavallisena työissuena**. Koodissa ei ole mitään, joka erottaisi epicin lehti-issuesta.
-> Tarkka koodianalyysi ja seuraukset §2:ssa.
+> **Historiallinen (kirjoitushetki #80).** Löydös oli tosi kun tämä kirjoitettiin, ja se on
+> sittemmin **korjattu #81:ssä** (`-label:epic` poiminnassa + S2c EpicCheck -portti). Säilytetty
+> tähän, koska §2 perustelee siihen koko epic-poissulun tarpeen — mutta sitä ei saa lukea
+> nykytilana. Nykytila: epic **ei** enää poimiudu.
+>
+> **Löydös (kirjoitushetkellä):** epic-labelillinen issue, jolla on `auto-run` eikä estäjää,
+> poimittiin *tuolloin* tavallisena työissuena. Koodissa ei ollut mitään, joka erottaisi epicin
+> lehti-issuesta. Tarkka koodianalyysi ja seuraukset §2:ssa.
 
 ---
 
@@ -139,13 +167,22 @@ ks. §6):
 Suodattimet siis ovat: avoin, ei assigneeta, ei `blocked_by`-estetty, ei `waiting`/`wip`/
 `auto-clean`-labelia, ja kaikki konfiguroidut labelit (tyypillisesti `auto-run`) läsnä.
 
-### 2.2 Löydös: epic poimitaan tänään tavallisena issuena
+### 2.2 Löydös (historiallinen): epic poimittiin tavallisena issuena — korjattu #81:ssä
 
-> **`epic`-labelia ei suodateta kummassakaan poimintakyselyssä.** Jos epic-issuelle lisätään
-> `auto-run` tänään, ja se on avoin, assignoimaton eikä `blocked_by`-estetty, se **täyttää
-> poimintaehdon täsmälleen kuten lehti-issue** ja tulee poimituksi.
+> **Historiallinen.** Tämä koko alaluku on **nykytila-analyysi kirjoitushetkeltä (#80)** ja
+> kuvaa vian, jonka #81 nimenomaan korjasi. Nykyään `epic`-labelia **suodatetaan** molemmissa
+> poimintakyselyissä (`-label:epic`, M1) ja **S2c EpicCheck** -portti (M2) pyydystää epicin
+> autoritatiivisesti lukon jälkeen ja claimia ennen (fail-closed, exit 12). Epic ei siis enää
+> poimiudu eikä aja. Alaluku on säilytetty, koska se perustelee, *miksi* poissulku on
+> pakollinen — mutta se ei kuvaa nykytilaa. **Älä "korjaa" tästä mitään: asia on jo korjattu.**
 
-Seuraukset, kun näin käy:
+Löydös kirjoitushetkellä:
+
+> **`epic`-labelia ei suodatettu kummassakaan poimintakyselyssä.** Jos epic-issuelle lisättiin
+> `auto-run` *tuolloin*, ja se oli avoin, assignoimaton eikä `blocked_by`-estetty, se täytti
+> poimintaehdon täsmälleen kuten lehti-issue ja tuli poimituksi.
+
+Seuraukset, kun näin *tuolloin* kävi (nyt M1+M2 estävät tämän):
 
 1. Orkestraattori etenee normaalisti: lukko (S2), S2b-esto-portti, claim (S3), worktree (S4).
    **S2b ei pidättele epiciä**, koska `count_open_blockers` (`lib/issue.sh:218`) lukee
@@ -158,9 +195,10 @@ Seuraukset, kun näin käy:
 3. Epic-issue jää assignatuksi (varaus ei vapaudu epäonnistuneesta ajosta, README 6.4), joten
    se ei toistu — mutta ei myöskään etene ilman siivousta.
 
-**Johtopäätös:** epicin poiminnan esto on **pakollinen ennakkoehto** kaikelle epic-tason
-automaatiolle. Ilman sitä `epic`-labelin ja `auto-run`in samanaikaisuus on jo nyt
-haitallinen. Tämä on §6:n ensimmäinen ja tärkein muutoskohta.
+**Johtopäätös (toteutui näin):** epicin poiminnan esto oli **pakollinen ennakkoehto** kaikelle
+epic-tason automaatiolle — ilman sitä `epic`-labelin ja `auto-run`in samanaikaisuus olisi ollut
+haitallinen. Tämä oli §6:n ensimmäinen ja tärkein muutoskohta, ja **#81 toteutti sen** (M1
+`-label:epic` + M2 S2c-portti).
 
 ### 2.3 Kuinka erottaa epic poiminnassa
 
