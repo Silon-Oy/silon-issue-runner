@@ -1150,7 +1150,7 @@ ole siivous** — worktree, haara ja run-dir jäävät koskematta (purku jää `
 `auto-clean`-labelille). Ei `--all`-lippua eikä oletuskohdetta: massapysäytys on koko
 orkestraattorin pysäyttäminen (`launchctl`), ei tämän skriptin asia.
 
-### Epicin käynnistys (`run-epic.sh`)
+### Epicin käynnistys ja keskeytys (`run-epic.sh`)
 
 Koodit 1/2/3/5 ovat yhteisiä molemmille moodeille; 4 on vain käynnistys, 6 vain `--stop`.
 
