@@ -43,10 +43,13 @@ uutta, ja mikä on jo olemassa.
 
 ## Rajaukset
 
-- **Ei cross-repo-epicejä.** Epicin kaikki alaissueet ovat samassa repossa kuin epic-issue
-  itse. Toisessa repossa oleva alaissue on virhetilanne (§7), ei tuettu muoto. GitHubin
-  sub-issue-relaatio *sallii* cross-repo-lapset, mutta runnerin poiminta, lukot ja worktree
-  ovat kaikki repo-kohtaisia, joten cross-repo-ajo vaatisi oman epicinsä eikä kuulu tähän.
+- **Ei cross-repo-epicejä (toistaiseksi, → #92).** Epicin kaikki alaissueet ovat samassa
+  repossa kuin epic-issue itse. Toisessa repossa oleva alaissue on **nykytoteutuksessa**
+  virhetilanne (§7), ei tuettu muoto: `list_epic_children` ohittaa cross-repo-lapsen
+  varoituksella. GitHubin sub-issue-relaatio *sallii* cross-repo-lapset, mutta runnerin
+  poiminta, lukot ja worktree ovat kaikki repo-kohtaisia, joten cross-repo-ajo vaatisi oman
+  suunnittelunsa. Tämä rajaus **ei ole periaatteellinen vaan toteutuksellinen** ja on **työn
+  alla (#92)**; sitä ei pidä esittää ikuisena.
 - **Ei näkyvyysmuutoksia Ohjaamo-näkymään.** Epicin tila esitetään erikseen Ohjaamon
   V4-näkymäissuessa; tämä dokumentti määrittelee vain *ajon* arkkitehtuurin. Jaettu vaatimus
   molemmille on sama kanoninen muoto ja sama fallback (§1) — tämä dokumentti on siitä
@@ -128,6 +131,16 @@ jotta näkymä ja ajo eivät voi olla eri mieltä siitä, mitkä issuet epiciin 
 seuraus toteutukselle: lapsijoukon resolvointi (`sub_issues` → fallback) kannattaa toteuttaa
 **yhtenä jaettuna funktiona** (`lib/issue.sh`, §6), jota molemmat kutsuvat.
 
+> **Toteutustila (osittain, → #91).** Jaettu funktio `lib/issue.sh:list_epic_children` on
+> olemassa (#81) ja sitä käyttää **ajopuoli** — `run-epic.sh` ja `lib/epic.sh`
+> (`propagate_run_labels`, `epic_process_one`). **Näkymäpuoli ei sitä vielä kutsu:** Ohjaamon
+> epic-rollup (`lib/status-github.sh`, #79) resolvoi lapsijoukon **omilla** funktioillaan
+> (`status_github_fetch_sub_issues` + `status_github_parse_task_list`). Tavoiteltu invariantti
+> "yksi jaettu funktio molemmille" on siis vasta puoliksi voimassa; näkymän kokoaminen samaan
+> `list_epic_children`iin on avoin työ (**#91**). Toistaiseksi molemmat noudattavat samaa
+> sääntöä (natiivi voittaa, task-lista fallback), mutta kahtena toteutuksena — mikä on juuri se
+> ero, jonka #91 poistaa.
+
 ### 1.4 Kaksi eri graafia — älä sekoita
 
 Epicissä on kaksi toisistaan riippumatonta GitHub-relaatiota, ja niiden erottaminen on
@@ -144,12 +157,18 @@ epiciä, koska S2b lukee vain järjestävää graafia.
 
 ---
 
-## 2. Tunnistus ja poiminta — nykytila koodia vasten
+## 2. Tunnistus ja poiminta — koodianalyysi kirjoitushetkeltä (historiallinen)
 
-**Hyväksyntäkriteeri 2 vaatii, että tämä analyysi on tehty koodia vasten, ei arvailtu.** Alla
-lainatut kohdat on luettu suoraan repon `main`-tilasta (commit `4ad8d5b`).
+> **Historiallinen.** Tämän luvun kaikki lainaukset on luettu repon `main`-tilasta commitissa
+> `4ad8d5b`, joka on **#81:tä edeltävä** tila. Poimintahaut **eivät** silloin vielä sisältäneet
+> `-label:epic`iä eikä S2c-porttia ollut. Luku kuvaa siis lähtötilan, jota vasten M1/M2
+> perusteltiin — **ei nykytilaa**. Nykyinen poimintahaku sisältää `-label:epic`in ja S2c
+> pyydystää epicin autoritatiivisesti (§2.2:n merkintä).
 
-### 2.1 Poimintahaku tänään
+**Hyväksyntäkriteeri 2 vaati, että tämä analyysi tehdään koodia vasten, ei arvailtu.** Alla
+lainatut kohdat on luettu suoraan repon `main`-tilasta (commit `4ad8d5b`, ennen #81:tä).
+
+### 2.1 Poimintahaku kirjoitushetkellä (ennen #81:tä)
 
 Poiminta tapahtuu **kahdessa paikassa samalla hakukyselyllä** (tämä duplikaatio on olemassa,
 ks. §6):
@@ -202,6 +221,9 @@ haitallinen. Tämä oli §6:n ensimmäinen ja tärkein muutoskohta, ja **#81 tot
 `-label:epic` + M2 S2c-portti).
 
 ### 2.3 Kuinka erottaa epic poiminnassa
+
+> **Toteutettu (#81):** molempiin poimintakyselyihin lisättiin `-label:epic` (M1), ja
+> autoritatiivinen S2c-portti täydentää sen (M2, päätös B). Alla alkuperäinen perustelu.
 
 **Suositus:** lisää molempiin poimintakyselyihin negatiivinen kvalifikaattori **`-label:epic`**.
 Se on symmetrinen olemassa olevien `-label:waiting -label:wip` -suodattimien kanssa, halpa (ei
@@ -487,14 +509,22 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
 
 ### 6.2 Tarvitsee muutoksen
 
-**M1 — Epicin poissulku poiminnasta (pakollinen, §2:n löydös).**
+> **Toteutustila.** M1–M5 ja M7 toteutettiin **#81:ssä**, M6 **#82:ssa**, ja M8 on suurelta
+> osin tehty (README + CLAUDE.md + tämä statuspäivitys). Kunkin kohdan alla kerrotaan, mihin se
+> päätyi. Alkuperäinen "tehdään näin" -kuvaus on säilytetty; toteutus seurasi sitä ellei toisin
+> mainita.
+
+**M1 — Epicin poissulku poiminnasta (pakollinen, §2:n löydös).** — **TOTEUTETTU (#81):**
+`-label:epic` lisätty molempiin poimintakyselyihin.
 - `lib/issue.sh:pick_oldest_unassigned` (rivi 108): lisää `-label:epic` hakumerkkijonoon.
 - `poller.sh` inline-poiminta (rivi 775): **sama lisäys** — nämä kaksi hakua on pidettävä
   synkassa (olemassa oleva duplikaatio; harkitse merkkijonon nostamista jaetuksi vakioksi
   `lib/issue.sh`:ään samalla). Vartija: `tests/test-issue-pick.sh` pinnaa hakumerkkijonon;
   lisää `-label:epic` sen assertioon.
 
-**M2 — (Avoin päätös B) Autoritatiivinen epic-portti claimia ennen.**
+**M2 — (Päätös B) Autoritatiivinen epic-portti claimia ennen.** — **TOTEUTETTU (#81):**
+S2c EpicCheck -portti, `lib/issue.sh:is_epic`, exit 12, `blocked/is_epic_not_runnable`
+(tai `epic_check_failed`), ei `needs-human`-labelia.
 - `orchestrate.sh`: uusi portti S2b:n viereen (lukon jälkeen, claimia ennen), joka lukee issuen
   labelit / `sub_issues_summary`n ja perääntyy jos issue on epic. Uusi finalisointisyy esim.
   `blocked/is_epic_not_runnable`, uusi exit-koodi (jatkaa orkestraattorin koodiavaruutta, §5
@@ -502,49 +532,58 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
 - `lib/issue.sh`: uusi `is_epic <repo> <N> [<owner/repo>]` (label-luku, fail-closed samaan
   tapaan kuin `count_open_blockers`).
 
-**M3 — Lapsijoukon resolvointi (jaettu, §1.3).**
+**M3 — Lapsijoukon resolvointi (jaettu, §1.3).** — **TOTEUTETTU AJOPUOLELLA (#81), NÄKYMÄPUOLI
+AVOIN (#91).**
 - `lib/issue.sh`: uusi `list_epic_children <repo> <N> [<owner/repo>]` — lukee natiivit
   `GET …/issues/{N}/sub_issues`; jos tyhjä, jäsentää rungon task-listan (`- [ ] … #N`).
-  Palauttaa lapsi-issuenumerot + tilan. Sama funktio palvelee ajoa **ja** Ohjaamon näkymää
-  (hyväksyntäkriteeri 4).
+  Palauttaa lapsi-issuenumerot + tilan. **Toteutunut poikkeama:** funktion piti palvella ajoa
+  **ja** Ohjaamon näkymää (hyväksyntäkriteeri 4), mutta tällä hetkellä sitä käyttää vain
+  ajopuoli (`run-epic.sh`, `lib/epic.sh`); Ohjaamon rollup (`lib/status-github.sh`, #79)
+  resolvoi lapset omilla funktioillaan. Näkymän kokoaminen samaan funktioon on **#91** (§1.3).
 
-**M4 — Ajolabelien propagointi (§3).**
-- Uusi funktio (sijainti: `lib/issue.sh` tai uusi `lib/epic.sh`)
-  `propagate_run_labels <repo> <epic-N> <labels-csv> [<owner/repo>]` — iteroi avoimet lapset,
-  lisää puuttuvat ajolabelit idempotentisti `labels_add`illa (`lib/labels.sh:85`) /
-  `labels_ensure`illa (`lib/labels.sh:153`). Ohittaa `wip`- ja suljetut lapset.
+**M4 — Ajolabelien propagointi (§3).** — **TOTEUTETTU (#81):** sijainti `lib/epic.sh`.
+- `lib/epic.sh:propagate_run_labels` — iteroi avoimet lapset, lisää puuttuvat ajolabelit
+  idempotentisti `labels_add`illa. Ohittaa `wip`- ja suljetut lapset. Propagoinnin yksi jaettu
+  primitiivi `_epic_propagate_child` palvelee sekä `epic_process_one`ia (poller) että
+  `propagate_run_labels`ia (`/run-epic`) — ei kahta toteutusta (#82 AC4).
 
-**M5 — Pollerin epic-skannaus (§3.2, avoin päätös C).**
-- `poller.sh`: uusi `scan_epics`-vaihe ennen normaalia poimintaa — hakee `is:open label:epic`
-  (+ watchlistin labelit), kutsuu `propagate_run_labels`in kullekin, ja emittoi epic-merkinnän
-  (4.2) jumittuneista lapsista. Sijoitus poiminnan eteen, jotta juuri propagoitu lapsi on
-  poimittavissa samalla tikillä. Host-portti ja watchlist-resolvointi kuten muillakin
-  poller-vaiheilla (`lib/poller-config.sh`).
+**M5 — Pollerin epic-skannaus (§3.2, päätös C).** — **TOTEUTETTU (#81):**
+- `poller.sh`: `scan_epics`-vaihe ennen normaalia poimintaa — hakee `is:open label:epic`
+  (+ watchlistin labelit, `lib/epic.sh:epic_list_open`), kutsuu `epic_process_one`in kullekin
+  (best-effort, aina rc 0), ja emittoi epic-merkinnän (4.2) jumittuneista lapsista. Sijoitus
+  poiminnan eteen, jotta juuri propagoitu lapsi on poimittavissa samalla tikillä. Host-portti ja
+  watchlist-resolvointi kuten muillakin poller-vaiheilla (`lib/poller-config.sh`).
 
-**M6 — `/run-epic`-komento (§5).**
-- Uusi `commands/run-epic.md` (slash-komento, Claude Code lukee sen suoraan; ei
-  `render_prompt`-käsittelyä). Delegoi validoinnin ja propagoinnin M3/M4-funktioihin.
-  Mahdollinen ohut `run-epic.sh` repo-juureen, jos komento tarvitsee ei-triviaalia
-  bash-logiikkaa (syklintarkistus, topologinen järjestys) — symmetrinen `stop-run.sh`:n kanssa.
-- Asennus: `install.sh` linkittää `commands/*.md` jo globilla, joten uusi komento tulee
-  asennukseen pelkällä nimeämisellä (CLAUDE.md §3). Uusi juuren skripti näkyisi automaattisesti
-  litteässä juuressa (CLAUDE.md §2).
+**M6 — `/run-epic`-komento (§5).** — **TOTEUTETTU (#82):** komento **ja** ohut skripti; `--stop`
+scope-out (→ #90).
+- `commands/run-epic.md` (slash-komento, Claude Code lukee sen suoraan) **ja** `run-epic.sh`
+  repo-juuressa, koska komento tarvitsi ei-triviaalia bash-logiikkaa (syklintarkistus Kahnin
+  algoritmilla bash 3.2:ssa ilman assosiatiivisia taulukoita, topologinen järjestys) —
+  symmetrinen `stop-run.sh`:n kanssa. Validointi suunnittele–sovella-jaolla, delegoi propagoinnin
+  jaettuun `propagate_run_labels`iin (M4). `--dry-run`, `--start-now`; keskeytys `--stop` jäi
+  tietoisesti pois (→ #90, päätös H).
+- Asennus: `install.sh` linkittää `commands/*.md` jo globilla, joten komento tuli asennukseen
+  pelkällä nimeämisellä (CLAUDE.md §3). Juuren skripti näkyy automaattisesti litteässä juuressa
+  (CLAUDE.md §2).
 
-**M7 — Epicin näkyvä merkintä (§4.2, avoin päätös G).**
-- Osa M5:tä: kommentti epic-issuelle jumittuneesta lapsesta + kevyt `epic-attention`-label.
-  Idempotenssi #65:n `pr_last_decision`-hengessä (lue viimeisin kirjattu tila, älä toista).
+**M7 — Epicin näkyvä merkintä (§4.2, päätös G).** — **TOTEUTETTU (#81):**
+- Osa M5:tä: kommentti epic-issuelle jumittuneesta lapsesta (`lib/epic.sh:_epic_escalate_child`,
+  per-child piilomarker) + kevyt `epic-attention`-label. Idempotenssi #65:n
+  `pr_last_decision`-hengessä (kertaluonteinen per lapsi). Lisäksi valmiuden merkintä
+  (`_epic_announce_complete`: yhteenvetokommentti + `epic-complete`-label, päätös F).
 
-**M8 — Dokumentaatio.**
-- `README.md`: uusi alaluku (esim. 6.11 "Epicin ajaminen") ihmiselle.
-- `CLAUDE.md`: viittaus tähän dokumenttiin (hyväksyntäkriteeri 6, tehty tässä PR:ssä).
-- Uudet exit-koodit ja env-muuttujat CLAUDE.md §5/§7:ään toteutuksen yhteydessä.
+**M8 — Dokumentaatio.** — **TOTEUTETTU (#82) + tämä statuspäivitys (#93):**
+- `README.md`: alaluku "Epicit — usean issuen ketjun ajaminen `auto-run`illa" ihmiselle (#82).
+- `CLAUDE.md`: epic-koneisto kuvattu §4:ssä ja §6:ssa; viittaus tähän dokumenttiin.
+- Uudet exit-koodit (12 orkestraattori; `run-epic.sh`-avaruus) ja labelit CLAUDE.md §4/§5:ssä.
+- **Tämä PR (#93):** dokumentin statuspäivitys — suunnitelmasta toteutustilan kuvaukseksi.
 
 ### 6.3 Muutosten kokoluokka
 
-M1 ja M2 ovat **pakollisia ennakkoehtoja** (ilman niitä epic+auto-run on jo haitallinen, §2).
-M3–M7 ovat varsinainen epic-automaatio. Kaikki nojaavat olemassa oleviin abstraktioihin;
-mitään ydinkoneistoa (S2b, lukot, PR-vahti) ei kirjoiteta uusiksi. Tämä on issuen tavoittelema
-minimimuutos.
+M1 ja M2 olivat **pakollisia ennakkoehtoja** (ilman niitä epic+auto-run olisi ollut haitallinen,
+§2). M3–M7 olivat varsinainen epic-automaatio. Kaikki nojasivat olemassa oleviin abstraktioihin;
+mitään ydinkoneistoa (S2b, lukot, PR-vahti) ei kirjoitettu uusiksi. Tämä oli issuen tavoittelema
+minimimuutos, ja se toteutui suunnitellusti (#81 M1–M5 + M7, #82 M6).
 
 ---
 
