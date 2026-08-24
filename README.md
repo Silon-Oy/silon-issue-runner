@@ -264,7 +264,6 @@ jotta kaksi listaa ei ajaudu erilleen.
 | `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Salaisuustiedoston polku |
 | `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu |
 | `RUN_ISSUES_CLAUDE_TIMEOUT` | `3600` | Aikabudjetti per claude-kutsu |
-| `RUN_ISSUES_LABELS_CSV` | *(tyhjä)* | Poimintalabelit käsiajon poll-tilassa. Kaikkien oltava issuella (6.2) |
 | `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle kopioitavat labelit (6.3) |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | Montako kertaa aikakatkaistu ajo yritetään uudelleen (6.6 d) |
 | `RUN_ISSUES_MAX_CLARIFICATIONS` | `3` | Tarkennuskierrosten katto (6.6 c) |
@@ -318,12 +317,12 @@ Automaattiajossa (poller) yksi issue kulkee tämän ketjun ilman ihmistä:
 
 | Vaihe | Kuka tekee | Mitä ihminen näkee |
 |---|---|---|
-| Poiminta | poller / orkestraattori | issue **assignoituu** sinulle |
+| Poiminta | poller / orkestraattori | issue **varataan** (`auto-claimed`-label) ja assignoituu sinulle |
 | Katselmointi (S6) | Claude | ei mitään — tai tarkennuskysymys kommenttina |
 | Toteutus (S8–S9) | Claude | committeja haaralla `auto-run/<repo-slug>-issue-<N>-<slug>` |
 | PR (S11) | orkestraattori | PR, jonka rungossa on `Closes #<N>` |
 | Merge | PR-vahti | PR mergetty, **issue sulkeutuu** `Closes`-viittauksesta |
-| Siivous | PR-vahti | worktree, haara, lukko ja assignaatio poistuvat |
+| Siivous | PR-vahti | worktree, haara, lukko, assignaatio ja `auto-claimed`-varaus poistuvat |
 
 Ihmisen tehtävä on kaksi asiaa: **kirjoittaa issue riittävän tarkasti** ja **katselmoida PR**.
 Kaikki muu ihmiskosketus (tarkennuskysymys, `needs-human`, siivous) on poikkeustilanne, jonka
@@ -335,8 +334,8 @@ Poiminta on **yksi GitHub-haku**, ja sen ehdot ovat sanatarkasti nämä (`lib/is
 orkestraattorille, sama lauseke `poller.sh`:ssa):
 
 ```
-is:open no:assignee
--is:blocked -label:waiting -label:wip -label:auto-clean
+is:open -label:auto-claimed
+-is:blocked -label:waiting -label:wip -label:epic -label:auto-clean
 label:"<jokainen konfiguroitu label>"
 sort:created-asc  →  ensimmäinen osuma
 ```
@@ -344,9 +343,11 @@ sort:created-asc  →  ensimmäinen osuma
 Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
 
 1. Issue on **avoin**.
-2. Issuella **ei ole yhtään assigneeta** — ei sinua, ei ketään muuta (ks. 6.4).
+2. Issuella **ei ole `auto-claimed`-labelia** — se on automaation oma varaus käynnissä olevalle
+   tai siivoamattomalle ajolle (ks. 6.4). **Assignaatio ei ole poimintaehto:** käsin assignattu
+   issue lähtee ajoon normaalisti.
 3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa (`-is:blocked`, ks. 6.5).
-4. Issuella **ei ole** labelia `waiting`, `wip` eikä `auto-clean`.
+4. Issuella **ei ole** labelia `waiting`, `wip`, `epic` eikä `auto-clean`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: `auto-run`).
 6. Se on vanhin ehdot täyttävä issue — **yksi issue per tikki per remote**.
 
@@ -357,13 +358,15 @@ pysyvästi tyhjän** — haku sisältäisi silloin sekä `label:"auto-clean"` et
 `-label:auto-clean`. Tulos on nolla osumaa, eikä siitä synny virhettä eikä lokiriviä.
 
 Poimintalabelit tulevat konfiguraatiosta kolmessa portaassa: watchlistin repokohtainen
-`labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. Käsiajossa
-sama tulee muuttujasta `RUN_ISSUES_LABELS_CSV`. **Mikään labelin nimi ei ole kovakoodattu
-poimintaan** — `auto-run` on pelkkä konventio.
+`labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. **Mikään
+labelin nimi ei ole kovakoodattu poimintaan** — `auto-run` on pelkkä konventio. Poiminta on
+**pollerin** tehtävä: orkestraattori ei enää poimi (ei `poll`-tilaa, ei `RUN_ISSUES_LABELS_CSV`ää),
+joten koko paketissa on yksi poimintahaku.
 
 **Nimetty ajo ohittaa poimintaehdot.** `/run-issues #N` ja `orchestrate.sh <repo> <N>` eivät
-tee hakua lainkaan, joten labelit ja avoimuus eivät estä niitä. Kohta 2 pätee silti: claim
-tarkistetaan, ja toiselle assignattu issue kaataa ajon (exit 3).
+tee hakua lainkaan, joten labelit ja avoimuus eivät estä niitä. Claim tarkistetaan silti:
+**käsin assignattu issue lähtee nyt ajoon** (assignaatio ei ole varaus, ks. 6.4), mutta jos
+**toinen runner** ehtii varata saman issuen samaan aikaan, tämä ajo perääntyy (exit 3).
 
 **Rinnakkaisuus.** Poller ajaa kerrallaan enintään `global_max_concurrent` ajoa (watchlistin
 avain, oletus `2`) kaikkien repojen yli. Katon täyttyessä tikki kirjoittaa lokiin
@@ -394,7 +397,8 @@ automaation lisäämää labelia kannata poistaa käsin ennen kuin syy on korjat
 | `auto-run` | **sinä** | sinä | Poimintaehto. Nimi tulee konfiguraatiosta (`default_labels` / `RUN_ISSUES_LABELS_CSV`), ei koodista |
 | `waiting` | orkestraattori, kun ajo jää odottamaan vastaustasi | orkestraattori, kun `--continue` jatkaa | Estää poiminnan sillä aikaa kun tarkennus on kesken |
 | `wip` | **sinä** | sinä | Estää poiminnan. Tarkoitettu "teen tämän itse" -merkinnäksi |
-| `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu; PR-vahti, kun CI-korjaus luovuttaa | `cleanup-run.sh` (myös `/cleanup-run`); PR:ltä **sinä** | Issuella: **ei estä poimintaa** — assignaatio estää; signaali sinulle. PR:llä: **pidättää PR-vahdin**, kunnes poistat sen (7.5) |
+| `auto-claimed` | orkestraattori, kun ajo varaa issuen (S3) | orkestraattori, kun ajo perääntyy; `cleanup-run.sh` (myös `/cleanup-run`) siivouksessa | **Varausmerkintä** (6.4): estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Vain automaatio kirjoittaa** — älä lisää tai poista käsin |
+| `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu; PR-vahti, kun CI-korjaus luovuttaa | `cleanup-run.sh` (myös `/cleanup-run`); PR:ltä **sinä** | Issuella: **ei estä poimintaa** — varaus (`auto-claimed`) estää; signaali sinulle. PR:llä: **pidättää PR-vahdin**, kunnes poistat sen (7.5) |
 | `auto-clean` | **sinä** | `auto-clean.sh` onnistuneen siivouksen jälkeen | Pyytää siivoamaan issuen ajojäänteet ja sulkemaan issuen. Ks. 6.6 h) |
 | `auto-clean-skipped` | `auto-clean.sh`, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
 | `auto-merge` | **sinä** issuelle | — | Propagoituu issuelta PR:lle, ja PR-vahti mergeää vain labeloidun PR:n |
@@ -405,48 +409,58 @@ Kolme yleistä sekaannusta kannattaa erottaa heti:
   (6.5), ei mikään label; `run.json`-status `blocked` puolestaan kertoo vain, että yksittäinen
   ajo päättyi virheeseen. Kumpikaan ei aiheuta toista — epäonnistunut ajo **ei** estä issueta.
 - **`needs-human` ei estä poimintaa.** Se on pelkkä lippu sinulle. Uuden ajon estää
-  assignaatio, joka jää voimaan (6.4). **Poikkeus on PR:lle lisätty `needs-human`**, jonka
-  PR-vahti lisää CI-korjauksen luovuttaessa: siinä se on aito pidätyslippu, ja sen poistaminen
-  on nimenomaan se toimenpide, joka palauttaa PR:n vahdin käsittelyyn (7.5).
+  varaus (`auto-claimed`), joka jää voimaan (6.4). **Poikkeus on PR:lle lisätty `needs-human`**,
+  jonka PR-vahti lisää CI-korjauksen luovuttaessa: siinä se on aito pidätyslippu, ja sen
+  poistaminen on nimenomaan se toimenpide, joka palauttaa PR:n vahdin käsittelyyn (7.5).
 - **`auto-merge` luetaan PR:ltä, ei issuelta.** Orkestraattori kopioi sen issuelta PR:lle
   (`RUN_ISSUES_PR_LABELS_CSV`, oletus `auto-merge`). Jos lisäät labelin issuelle vasta PR:n
   avaamisen jälkeen, se ei siirry itsestään — lisää se silloin suoraan PR:lle.
 
 Kaksi labelinimeä on vaihdettavissa ympäristömuuttujalla: `auto-clean`
 (`RUN_ISSUES_CLEAN_LABEL`) ja `auto-merge` (`PR_WATCH_MERGE_LABEL`). `waiting`, `wip`,
-`needs-human` ja `auto-clean-skipped` ovat kovakoodattuja.
+`auto-claimed`, `needs-human` ja `auto-clean-skipped` ovat kovakoodattuja.
 
-Automaation itsensä lisäämät labelit (`waiting`, `needs-human`, `auto-clean-skipped` sekä
-PR:lle kopioitavat) luodaan repoon tarvittaessa itsestään. **Sinun lisäämäsi labelit
-(`auto-run`, `wip`, `auto-clean`) pitää luoda repoon itse** — GitHub ei salli tuntemattoman
-labelin liittämistä.
+Automaation itsensä lisäämät labelit (`waiting`, `auto-claimed`, `needs-human`,
+`auto-clean-skipped` sekä PR:lle kopioitavat) luodaan repoon tarvittaessa itsestään. **Sinun
+lisäämäsi labelit (`auto-run`, `wip`, `auto-clean`) pitää luoda repoon itse** — GitHub ei salli
+tuntemattoman labelin liittämistä.
 
-### 6.4 Issuen omistaja (assignee)
+### 6.4 Varaus (`auto-claimed`) ja assignaatio
 
-Assignaatio ei ole tässä järjestelmässä kirjanpitoa vaan **varausmekanismi**. Se on ainoa
-tila, jonka kaikki koneet näkevät: paikallinen lukkohakemisto suojaa vain yhden koneen
-sisällä, GitHub-assignaatio kaikkien välillä.
+**Varaus on `auto-claimed`-label, assignaatio on kirjanpitoa.** Varaus tarkoittaa yhtä asiaa:
+käynnissä oleva tai siivoamaton ajo pois poiminnasta. Se on ainoa tila, jonka kaikki koneet
+näkevät — paikallinen lukkohakemisto suojaa vain yhden koneen sisällä, GitHub-label kaikkien
+välillä. Label on **automaation omistama**: automaatio luo, lisää ja poistaa sen; ihminen ei
+lisää sitä koskaan.
 
-Kulku on kolmivaiheinen (S2 → S3): ajo ottaa paikallisen lukon, assignoi issuen itselleen,
-odottaa hetken ja **tarkistaa että on issuen ainoa assignee**. Jos assigneita on useampi,
-kaksi ajoa varasi saman issuen yhtä aikaa — tämä ajo perääntyy, poistaa oman
-assignaationsa ja exittaa koodilla 3. GitHub sallii rinnakkaiset assignaatiot, joten
-"olenko ainoa" on ainoa luotettava ratkaisija.
+Aiemmin tämän roolin kantoi assignaatio (`no:assignee` poimintaehtona). Ongelma: ajo assignoi
+`@me`:n eli **saman tilin, jolla ihminenkin assignoi issueita**, joten "ihmisen assignaatio" ja
+"runnerin varaus" eivät olleet erotettavissa. Nyt varaus on erillinen label, ja assignaatio jää
+pelkäksi kirjanpidoksi.
+
+Kulku on kolmivaiheinen (S2 → S3): ajo ottaa paikallisen lukon, assignoi issuen itselleen ja
+lisää `auto-claimed`in, odottaa hetken ja **tarkistaa että assignee-joukko on ennallaan +
+`@me`**. Jos joukossa on ylimääräinen tili, toinen runner varasi saman issuen yhtä aikaa — tämä
+ajo perääntyy, poistaa oman assignaationsa ja varauksensa ja exittaa koodilla 3. GitHub sallii
+rinnakkaiset assignaatiot, joten joukkovertailu on ainoa luotettava ratkaisija.
 
 Kolme käytännön seurausta:
 
-1. **Käsin assignattu issue ei koskaan lähde automaatioon.** Poimintahaussa on `no:assignee`.
-   Jos haluat tehdä issuen itse, assignoi se itsellesi — se on `wip`-labelia vahvempi keino.
-2. **Nimetty ajo kaatuu toisen ihmisen issueen.** `/run-issues #N` ohittaa poimintaehdot,
-   mutta claim-tarkistus huomaa toisen assigneen ja exittaa koodilla 3 ilman sivuvaikutuksia.
-3. **Assignaatio ei vapaudu itsestään, jos ajo epäonnistuu.** Se poistuu vain neljässä
+1. **Käsin assignattu issue lähtee ajoon normaalisti.** Assignaatio ei ole poimintaehto eikä
+   varaus. Jos haluat tehdä issuen itse, käytä **`wip`-labelia** — se on nyt ainoa "teen tämän
+   itse" -opt-out.
+2. **Nimetty ajo ei enää kaadu toisen ihmisen issueen.** `/run-issues #N` ohittaa poimintaehdot,
+   ja claim-tarkistus hyväksyy etukäteen tehdyn assignaation (joukko ennen ∪ `@me`). Vasta
+   **toisen runnerin** kilpaileva varaus samassa 5 sekunnin ikkunassa kaataa ajon (exit 3).
+3. **Varaus ei vapaudu itsestään, jos ajo epäonnistuu.** `auto-claimed` poistuu vain neljässä
    tilanteessa: hävitty varauskilpailu, `--resume --decision CANCEL`, `cleanup-run.sh`
-   (myös `/cleanup-run`) ja PR-vahdin mergenjälkeinen siivous.
+   (myös `/cleanup-run`) ja PR-vahdin mergenjälkeinen siivous. Estynyt tai jumiutunut ajo pitää
+   varauksen (ja assignaation) siivoukseen asti.
 
 Kolmas kohta on tarkoituksellinen: epäonnistunut ajo jättää issuen varatuksi, jotta poller ei
 poimi samaa issueta uudelleen ja uudelleen samaan seinään. Hinta on, että **issue palaa
 automaatioon vasta siivouksen jälkeen** (6.6 g). Jos ihmettelet miksi korjattu issue ei lähde
-liikkeelle, tarkista assignaatio ensin.
+liikkeelle, tarkista `auto-claimed`-label ensin.
 
 ### 6.5 Riippuvuudet toisiin issueihin
 
@@ -602,8 +616,8 @@ tilaan `blocked/stalled_in_<vaihe>`, lisää `needs-human`-labelin ja kommentoi 
 on turvaverkko roikkuvalle Claude-kutsulle — erityisesti jos `timeout`-binääri puuttuu
 (osio 2).
 
-**g) Issue ei lähde uudelleen liikkeelle epäonnistumisen jälkeen.** Odotettua: assignaatio on
-yhä voimassa (6.4). Siivoa ajo sillä koneella, jossa se tapahtui:
+**g) Issue ei lähde uudelleen liikkeelle epäonnistumisen jälkeen.** Odotettua: varaus
+(`auto-claimed`) on yhä voimassa (6.4). Siivoa ajo sillä koneella, jossa se tapahtui:
 
 ```bash
 "$HOME/.claude/scripts/run-issues/cleanup-run.sh" --list          # mitä ajoja on
@@ -673,7 +687,7 @@ käytettävissä.
 
 | Skripti | Tyypillinen kutsu | Mitä tekee |
 |---|---|---|
-| `orchestrate.sh` | `orchestrate.sh <repo> <N\|poll>` | Yksi issue → yksi PR. Muut moodit: `--resume <run-dir> --decision …`, `--restart <run-dir>`, `--continue <run-dir>`, `--remote <nimi>` |
+| `orchestrate.sh` | `orchestrate.sh <repo> <N>` | Yksi issue → yksi PR (issuenumero pakollinen). Muut moodit: `--resume <run-dir> --decision …`, `--restart <run-dir>`, `--continue <run-dir>`, `--remote <nimi>` |
 | `run-epic.sh` | `run-epic.sh <N> --repo <polku>` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille. `--stop` keskeyttää (pysäyttää elävät lapsiajot + poistaa ajolabelit). `--dry-run`, `--start-now`, `--remote`, `--labels` |
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
@@ -1157,8 +1171,7 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | Koodi | Merkitys |
 |---|---|
 | 0 | Onnistui — PR avattu, tai resume peruttiin siististi |
-| 1 | Fataali — virheellinen käyttö tai puuttuva `run.json` resumessa |
-| 2 | Ei ehdokasissueta (poll-tila, ei tekemistä) |
+| 1 | Fataali — virheellinen käyttö tai puuttuva `run.json` resumessa. **Myös `poll`-argumentti** (issue #99): automaattinen poiminta on pollerin tehtävä, ei orkestraattorin. Koodi 2 (ei ehdokasta) poistui käytöstä |
 | 3 | Lukko-/claim-kilpajuoksu hävitty |
 | 4 | Katselmointi esti ajon (vain auto-tila) |
 | 5 | Estynyt ennen implementeriä tai implementerissä — worktreen luonti (S4), db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED. Tarkan syyn ja sen korjauksen kertoo `run.json`-statuksen syykenttä, ks. vianetsinnän kohta (e) |

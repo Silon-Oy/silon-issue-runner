@@ -211,6 +211,25 @@ S4 Worktree → S5 DBClone → S6 CycleReview
   (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`illa. Ks. epic-tason
   automaatio alla ja `docs/epic-orchestration.md`.
 
+- **S1 PickIssue** vaatii **nimetyn issuenumeron** (#99). Orkestraattori ei enää poimi: poll-tila
+  poistettiin (`poll`-argumentti ⇒ exit 1, koodi 2 poistui käytöstä), samoin
+  `RUN_ISSUES_LABELS_CSV`. Koko paketissa on enää **yksi** poimintahaku — pollerin polku, joka
+  delegoi `lib/issue.sh:pick_oldest_candidate`ille (ent. `pick_oldest_unassigned`), joten haku ja
+  sen suodattimet elävät yhdessä paikassa (sama konvergointi kuin #91:ssä epicin lapsijoukolle).
+
+- **S3 Claim** assignoi `@me`:n **ja** lisää `auto-claimed`-varauslabelin (#99). Varaus siirtyi
+  assignaatiosta erilliseen, **vain automaation kirjoittamaan** labeliin, koska `claim_issue`
+  assignoi saman tilin jolla ihminenkin assignoi — "ihmisen assignaatio" ja "runnerin varaus"
+  eivät olleet erotettavissa. Poimintahaku suodattaa `-label:auto-claimed` (ei enää `no:assignee`),
+  joten käsin assignattu issue lähtee ajoon. `verify_claim`in sääntö on nyt **"assignee-joukko
+  claimin jälkeen == joukko ennen claimia ∪ {@me}"** (joukko snapshotataan S3:ssa ennen claimia):
+  etukäteen tehty assignaatio ei kaada ajoa, mutta toisen tilin kilpaileva runner huomataan yhä
+  (ylimääräinen login ⇒ perääntyminen, exit 3). Label sidotaan `claim_issue`/`unclaim_issue`iin
+  rakenteellisesti (lisäys claimissa, poisto joka unclaim-polussa) + `cleanup-run.sh`in raakaan
+  purkuun; **blocked/stalled-finalisoinnit eivät poista sitä** (`lib/run-terminate.sh`) — estynyt
+  ajo pysyy varattuna siivoukseen asti, kuten assignaatio ennen. Best-effort: label-kirjoituksen
+  häiriö ei kaada claimia (tmux-dedup + S2-lukko estävät kaksoisajon).
+
 - **S4 Worktree** ratkaisee feature-haaran base-refin **arvaamatta**: eksplisiittinen
   `base_branch` → `<remote>/<base_branch>`, muuten `<remote>/HEAD`. Jos remotella on refit
   mutta ei symbolista HEADia (yleistä `git remote add`illa lisätyillä remoteilla, joilla
@@ -276,9 +295,10 @@ kommentilla.
 Kun ihminen vastaa markerin jälkeen, pollerin **`scan_blocked_answered`** (poller.sh,
 `scan_answered`in sisarfunktio: sama host/remote-portti, `parse_marker`+`detect_answer`)
 tunnistaa tämän koneen avoimen blocked-ajon ja ajaa siihen `cleanup-run.sh --issue`n
-(worktree, branch, run-dir, assignaatio, `needs-human`-label, lukko — **issueta ei suljeta**,
-toisin kuin `auto-clean.sh`). Siivottu issue täyttää normaalin poimintahaun (`no:assignee`) ja
-tulee poimituksi seuraavalla tikillä täytenä uutena ajona tuoreesta basesta — ei vanhan
+(worktree, branch, run-dir, assignaatio, `auto-claimed`-varaus, `needs-human`-label, lukko —
+**issueta ei suljeta**, toisin kuin `auto-clean.sh`). Siivottu issue täyttää normaalin
+poimintahaun (`-label:auto-claimed`, #99) ja tulee poimituksi seuraavalla tikillä täytenä
+uutena ajona tuoreesta basesta — ei vanhan
 run-dirin jatkamista, koska blocked-ajon worktree on tyypillisesti haarautettu ennen esteen
 poistanutta mergeä. Silmukkaraja on rakenteellinen ilman uutta laskuria: uudelleen blocked
 päättyvä ajo postaa **uuden** markerin, ja `scan_blocked_answered` vaatii vastauksen uusimman
@@ -351,8 +371,7 @@ README-riviä on punainen testi.
 | Koodi | Merkitys |
 |---|---|
 | 0 | Onnistui — PR avattu, tai resume peruttiin siististi |
-| 1 | Fataali — virheellinen käyttö / puuttuva `run.json` resumessa |
-| 2 | Ei ehdokasissueta (poll-tila, ei tehtävää) |
+| 1 | Fataali — virheellinen käyttö / puuttuva `run.json` resumessa / `poll`-argumentti (#99: automaattinen poiminta on pollerin tehtävä; orkestraattori vaatii numeron). **Koodi 2 (ei ehdokasta, poll-tila) poistui käytöstä** — poll-tilaa ei enää ole |
 | 3 | Lukko-/claim-kisa hävitty |
 | 4 | Cycle review esti ajon (vain auto-tila) |
 | 5 | Estynyt ennen implementeriä tai siinä — S4 worktreen luonti epäonnistui (`worktree_base_unresolved` base-ref ei ratkennut / `worktree_leftover_branch` jäänne-haara edellisestä ajosta / `worktree_create_failed` muu `git worktree add` -virhe, #34), db-clone, S7b tai S7c epäonnistui, tai implementer palautti BLOCKED |
@@ -600,7 +619,7 @@ skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon **yksi jaettu resolvointi** natiivi→fallback, TSV `<number>\t<state>\t<labels>\t<owner/repo>\t<title>` — kaikki kuluttajat kutsuvat tätä, myös näkymä (`lib/status-github.sh`, #91), joten näkymä ja ajo eivät voi olla eri mieltä lapsijoukosta; fallback-tila autoritatiivinen avoimien issueiden joukosta (ei checkbox-arvaus), lähde (`sub_issues`/`task_list`) `--source-file`in kautta luettavissa, identiteetti kutsujan valinta `--gh-runner`illa (näkymä ajaa `gha_with_token`in läpi, ajo paljasta `gh`:ta), fail-closed rc 2 lukukelvottomasta natiivigraafista, #81/#91; **cross-repo (#92):** jokainen lapsi kantaa oman `owner/repo`nsa (natiivi `repository_url`ista, task-lista `owner/repo#N`-viittauksesta), cross-repo-lapsen tila ratkaistaan kyseisen repon avoin-joukosta (kerran per repo, fail-closed) — ei enää pudoteta pois; `count_open_blockers` laskee cross-repo-estäjän jo valmiiksi (pelkkä `.state`-suodatus, AC4); `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `pick_oldest_candidate` paketin **ainoa** poimintahaku, ent. `pick_oldest_unassigned` — `no:assignee` → `-label:auto-claimed`, #99, pollerin delegoima; `claim_issue`/`unclaim_issue` assignoivat + lisäävät/poistavat `auto-claimed`-varauslabelin rakenteellisesti (`AUTO_CLAIMED_LABEL`, kiinteä nimi, vain automaation kirjoittama), `issue_assignees` snapshottaa assignee-joukon S3:ssa ja `verify_claim` tarkistaa "joukko claimin jälkeen == joukko ennen ∪ {@me}" (käsin assignattu issue ei kaada ajoa, kilpaileva toinen tili huomataan yhä), #99; `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon **yksi jaettu resolvointi** natiivi→fallback, TSV `<number>\t<state>\t<labels>\t<owner/repo>\t<title>` — kaikki kuluttajat kutsuvat tätä, myös näkymä (`lib/status-github.sh`, #91), joten näkymä ja ajo eivät voi olla eri mieltä lapsijoukosta; fallback-tila autoritatiivinen avoimien issueiden joukosta (ei checkbox-arvaus), lähde (`sub_issues`/`task_list`) `--source-file`in kautta luettavissa, identiteetti kutsujan valinta `--gh-runner`illa (näkymä ajaa `gha_with_token`in läpi, ajo paljasta `gh`:ta), fail-closed rc 2 lukukelvottomasta natiivigraafista, #81/#91; **cross-repo (#92):** jokainen lapsi kantaa oman `owner/repo`nsa (natiivi `repository_url`ista, task-lista `owner/repo#N`-viittauksesta), cross-repo-lapsen tila ratkaistaan kyseisen repon avoin-joukosta (kerran per repo, fail-closed) — ei enää pudoteta pois; `count_open_blockers` laskee cross-repo-estäjän jo valmiiksi (pelkkä `.state`-suodatus, AC4); `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
 | `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Propagoinnin **yksi jaettu primitiivi** `_epic_propagate_child` (AC4, #82): sekä `epic_process_one` että julkinen `propagate_run_labels` (lapsijoukon resolvointi + propagointi, `/run-epic`in kirjoituspolku) kutsuvat sitä — ei kahta label-propagointitoteutusta. `_epic_parse_child_line` säilyttää `list_epic_children`in tyhjän label-sarakkeen (tab on IFS-whitespace ⇒ `IFS=$'\t' read` romahduttaisi sen) ja palauttaa `REPLY_REPO`n (lapsen `owner/repo`, #92) ⇒ propagointi/eskalaatio/valmius kohdistuvat lapsen omaan repoon; `_epic_child_ref`/`_epic_attn_marker` nimeävät cross-repo-lapsen `owner/repo#N`-muodossa ja repo-tarkennetulla markerilla (saman repon lapsi säilyttää vanhan `child=<N>`-muodon, taaksepäin yhteensopiva). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartijat `tests/test-epic.sh`, `tests/test-run-epic.sh` |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
@@ -625,7 +644,6 @@ skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
 |---|---|---|
 | `RUN_ISSUES_AUTO` | `0` | `1` = ei interaktiivisia kehotteita |
 | `RUN_ISSUES_REVIEW_GATE` | `interactive` (`auto` jos `RUN_ISSUES_AUTO=1`) | S7-portin tila |
-| `RUN_ISSUES_LABELS_CSV` | *(tyhjä)* | Label-suodatin poll-tilassa |
 | `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle propagoitavat labelit |
 | `RUN_ISSUES_BASE_BRANCH` | *(repon oletushaara)* | Pakotettu base-haara |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | `--restart`-budjetti timeoutin jälkeen |
@@ -1040,9 +1058,9 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   alle kahdeksan alkion tai ankkuri `needs-human` katoaa, testi kaatuu sen sijaan että läpäisisi
   tyhjästä. `tests/test-skill-surface.sh` tekee saman komento- ja skriptipinnalle molempiin
   suuntiin (skillin nimeämä `/komento` ⇒ `commands/<nimi>.md` olemassa; toimitettu komento ⇒
-  skillissä nimetty, pois lukien perusteltu poissulkulista). Tunnettu kytkös: **avoin #99**
-  muuttaisi poimintaehdot ja lisäisi `auto-claimed`-labelin — skillin päivitys kuuluu #99:n
-  scopeen, ja vartijat menevät punaisiksi siihen asti. Se on suunniteltua.
+  skillissä nimetty, pois lukien perusteltu poissulkulista). Kytkös lunastettu: **#99** muutti
+  poimintaehdot (`no:assignee` → `-label:auto-claimed`) ja lisäsi `auto-claimed`-labelin, ja
+  skillin päivitys tuli samassa muutoksessa — vartijat todensivat sen.
 - **`install.sh --uninstall` puuttuu.** Paketin omistamien symlinkkien poisto on tehtävä
   käsin. Omistajuuspredikaatti (symlinkin kohde paketin juuren sisällä) riittäisi sellaisenaan
   toteutukseen.

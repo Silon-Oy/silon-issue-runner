@@ -194,22 +194,23 @@ lainatut kohdat on luettu suoraan repon `main`-tilasta (commit `4ad8d5b`, ennen 
 
 ### 2.1 Poimintahaku kirjoitushetkellä (ennen #81:tä)
 
-Poiminta tapahtuu **kahdessa paikassa samalla hakukyselyllä** (tämä duplikaatio on olemassa,
-ks. §6):
+Poiminta tapahtuu **yhdessä paikassa** (#99 konvergoi aiemman duplikaation: `poller.sh`
+delegoi kirjastofunktiolle eikä toista hakua):
 
-- `lib/issue.sh` → `pick_oldest_unassigned()`, rivi 108:
+- `lib/issue.sh` → `pick_oldest_candidate()` (ent. `pick_oldest_unassigned`):
 
   ```
-  is:open no:assignee -is:blocked -label:waiting -label:wip -label:${clean_label} sort:created-asc
+  is:open -label:auto-claimed -is:blocked -label:waiting -label:wip -label:epic -label:${clean_label} sort:created-asc
   ```
 
   johon lisätään AND-ehtoina konfiguroidut positiiviset labelit (`label:"auto-run"` jne.).
 
-- `poller.sh` inline-poiminta, rivi 775: **sama** merkkijono
-  (`is:open no:assignee -is:blocked -label:waiting -label:wip -label:$RUN_ISSUES_CLEAN_LABEL …`).
+- `poller.sh` kutsuu `pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO"` — **ei enää
+  omaa inline-hakua** (#99).
 
-Suodattimet siis ovat: avoin, ei assigneeta, ei `blocked_by`-estetty, ei `waiting`/`wip`/
-`auto-clean`-labelia, ja kaikki konfiguroidut labelit (tyypillisesti `auto-run`) läsnä.
+Suodattimet siis ovat: avoin, ei `auto-claimed`-varausta (#99: ei enää `no:assignee` —
+assignaatio ei ole varaus), ei `blocked_by`-estetty, ei `waiting`/`wip`/`epic`/`auto-clean`-labelia,
+ja kaikki konfiguroidut labelit (tyypillisesti `auto-run`) läsnä.
 
 ### 2.2 Löydös (historiallinen): epic poimittiin tavallisena issuena — korjattu #81:ssä
 
@@ -315,7 +316,8 @@ Propagointi voi tapahtua kolmessa kohdassa:
 > poimintakelpoinen samalla tikillä.
 
 **Missä poller skannaa epicit:** epic-issuet löytyvät haulla `is:open label:epic` (ei
-`no:assignee` — epic ei koskaan ole assignattu automaation toimesta) niiden labelien kera, jotka
+varaussuodatinta — epic ei koskaan ole assignattu eikä `auto-claimed` automaation toimesta,
+#99) niiden labelien kera, jotka
 watchlist vaatii repolle. Skannaus on halpa (epicejä on vähän), ja se voi jakaa
 `pr-watch-poller.sh`:n rotaatiokursorin (#47) hengen, jos epicejä on paljon — mutta oletuksena
 se ajetaan joka tikki, koska joukko on pieni.
@@ -532,7 +534,7 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
 | Koneisto | Miksi riittää |
 |---|---|
 | **S2b-esto-portti** (`lib/issue.sh:count_open_blockers`, `orchestrate.sh:718`) | Ajaa alaissuet oikeassa järjestyksessä `blocked_by`-graafin varassa. Epic-ketju on täsmälleen se, mille S2b on rakennettu. |
-| **Poiminta-ajo** (`pick_oldest_unassigned` + poller inline) | Poimii propagoidut lapset normaalisti. Ainoa muutos on epicin **poissulku** (6.2), ei uusi poimintapolku lapsille. |
+| **Poiminta-ajo** (`pick_oldest_candidate`, pollerin delegoima) | Poimii propagoidut lapset normaalisti. Ainoa muutos on epicin **poissulku** (6.2), ei uusi poimintapolku lapsille. |
 | **Lukot** (`lib/locking.sh`) | Issue-kohtaisia; lapsiajot lukkiutuvat itsenäisesti. Epic ei tarvitse omaa lukkoa (se ei aja). |
 | **PR-vahti** (`pr-watch.sh`, `pr-watch-poller.sh`) | Kunkin lapsen PR mergetään itsenäisesti. Epic-ketjun merge-järjestys seuraa `blocked_by`sta: estävän lapsen PR mergetään ennen kuin estetty lapsi vapautuu poimintaan. |
 | **Terminaalisen eston merkintä** (`_add_needs_human_label`, CLAUDE.md §4) | Antaa jumittuneelle lapselle jo `needs-human`-labelin; epic-merkintä (4.2) *lukee* tämän, ei korvaa. |
@@ -547,12 +549,13 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
 > mainita.
 
 **M1 — Epicin poissulku poiminnasta (pakollinen, §2:n löydös).** — **TOTEUTETTU (#81):**
-`-label:epic` lisätty molempiin poimintakyselyihin.
-- `lib/issue.sh:pick_oldest_unassigned` (rivi 108): lisää `-label:epic` hakumerkkijonoon.
-- `poller.sh` inline-poiminta (rivi 775): **sama lisäys** — nämä kaksi hakua on pidettävä
-  synkassa (olemassa oleva duplikaatio; harkitse merkkijonon nostamista jaetuksi vakioksi
-  `lib/issue.sh`:ään samalla). Vartija: `tests/test-issue-pick.sh` pinnaa hakumerkkijonon;
-  lisää `-label:epic` sen assertioon.
+`-label:epic` lisätty poimintakyselyyn.
+- `lib/issue.sh:pick_oldest_candidate` (ent. `pick_oldest_unassigned`): lisää `-label:epic`
+  hakumerkkijonoon. **#99 konvergoi kahden haun duplikaation:** `poller.sh` delegoi nyt tälle
+  funktiolle eikä toista hakua, joten "pidä kaksi hakua synkassa" -huoli poistui rakenteellisesti
+  (edellä ehdotettu jaetuksi vakioksi nostaminen toteutui delegointina). Vartija:
+  `tests/test-issue-pick.sh` pinnaa hakumerkkijonon (`-label:epic` + `-label:auto-claimed`) ja
+  varmistaa ettei `poller.sh`:ssa ole enää omaa `gh issue list --search` -poimintaa.
 
 **M2 — (Päätös B) Autoritatiivinen epic-portti claimia ennen.** — **TOTEUTETTU (#81):**
 S2c EpicCheck -portti, `lib/issue.sh:is_epic`, exit 12, `blocked/is_epic_not_runnable`

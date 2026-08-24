@@ -1,6 +1,6 @@
 ---
-argument-hint: [#N]
-description: Aja /run-issues-orkestraattori joko nimetylle issuelle (`#N`) tai vanhimmalle omistamattomalle (ei argumenttia).
+argument-hint: "#N"
+description: Aja /run-issues-orkestraattori nimetylle issuelle (`#N`). Issuenumero on pakollinen — automaattinen poiminta on pollerin tehtävä.
 ---
 
 # /run-issues
@@ -15,12 +15,20 @@ Tämä rakenne toimii sekä silloin kun Claude Coden Bash-työkalu ajaa orkestra
 
 ## 1. Aja vaihe A
 
-Käytä **nykyistä työhakemistoa kohdereposijaintina** (`pwd`). Jos käyttäjä antoi argumentin `#N`, käytä siitä numero-osa; muuten käytä `poll`.
+Käytä **nykyistä työhakemistoa kohdereposijaintina** (`pwd`). **Issuenumero on pakollinen.**
+Jos käyttäjä ei antanut argumenttia `#N`, tulosta usage-viesti äläkä kutsu orkestraattoria
+lainkaan — automaattinen poiminta on pollerin tehtävä, ei tämän komennon.
 
 ```bash
 REPO_ROOT=$(pwd)
-# ISSUE_ARG: korvaa "<n>" käyttäjän antamalla numerolla, tai pidä "poll" jos argumenttia ei annettu.
-ISSUE_ARG="poll"          # tai esim. "19" jos käyttäjä antoi #19
+# ISSUE_ARG: käyttäjän antama issuenumero, esim. "19" (ilman #-etuliitettä myös kelpaa).
+ISSUE_ARG="<n>"          # esim. "19" jos käyttäjä antoi #19
+
+# Ilman numeroa: älä aja orkestraattoria.
+if [ -z "$ISSUE_ARG" ] || [ "$ISSUE_ARG" = "<n>" ]; then
+  echo "usage: /run-issues #N — anna ajettava issuenumero (automaattinen poiminta on pollerin tehtävä)."
+  exit 0
+fi
 
 set +e
 "$HOME/.claude/scripts/run-issues/orchestrate.sh" "$REPO_ROOT" "$ISSUE_ARG"
@@ -35,7 +43,6 @@ echo "ORCHESTRATE_EXIT=$RC"
 |---|---|---|
 | 0 | Valmis (auto-tila tai resume-cancel) | Tulosta lopputulos. Jos `<repo>/.claude/run-issues/<run-id>/run.json` sisältää `pr_url`, näytä se. |
 | 10 | Awaiting review — vaihe A valmis | Etene **kohtaan 3**. |
-| 2 | Ei kandidaatti-issueta poll-tilassa | Tulosta "Ei avoimia auto-run-issueita" ja lopeta. |
 | 3 | Lock/claim race hävitty | Joku toinen runner ajaa samaa issueta. Lopeta hiljaa. |
 | 4,5,6 | Vaihe blocked / virhe | Lue tuoreimman ajon `state.jsonl` viimeinen rivi, tulosta `blocked_reason`. |
 | 8 | Puuttuva riippuvuus — mitään ei aloitettu | Tulosta orkestraattorin virheviesti **sellaisenaan**; se sisältää korjauskomennon. Älä tulosta usagea. |
@@ -80,6 +87,6 @@ Exit-koodit kohdan 2 taulukon mukaan. PROCEED-onnistumisessa PR-URL löytyy `run
 ## Huomioita
 
 - **Auto-tila (Studion poller)** asettaa `RUN_ISSUES_AUTO=1` ja `RUN_ISSUES_REVIEW_GATE=auto`, jolloin S7 ei exittaa 10:llä vaan päättää itse PROCEED/BLOCKER cycle-reviewn output-rivin perusteella. Slash-komentoa ei silloin tarvita.
-- **Poll-tila** (`/run-issues` ilman argumenttia) etsii vanhimman omistamattoman issuen, jossa ei ole labelia `blocked`/`waiting`/`wip`.
+- **Automaattinen poiminta on pollerin tehtävä.** Tämä komento ajaa vain nimetyn issuen; ilman numeroa se ei kutsu orkestraattoria. `orchestrate.sh <repo> poll` on käyttövirhe (exit 1).
 - **Lukko ja assignaatio** pysyvät paikoillaan exit-koodilla 10 — vaihe B saa saman issuen omakseen.
 - **Worktree** jätetään aina paikoilleen forensiseksi artefaktiksi; maintainer poistaa sen manuaalisesti tai Phase 2 -PR-valvoja hoitaa siivouksen mergeyksen jälkeen.

@@ -13,8 +13,7 @@
 # for the same fail-open reason as `-is:blocked`: a typo'd negative qualifier does
 # NOT error on GitHub — it silently matches everything.
 #
-# WHY THE -is:blocked TERM IS PINNED EXACTLY, AND WHY THE TWO PICKUP SEARCHES
-# ARE ASSERTED CONGRUENT:
+# WHY THE -is:blocked TERM IS PINNED EXACTLY:
 #   Blocked issues are excluded with GitHub's native `-is:blocked` qualifier
 #   (reads the blocked_by graph), replacing the old blocked-label filter and its
 #   label-sync script. An UNKNOWN negative qualifier does NOT error on GitHub —
@@ -22,9 +21,11 @@
 #   open issues). So a typo like `-is:blockd` would not fail; it would quietly
 #   leak blocked issues into pickup. The old label-based bug failed safe (picked
 #   too few, noticed at once); this one fails open, so the lost safety margin is
-#   bought back here: we pin the literal `-is:blocked` string AND assert
-#   lib/issue.sh's and poller.sh's pickup searches carry the same standing
-#   filters, so the two sources can't drift apart unnoticed.
+#   bought back here: we pin the literal `-is:blocked` string. The same reasoning
+#   pins `-label:auto-claimed` (the issue #99 reservation qualifier).
+#   There is now only ONE pickup search — poller.sh delegates to
+#   pick_oldest_candidate (issue #99), so the two-search congruence check that
+#   used to live here is replaced by case 5a's "poller has no inline search".
 #
 # Two layers:
 #   1. Default (offline, deterministic): `gh` is mocked via a PATH shim that
