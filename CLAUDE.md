@@ -34,7 +34,8 @@ tests/     plain-bash-testipaketti, ajuri run-all.sh
 db-clone/  opt-in-tietokantakloonaus
 agents/    Claude-agenttimäärittelyt (architect, developer, reviewer, refactorer)
 commands/  slash-komennot (run-issues, run-epic, cleanup-run, pr-watch, refresh, factory-*)
-skills/    Claude-skillit (run-issues-workflow: issue-konventiot kohderepoon)
+skills/    Claude-skillit (claude-issue-runner: järjestelmän käyttöohje kohderepoon — labelit,
+           poiminta, epicit, ongelmatilanteet, komennot)
 docs/diagrams/  mermaid-kaaviot (.mmd)
 examples/  run-issues-watchlist.example.json, run-issues-poller.env.example,
            status-digest.env.example, status-caddy.example
@@ -1029,9 +1030,19 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   koneella `~/.claude/skills` on yhä hakemistosymlinkki (`-> dotfiles`); `agents` ja `commands`
   on jaettu per tiedosto, `skills` ei vielä. Tällä koneella `install.sh` tulostaa skillistä
   **conflict-rivin ja exit 4:n** (ei refusea, jottei koko asennus kaadu — §3), joten
-  agents/commands linkittyvät normaalisti ja `skills/run-issues-workflow` jää asentumatta. Se ei
+  agents/commands linkittyvät normaalisti ja `skills/claude-issue-runner` jää asentumatta. Se ei
   ole bugi vaan odotettu välitila: korjaus (skills-hakemiston jako per-tiedosto/per-hakemisto
   -symlinkeiksi) on dotfiles-repon puolen työ, samoin kuin agents/commands aikanaan.
+- **Skillin sisältö on kahden vartijan varassa.** `tests/test-skill-labels.sh` johtaa
+  labelisanaston koodista (poimintakysely, `labels_*`-kutsujen labeliargumentit, `*_LABEL`-arvot,
+  konfiguroitavien oletukset) ja vaatii skilliltä jokaisen — **koodiin lisätty label ilman
+  skill-riviä on punainen testi**, ei hiljainen ajautuma. Fail-closed: jos johdettu joukko kutistuu
+  alle kahdeksan alkion tai ankkuri `needs-human` katoaa, testi kaatuu sen sijaan että läpäisisi
+  tyhjästä. `tests/test-skill-surface.sh` tekee saman komento- ja skriptipinnalle molempiin
+  suuntiin (skillin nimeämä `/komento` ⇒ `commands/<nimi>.md` olemassa; toimitettu komento ⇒
+  skillissä nimetty, pois lukien perusteltu poissulkulista). Tunnettu kytkös: **avoin #99**
+  muuttaisi poimintaehdot ja lisäisi `auto-claimed`-labelin — skillin päivitys kuuluu #99:n
+  scopeen, ja vartijat menevät punaisiksi siihen asti. Se on suunniteltua.
 - **`install.sh --uninstall` puuttuu.** Paketin omistamien symlinkkien poisto on tehtävä
   käsin. Omistajuuspredikaatti (symlinkin kohde paketin juuren sisällä) riittäisi sellaisenaan
   toteutukseen.

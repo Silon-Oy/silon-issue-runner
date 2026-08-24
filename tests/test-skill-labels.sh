@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-skill-labels.sh — the run-issues-workflow skill is a THIRD copy of the
+# test-skill-labels.sh — the claude-issue-runner skill is a THIRD copy of the
 # label conventions (README §6.3 and CLAUDE.md are the other two). It is the
 # most dangerous copy to let drift: it loads into a session in a FOREIGN repo,
 # where the reader has no README beside them to cross-check. This test pins the
@@ -15,6 +15,10 @@
 #   c) the pickup query's negative label terms (-label:waiting -label:wip
 #      -label:<clean>) in lib/issue.sh match the labels the skill claims block
 #      pickup
+#   d) BIDIRECTIONAL coverage: the FULL label vocabulary derived from the code
+#      is named in the skill. (a)-(c) only walk skill→code, so a label added to
+#      the code would silently never reach the skill; case 5 walks code→skill
+#      and turns that into a red test.
 #
 # This test WRITES NOTHING and needs no $HOME. It only reads repository files.
 #
@@ -26,7 +30,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 FAIL=0
 
-SKILL="$ROOT/skills/run-issues-workflow/SKILL.md"
+SKILL="$ROOT/skills/claude-issue-runner/SKILL.md"
 ISSUE_LIB="$ROOT/lib/issue.sh"
 
 # ---- Case 1: skill exists ----
@@ -38,7 +42,7 @@ if [ ! -s "$SKILL" ]; then
   echo "skill-labels: FAILURES"
   exit 1
 fi
-echo "PASS: run-issues-workflow/SKILL.md exists and is non-empty"
+echo "PASS: claude-issue-runner/SKILL.md exists and is non-empty"
 
 # Sources in which a label literal is considered "present in the code". Kept
 # broad on purpose: the point is that the label is real, not where it lives.
@@ -113,6 +117,82 @@ else
       echo "FAIL: pickup-blocker '$lbl' from the query is not named in the skill"; FAIL=1
     fi
   done <<< "$NEG_LABELS"
+fi
+
+# ---- Case 5: the code's full label vocabulary is named in the skill ----
+# Cases 2-4 walk skill→code. This one walks code→skill: derive every label the
+# package actually writes or filters on, and require the skill to name each. A
+# new label introduced in the code without a skill row is a red test.
+#
+# Four derivation sources, because no single one is complete:
+#   1. the pickup query's literal -label: terms          (lib/issue.sh)
+#   2. the label ARGUMENT of every labels_add/remove/ensure call site
+#      (lib/*.sh + root *.sh, minus lib/labels.sh which defines them). Read
+#      POSITIONALLY (add/remove: 3rd arg, ensure: 2nd arg) so a Finnish label
+#      DESCRIPTION string is never mistaken for a label name.
+#   3. *_LABEL="<literal>" assignments (the fixed names held in variables)
+#   4. the documented defaults of the configurable ones, incl. the poller's
+#      default pickup label
+
+derived_labels() {
+  {
+    # 1. pickup query literals (the ${clean_label} term is a variable → source 4)
+    grep -hE 'is:open no:assignee .*-is:blocked' "$ISSUE_LIB" \
+      | grep -v '^[[:space:]]*#' \
+      | grep -oE -- '-label:[a-z][a-z0-9-]*' | sed 's/^-label://'
+
+    # 2. label argument of each call site, by position. awk locates the call
+    # token itself and steps to its label argument — a `sed` cut on the line
+    # would mis-fire on wrappers like `do_or_dry remote "unlabel" labels_remove …`
+    # and on any line where the call is not the first token.
+    for f in "${CODE_FILES[@]}"; do
+      case "$f" in */lib/labels.sh) continue ;; esac
+      [ -f "$f" ] || continue
+      grep -v '^[[:space:]]*#' "$f" | awk '
+        {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "labels_add" || $i == "labels_remove") off = 3
+            else if ($i == "labels_ensure") off = 2
+            else continue
+            if (i + off <= NF) print $(i + off)
+          }
+        }' | tr -d '"'"'"'\\'
+    done
+
+    # 3. fixed names held in *_LABEL variables
+    grep -hoE '[A-Z_]*LABEL="[a-z][a-z0-9-]*"' "${CODE_FILES[@]}" 2>/dev/null \
+      | sed 's/.*="//; s/"$//'
+
+    # 4. documented defaults of the configurable labels + the poller's default
+    grep -hoE '\$\{RUN_ISSUES_CLEAN_LABEL:-[a-z][a-z0-9-]*\}' "${CODE_FILES[@]}" 2>/dev/null \
+      | sed 's/.*:-//; s/}$//'
+    grep -hoE '\$\{PR_WATCH_MERGE_LABEL:-[a-z][a-z0-9-]*\}' "${CODE_FILES[@]}" 2>/dev/null \
+      | sed 's/.*:-//; s/}$//'
+    grep -hoE 'default_labels // \["[a-z][a-z0-9-]*"\]' "$ROOT/poller.sh" 2>/dev/null \
+      | sed 's/.*\["//; s/"\]//'
+  } | grep -E '^[a-z][a-z0-9-]*$' | sort -u
+}
+
+DERIVED="$(derived_labels)"
+DERIVED_COUNT="$(printf '%s\n' "$DERIVED" | grep -c '[a-z]')"
+
+# FAIL-CLOSED: a derivation that silently stopped matching would let the skill
+# pass with an EMPTY expectation set — the exact failure this case exists to
+# prevent. Require a plausible floor and a known anchor before comparing.
+if [ "$DERIVED_COUNT" -lt 8 ] || ! printf '%s\n' "$DERIVED" | grep -qx 'needs-human'; then
+  echo "FAIL: label derivation broke — got $DERIVED_COUNT label(s), anchor 'needs-human' missing?"
+  printf '%s\n' "$DERIVED" | sed 's/^/      derived: /'
+  FAIL=1
+else
+  echo "PASS: derived $DERIVED_COUNT labels from the code ($(printf '%s' "$DERIVED" | tr '\n' ' '))"
+  while IFS= read -r lbl; do
+    [ -n "$lbl" ] || continue
+    if label_in_skill "$lbl"; then
+      echo "PASS: code label '$lbl' is named in the skill"
+    else
+      echo "FAIL: code label '$lbl' is NOT named in the skill"; FAIL=1
+    fi
+  done <<< "$DERIVED"
 fi
 
 echo "----------------------------------------"

@@ -337,7 +337,7 @@ if [ -L "$H9/.claude/skills" ] && [ "$(readlink "$H9/.claude/skills")" = "$H9/fo
 else
   echo "FAIL: case9 foreign skills symlink was modified"; FAIL=1
 fi
-if [ ! -e "$H9/foreign-skills/run-issues-workflow" ]; then
+if [ ! -e "$H9/foreign-skills/claude-issue-runner" ]; then
   echo "PASS: case9 nothing was written through the foreign symlink"
 else
   echo "FAIL: case9 the installer wrote through the foreign skills symlink"; FAIL=1
@@ -369,7 +369,7 @@ if [ -d "$H10/.claude/skills/foreign-skill" ] && [ ! -L "$H10/.claude/skills/for
 else
   echo "FAIL: case10 foreign real skill directory was modified"; FAIL=1
 fi
-if [ -L "$H10/.claude/skills/run-issues-workflow" ]; then
+if [ -L "$H10/.claude/skills/claude-issue-runner" ]; then
   echo "PASS: case10 shipped skill still linked"
 else
   echo "FAIL: case10 shipped skill not linked"; FAIL=1

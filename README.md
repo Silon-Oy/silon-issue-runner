@@ -691,19 +691,26 @@ Kaksi asiaa kannattaa muistaa ajaessa käsin:
 - **Pollerit ovat konelukittuja.** Ne vertaavat konenimeä muuttujaan
   `RUN_ISSUES_POLLER_HOSTS` ja exittaavat hiljaa nollalla, jos osumaa ei tule (osio 8).
 
-### 6.9 Skill: `run-issues-workflow`
+### 6.9 Skill: `claude-issue-runner`
 
-Poiminta- ja labelointipäätökset (6.2–6.5) tehdään silloin kun issue **luodaan** —
-kohderepossa, jossa tätä README:tä ei ole vieressä. Sitä hetkeä varten paketti toimittaa
-skillin [`skills/run-issues-workflow/SKILL.md`](skills/run-issues-workflow/SKILL.md), jonka
-`install.sh` linkittää polkuun `$HOME/.claude/skills/` samalla ajolla kuin agentit ja
-slash-komennot. Skill on siis **globaalisti käytettävissä** kaikissa repoissa, ei vain tässä.
+Päätökset järjestelmästä tehdään **kohderepossa**, jossa tätä README:tä ei ole vieressä: siellä
+kirjoitetaan ja labeloidaan issue, ja siellä törmätään siihen mitä automaatio on jättänyt
+jälkeensä. Sitä hetkeä varten paketti toimittaa skillin
+[`skills/claude-issue-runner/SKILL.md`](skills/claude-issue-runner/SKILL.md), jonka `install.sh`
+linkittää polkuun `$HOME/.claude/skills/` samalla ajolla kuin agentit ja slash-komennot. Skill
+on siis **globaalisti käytettävissä** kaikissa repoissa, ei vain tässä.
 
-Se latautuu Claude-sessioon progressiivisesti silloin kun teet issue-työtä vieraassa repossa
-(näet `auto-run`-labelin, `run.json`-artefaktin tai PR-vahdin) ja kattaa kaksi näkökulmaa:
-issuen kirjoittamisen niin että runner poimii sen, ja triagen "miksi issueni ei lähde ajoon".
-Se **ei** kata tilakonetta, exit-koodeja eikä `lib/`-rakennetta — ne ovat tämän paketin
-anatomiaa ja kuvattu tässä dokumentissa ja `CLAUDE.md`:ssä.
+Se latautuu Claude-sessioon progressiivisesti silloin kun näet järjestelmän jäljen (label,
+`auto-run/`-haara, `run.json`, markerikommentti, botin avaama PR) ja kattaa kuusi asiaa:
+järjestelmän **tunnistamisen**, koko **labelisanaston** omistajuuksineen, **poimintaehdot**,
+**riippuvuudet ja epicit**, **ongelmatilanteiden purkamisen** (mitä näet → mitä teet) sekä
+**komennot ja skriptit**. Rajanveto tähän dokumenttiin: skill on päätöskriittinen ydin, README
+täysi lähde. Skill **ei** kata tilakonetta, exit-koodeja, `lib/`-rakennetta, asennusta,
+turvamallia, LaunchAgenteja eikä statussivua — ne ovat tämän paketin anatomiaa ja kuvattu tässä
+dokumentissa ja `CLAUDE.md`:ssä.
+
+Sisällön ajantasaisuutta vartioivat `tests/test-skill-labels.sh` (labelisanasto molempiin
+suuntiin) ja `tests/test-skill-surface.sh` (komento- ja skriptipinta molempiin suuntiin).
 
 Ylläpitäjän koneella, jolla `$HOME/.claude/skills` on hakemistosymlinkki dotfilesiin, skill ei
 asennu automaattisesti: `install.sh` tulostaa siitä `CONFLICT`-rivin ja exit-koodin 4, mutta
