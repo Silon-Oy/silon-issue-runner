@@ -549,10 +549,24 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     [ -n "$issue_states" ] || issue_states="{}"
 
     # Emit this owner's epics to the top-level epics[] accumulator, injecting the
-    # repo_slug the page groups by (issue #79). One JSONL line per epic.
+    # repo_slug the page groups by (issue #79). One JSONL line per epic. Each
+    # sub-issue ALSO gets a repo_slug (issue #92): its home owner/repo mapped to
+    # the local slug via OWNER_SLUG_JSON (a cross-repo child in a locally-run repo
+    # joins to its own run and group), falling back to the epic's slug when the
+    # child is same-repo and to the repo basename when the child repo has no local
+    # run. repo_slug is a LOCAL concept, so it is injected here at emit — never in
+    # the cached GitHub payload.
     slug_for_epic="$(printf '%s' "$OWNER_SLUG_JSON" | jq -r --arg o "$owner" '.[$o] // ""' 2>/dev/null || true)"
-    printf '%s' "$epics" | jq -c --arg slug "$slug_for_epic" \
-      'if type == "array" then .[] else empty end | {repo_slug: $slug} + .' \
+    printf '%s' "$epics" | jq -c --arg slug "$slug_for_epic" --argjson om "$OWNER_SLUG_JSON" '
+      if type == "array" then .[] else empty end
+      | .sub_issues = ((.sub_issues // []) | map(
+          . + {repo_slug: (
+            (.repo // "") as $r
+            | if $r == "" then $slug
+              elif ($om[$r] // "") != "" then $om[$r]
+              else ($r | sub(".*/"; ""))
+              end)}))
+      | {repo_slug: $slug} + .' \
       >> "$EPICS_FILE" 2>/dev/null || true
 
     age=$((NOW_EPOCH - fetched_epoch))

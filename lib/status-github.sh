@@ -254,7 +254,10 @@ status_github_fetch_epics() {
 # resolver lib/issue.sh:list_epic_children (issue #91: the view no longer owns a
 # second resolution — no direct /sub_issues call, no task-list parsing here) and
 # return the resolved epic array:
-#   [{epic_number, epic_title, epic_url, sub_issues:[{number,state}], source}]
+#   [{epic_number, epic_title, epic_url, sub_issues:[{number,state,repo}], source}]
+# where sub_issues[].repo is the child's home owner/repo (issue #92) so a
+# cross-repo child is distinguishable; status.sh maps it to a local repo_slug at
+# emit time (repo_slug stays a LOCAL concept, out of the cached GitHub payload).
 # `source` is "sub_issues", "task_list", or "unreadable". The last is the view's
 # FAIL-CLOSED marker (issue #91 AC4): when the native sub-issues read fails,
 # list_epic_children returns rc 2 and we surface an unreadable epic with an empty
@@ -293,11 +296,13 @@ status_github_build_epics() {
       # Fail-closed: an unreadable native graph does NOT degrade to the task list.
       sub='[]'; source="unreadable"
     else
-      # TSV (<number>\t<state>\t<labels>\t<title>) → [{number,state}] only, so no
-      # label/title leaks into the payload (the schema carries number+state). The
-      # jq program is ONE line on purpose: a multi-line single-quoted program
-      # inside "$(…)" is mis-parsed by bash 3.2 (macOS).
-      sub="$(printf '%s' "$lines" | jq -R -s -c '[ split("\n")[] | select(length > 0) | split("\t") | select(length >= 2 and (.[0] | test("^[0-9]+$"))) | {number: (.[0] | tonumber), state: .[1]} ]' 2>/dev/null || printf '[]')"
+      # TSV (<number>\t<state>\t<labels>\t<owner/repo>\t<title>) → [{number,state,repo}]
+      # only, so no label/title leaks into the payload (the schema carries
+      # number+state+repo; repo is the child's home owner/repo, issue #92 — a
+      # cross-repo child is distinguishable in the view). The jq program is ONE
+      # line on purpose: a multi-line single-quoted program inside "$(…)" is
+      # mis-parsed by bash 3.2 (macOS).
+      sub="$(printf '%s' "$lines" | jq -R -s -c '[ split("\n")[] | select(length > 0) | split("\t") | select(length >= 5 and (.[0] | test("^[0-9]+$"))) | {number: (.[0] | tonumber), state: .[1], repo: .[3]} ]' 2>/dev/null || printf '[]')"
       [ -n "$sub" ] || sub='[]'
     fi
     obj="$(jq -nc --argjson num "$num" --arg title "$title" \

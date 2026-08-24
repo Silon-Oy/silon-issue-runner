@@ -45,7 +45,8 @@
 #      "<script>" is shown as text and never executes. The JS never iterates the
 #      run or github object, so a field the schema grows later cannot leak. The
 #      epics[] lane (#79) reads only its named fields too — repo_slug, epic_number,
-#      epic_title, epic_url, sub_issues[].{number,state}, source — the same way.
+#      epic_title, epic_url, sub_issues[].{number,state,repo,repo_slug}, source —
+#      the same way (sub_issues[].repo/repo_slug added for cross-repo, issue #92).
 #
 # EPIC ROLLUP (#79). status.sh --github also emits a top-level epics[] list (open
 # epic-labelled issues + their sub-issues). The JS renders one lane per epic
@@ -363,6 +364,8 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .epic-sub.done .done-title{text-decoration:line-through;color:var(--muted)}
 .epic-sub.queued{color:var(--muted)}
 .epic-sub-state{color:var(--muted);font-size:.82rem}
+.epic-sub-repo{font-size:.7rem;padding:.02rem .3rem;border-radius:3px;
+  background:var(--border);color:var(--muted);white-space:nowrap}
 a{color:var(--link);text-decoration:none}
 a:hover{text-decoration:underline}
 .empty{color:var(--muted);padding:1rem 0}
@@ -800,6 +803,10 @@ a:hover{text-decoration:underline}
   // --- epic rollup (#79) ------------------------------------------------
   // subKey(repo_slug, number) — the join key between a sub-issue and its run.
   function subKey(slug, n){ return (slug || "(tuntematon repo)") + "#" + n; }
+  // subSlug(e, s) — the repo_slug a sub-issue joins under (issue #92): its own
+  // repo_slug when present (a cross-repo child lives in a different repo group and
+  // joins to a run there), else the epic's repo_slug (same-repo child).
+  function subSlug(e, s){ return (s && s.repo_slug) ? s.repo_slug : e.repo_slug; }
 
   // A run is "live" when it is not in the cleanup class (a finished run lingering
   // on disk). A closed sub-issue keeps its lane row (ack) while the epic is open.
@@ -814,7 +821,7 @@ a:hover{text-decoration:underline}
     if (e.source === "unreadable") return true;
     var subs = e.sub_issues || [];
     if (subs.some(function(s){ return s.state === "open"; })) return true;
-    return subs.some(function(s){ return isLiveRun(runByKey[subKey(e.repo_slug, s.number)]); });
+    return subs.some(function(s){ return isLiveRun(runByKey[subKey(subSlug(e, s), s.number)]); });
   }
 
   function renderEpicLane(e, runByKey){
@@ -856,14 +863,19 @@ a:hover{text-decoration:underline}
     // sub-issue is the nearest PRECEDING still-open sub-issue.
     var blocker = null;
     subs.forEach(function(s){
-      var r = runByKey[subKey(e.repo_slug, s.number)];
+      var r = runByKey[subKey(subSlug(e, s), s.number)];
       var title = r ? ghTitle(r.github) : null;
+      // Cross-repo children (issue #92): a sub in a different repo than the epic
+      // is tagged with its repo so the lane distinguishes it. Same-repo subs get
+      // no tag (the lane already sits in that repo's group).
+      var crossRepo = s.repo_slug && s.repo_slug !== e.repo_slug ? s.repo_slug : null;
       var row;
       if (s.state === "closed") {
         // Acknowledgement row: strikethrough, green check. Stays while epic open.
         row = el("div", "epic-sub done");
         row.appendChild(el("span", "epic-mark", "✓"));
         row.appendChild(r ? link(r.issue_url, "#" + s.number) : el("span", "epic-sub-num", "#" + s.number));
+        if (crossRepo) row.appendChild(el("span", "epic-sub-repo", crossRepo));
         if (title) row.appendChild(el("span", "epic-sub-title done-title", title));
         lane.appendChild(row);
         return;   // closed subs do not shift the blocker
@@ -873,6 +885,7 @@ a:hover{text-decoration:underline}
         row = el("div", "epic-sub active");
         row.appendChild(el("span", "epic-mark", "▶"));
         row.appendChild(link(r.issue_url, "#" + s.number + " ↗"));
+        if (crossRepo) row.appendChild(el("span", "epic-sub-repo", crossRepo));
         row.appendChild(el("span", "epic-sub-state", reasonInfo(r.class_reason).label));
         if (title) row.appendChild(el("span", "epic-sub-title", title));
       } else {
@@ -881,6 +894,7 @@ a:hover{text-decoration:underline}
         row = el("div", "epic-sub queued");
         row.appendChild(el("span", "epic-mark", "•"));
         row.appendChild(r ? link(r.issue_url, "#" + s.number) : el("span", "epic-sub-num", "#" + s.number));
+        if (crossRepo) row.appendChild(el("span", "epic-sub-repo", crossRepo));
         row.appendChild(el("span", "epic-sub-state",
           blocker != null ? ("jonossa · estäjä #" + blocker) : "odottaa poimintaa"));
         if (title) row.appendChild(el("span", "epic-sub-title", title));
@@ -935,7 +949,9 @@ a:hover{text-decoration:underline}
       var k = e.repo_slug || "(tuntematon repo)";
       (epicsByRepo[k] = epicsByRepo[k] || []).push(e);
       if (!epicLaneVisible(e, runByKey)) return;
-      (e.sub_issues || []).forEach(function(s){ epicMember[subKey(k, s.number)] = true; });
+      // Dedup by the sub-issue's OWN repo_slug (issue #92): a cross-repo child's
+      // run lives in a different repo group and must be deduped out of THAT group.
+      (e.sub_issues || []).forEach(function(s){ epicMember[subKey(subSlug(e, s), s.number)] = true; });
     });
 
     // Group by repo_slug. allRuns drives counts + ordering; rows excludes runs
