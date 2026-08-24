@@ -320,15 +320,17 @@ is_epic() {
 # Resolves the child issues of epic N and prints one TAB-separated line per
 # child on stdout:
 #
-#   <number>\t<state>\t<labels-csv>\t<title>
+#   <number>\t<state>\t<labels-csv>\t<owner/repo>\t<title>
 #
-# where <state> is "open"/"closed". This is the SINGLE shared resolver every
-# consumer uses — the running poller (lib/epic.sh), /run-epic (run-epic.sh, its
-# --stop path), AND Ohjaamo's V4 epic view (lib/status-github.sh) — so no two can
-# disagree about which issues belong to an epic (AC5, docs/epic-orchestration.md
-# §1.3; issue #91 wired the view onto it). Returns 0 on a successful read
-# (including the empty case — an epic with no children prints nothing), 2 when the
-# read failed (fail-closed: the caller must not treat "unreadable" as "done").
+# where <state> is "open"/"closed" and <owner/repo> is the child's HOME repo (the
+# repo the child lives in, NOT necessarily the epic's repo — see cross-repo
+# below). This is the SINGLE shared resolver every consumer uses — the running
+# poller (lib/epic.sh), /run-epic (run-epic.sh, its --stop path), AND Ohjaamo's V4
+# epic view (lib/status-github.sh) — so no two can disagree about which issues
+# belong to an epic (AC5, docs/epic-orchestration.md §1.3; issue #91 wired the
+# view onto it). Returns 0 on a successful read (including the empty case — an epic
+# with no children prints nothing), 2 when the read failed (fail-closed: the
+# caller must not treat "unreadable" as "done").
 #
 # Resolution order (docs/epic-orchestration.md §1.2): native GitHub sub-issues
 # are CANONICAL. The body task-list is read ONLY as a fallback, and ONLY when
@@ -344,29 +346,37 @@ is_epic() {
 # FALLBACK STATE IS AUTHORITATIVE (issue #91). A task-list child's state is
 # NEVER inferred from the checkbox alone — the box can lie (a `[ ]` on an issue
 # that is actually closed, or a `[x]` on one still open). It is resolved against
-# the set of OPEN issues in the repo: number IN the open set => "open"; NOT in the
-# set + `[x]` => "closed" (done; the closed issue is absent from the open list);
+# the set of OPEN issues in the child's HOME repo: number IN the open set =>
+# "open"; NOT in the set + `[x]` => "closed" (done; absent from the open list);
 # NOT in the set + `[ ]` => SKIPPED (the reference does not resolve to a real open
-# issue). The open set is INJECTED by the view (--open-map, which already has it,
-# so no extra call) or, when absent, fetched once by this function — and a failed
-# fetch is fail-closed (rc 2), so a legacy epic can never announce false
-# completion off an unreadable open list.
+# issue). The epic-repo open set is INJECTED by the view (--open-map, which
+# already has it, so no extra call) or, when absent, fetched once by this
+# function; a cross-repo child's open set is fetched once PER repo. A failed fetch
+# is fail-closed (rc 2), so a legacy epic can never announce false completion off
+# an unreadable open list.
 #
-# Cross-repo children are out of scope (Rajaukset): a native child in another
-# repo is filtered out (and would otherwise be mislabelled in the epic's OWN
-# repo, since propagation writes with the epic's owner/repo), and a fallback
-# `owner/repo#N` reference is skipped. Both cases emit a one-line warning on
-# stderr so the exclusion is visible, never silent. The view filters IDENTICALLY
-# because it goes through this same function (issue #91 AC5).
+# CROSS-REPO CHILDREN ARE SUPPORTED (issue #92). GitHub's sub-issue relation
+# permits a child in another repo; the epic layer handles it in the child's OWN
+# repo (propagation, escalation, completion all target owner/repo per child — the
+# repo travels in the TSV so every consumer targets the right repo). A native
+# child in another repo is kept with its own owner/repo (from repository_url); a
+# fallback `owner/repo#N` reference is kept with that owner/repo. What stays out of
+# scope is a cross-repo WORKTREE / single PR — each child still runs in its own
+# repo as its own run (docs/epic-orchestration.md Scope-out). The view resolves
+# IDENTICALLY because it goes through this same function (issue #91 AC5).
 #
 # The function binds NO identity — the caller chooses (issue #91 edge case): the
 # run side uses the plain gh-CLI (a pick-time read, like is_epic); the view passes
-# `--gh-runner gha_with_token` so the App identity is honoured. OPTIONS (after the
-# optional <owner/repo> positional):
+# `--gh-runner gha_with_token` so the App identity is honoured. NOTE (issue #92
+# edge): the App token is per-org, so a cross-repo child in ANOTHER org is read
+# with a token minted for the wrong org and its open-set fetch may fail — that is
+# fail-closed (rc 2), never a silent wrong answer. OPTIONS (after the optional
+# <owner/repo> positional):
 #   --gh-runner <fn>    command prefix to invoke gh (default: none → plain `gh`)
 #   --body <text>       pre-fetched epic body → skip the fallback `gh issue view`
-#   --open-map <json>   {"<num>":…,…} open-issue set for authoritative fallback
-#                       state; when absent this function fetches it once itself
+#   --open-map <json>   {"<num>":…,…} open-issue set of the EPIC's repo for
+#                       authoritative fallback state; when absent this function
+#                       fetches it once itself (cross-repo children always fetched)
 #   --source-file <p>   path to write the resolution source ("sub_issues" /
 #                       "task_list") so a caller running via $(…) can read it back
 list_epic_children() {
@@ -393,15 +403,6 @@ list_epic_children() {
   local -a ghc
   if [ -n "$gh_runner" ]; then ghc=("$gh_runner" gh); else ghc=(gh); fi
 
-  # Expected owner/repo for the cross-repo filter. In multi-remote mode it is
-  # passed explicitly; in origin mode it is empty, so resolve it once from the
-  # working copy (cheap, cached for the call) — otherwise a native cross-repo
-  # child could be labelled against the epic's repo by number.
-  local expected="$owner_repo"
-  if [ -z "$expected" ]; then
-    expected=$(cd "$repo" && "${ghc[@]}" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
-  fi
-
   local api_path
   if [ -n "$owner_repo" ]; then
     api_path="repos/$owner_repo/issues/$n/sub_issues"
@@ -422,27 +423,13 @@ list_epic_children() {
 
   if [ "$native_count" -gt 0 ]; then
     [ -n "$source_file" ] && printf 'sub_issues' > "$source_file" 2>/dev/null
-    # Warn about (and drop) any native child that lives in another repo.
-    local skipped
-    skipped=$(printf '%s' "$native" | jq -s -r --arg exp "$expected" '
+    # Each child keeps its OWN owner/repo (from repository_url), so a cross-repo
+    # child is carried through with its home repo rather than dropped (issue #92).
+    printf '%s' "$native" | jq -s -r '
       ([.[][]?] | map(select(.number != null)))
-      | map(select(($exp != "") and ((.repository_url // "" | sub(".*/repos/"; "")) != $exp)))
-      | .[] | "\(.repository_url // "" | sub(".*/repos/"; ""))#\(.number)"
-    ' 2>/dev/null || true)
-    if [ -n "$skipped" ]; then
-      local ref
-      while IFS= read -r ref; do
-        [ -n "$ref" ] || continue
-        printf 'list_epic_children: epic #%s: cross-repo child %s skipped (scope-out)\n' "$n" "$ref" >&2
-      done <<EOF
-$skipped
-EOF
-    fi
-    printf '%s' "$native" | jq -s -r --arg exp "$expected" '
-      ([.[][]?] | map(select(.number != null)))
-      | map(select($exp == "" or ((.repository_url // "" | sub(".*/repos/"; "")) == $exp)))
       | .[]
-      | [ (.number|tostring), .state, ([.labels[]?.name] | join(",")), (.title // "") ]
+      | [ (.number|tostring), .state, ([.labels[]?.name] | join(",")),
+          (.repository_url // "" | sub(".*/repos/"; "")), (.title // "") ]
       | @tsv
     ' 2>/dev/null
     return 0
@@ -459,53 +446,88 @@ EOF
 
   [ -n "$source_file" ] && printf 'task_list' > "$source_file" 2>/dev/null
 
-  # Open-issue set for authoritative fallback state. Injected by the view; else
-  # fetched lazily here on the FIRST task-list child (an empty epic body needs no
-  # open list, and must not fail on an unfetchable one). A failed fetch is
-  # fail-closed (rc 2) — see the function header.
+  # The epic's own owner/repo. Same-repo `#N` refs are labelled with it; it is
+  # resolved once here (origin mode has no explicit owner/repo).
+  local expected="$owner_repo"
+  if [ -z "$expected" ]; then
+    expected=$(cd "$repo" && "${ghc[@]}" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
+  fi
+
+  # Per-repo open-issue set cache for authoritative fallback state. The epic
+  # repo's set is injected by the view (--open-map) or fetched lazily; a cross-repo
+  # child's set is fetched once per repo and cached in this dir. A failed fetch is
+  # fail-closed (rc 2). The dir is cleaned on return (covers every return path).
+  local mapdir=""
+  mapdir=$(mktemp -d "${TMPDIR:-/tmp}/lec-maps.XXXXXX" 2>/dev/null) || mapdir=""
+  # shellcheck disable=SC2064
+  [ -n "$mapdir" ] && trap "rm -rf '$mapdir'" RETURN
+
   local openmap="$inj_openmap" openmap_ready="$have_openmap"
-  local line cbox num state title seen=" "
+  local line cbox num state title seen=" " child_repo cur_map cr_key cr_file cr_raw open_raw
   while IFS= read -r line; do
     # Require a GitHub task-list checkbox: `- [ ]` / `- [x]` (also * and +).
     [[ "$line" =~ ^[[:space:]]*[-*+][[:space:]]+\[([ xX])\][[:space:]] ]] || continue
     cbox="${BASH_REMATCH[1]}"
-    # Cross-repo `owner/repo#N` reference → skip with a warning (scope-out).
+    # Cross-repo `owner/repo#N` reference → keep it, homed in that repo (#92).
     if [[ "$line" =~ ([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+) ]]; then
-      printf 'list_epic_children: epic #%s: cross-repo child %s#%s skipped (scope-out)\n' \
-        "$n" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >&2
+      child_repo="${BASH_REMATCH[1]}"
+      num="${BASH_REMATCH[2]}"
+    elif [[ "$line" =~ \#([0-9]+) ]]; then
+      # Same-repo `#N` reference → the epic's own repo.
+      child_repo="$expected"
+      num="${BASH_REMATCH[1]}"
+    else
       continue
     fi
-    # Same-repo `#N` reference.
-    [[ "$line" =~ \#([0-9]+) ]] || continue
-    num="${BASH_REMATCH[1]}"
-    # First reference to a number wins (a body may mention an issue twice).
-    case "$seen" in *" $num "*) continue ;; esac
-    # Resolve the open set on demand, once, on the first real child.
-    if [ "$openmap_ready" -ne 1 ]; then
-      local open_raw
-      if ! open_raw=$(cd "$repo" && "${ghc[@]}" issue list $(_repo_args "$owner_repo") --state open --limit 1000 --json number 2>/dev/null); then
-        return 2
+    # First reference to a repo#number wins (dedup by owner/repo#N, issue #92:
+    # a bare number no longer uniquely identifies a child across repos).
+    case "$seen" in *" $child_repo#$num "*) continue ;; esac
+    # Resolve the open set for THIS child's repo.
+    if [ -n "$child_repo" ] && [ "$child_repo" != "$expected" ]; then
+      # Cross-repo: fetch (and cache) this repo's open set once. The cache file is
+      # only used when mapdir was created (mktemp -d succeeded); otherwise fall
+      # back to fetching each time rather than writing to a bogus path.
+      cr_key=$(printf '%s' "$child_repo" | tr '/' '_')
+      cr_file=""
+      [ -n "$mapdir" ] && cr_file="$mapdir/$cr_key"
+      if [ -n "$cr_file" ] && [ -f "$cr_file" ]; then
+        cur_map=$(cat "$cr_file")
+      else
+        if ! cr_raw=$(cd "$repo" && "${ghc[@]}" issue list --repo "$child_repo" --state open --limit 1000 --json number 2>/dev/null); then
+          return 2
+        fi
+        cur_map=$(printf '%s' "$cr_raw" | jq -c 'if type == "array" then (reduce .[] as $i ({}; .[($i.number|tostring)] = 1)) else empty end' 2>/dev/null || printf '')
+        [ -n "$cur_map" ] || return 2
+        [ -n "$cr_file" ] && printf '%s' "$cur_map" > "$cr_file"
       fi
-      openmap=$(printf '%s' "$open_raw" | jq -c 'if type == "array" then (reduce .[] as $i ({}; .[($i.number|tostring)] = 1)) else empty end' 2>/dev/null || printf '')
-      [ -n "$openmap" ] || return 2
-      openmap_ready=1
+    else
+      # Same-repo: the epic-repo open set (injected or lazily fetched once).
+      if [ "$openmap_ready" -ne 1 ]; then
+        if ! open_raw=$(cd "$repo" && "${ghc[@]}" issue list $(_repo_args "$owner_repo") --state open --limit 1000 --json number 2>/dev/null); then
+          return 2
+        fi
+        openmap=$(printf '%s' "$open_raw" | jq -c 'if type == "array" then (reduce .[] as $i ({}; .[($i.number|tostring)] = 1)) else empty end' 2>/dev/null || printf '')
+        [ -n "$openmap" ] || return 2
+        openmap_ready=1
+      fi
+      cur_map="$openmap"
     fi
     # Authoritative state (issue #91): the open set, not the checkbox.
     #   in open set          → open
     #   not in set, [x]/[X]  → closed (done; absent from the open list)
     #   not in set, [ ]      → skip (does not resolve to a real open issue)
-    if printf '%s' "$openmap" | jq -e --arg k "$num" 'has($k)' >/dev/null 2>&1; then
+    if printf '%s' "$cur_map" | jq -e --arg k "$num" 'has($k)' >/dev/null 2>&1; then
       state="open"
     elif [ "$cbox" != " " ]; then
       state="closed"
     else
       continue
     fi
-    seen="$seen$num "
-    # Title: the line minus the leading checkbox and the trailing `#N …`.
+    seen="$seen$child_repo#$num "
+    # Title: the line minus the leading checkbox and the trailing `[owner/repo]#N …`.
     title=$(printf '%s' "$line" \
-      | sed -E 's/^[[:space:]]*[-*+][[:space:]]+\[[ xX]\][[:space:]]*//; s/[[:space:]]*#[0-9]+.*$//; s/[[:space:]]*$//')
-    printf '%s\t%s\t\t%s\n' "$num" "$state" "$title"
+      | sed -E 's/^[[:space:]]*[-*+][[:space:]]+\[[ xX]\][[:space:]]*//; s/[[:space:]]*([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)?#[0-9]+.*$//; s/[[:space:]]*$//')
+    printf '%s\t%s\t\t%s\t%s\n' "$num" "$state" "$child_repo" "$title"
   done <<EOF
 $body
 EOF
