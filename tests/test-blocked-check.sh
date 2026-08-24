@@ -80,6 +80,10 @@ case "\$n" in
   4) exit 22 ;;                    # HTTP/network failure surface
   5) printf 'garbage\n'; exit 0 ;; # rc 0 but non-numeric body
   6) emit_jq '[{"state":"open"}]' ;;
+  # Cross-repo blocker (issue #92): the dependencies API returns a blocker that
+  # lives in ANOTHER repo. count_open_blockers must still count it (a cross-repo
+  # blocker must not be lost — the issue stays blocked). AC4.
+  10) emit_jq '[{"state":"open","repository_url":"https://api.github.com/repos/other/repo"}]' ;;
   *) echo "mock gh: unexpected issue '\$n' (path=\$path)" >&2; exit 99 ;;
 esac
 SH
@@ -160,6 +164,17 @@ if grep -qF 'repos/{owner}/{repo}/issues/2/dependencies/blocked_by' "$PATHLOG"; 
 else
   fail "empty owner/repo: expected placeholder path, got: $(cat "$PATHLOG")"
 fi
+
+# --- 8. cross-repo blocker → still counted, issue stays blocked (issue #92) ---
+# The blocked_by dependency graph can point at a blocker in ANOTHER repo. S2b must
+# not lose it: count_open_blockers counts every OPEN blocker regardless of repo,
+# so the dependent issue is held back exactly as for a same-repo blocker (AC4).
+set +e
+out=$(count_open_blockers "$REPO" 10); rc=$?
+set -e
+{ [ "$rc" = "0" ] && [ "$out" = "1" ]; } \
+  && pass "cross-repo blocker counted → issue stays blocked (AC4, #92)" \
+  || fail "cross-repo blocker: expected 1/rc0 (still blocked), got [$out]/rc$rc"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "blocked-check: all passed" || echo "blocked-check: FAILURES"

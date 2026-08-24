@@ -45,6 +45,7 @@ mkdir -p "$STATE/labels" "$STATE/body" "$STATE/title" "$STATE/state" \
          "$STATE/exists" "$STATE/subissues_fail" "$STATE/blockers_fail"
 REC="$WORK/rec"; mkdir -p "$REC"
 : > "$REC/labels_add"     # <number>:<csv>
+: > "$REC/labels_add_repo" # <owner/repo>#<number>:<csv> (issue #92)
 : > "$REC/labels_ensure"  # <label>
 : > "$REC/labels_remove"  # <number>:<label>
 : > "$REC/orchestrate"    # start-now shim arg line
@@ -138,12 +139,14 @@ case "\$sub" in
         if [ -n "\$expr" ]; then printf '%s' "\$arr" | jq -r "\$expr"; else printf '%s' "\$arr"; fi ;;
       *"/issues/"*"/labels")
         n="\${path##*/issues/}"; n="\${n%%/*}"
+        orepo="\${path#repos/}"; orepo="\${orepo%%/issues/*}"
         added=""; prev=""
         for a in "\$@"; do
           if [ "\$prev" = "-f" ]; then case "\$a" in labels\\[\\]=*) lbl="\${a#labels[]=}"; [ -z "\$added" ] && added="\$lbl" || added="\$added,\$lbl";; esac; fi
           prev="\$a"
         done
         printf '%s:%s\n' "\$n" "\$added" >> "\$REC/labels_add"
+        printf '%s#%s:%s\n' "\$orepo" "\$n" "\$added" >> "\$REC/labels_add_repo"
         cur=""; [ -f "\$STATE/labels/\$n" ] && cur="\$(cat "\$STATE/labels/\$n")"
         IFS=','; for lbl in \$added; do case ",\$cur," in *",\$lbl,"*) : ;; *) [ -z "\$cur" ] && cur="\$lbl" || cur="\$cur,\$lbl";; esac; done; unset IFS
         printf '%s' "\$cur" > "\$STATE/labels/\$n" ;;
@@ -183,7 +186,7 @@ adds_for() { grep -c "^$1:" "$REC/labels_add" 2>/dev/null; true; }
 removes_for() { grep -c "^$1:" "$REC/labels_remove" 2>/dev/null; true; }
 # first line number in the labels_remove record whose issue is $1 (0 if absent).
 remove_line() { grep -n "^$1:" "$REC/labels_remove" 2>/dev/null | head -1 | cut -d: -f1; }
-reset_rec() { : > "$REC/labels_add"; : > "$REC/labels_ensure"; : > "$REC/labels_remove"; : > "$REC/orchestrate"; : > "$REC/stoprun"; }
+reset_rec() { : > "$REC/labels_add"; : > "$REC/labels_add_repo"; : > "$REC/labels_ensure"; : > "$REC/labels_remove"; : > "$REC/orchestrate"; : > "$REC/stoprun"; }
 
 # ===========================================================================
 # 1. Happy path — dry-run reports and writes nothing (AC2)
@@ -483,6 +486,57 @@ else
 fi
 grep -q 'stop-run.sh' "$RUN_EPIC" && pass "AC3: run-epic.sh delegates live-run stop to stop-run.sh" \
   || fail "AC3: run-epic.sh does not reference stop-run.sh"
+
+# ===========================================================================
+# 11. Cross-repo epic (issue #92): children in two repos validate, propagate to
+#     EACH child's OWN repo, and the report groups by repo + warns about repos no
+#     local poller watches.
+# ===========================================================================
+# Make REPO a real git clone with origin=silon-oy/demo so the watchlist resolver
+# maps its remote to an owner/repo (resolve_remote_to_owner_repo uses real git).
+git -C "$REPO" init -q 2>/dev/null || true
+git -C "$REPO" remote remove origin 2>/dev/null || true
+git -C "$REPO" remote add origin https://github.com/silon-oy/demo.git 2>/dev/null || true
+
+# Watchlist covers only silon-oy/demo (via REPO's origin). other/repo is NOT
+# watched → the report must name its child as "not run here".
+WL="$WORK/watchlist.json"
+cat > "$WL" <<JSON
+{"default_labels":["auto-run"],"repos":[{"path":"$REPO","remotes":["origin"]}]}
+JSON
+
+seed_title 190 "Cross-repo epic"; seed_labels 190 "epic,auto-run"; seed_state 190 OPEN
+seed_subs 190 '[
+  {"number":701,"state":"open","title":"Local base","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":702,"state":"open","title":"Cross child","labels":[],"repository_url":"https://api.github.com/repos/other/repo"}
+]'
+touch "$STATE/exists/701" "$STATE/exists/702"
+# no blockers for either → both runnable
+reset_rec
+out=$(RUN_ISSUES_WATCHLIST="$WL" run_epic 190 --repo "$REPO" 2>&1); rc=$?
+[ "$rc" = 0 ] && pass "cross-repo epic validates + applies (exit 0), not rejected (AC4)" \
+  || fail "cross-repo epic exited $rc (out: $out)"
+# AC1: each child labelled in its OWN repo.
+grep -q "^silon-oy/demo#701:.*auto-run" "$REC/labels_add_repo" \
+  && pass "cross-repo: 701 labelled in silon-oy/demo" \
+  || fail "cross-repo: 701 not labelled in silon-oy/demo (rec: $(cat "$REC/labels_add_repo"))"
+grep -q "^other/repo#702:.*auto-run" "$REC/labels_add_repo" \
+  && pass "cross-repo: 702 labelled in its OWN repo other/repo (AC1)" \
+  || fail "cross-repo: 702 not labelled in other/repo (rec: $(cat "$REC/labels_add_repo"))"
+# AC4: report groups by repo.
+printf '%s\n' "$out" | grep -q "silon-oy/demo:" \
+  && printf '%s\n' "$out" | grep -q "other/repo:" \
+  && pass "cross-repo: report groups children by repo (AC4)" \
+  || fail "cross-repo: report not grouped by repo (out: $out)"
+# AC2: the watchlist warning names the child whose repo no local poller watches.
+printf '%s\n' "$out" | grep -qi "NOT RUN HERE" \
+  && printf '%s\n' "$out" | grep -q "other/repo#702" \
+  && pass "cross-repo: report warns other/repo#702 is not run on this machine (AC2)" \
+  || fail "cross-repo: watchlist warning missing (out: $out)"
+# The watched repo's child is NOT named in the warning.
+printf '%s\n' "$out" | grep -i "NOT RUN HERE" | grep -q "701" \
+  && fail "cross-repo: 701 (watched) wrongly named in the not-run warning" \
+  || pass "cross-repo: watched child 701 not flagged as un-run"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "run-epic: all passed" || echo "run-epic: FAILURES"

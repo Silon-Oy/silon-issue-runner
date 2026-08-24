@@ -45,6 +45,7 @@ pass() { echo "PASS: $*"; }
 STATE="$WORK/state"; mkdir -p "$STATE/labels" "$STATE/body" "$STATE/title" "$STATE/comments" "$STATE/subissues"
 REC="$WORK/rec";     mkdir -p "$REC"
 : > "$REC/labels_add"      # lines: <number>:<csv>
+: > "$REC/labels_add_repo" # lines: <owner/repo>#<number>:<csv> (issue #92)
 : > "$REC/labels_ensure"   # lines: <label>
 : > "$REC/comment_post"    # lines: <number>
 : > "$REC/search"          # lines: the epic_list_open --search string
@@ -151,6 +152,9 @@ case "\$sub" in
       *"/issues/"*"/labels")
         # labels_add: -f labels[]=X ...
         n="\${path##*/issues/}"; n="\${n%%/*}"
+        # owner/repo segment of the path, so a test can assert a cross-repo child
+        # (issue #92) was labelled in its OWN repo, not the epic's.
+        orepo="\${path#repos/}"; orepo="\${orepo%%/issues/*}"
         added=""; prev=""
         for a in "\$@"; do
           if [ "\$prev" = "-f" ]; then
@@ -159,6 +163,7 @@ case "\$sub" in
           prev="\$a"
         done
         printf '%s:%s\n' "\$n" "\$added" >> "\$REC/labels_add"
+        printf '%s#%s:%s\n' "\$orepo" "\$n" "\$added" >> "\$REC/labels_add_repo"
         # Persist into state so a later read reflects the add (idempotency).
         cur=""; [ -f "\$STATE/labels/\$n" ] && cur="\$(cat "\$STATE/labels/\$n")"
         IFS=','; for lbl in \$added; do
@@ -190,6 +195,8 @@ REPO="$WORK"  # any dir; gh is mocked
 
 added_for() { grep -c "^$1:" "$REC/labels_add"; }              # count add calls for issue
 added_has() { grep -q "^$1:.*$2" "$REC/labels_add"; }          # add for issue included label
+# add for a child in a SPECIFIC repo included label (issue #92 cross-repo target).
+added_repo_has() { grep -q "^$1#$2:.*$3" "$REC/labels_add_repo"; }
 comments_for() { grep -c "^$1\$" "$REC/comment_post"; }        # count comments posted to issue
 
 # ===========================================================================
@@ -215,7 +222,9 @@ o=$(PATH="/nonexistent" is_epic "$REPO" 300 2>/dev/null); r=$?; set -e
   || fail "is_epic: expected rc2/empty when gh absent, got [$o]/rc$r"
 
 # ===========================================================================
-# 2. list_epic_children — native canonical + cross-repo exclusion
+# 2. list_epic_children — native canonical + cross-repo INCLUSION (issue #92)
+# TSV is now <number>\t<state>\t<labels-csv>\t<owner/repo>\t<title>: a cross-repo
+# child is KEPT with its own owner/repo rather than dropped.
 # ===========================================================================
 seed_subissues 400 '[
   {"number":401,"state":"open","title":"A","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
@@ -223,12 +232,12 @@ seed_subissues 400 '[
   {"number":403,"state":"open","title":"X","labels":[],"repository_url":"https://api.github.com/repos/other/repo"}
 ]'
 out=$(list_epic_children "$REPO" 400 "silon-oy/demo")
-echo "$out" | grep -q "^401	open	auto-run	A$" || fail "list_epic_children native: missing 401 line (got: $out)"
-echo "$out" | grep -q "^402	closed		B$"       || fail "list_epic_children native: missing 402 line"
-echo "$out" | grep -q "^403"                       && fail "list_epic_children native: cross-repo 403 NOT excluded"
+echo "$out" | grep -q "^401	open	auto-run	silon-oy/demo	A$" || fail "list_epic_children native: missing 401 line (got: $out)"
+echo "$out" | grep -q "^402	closed		silon-oy/demo	B$"       || fail "list_epic_children native: missing 402 line"
+echo "$out" | grep -q "^403	open		other/repo	X$"           || fail "list_epic_children native: cross-repo 403 missing its own repo"
 n=$(printf '%s\n' "$out" | grep -c '^[0-9]')
-[ "$n" = 2 ] && pass "list_epic_children native: 2 same-repo children, cross-repo excluded" \
-  || fail "list_epic_children native: expected 2 children, got $n"
+[ "$n" = 3 ] && pass "list_epic_children native: cross-repo child included with its own repo (issue #92)" \
+  || fail "list_epic_children native: expected 3 children (incl cross-repo), got $n"
 
 # Fallback: zero native → parse task-list from the body. State is resolved
 # AUTHORITATIVELY against the open-issue set, NEVER the checkbox (issue #91, AC3).
@@ -237,18 +246,31 @@ n=$(printf '%s\n' "$out" | grep -c '^[0-9]')
 #   #502 box [ ] but NOT open → SKIPPED  (a [ ] mark on a non-open issue is not
 #                                         "open" — the old bug this fixes)
 #   #503 box [x] and NOT open → closed   (genuinely done; absent from open list)
-#   owner/repo#999            → cross-repo skip
+#   owner/repo#999 box [ ]    → cross-repo, resolved against that repo's open set;
+#                               the mock's open set lacks 999 → skipped (not open)
 seed_subissues 410 '[]'
 seed_body 410 $'- [x] First #501\n- [ ] Second #502\n- [x] Third #503\n- [ ] Cross owner/repo#999\nplain line'
-seed_open '[{"number":501}]'   # only 501 is open in the repo
-out=$(list_epic_children "$REPO" 410)
-echo "$out" | grep -q "^501	open		First$"  || fail "list_epic_children fallback: 501 must be open (map wins over [x]) (got: $out)"
+seed_open '[{"number":501}]'   # only 501 is open (all repos in the mock share this)
+out=$(list_epic_children "$REPO" 410 "silon-oy/demo")
+echo "$out" | grep -q "^501	open		silon-oy/demo	First$"  || fail "list_epic_children fallback: 501 must be open (map wins over [x]) (got: $out)"
 echo "$out" | grep -q "^502"                       && fail "list_epic_children fallback: 502 ([ ] + not open) must be skipped, not reported"
-echo "$out" | grep -q "^503	closed		Third$" || fail "list_epic_children fallback: 503 ([x] + not open) must be closed"
-echo "$out" | grep -q "999"                        && fail "list_epic_children fallback: cross-repo 999 NOT excluded"
+echo "$out" | grep -q "^503	closed		silon-oy/demo	Third$" || fail "list_epic_children fallback: 503 ([x] + not open) must be closed"
+echo "$out" | grep -q "999"                        && fail "list_epic_children fallback: cross-repo 999 ([ ] + not open) must be skipped"
 n=$(printf '%s\n' "$out" | grep -c '^[0-9]')
-[ "$n" = 2 ] && pass "list_epic_children fallback: state authoritative from open set, cross-repo excluded" \
+[ "$n" = 2 ] && pass "list_epic_children fallback: state authoritative, same-repo carries its repo, cross-repo not-open skipped" \
   || fail "list_epic_children fallback: expected 2 children (501 open, 503 closed), got $n"
+
+# Fallback cross-repo INCLUSION: an owner/repo#N that IS open in its repo is kept
+# with that repo (issue #92). The mock's shared open set now contains 777, so the
+# cross-repo ref resolves to open and is emitted with other/repo.
+seed_subissues 411 '[]'
+seed_body 411 $'- [ ] Cross open other/repo#777\n- [ ] Local open #501'
+seed_open '[{"number":501},{"number":777}]'
+out=$(list_epic_children "$REPO" 411 "silon-oy/demo")
+echo "$out" | grep -q "^777	open		other/repo	Cross open$" \
+  && pass "list_epic_children fallback: cross-repo open child kept with its own repo (issue #92)" \
+  || fail "list_epic_children fallback: cross-repo 777 not emitted with other/repo (got: $out)"
+seed_open '[{"number":501}]'   # restore the default open set for later sections
 
 # Fail-closed on the run side: an unreadable native graph → rc 2, no fallback,
 # no output (AC4). Simulate with gh absent from PATH.
@@ -280,10 +302,12 @@ seed_subissues 100 '[
   {"number":102,"state":"open","title":"already","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":103,"state":"closed","title":"done","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":104,"state":"open","title":"parked","labels":[{"name":"wip"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
-  {"number":105,"state":"open","title":"stuck","labels":[{"name":"needs-human"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
+  {"number":105,"state":"open","title":"stuck","labels":[{"name":"needs-human"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":106,"state":"open","title":"cross needs label","labels":[],"repository_url":"https://api.github.com/repos/other/repo"},
+  {"number":107,"state":"open","title":"cross stuck","labels":[{"name":"needs-human"}],"repository_url":"https://api.github.com/repos/other/repo"}
 ]'
 
-epic_process_one "$REPO" 100 "auto-run" "" origin
+epic_process_one "$REPO" 100 "auto-run" "silon-oy/demo" origin
 
 # 101 (open, no label) → auto-run added
 added_has 101 "auto-run" && pass "propagate: auto-run added to bare open child 101" \
@@ -300,9 +324,9 @@ added_has 105 "auto-run" || fail "propagate: 105 did not receive auto-run"
 [ "$(added_for 104)" = 0 ] && pass "wip child 104 skipped (opt-out)" \
   || fail "wip child 104 was labelled"
 
-# Escalation: 105 has needs-human → one comment on the epic + epic-attention label
-[ "$(comments_for 100)" = 1 ] && pass "escalation: stalled child 105 escalated to epic (1 comment)" \
-  || fail "escalation: expected 1 epic comment, got $(comments_for 100)"
+# Escalation: 105 + 107 have needs-human → two comments on the epic + epic-attention label
+[ "$(comments_for 100)" = 2 ] && pass "escalation: stalled children 105 + 107 escalated to epic (2 comments)" \
+  || fail "escalation: expected 2 epic comments, got $(comments_for 100)"
 grep -q '^epic-attention$' "$REC/labels_ensure" && pass "escalation: epic-attention label ensured" \
   || fail "escalation: epic-attention label not ensured"
 # The posted comment must carry the per-child marker.
@@ -310,10 +334,28 @@ grep -q 'epic-attention child=105' "$STATE/comments/100.jsonl" \
   && pass "escalation: comment carries per-child marker" \
   || fail "escalation: per-child marker missing from comment"
 
-# Second tick: idempotent — no new escalation comment for 105.
-epic_process_one "$REPO" 100 "auto-run" "" origin
-[ "$(comments_for 100)" = 1 ] && pass "escalation idempotent: no repeat comment on 2nd tick" \
-  || fail "escalation idempotent: comment count rose to $(comments_for 100)"
+# --- cross-repo child propagation + escalation (issue #92) ---
+# 106 (open, no label, in other/repo) → auto-run added IN other/repo, not the epic's.
+added_repo_has "other/repo" 106 "auto-run" \
+  && pass "cross-repo: 106 labelled in its OWN repo (other/repo), not the epic's" \
+  || fail "cross-repo: 106 not labelled in other/repo (rec: $(cat "$REC/labels_add_repo"))"
+# 101 (same-repo) still labelled in the epic's repo.
+added_repo_has "silon-oy/demo" 101 "auto-run" \
+  && pass "same-repo: 101 labelled in the epic's repo (silon-oy/demo)" \
+  || fail "same-repo: 101 not labelled in silon-oy/demo"
+# 107 (needs-human, cross-repo) → escalation comment carries a REPO-QUALIFIED marker.
+grep -q 'epic-attention child=other/repo#107' "$STATE/comments/100.jsonl" \
+  && pass "cross-repo escalation: marker is repo-qualified (child=other/repo#107)" \
+  || fail "cross-repo escalation: repo-qualified marker missing"
+# and the comment body names the child as owner/repo#N.
+grep -q 'other/repo#107' "$STATE/comments/100.jsonl" \
+  && pass "cross-repo escalation: comment names child as other/repo#107" \
+  || fail "cross-repo escalation: owner/repo#N reference missing from comment"
+
+# Second tick: idempotent — no new escalation comment for 105 or 107.
+epic_process_one "$REPO" 100 "auto-run" "silon-oy/demo" origin
+[ "$(comments_for 100)" = 2 ] && pass "escalation idempotent: no repeat comment on 2nd tick (105 + 107 = 2)" \
+  || fail "escalation idempotent: comment count is $(comments_for 100) (expected 2)"
 
 # ===========================================================================
 # 5. epic_process_one — completion announced exactly once

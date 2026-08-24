@@ -244,7 +244,9 @@ cat > "$FX/epic.json" <<JSON
  "epics":[
   {"repo_slug":"acme-site","epic_number":10,"epic_title":"$EPIC_TITLE_LEAK",
    "epic_url":"https://github.com/acme/acme-site/issues/10","source":"sub_issues",
-   "sub_issues":[{"number":11,"state":"open"},{"number":12,"state":"open"},{"number":13,"state":"closed"}]}
+   "sub_issues":[{"number":11,"state":"open","repo":"acme/acme-site","repo_slug":"acme-site"},
+                 {"number":12,"state":"open","repo":"acme/acme-site","repo_slug":"acme-site"},
+                 {"number":13,"state":"closed","repo":"acme/other","repo_slug":"other"}]}
  ]}
 JSON
 OUTEP="$FX/wwwep"
@@ -271,6 +273,12 @@ if [ -f "$HTMLEP" ]; then
   # Dedup: epic-member runs are shown inside the lane, not as loose rows. Guard
   # the mechanism (epicMember set + subKey join) is present.
   present "epic dedup via epicMember" "epicMember" "$HTMLEP"
+  # Cross-repo children (issue #92): the JS joins each sub by its OWN repo_slug
+  # (subSlug) and tags a cross-repo sub with its repo. Guard both mechanisms — the
+  # page is data-free so we assert the JS reads the fields + renders the tag.
+  present "JS reads sub repo_slug via subSlug" "subSlug" "$HTMLEP"
+  present "JS reads sub_issues[].repo_slug" "s.repo_slug" "$HTMLEP"
+  present "JS renders cross-repo tag" "epic-sub-repo" "$HTMLEP"
   # Unreadable child-set (issue #91): the JS keeps such a lane VISIBLE and shows a
   # note instead of a progress bar (goal 3 — never silently vanish, never false
   # progress). The page is data-free, so guard the JS branch + wording.

@@ -204,8 +204,8 @@ if [ "\$1" = "api" ]; then
   case "\$apipath" in
     repos/o/repo-a/issues/10/sub_issues)
       # Native sub-issues: #11 open, #12 closed, plus #13 in ANOTHER repo — the
-      # cross-repo child must be filtered IDENTICALLY on the view side (issue #91
-      # AC5), exactly as the run side drops it (scope-out).
+      # cross-repo child is now SUPPORTED (issue #92) and resolved IDENTICALLY on
+      # the view side (issue #91 AC5), carrying its own repo (o/other-repo).
       cat <<'JSON'
 [
  {"number":11,"state":"open","title":"Alpha sub one","repository_url":"https://api.github.com/repos/o/repo-a"},
@@ -372,16 +372,27 @@ check "epic #10 repo_slug"       "$(ge 10 | jq -r '.repo_slug')" "repo-a"
 check "epic #10 title"           "$(ge 10 | jq -r '.epic_title')" "Epic Alpha"
 check "epic #10 url"             "$(ge 10 | jq -r '.epic_url')" "https://github.com/o/repo-a/issues/10"
 check "epic #10 source sub_issues" "$(ge 10 | jq -r '.source')" "sub_issues"
-check "epic #10 sub_issues count" "$(ge 10 | jq '.sub_issues | length')" "2"
+check "epic #10 sub_issues count (incl cross-repo)" "$(ge 10 | jq '.sub_issues | length')" "3"
 check "epic #10 sub #11 open"    "$(ge 10 | jq -r '.sub_issues[] | select(.number==11) | .state')" "open"
 check "epic #10 sub #12 closed"  "$(ge 10 | jq -r '.sub_issues[] | select(.number==12) | .state')" "closed"
-# AC5: the cross-repo child #13 is excluded on the view side, just as on the run
-# side — the same list_epic_children filter, so the two can never disagree.
-check "epic #10 cross-repo #13 excluded (AC5)" \
-  "$(ge 10 | jq '[.sub_issues[] | select(.number==13)] | length')" "0"
-# sub_issues carry ONLY number+state (no title/body leak from the API payload).
-check "epic #10 sub keys number+state" \
-  "$(ge 10 | jq -r '.sub_issues[0] | keys | sort | join(",")')" "number,state"
+# AC5 (issue #92): the cross-repo child #13 is now INCLUDED and carries its own
+# repo (o/other-repo), resolved IDENTICALLY on the view and run sides.
+check "epic #10 cross-repo #13 included (AC5, #92)" \
+  "$(ge 10 | jq '[.sub_issues[] | select(.number==13)] | length')" "1"
+check "epic #10 #13 repo o/other-repo" \
+  "$(ge 10 | jq -r '.sub_issues[] | select(.number==13) | .repo')" "o/other-repo"
+check "epic #10 same-repo #11 repo o/repo-a" \
+  "$(ge 10 | jq -r '.sub_issues[] | select(.number==11) | .repo')" "o/repo-a"
+# sub_issues carry number+state+repo (no title/body leak) plus repo_slug, which
+# status.sh injects at emit for the view's local grouping (issue #92).
+check "epic #10 sub keys number+repo+repo_slug+state" \
+  "$(ge 10 | jq -r '.sub_issues[0] | keys | sort | join(",")')" "number,repo,repo_slug,state"
+# A same-repo child's repo_slug is the epic's slug; a cross-repo child with no
+# local run falls back to the repo basename (issue #92).
+check "epic #10 #11 repo_slug == epic slug (repo-a)" \
+  "$(ge 10 | jq -r '.sub_issues[] | select(.number==11) | .repo_slug')" "repo-a"
+check "epic #10 #13 repo_slug basename fallback (other-repo)" \
+  "$(ge 10 | jq -r '.sub_issues[] | select(.number==13) | .repo_slug')" "other-repo"
 
 # Epic #20: no native sub-issues => task-list fallback (source "task_list"). The
 # open-issue map is authoritative for state (#1 is checked but IS open => open),
