@@ -34,8 +34,8 @@ echo "RUN_EPIC_EXIT=$RC"
 Liput:
 
 - `--dry-run` — tulostaa saman raportin (mitä labeloitaisiin, mikä ajaa ensin, mitkä ovat
-  estettyjä ja minkä takana, ketjun pituus) **kirjoittamatta mitään**. Aja tämä ensin, jos
-  haluat nähdä suunnitelman.
+  estettyjä ja minkä takana, ketjun pituus, **lapset repoittain ryhmiteltynä**) **kirjoittamatta
+  mitään**. Aja tämä ensin, jos haluat nähdä suunnitelman.
 - `--start-now` — labeloinnin jälkeen käynnistää heti ensimmäisen ajokelpoisen alaissueen
   (`orchestrate.sh`) odottamatta pollerin tikkiä. Hyödyllinen koneella, jolla poller ei aja.
 - `--stop` — **keskeyttää** epicin: pysäyttää elävät lapsiajot (delegoi `stop-run.sh`:lle) ja
@@ -68,6 +68,11 @@ Koodit 1/2/3/5 ovat yhteisiä molemmille moodeille; 4 on vain käynnistys, 6 vai
   kone, jonka poller pollaa repoa (host-portti). Jos tällä koneella ei ole polleria, käytä
   `--start-now`.
 - Jätä yksittäinen alaissue ajon ulkopuolelle `wip`illä — älä poista siltä `auto-run`ia.
+- **Cross-repo-alaissueet ovat tuettuja.** Alaissue voi olla toisessa repossa kuin epic-issue
+  itse; komento propagoi labelit kunkin lapsen **omaan repoon** ja raportoi lapset **repoittain**.
+  Jos jonkin lapsen repo ei ole tämän koneen watchlistissä, raportti varoittaa erikseen
+  (`NOT RUN HERE`): labelit lisätään, mutta mikään paikallinen poller ei aja sitä — ketjun ajaa se
+  kone, jonka watchlist kattaa kyseisen repon. Kerro tämä varoitus käyttäjälle sellaisenaan.
 
 ## 3. Keskeytys — `--stop`
 

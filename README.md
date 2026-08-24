@@ -441,17 +441,29 @@ GitHubin natiivilla **sub-issue**-toiminnolla (vanhoissa epiceissä rungon task-
   `epic-complete`-labelin. **Runner ei sulje epiciä** — tarkista epicin hyväksyntäkriteerit ja
   sulje itse (tai anna GitHubin natiivin auto-closen hoitaa se, jos repo on niin konfiguroitu).
 
-Labelit `epic`, `epic-attention` ja `epic-complete` ovat kiinteitä nimiä. Cross-repo-alaissueet
-(toisessa repossa) ovat tuen ulkopuolella: ne ohitetaan lokivaroituksella.
+Labelit `epic`, `epic-attention` ja `epic-complete` ovat kiinteitä nimiä.
+
+- **Cross-repo-alaissueet ovat tuettuja.** Alaissue voi olla toisessa repossa kuin epic-issue
+  itse (natiivi sub-issue toisesta repossa tai `owner/repo#N`-viittaus task-listassa). Runner
+  käsittelee jokaisen lapsen sen **omassa repossa**: ajolabelit lisätään sinne, eskalaatio- ja
+  valmiuskommentti nimeävät lapsen `owner/repo#N`-muodossa, ja valmius vaatii **kaikkien** lasten
+  sulkeutumista repoista riippumatta. Jokainen lapsi ajetaan silti omassa repossaan omana
+  ajonaan ja omana PR:nään — yhden ajon lukot ja worktree eivät ylitä repo-rajaa. **Huomaa:**
+  lapsen ajaa vain kone, jonka watchlist kattaa kyseisen repon; `/run-epic`-raportti varoittaa
+  erikseen lapsista, joiden repo ei ole tämän koneen watchlistissä (labelit lisätään, mutta
+  mikään paikallinen poller ei aja niitä). Vieraan **organisaation** lapseen kirjoitus tapahtuu
+  henkilökohtaisella identiteetillä tai epäonnistuu näkyvästi — GitHub App -tunnistautuminen on
+  org-kohtainen (ei laajenneta).
 
 **Yhden komennon käynnistys — `/run-epic`.** Sen sijaan että lisäisit `auto-run`in epiciin käsin
 ja odottaisit tikkiä, `/run-epic #N` (skripti `run-epic.sh`) tekee sen heti: se **validoi**
-epicin rakenteen (avoin, alaissueita on, `blocked_by`-graafi on syklitön, alaissueet samassa
-repossa) **ennen mitään kirjoitusta**, lisää `epic`-labelin jos se puuttuu, propagoi ajolabelit
-avoimille alaissueille (**sama jaettu propagointi** kuin pollerilla), ja raportoi mikä alaissue
-ajaa ensin, mitkä ovat estettyjä ja minkä takana, ja kuinka pitkä ketju on. `--dry-run` tulostaa
-saman raportin kirjoittamatta mitään; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen
-heti (hyödyllinen koneella jolla poller ei aja). Ks. exit-koodit osiossa 9 ja ohje
+epicin rakenteen (avoin, alaissueita on, `blocked_by`-graafi on syklitön) **ennen mitään
+kirjoitusta**, lisää `epic`-labelin jos se puuttuu, propagoi ajolabelit avoimille alaissueille
+(**sama jaettu propagointi** kuin pollerilla, kukin lapsen omaan repoon), ja raportoi **lapset
+repoittain**: mikä alaissue ajaa ensin, mitkä ovat estettyjä ja minkä takana, kuinka pitkä ketju
+on, ja mitkä lapset ovat repossa jota tämä kone ei aja. `--dry-run` tulostaa saman raportin
+kirjoittamatta mitään; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen heti (hyödyllinen
+koneella jolla poller ei aja). Ks. exit-koodit osiossa 9 ja ohje
 [`commands/run-epic.md`](commands/run-epic.md).
 
 **Epicin keskeytys — `/run-epic #N --stop`.** Symmetrinen käynnistyksen kanssa ja samalla

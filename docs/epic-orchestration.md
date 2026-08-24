@@ -18,8 +18,8 @@
 >
 > Kymmenestä alla luetellusta avoimesta päätöksestä (§"Avoimet päätökset") **kaikki on
 > ratkaistu koodissa**; kunkin ratkaisukohta on nimetty päätöstaulukon ratkaisusarakkeessa.
-> Viimeisenä ratkesi **H (epicin keskeytys)** → #90. Osin avoinna ovat vielä lapsijoukon
-> jaettu resolvointi (§1.3, → **#91**) ja cross-repo-rajaus (§Rajaukset, → **#92**).
+> Viimeisenä ratkesi **H (epicin keskeytys)** → #90. Lapsijoukon jaettu resolvointi (§1.3) →
+> **#91** ja cross-repo-tuki (§Rajaukset) → **#92** on niin ikään toteutettu.
 >
 > Dokumentin arvo ei ole enää suunnitelmana vaan **perusteluna**: se kertoo *miksi* koneisto on
 > tällainen. Alkuperäiset ehdotukset ja "avoin päätös" -laatikot on säilytetty, mutta kukin on
@@ -46,13 +46,18 @@ uutta, ja mikä on jo olemassa.
 
 ## Rajaukset
 
-- **Ei cross-repo-epicejä (toistaiseksi, → #92).** Epicin kaikki alaissueet ovat samassa
-  repossa kuin epic-issue itse. Toisessa repossa oleva alaissue on **nykytoteutuksessa**
-  virhetilanne (§7), ei tuettu muoto: `list_epic_children` ohittaa cross-repo-lapsen
-  varoituksella. GitHubin sub-issue-relaatio *sallii* cross-repo-lapset, mutta runnerin
-  poiminta, lukot ja worktree ovat kaikki repo-kohtaisia, joten cross-repo-ajo vaatisi oman
-  suunnittelunsa. Tämä rajaus **ei ole periaatteellinen vaan toteutuksellinen** ja on **työn
-  alla (#92)**; sitä ei pidä esittää ikuisena.
+- **Cross-repo-epicit ovat tuettuja (#92).** Epicin alaissue voi olla toisessa repossa kuin
+  epic-issue itse. `list_epic_children` säilyttää jokaisen lapsen oman `owner/repo`n (natiivi
+  sub-issue `repository_url`ista, task-lista-fallback `owner/repo#N`-viittauksesta), ja
+  epic-kerros käsittelee lapsen aina sen **omassa repossa**: ajolabelit propagoidaan sinne,
+  eskalaatio- ja valmiuskommentti nimeävät lapsen `owner/repo#N`-muodossa, ja S2b-esto-portti
+  (`count_open_blockers`) laskee myös toisen repon estäjän. Jokainen lapsi ajetaan silti **omassa
+  repossaan omana ajonaan ja omana PR:nään** — runnerin poiminta, lukot ja worktree ovat
+  repo-kohtaisia, eikä sitä muuteta. **Yhä rajattu ulos (Scope-out):** ei cross-repo-worktreetä
+  eikä yhtä useaa repoa kattavaa PR:ää, eikä cross-org-App-tunnistautumisen laajennusta (App-token
+  on org-kohtainen; vieraan orgin lapsi kirjoitetaan henkilökohtaisella identiteetillä tai
+  epäonnistuu näkyvästi, ei hiljaa). `/run-epic` raportoi lapset **repoittain** ja varoittaa
+  erikseen lapsista, joiden repo ei ole tämän koneen watchlistissä (mikään poller ei aja niitä).
 - **Ei näkyvyysmuutoksia Ohjaamo-näkymään.** Epicin tila esitetään erikseen Ohjaamon
   V4-näkymäissuessa; tämä dokumentti määrittelee vain *ajon* arkkitehtuurin. Jaettu vaatimus
   molemmille on sama kanoninen muoto ja sama fallback (§1) — tämä dokumentti on siitä
@@ -112,8 +117,10 @@ fallbackina.**
 3. **Jäsennyssääntö:** poimi rivit, jotka täsmäävät kuvioon `- [ ] … #<N>` tai `- [x] … #<N>`
    (GitHub-checkbox + issue-viittaus). Numero `<N>` on saman repon issue. `[x]` = valmis (ei
    poimita ajoon), `[ ]` = avoin. Rivin muu teksti on kuvaus, ei koneelle.
-4. **Cross-repo-viittaukset** (`owner/repo#N`) fallback-listassa ovat rajausten (ks. Rajaukset)
-   ulkopuolella: rivi ohitetaan ja kirjataan varoituksena.
+4. **Cross-repo-viittaukset** (`owner/repo#N`) fallback-listassa ovat **tuettuja (#92):** lapsi
+   säilytetään sen omassa `owner/repo`ssa, ja sen tila ratkaistaan autoritatiivisesti kyseisen
+   repon avoimien issueiden joukosta (kerran per repo haettu), aivan kuten saman repon `#N`.
+   Lukukelvoton toisen repon avoin-joukko on fail-closed (rc 2), ei hiljainen ohitus.
 
 > **Päätös A — kirjoittaako fallback natiivit lapset?** — **Ratkaistu (#81):** vaihtoehto (i),
 > fallback on vain lukusääntö (`lib/issue.sh:list_epic_children`). Alkuperäinen harkinta:
@@ -150,7 +157,8 @@ seuraus toteutukselle: lapsijoukon resolvointi (`sub_issues` → fallback) kanna
 > - **Fail-closed molemmilla:** lukukelvoton natiivigraafi tuottaa rc 2. Ajo kieltäytyy; näkymä
 >   merkitsee epicin `source: "unreadable"` (tyhjä `sub_issues`) eikä pudota task-lista-fallbackiin.
 > - **Cross-repo-lapsi suodatetaan identtisesti** — sama funktio, joten näkymä ja ajo eivät voi
->   olla eri mieltä (§Rajaukset; cross-repo-**tuki** on yhä eri issue #92).
+>   olla eri mieltä (§Rajaukset; cross-repo-**tuki** toteutettu #92:ssa — kumpikin puoli
+>   säilyttää lapsen oman `owner/repo`n ja käsittelee sen samalla logiikalla).
 > - **Identiteettiä ei sidota funktioon:** kutsuja valitsee (`--gh-runner`) — näkymä ajaa
 >   `gha_with_token`-kääreen läpi (GitHub App), ajo käyttää paljasta `gh`-CLI:tä.
 >
@@ -458,8 +466,10 @@ Komento validoi **ennen** kuin se koskee mihinkään:
 3. **Ovatko riippuvuudet asyklisiä?** Alaissueiden `blocked_by`-graafi ei saa sisältää sykliä
    (§7: syklinen graafi). Validointi rakentaa graafin (`count_open_blockers` / suora
    `blocked_by`-luku per lapsi) ja tarkistaa syklittömyyden ennen ajoa.
-4. **Ovatko alaissuet ajokelpoisia?** Jokainen avoin lapsi on samassa repossa (§7: cross-repo).
-   Cross-repo-lapsi tuottaa varoituksen ja jää ajon ulkopuolelle, ei kaada koko epiciä.
+4. **Ovatko alaissuet ajokelpoisia?** Cross-repo-lapsi on **tuettu (#92):** se ei kaada epiciä
+   eikä jää ajon ulkopuolelle, vaan käsitellään omassa repossaan. `/run-epic` raportoi lapset
+   repoittain ja varoittaa erikseen lapsista, joiden repo ei ole tämän koneen watchlistissä
+   (labelit lisätään, mutta mikään paikallinen poller ei aja niitä).
 5. **Onko jollain lapsella jo elävä ajo?** Ei virhe — propagointi on idempotentti ja poller
    hoitaa (§7).
 
@@ -504,8 +514,11 @@ Komento tulostaa (ja `--dry-run` vain tulostaa, ei kirjoita):
 - Ajojärjestys: `blocked_by`-graafista johdettu topologinen järjestys (mikä ajaa heti, mikä
   odottaa mitä).
 - Propagointi: mille lapsille `auto-run` lisättiin (ja mille se oli jo), mitkä ohitettiin
-  (`wip`, suljettu, cross-repo).
-- Varoitukset: cross-repo-lapset, mahdollinen syklihavainto (joka estää ajon, §7).
+  (`wip`, suljettu).
+- Ajojärjestys **repoittain ryhmiteltynä** (#92): cross-repo-epicin lapset listataan kunkin
+  `owner/repo`n alla.
+- Varoitukset: lapset joiden repo ei ole tämän koneen watchlistissä (#92: labelit lisätään,
+  mutta mikään paikallinen poller ei aja niitä), mahdollinen syklihavainto (joka estää ajon, §7).
 
 ---
 
@@ -614,7 +627,7 @@ minimimuutos, ja se toteutui suunnitellusti (#81 M1–M5 + M7, #82 M6).
 | Tilanne | Käytös |
 |---|---|
 | **Syklinen riippuvuusgraafi** (A `blocked_by` B, B `blocked_by` A) | `/run-epic`-validointi (§5.2) havaitsee syklin topologisessa järjestyksessä ja **kieltäytyy ajamasta**, nimeten sykliin osallistuvat issuet. Ilman `/run-epic`iä (pelkkä poller) sykli ei kaada mitään, mutta jokainen sykliin kuuluva lapsi on ikuisesti `blocked_by`-estetty (S2b pitää ne poiminnan ulkopuolella), joten ketju vain pysähtyy hiljaa — siksi `/run-epic`-validointi on ainoa paikka, joka **havaitsee** syklin aktiivisesti. Suositus: epic-merkintä (4.2) nostaa myös "N lasta ikuisesti estettynä" -tilan näkyviin. |
-| **Alaissue toisessa repossa** | Rajausten (ks. Rajaukset) ulkopuolella. `list_epic_children` (M3) ohittaa cross-repo-lapsen ja kirjaa varoituksen; `/run-epic`-raportti (§5.4) listaa sen. Epic voi silti valmistua saman repon lasten osalta, mutta ei sulkeudu automaattisesti, koska cross-repo-lapsi jää avoimeksi (ihminen hoitaa). |
+| **Alaissue toisessa repossa** | **Tuettu (#92).** `list_epic_children` (M3) säilyttää lapsen oman `owner/repo`n; propagointi, eskalaatio, valmius ja S2b-esto käsittelevät sen omassa repossaan, ja `/run-epic`-raportti (§5.4) ryhmittelee lapset repoittain. Valmius edellyttää **kaikkien** lasten sulkeutumista repoista riippumatta. Lapsi ajetaan omassa repossaan omana ajonaan ja PR:nään (ei cross-repo-worktreetä/PR:ää — Scope-out). Jos lapsen repo ei ole tämän koneen watchlistissä, raportti varoittaa: labelit lisätään, mutta mikään paikallinen poller ei aja sitä. |
 | **Epic ilman alaissueita** | `list_epic_children` palauttaa tyhjän (ei natiiveja, ei fallback-rivejä). `/run-epic`-validointi (§5.2.2) **kieltäytyy** — ei propagoitavaa. Poller-skannaus (M5) ohittaa hiljaa (ei lapsia = ei työtä), ei kaada tikkiä. Epicin poissulku poiminnasta (M1) on silti voimassa, joten tyhjä epic ei koskaan aja vahingossa. |
 | **Alaissue jolla on jo elävä ajo** | Ei virhe. Propagointi (M4) on idempotentti: jos lapsella on jo `auto-run` ja elävä ajo, mitään ei tehdä (label on jo, poller ei poimi assignattuja, README 6.4). `/run-epic`-raportti mainitsee "N lasta jo ajossa". |
 | **Epicin alaissueen manuaalinen sulkeminen kesken ajon** | Suljettu lapsi tippuu poiminnasta (`is:open`), ja sen mahdollinen elävä ajo jää orvoksi — poller havaitsee sen liveness-rajalla (`RUN_ISSUES_STALE_AFTER`) ja finalisoi `stalled_in_*` normaalisti. `blocked_by`-riippuvuudet: suljettu lapsi lakkaa estämästä siitä riippuvia (sulku = ei enää avoin estäjä), joten seuraavat lapset vapautuvat — mikä on oikea käytös, jos ihminen sulki lapsen "valmiina". Jos lapsi suljettiin **keskeneräisenä**, epic-merkintä (4.2) ei sitä huomaa; se on ihmisen tietoinen toimenpide, jonka semantiikka on "tämä on hoidettu". |

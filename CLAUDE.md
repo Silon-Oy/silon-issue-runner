@@ -296,19 +296,26 @@ poimittavissa) hakee avoimet epicit (`is:open label:epic` + watchlistin ajolabel
 idempotentti** (aina rc 0 — yhden epicin GitHub-häiriö ei kaada tikkiä):
 
 - **Propagointi** — lisää ajolabelit (`auto-run` + watchlistin vaatimat) epicin **avoimille**
-  alaissueille joilta ne puuttuvat (`labels_add`). Ohittaa suljetut, jo-labeloidut ja `wip`-lapset
-  (`wip` on ihmisen opt-out, ei uutta labelia). Lapsijoukko resolvoidaan **jaetulla**
-  `lib/issue.sh:list_epic_children`illä (natiivit `sub_issues` kanoninen, rungon task-lista
-  fallback vain kun natiiveja on nolla; cross-repo-lapset ohitetaan varoituksella) — sama funktio,
-  jota Ohjaamon V4-näkymä (`lib/status-github.sh`) **oikeasti kutsuu** (#91), joten näkymä ja ajo
-  eivät voi olla eri mieltä epicin lapsista.
+  alaissueille joilta ne puuttuvat (`labels_add`, **lapsen omaan repoon**, #92). Ohittaa suljetut,
+  jo-labeloidut ja `wip`-lapset (`wip` on ihmisen opt-out, ei uutta labelia). Lapsijoukko
+  resolvoidaan **jaetulla** `lib/issue.sh:list_epic_children`illä (natiivit `sub_issues` kanoninen,
+  rungon task-lista fallback vain kun natiiveja on nolla; **cross-repo-lapsi säilytetään sen omalla
+  `owner/repo`lla** (#92), tila ratkaistaan kyseisen repon avoin-joukosta) — sama funktio, jota
+  Ohjaamon V4-näkymä (`lib/status-github.sh`) **oikeasti kutsuu** (#91), joten näkymä ja ajo eivät
+  voi olla eri mieltä epicin lapsista. TSV kantaa nyt `owner/repo`-sarakkeen
+  (`<number>\t<state>\t<labels>\t<owner/repo>\t<title>`); `_epic_parse_child_line` palauttaa
+  `REPLY_REPO`n.
 - **Eskalaatio** — kun alaissue saa `needs-human`-labelin, epic-issuelle postataan **kerran per
-  lapsi** tilannekommentti (piilomarker `<!-- run-issues:epic-attention child=<N> -->` epicin
-  kommenteissa vartioi kertaluonteisuuden, #65:n SKIP_CLOSED-vaimennuksen hengessä) + kevyt
-  suodatettava `epic-attention`-label. Riippumattomat haarat jatkavat itsestään (S2b ajaa vain ne
-  lapset, joiden estäjät ovat kiinni).
-- **Valmius (elinkaari)** — kun **kaikki** alaissueet ovat suljettuja, epic saa **kerran**
-  yhteenvetokommentin (listaa alaissueet + best-effort PR:t) ja `epic-complete`-labelin. **Runner
+  lapsi** tilannekommentti (piilomarker epicin kommenteissa vartioi kertaluonteisuuden, #65:n
+  SKIP_CLOSED-vaimennuksen hengessä) + kevyt suodatettava `epic-attention`-label. Marker on
+  saman repon lapselle historiallinen `<!-- run-issues:epic-attention child=<N> -->` (taaksepäin
+  yhteensopiva) ja cross-repo-lapselle repo-tarkennettu `child=<owner/repo>#<N>` (#92: kaksi repoa
+  voi jakaa issue-numeron eivätkä saa kuitata toistensa eskalaatioita); kommentti nimeää lapsen
+  `owner/repo#N`-muodossa. Riippumattomat haarat jatkavat itsestään (S2b ajaa vain ne lapset,
+  joiden estäjät ovat kiinni).
+- **Valmius (elinkaari)** — kun **kaikki** alaissueet ovat suljettuja (repoista riippumatta, #92),
+  epic saa **kerran** yhteenvetokommentin (listaa alaissueet `owner/repo#N`-muodossa cross-repo-
+  lapsille + best-effort PR:t kunkin lapsen omasta repossa) ja `epic-complete`-labelin. **Runner
   ei sulje epiciä** — sulkupäätös jää ihmiselle (epicin runko voi sisältää hyväksyntäkriteereitä),
   ja GitHubin natiivi auto-close voittaa jos repo on niin konfiguroitu (avoin päätös F; #81:n cycle
   review pinnasi tämän additiivisen muodon: kommentti + label, ei sulkua). Idempotenssi: label tai
@@ -429,7 +436,10 @@ skeema alla). JS renderöi yhden epic-kaistan per epic sen **repo-ryhmän sisäl
 riippuvuusjärjestyksessä estäjineen ("jonossa · estäjä #N" = lähin edeltävä yhä avoin alaissue;
 ensimmäinen ilman ajoa → "odottaa poimintaa"), ja suljetut alaissueet yliviivattuina
 kuittausriveinä niin kauan kuin epic on auki. **Dedup:** alaissueen ajo näkyy **kerran** —
-kaistalla, ei myös irtorivinä repo-ryhmässä (`epicMember`-joukko + `subKey`-liitos). Epic ilman
+kaistalla, ei myös irtorivinä repo-ryhmässä (`epicMember`-joukko + `subKey`-liitos; **cross-repo
+(#92):** liitos tehdään lapsen **omalla** `repo_slug`illa (`subSlug`), joten toisessa repossa oleva
+alaissue liittyy sen repo-ryhmän ajoon ja siivoutuu sieltä; kaistalla se saa repo-tagin
+(`epic-sub-repo`)). Epic ilman
 avointa alaissuetta ja ilman elävää (ei-`cleanup`) ajoa **ei tuota kaistaa** — **poikkeus (#91):**
 `source: "unreadable"` -epic tuottaa aina kaistan, joka näyttää otsikon + huomion "lapsijoukkoa ei
 saatu luettua" edistymispalkin sijaan (ei koskaan hiljaa katoa, ei koskaan väärää edistymää
@@ -442,8 +452,11 @@ siivousjonon lukumäärästä). Otsikot (epic + alaissue) kulkevat saman valkoli
 kentät + sanamuodot + XSS-escape), `test-status-schema.sh` (`epics[]` tyhjä paikallisessa tilassa).
 
 **`epics[]`-skeema (schema_version 1):** jokainen alkio on
-`{repo_slug, epic_number, epic_title, epic_url, sub_issues: [{number, state}], source}`, missä
-`state` on `"open"|"closed"` ja `source` on `"sub_issues"` (natiivi sub-issues-rajapinta,
+`{repo_slug, epic_number, epic_title, epic_url, sub_issues: [{number, state, repo, repo_slug}], source}`,
+missä `state` on `"open"|"closed"`; **cross-repo (#92):** `sub_issues[].repo` on lapsen oma
+`owner/repo` (GitHub-johdettu, cachessa) ja `sub_issues[].repo_slug` sen paikallinen slug (status.sh
+injektoi emit-hetkellä — sama repo kuin epicillä ⇒ epicin slug, cross-repo + paikallinen ajo ⇒ ajon
+slug, muuten repo-basename; ei cachessa, koska slug on paikallinen käsite). `source` on `"sub_issues"` (natiivi sub-issues-rajapinta,
 ensisijainen), `"task_list"` (rungon `- [ ] … #N` -fallback vanhoille epiceille) tai
 `"unreadable"` (#91: jaetun `list_epic_children`in fail-closed-tila — natiivigraafi ei lukenut,
 `sub_issues` on tyhjä eikä task-lista-fallbackiin pudota). Lista on `[]` ilman
@@ -490,13 +503,16 @@ Oma avaruus. `/run-epic`-slash-komennon taustaskripti: epicin eksplisiittinen k�
 keskeytyspinta, symmetrinen `stop-run.sh`:n kanssa (ohut operaattoripinta, suunnittele–sovella
 kuten `install.sh`).
 
-**Käynnistys (#82).** Validoi epicin rakenteen **ennen mitään kirjoitusta** (avoin + olemassa,
-≥1 alaissue natiivi/task-lista, `blocked_by`-graafi syklitön, alaissueet samassa repossa),
-lisää sitten `epic`-labelin jos puuttuu (idempotentti; `docs/epic-orchestration.md` §5.2
-avoin päätös I — muuntaa kokoavan issuen epiciksi) ja propagoi ajolabelit avoimille
+**Käynnistys (#82, cross-repo #92).** Validoi epicin rakenteen **ennen mitään kirjoitusta** (avoin +
+olemassa, ≥1 alaissue natiivi/task-lista, `blocked_by`-graafi syklitön). **Alaissueet saavat olla
+eri repoissa (#92):** kunkin lapsen `blocked_by` luetaan sen omasta repossa ja ajolabelit
+propagoidaan sinne. Lisää sitten `epic`-labelin jos puuttuu (idempotentti; `docs/epic-orchestration.md`
+§5.2 avoin päätös I — muuntaa kokoavan issuen epiciksi) ja propagoi ajolabelit avoimille
 alaissueille **jaetulla `propagate_run_labels`illa** (lib/epic.sh) — sama polku kuin pollerin
-`scan_epics`illa, ei toista toteutusta (AC4). `--dry-run` tulostaa saman raportin (ensimmäinen
-ajokelpoinen lapsi, estetyt + estäjät, ketjun pituus) kirjoittamatta mitään; `--start-now`
+`scan_epics`illa, ei toista toteutusta (AC4). `--dry-run` tulostaa saman raportin (**lapset
+repoittain**, ensimmäinen ajokelpoinen lapsi, estetyt + estäjät, ketjun pituus, ja **varoitus
+lapsista joiden repo ei ole tämän koneen watchlistissä** — mikään paikallinen poller ei aja niitä,
+#92) kirjoittamatta mitään; `--start-now`
 käynnistää ensimmäisen ajokelpoisen lapsen heti (`orchestrate.sh`, `RUN_EPIC_ORCHESTRATE`
 testien injektiopisteenä). Syklintarkistus on Kahnin algoritmi ilman assosiatiivisia taulukoita
 (bash 3.2). Fail-closed: lukukelvoton lapsi-/estäjägraafi ⇒ exit 5, ei ajoa.
@@ -566,9 +582,9 @@ skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon **yksi jaettu resolvointi** natiivi→fallback — kaikki kuluttajat kutsuvat tätä, myös näkymä (`lib/status-github.sh`, #91), joten näkymä ja ajo eivät voi olla eri mieltä lapsijoukosta; fallback-tila autoritatiivinen avoimien issueiden joukosta (ei checkbox-arvaus), lähde (`sub_issues`/`task_list`) `--source-file`in kautta luettavissa, identiteetti kutsujan valinta `--gh-runner`illa (näkymä ajaa `gha_with_token`in läpi, ajo paljasta `gh`:ta), fail-closed rc 2 lukukelvottomasta natiivigraafista, #81/#91; `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon **yksi jaettu resolvointi** natiivi→fallback, TSV `<number>\t<state>\t<labels>\t<owner/repo>\t<title>` — kaikki kuluttajat kutsuvat tätä, myös näkymä (`lib/status-github.sh`, #91), joten näkymä ja ajo eivät voi olla eri mieltä lapsijoukosta; fallback-tila autoritatiivinen avoimien issueiden joukosta (ei checkbox-arvaus), lähde (`sub_issues`/`task_list`) `--source-file`in kautta luettavissa, identiteetti kutsujan valinta `--gh-runner`illa (näkymä ajaa `gha_with_token`in läpi, ajo paljasta `gh`:ta), fail-closed rc 2 lukukelvottomasta natiivigraafista, #81/#91; **cross-repo (#92):** jokainen lapsi kantaa oman `owner/repo`nsa (natiivi `repository_url`ista, task-lista `owner/repo#N`-viittauksesta), cross-repo-lapsen tila ratkaistaan kyseisen repon avoin-joukosta (kerran per repo, fail-closed) — ei enää pudoteta pois; `count_open_blockers` laskee cross-repo-estäjän jo valmiiksi (pelkkä `.state`-suodatus, AC4); `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
-| `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Propagoinnin **yksi jaettu primitiivi** `_epic_propagate_child` (AC4, #82): sekä `epic_process_one` että julkinen `propagate_run_labels` (lapsijoukon resolvointi + propagointi, `/run-epic`in kirjoituspolku) kutsuvat sitä — ei kahta label-propagointitoteutusta. `_epic_parse_child_line` säilyttää `list_epic_children`in tyhjän label-sarakkeen (tab on IFS-whitespace ⇒ `IFS=$'\t' read` romahduttaisi sen). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartijat `tests/test-epic.sh`, `tests/test-run-epic.sh` |
+| `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Propagoinnin **yksi jaettu primitiivi** `_epic_propagate_child` (AC4, #82): sekä `epic_process_one` että julkinen `propagate_run_labels` (lapsijoukon resolvointi + propagointi, `/run-epic`in kirjoituspolku) kutsuvat sitä — ei kahta label-propagointitoteutusta. `_epic_parse_child_line` säilyttää `list_epic_children`in tyhjän label-sarakkeen (tab on IFS-whitespace ⇒ `IFS=$'\t' read` romahduttaisi sen) ja palauttaa `REPLY_REPO`n (lapsen `owner/repo`, #92) ⇒ propagointi/eskalaatio/valmius kohdistuvat lapsen omaan repoon; `_epic_child_ref`/`_epic_attn_marker` nimeävät cross-repo-lapsen `owner/repo#N`-muodossa ja repo-tarkennetulla markerilla (saman repon lapsi säilyttää vanhan `child=<N>`-muodon, taaksepäin yhteensopiva). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartijat `tests/test-epic.sh`, `tests/test-run-epic.sh` |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `poller-config.sh` | Pollerien host-portti ja watchlistin resolvointi puhtaina funktioina. Erillinen lib siksi, että molemmat pollerit tarvitsevat saman päätöksen ja se on testattava **sourcaamalla** — poller itse exittaa source-hetkellä vieraalla koneella |
@@ -1052,8 +1068,8 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   kuin kumpikaan puhdas vaihtoehto, joten #9 jätti tämän tietoisesti tekemättä. Toiminnallista
   vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei nimellä
   (`lib/issue.sh`).
-- **Epic-ajon auto-run-semantiikka (#81), `/run-epic` (#82), keskeytys (#90) ja näkymän
-  konvergointi jaettuun resolvointiin (#91) on toteutettu.**
+- **Epic-ajon auto-run-semantiikka (#81), `/run-epic` (#82), keskeytys (#90), näkymän
+  konvergointi jaettuun resolvointiin (#91) ja cross-repo-tuki (#92) on toteutettu.**
   `docs/epic-orchestration.md` (#80) määrittelee koko arkkitehtuurin. #81 toteutti sen
   auto-run-tason muutoskohdat M1–M5 ja M7: epicin poissulku poiminnasta (`-label:epic`
   molemmissa hauissa) + S2c-portti (`is_epic`, exit 12), lapsijoukon jaettu resolvointi
@@ -1069,7 +1085,15 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   toisen resolvoinnin:** `lib/status-github.sh` kuluttaa jaettua `list_epic_children`iä
   (`status_github_fetch_sub_issues`/`status_github_parse_task_list` poistettu), fallback-tila on
   autoritatiivinen avoimien issueiden joukosta molemmilla puolilla, natiivin luvun epäonnistuminen
-  on fail-closed molemmilla (näkymässä `source: "unreadable"`), ja cross-repo suodatetaan
+  on fail-closed molemmilla (näkymässä `source: "unreadable"`), ja lapsijoukko resolvoidaan
   identtisesti — näkymä ja ajo eivät voi enää ajautua eri lapsijoukkoon (§1.3-invariantti
-  voimassa). **Toteuttamatta jää:** cross-repo-epicit (Rajaukset): `list_epic_children` ohittaa
-  cross-repo-lapsen varoituksella (#92).
+  voimassa). **#92 poisti cross-repo-rajauksen:** `list_epic_children`in TSV kantaa nyt lapsen oman
+  `owner/repo`n (natiivi `repository_url`ista, task-lista `owner/repo#N`-viittauksesta; tila
+  ratkaistaan kyseisen repon avoin-joukosta, kerran per repo, fail-closed rc 2), ja jokainen
+  kuluttaja käsittelee lapsen sen omassa repossa: propagointi + eskalaatio + valmius (`lib/epic.sh`,
+  eskalaatiomarker repo-tarkennettu cross-repolle, saman repon lapsi säilyttää vanhan
+  `child=<N>`-muodon), `count_open_blockers` laskee cross-repo-estäjän (S2b, AC4), `/run-epic`
+  raportoi lapset repoittain + varoittaa watchlistin ulkopuolisista repoista, ja Ohjaamon `epics[]`
+  kantaa per-lapsi `repo`/`repo_slug`-kentät (view joins + display). **Scope-out säilyy:** ei
+  cross-repo-worktreetä/PR:ää, ei cross-org-App-tunnistautumista (vieraan orgin lapsi kirjoitetaan
+  henkilökohtaisella identiteetillä tai epäonnistuu näkyvästi).
