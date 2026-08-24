@@ -420,6 +420,7 @@ a:hover{text-decoration:underline}
     pr_conflicted:         {label:"PR-konflikti",            next:"Ratkaise rebase-konflikti tai anna vahdin hoitaa."},
     awaiting_clarification:{label:"Odottaa vastaustasi",     next:"Botin kysymys odottaa vastaustasi issuessa."},
     pr_not_open:           {label:"PR suljettu",             next:"PR mergetty tai suljettu — ajo siivottavissa."},
+    issue_closed:          {label:"Issue suljettu",          next:"Issue suljettu ilman PR:ää — ajo siivottavissa (auto-clean-label tai cleanup-run.sh)."},
     pr_unlabelled:         {label:"PR ilman labelia",        next:"PR ilman auto-merge-labelia — vahti ei koske siihen."},
     pr_open_waiting:       {label:"PR matkalla",             next:"PR avoinna — vahti hoitaa mergen."},
     pr_state_unknown:      {label:"PR-tila epävarma",        next:"PR:n tilaa ei voitu päätellä paikallisesti."},

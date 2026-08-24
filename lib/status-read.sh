@@ -174,6 +174,15 @@ _STATUS_CLASSIFY_JQ='
 #       * review_decision CHANGES_REQUESTED => attention/pr_changes_requested
 #       * is_draft AND run age > 7d (604800s) => attention/pr_draft_stale
 #       otherwise the local class stands, only its confidence rises.
+#   - pr_state null/absent (a run with NO PR — issue-only object, issue #78) AND
+#       issue_state CONFIRMED "CLOSED" => cleanup/issue_closed/high (issue #96).
+#       A run that ended before a PR (blocked/timed_out/…) whose issue was later
+#       closed by hand would otherwise sit in attention forever. issue_state is
+#       only set when an explicit `gh issue view` confirmed the closure (see
+#       lib/status-github.sh:status_github_issue_state) — absence from the open
+#       map alone is a hint, never proof, so an unread/failed state stays null and
+#       the local class stands (fail-soft). The PR branches above own the
+#       closed-PR case, so this only fires when there is no PR at all.
 #
 # Single-quoted for the same reason as the classify program.
 # jq $-variables are meant to stay literal (SC2016); consumed elsewhere (SC2034).
@@ -196,6 +205,8 @@ _STATUS_GITHUB_RECLASSIFY_JQ='
                 $base + {class:"attention", class_reason:"pr_draft_stale"}
               else $base
               end
+          elif (($g.issue_state // "") == "CLOSED") then
+            $r + {class:"cleanup", class_reason:"issue_closed", class_confidence:"high"}
           else $r
           end
       end

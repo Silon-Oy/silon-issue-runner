@@ -75,6 +75,25 @@ cat > "$RUNS_A/r4/run.json" <<JSON
 {"run_id":"r4","repo":"$REPO_A","issue_number":4,"status":"blocked","started_at":"2026-08-01T10:00:00Z","finished_at":"2026-08-01T10:05:00Z","host":"$HOST","current_state":"S6_CycleReview","blocked_reason":"cycle_review_blocker","remote":"origin","repo_slug":"repo-a"}
 JSON
 
+# issue #96: no-PR runs whose issue is absent from the OPEN-issue map (suspected
+# closed). Absence is a hint, not proof — enrichment confirms with an explicit
+# `gh issue view --json state` before letting it drive classification.
+#   #8  -> issue confirmed CLOSED  => cleanup/issue_closed/high
+#   #89 -> issue-state read FAILS   => fail-soft, local class (attention/blocked)
+mkdir -p "$RUNS_A/r8"
+cat > "$RUNS_A/r8/run.json" <<JSON
+{"run_id":"r8","repo":"$REPO_A","issue_number":8,"status":"blocked","started_at":"2026-08-01T10:00:00Z","finished_at":"2026-08-01T10:05:00Z","host":"$HOST","current_state":"S6_CycleReview","blocked_reason":"cycle_review_blocker","remote":"origin","repo_slug":"repo-a"}
+JSON
+mkdir -p "$RUNS_A/r89"
+cat > "$RUNS_A/r89/run.json" <<JSON
+{"run_id":"r89","repo":"$REPO_A","issue_number":89,"status":"blocked","started_at":"2026-08-01T10:00:00Z","finished_at":"2026-08-01T10:05:00Z","host":"$HOST","current_state":"S6_CycleReview","blocked_reason":"cycle_review_blocker","remote":"origin","repo_slug":"repo-a"}
+JSON
+# A run with an OPEN PR whose issue is closed (#90): the PR state wins, so the run
+# stays pr_in_flight and NEVER becomes issue_closed (a PR run's suspected-closed
+# path is the pr_not_open branch, not this one). No issue-state read for it either
+# (only no-PR runs are suspected-closed candidates).
+run_json "$RUNS_A/r90" "$REPO_A" 90 90
+
 WL="$FX/watchlist.json"
 cat > "$WL" <<JSON
 {"global_max_concurrent":2,"repos":[{"path":"$REPO_A","remotes":["origin"]},{"path":"$REPO_B","remotes":["origin"]}]}
@@ -97,7 +116,8 @@ if [ "\$1" = "pr" ] && [ "\$2" = "list" ]; then
  {"number":2,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE","name":"ci"}],"reviewDecision":"","headRefName":"h2","baseRefName":"main"},
  {"number":3,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"UNSTABLE","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE","name":"non-required-lint"}],"reviewDecision":"","headRefName":"h3","baseRefName":"main"},
  {"number":6,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}],"reviewDecision":"CHANGES_REQUESTED","headRefName":"h6","baseRefName":"main"},
- {"number":7,"state":"OPEN","isDraft":true,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}],"reviewDecision":"","headRefName":"h7","baseRefName":"main"}
+ {"number":7,"state":"OPEN","isDraft":true,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}],"reviewDecision":"","headRefName":"h7","baseRefName":"main"},
+ {"number":90,"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[{"name":"auto-merge"}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}],"reviewDecision":"","headRefName":"h90","baseRefName":"main"}
 ]
 JSON
       exit 0
@@ -160,6 +180,16 @@ JSON
     ;;
   esac
 fi
+# issue view <n> --json state (issue #96): the explicit per-issue state read for a
+# suspected-closed no-PR issue. #8 is confirmed CLOSED; #89 simulates a read
+# failure (=> unconfirmed => fail-soft). The shim prints the final --jq value.
+if [ "\$1" = "issue" ] && [ "\$2" = "view" ]; then
+  case "\$repo:\$3" in
+    o/repo-a:8)  echo "CLOSED"; exit 0 ;;
+    o/repo-a:89) echo "gh: could not read issue (simulated failure)" >&2; exit 1 ;;
+    *) echo "gh: issue not found (simulated)" >&2; exit 1 ;;
+  esac
+fi
 # Sub-issues API: repos/{owner}/{repo}/issues/{n}/sub_issues (issue #79).
 if [ "\$1" = "api" ]; then
   case "\$2" in
@@ -198,6 +228,7 @@ pr_list_calls() { grep -c 'pr list' "$CALLS" 2>/dev/null || true; }
 issue_list_calls() { grep 'issue list' "$CALLS" 2>/dev/null | grep -vc 'label epic' || true; }
 epic_list_calls() { grep -c 'label epic' "$CALLS" 2>/dev/null || true; }
 sub_issue_calls() { grep -c 'api repos/' "$CALLS" 2>/dev/null || true; }
+issue_view_calls() { grep -c 'issue view' "$CALLS" 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------
 # 1) First --github run: fetches, enriches repo-a, fails repo-b.
@@ -244,6 +275,39 @@ check "#4 github.issue_title set"       "$(gi 4 | jq -r '.github.issue_title')" 
 check "#4 class attention (untouched)"  "$(gi 4 | jq -r '.class')" "attention"
 check "#4 reason blocked (untouched)"   "$(gi 4 | jq -r '.class_reason')" "blocked"
 check "#4 confidence high (untouched)"  "$(gi 4 | jq -r '.class_confidence')" "high"
+
+# ---- issue #96: no-PR run + confirmed-closed issue => cleanup/issue_closed ----
+# #8: no PR, issue absent from the open map, explicit state read confirms CLOSED
+# => cleanup/issue_closed/high (was attention/blocked, the dashboard's busiest
+# class, forever).
+check "#8 github.pr_state null (no PR)" "$(gi 8 | jq -r '.github.pr_state')" "null"
+check "#8 github.issue_state CLOSED"    "$(gi 8 | jq -r '.github.issue_state')" "CLOSED"
+check "#8 class cleanup"                "$(gi 8 | jq -r '.class')" "cleanup"
+check "#8 reason issue_closed"          "$(gi 8 | jq -r '.class_reason')" "issue_closed"
+check "#8 confidence high"              "$(gi 8 | jq -r '.class_confidence')" "high"
+
+# #89: fail-soft — the issue-state read fails, so absence from the open map stays
+# an unproven hint and the LOCAL class stands (attention/blocked). A network error
+# must never manufacture a cleanup.
+check "#89 github not null (issue-only)" "$(gi 89 | jq -r '.github != null')" "true"
+check "#89 github.issue_state null"      "$(gi 89 | jq -r '.github.issue_state')" "null"
+check "#89 class attention (fail-soft)"  "$(gi 89 | jq -r '.class')" "attention"
+check "#89 reason blocked (fail-soft)"   "$(gi 89 | jq -r '.class_reason')" "blocked"
+
+# #90: an OPEN PR whose issue is closed — the PR state wins (pr_not_open owns the
+# closed-PR case), so the run stays pr_in_flight (confidence confirmed high) and is
+# NEVER reclassified issue_closed. Its reason is the local pr_state_unknown (no
+# pr_classified event on disk), exactly like #1 — the OPEN branch bumps confidence,
+# not the reason. The point: an open PR is never touched by the issue_closed path.
+check "#90 github.pr_state OPEN"        "$(gi 90 | jq -r '.github.pr_state')" "OPEN"
+check "#90 class pr_in_flight"          "$(gi 90 | jq -r '.class')" "pr_in_flight"
+check "#90 confidence high (PR confirmed)" "$(gi 90 | jq -r '.class_confidence')" "high"
+check "#90 reason not issue_closed"     "$(gi 90 | jq -r '.class_reason')" "pr_state_unknown"
+
+# Call count (criterion 6): the state read runs ONCE per suspected-closed no-PR
+# issue (#8 + #89 = 2), never for #90 (it has a PR) nor #4 (present in the open
+# map). repo-b failed the PR fetch first, so it is never probed for issue state.
+check "gh issue view once per suspected-closed no-PR issue (2)" "$(issue_view_calls)" "2"
 
 # #2 required check red => attention/pr_ci_red.
 check "#2 class attention"        "$(gi 2 | jq -r '.class')" "attention"
@@ -329,6 +393,11 @@ check "cache hit: #1 title served from cache" \
 check "cache hit: no epic list call" "$(epic_list_calls)" "0"
 check "cache hit: no sub-issue API call" "$(sub_issue_calls)" "0"
 check "cache hit: epics[] still served (2)" "$(jq '.epics | length' "$FX/out2.json")" "2"
+# issue-state reads are cached in the SAME owner entry (issue #96): a repo-a cache
+# hit makes NO issue-view call, yet #8 is still classified cleanup/issue_closed.
+check "cache hit: no issue view call (repo-a cached)" "$(issue_view_calls)" "0"
+check "cache hit: #8 still issue_closed from cache" \
+  "$(jq -r '.runs[] | select(.issue_number==8) | .class_reason' "$FX/out2.json")" "issue_closed"
 check "cache hit: cache_age_seconds >= 0" \
   "$(jq -r '.enrichment.cache_age_seconds >= 0' "$FX/out2.json")" "true"
 

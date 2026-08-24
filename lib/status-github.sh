@@ -131,6 +131,26 @@ status_github_closed_state() {
   fi
 }
 
+# status_github_issue_state <owner/repo> <issue-number> — the explicit per-issue
+# state read for a SUSPECTED-CLOSED issue (issue #96): a run with NO PR whose issue
+# is absent from the open-issue map. That absence is only a HINT — the open-issue
+# fetch is best-effort (issue #78), so an incomplete/failed fetch would drop an
+# open issue too. We confirm the closure with one `gh issue view --json state`
+# before letting it drive classification. Prints "OPEN", "CLOSED", or empty on any
+# failure (a 404 on a moved/deleted issue, a network error): empty means "not
+# confirmed", and the caller leaves the local class in place (fail-soft). Modelled
+# on status_github_closed_state — one `gh issue view` per suspected-closed issue,
+# cached in the same TTL entry so the read runs at most once per issue per window.
+status_github_issue_state() {
+  local owner_repo="$1" num="$2" state
+  state="$(gha_with_token gh issue view "$num" --repo "$owner_repo" \
+    --json state --jq '.state // ""' 2>/dev/null)" || { printf ''; return 0; }
+  case "$state" in
+    OPEN|CLOSED) printf '%s' "$state" ;;
+    *) printf '' ;;
+  esac
+}
+
 # status_github_pr_object <pr-json> <fetched_at> <cache_age> <label> <res> <repair>
 # Build ONE `github` sub-object for an OPEN PR. `ci` and `pr_decide_verdict` come
 # from pr_ci_state / pr_decide — this function computes neither itself. `res` and
@@ -310,7 +330,10 @@ status_github_build_epics() {
 # with every PR field null and pr_state null (so the view shows a title but no CI
 # chips — chips are for OPEN-PR rows only), plus issue_title which status.sh
 # fills from the issue map. This is what lets titles reach attention/running rows,
-# not just PR rows.
+# not just PR rows. issue_state (issue #96) is null by default and set to
+# "CLOSED"/"OPEN" by status.sh only when a suspected-closed issue was confirmed by
+# an explicit state read — pr_state null + issue_state "CLOSED" is what the
+# reclassifier turns into cleanup/issue_closed.
 status_github_issue_only_object() {
   local fetched_at="$1" age="$2"
   jq -nc --arg fa "$fetched_at" --argjson age "$age" '
@@ -326,6 +349,7 @@ status_github_issue_only_object() {
       review_decision: null,
       pr_decide_verdict: null,
       closed_as: null,
-      issue_title: null
+      issue_title: null,
+      issue_state: null
     }'
 }
