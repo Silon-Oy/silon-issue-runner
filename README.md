@@ -777,6 +777,28 @@ epic on auki. Alaissueen ajo näkyy vain kerran — kaistalla, ei irtorivinä. I
 `epics[]` on tyhjä ja näkymä on entisellään. Epic- ja alaissue-otsikot ovat samaa
 tailnet-rajattua otsikkopolkua kuin #78. Skeema ja tekninen referenssi: CLAUDE.md §5 / §6.
 
+**Runnerin versiotila (#105).** `status.sh` emittoi top-level-objektin `runner`, joka tekee ajossa
+olevan runner-version tilan luettavaksi Ohjaamosta. Se on **paikallista git-tietoa** — saatavilla
+**ilman** `--github`iä eikä siihen liity uutta verkkokutsua (`behind_origin` on yhtä tuore kuin
+viimeisin pollerin `git fetch`). Kentät: `version` (lyhyt HEAD-sha), `behind_origin` (montako
+committia jäljessä `origin/main`ia, `null` jos ei tiedossa), `pinned_version` (emo-repon tallentama
+pinni tälle työpuulle, `null` kun paketti ei ole submodule), `update_state` ja `pin_age_seconds`
+(kuinka kauan pinni on odottanut, `null` jos committia ei ole paikallisesti). `update_state` on yksi
+neljästä:
+
+| Tila | Merkitys | Toimenpide |
+|---|---|---|
+| `up_to_date` | Pinni == työpuu ja ajan tasalla (tai ei submodule) | — |
+| `pin_pending` | Emo-repon pinni eroaa työpuusta — sync lykkää nostoa (ajo elossa) | **Ei mitään.** Korjaantuu itsestään ensimmäisellä idle-hetkellä |
+| `behind_upstream` | Pinni == työpuu, mutta yläjuoksu on edennyt | Odota pinnin nostoa (CI) tai nosta se |
+| `unknown` | Ajautumaa ei voitu laskea (ei originia / fetch tekemättä / pinni lukukelvoton) | — |
+
+Sivu näyttää tilan yläosassa **vain kun se ei ole `up_to_date`**, suomenkielisin selittein. `pin_pending`
+on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsestään. Erottelu on
+olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka
+johti kerran väärään "5 vuorokautta jäljessä" -diagnoosiin ja aikeeseen tehdä käsin checkout elävän ajon
+alta (#32). Skeema ja tekninen referenssi: CLAUDE.md §6.
+
 ---
 
 ## 7. Turvamalli

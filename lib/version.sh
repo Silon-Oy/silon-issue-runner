@@ -56,6 +56,91 @@ runner_behind_origin() {
   printf '%s' "$count"
 }
 
+# _runner_pinned_full <dir> — full sha of the commit the SUPERPROJECT pins this
+# working tree at, or "" when <dir> is not a submodule, or "?" when a superproject
+# exists but its pin cannot be read. The maintainer install model (CLAUDE.md §3)
+# mounts the package as a pinned dotfiles submodule; the default model (a symlinked
+# clone) is not a submodule, so `--show-superproject-working-tree` is empty and the
+# package falls back to the plain two-tier state with no special case (issue #105).
+# The dotfiles path is NEVER hardcoded — the superproject is discovered generically.
+_runner_pinned_full() {
+  local dir="$1" super top rel sha
+  super=$(git -C "$dir" rev-parse --show-superproject-working-tree 2>/dev/null) || super=""
+  # Empty => not a submodule => no pin. This is the default install model.
+  [ -n "$super" ] || { printf ''; return 0; }
+  top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || { printf '?'; return 0; }
+  # Canonicalise both so a symlinked tmp path (/tmp -> /private/tmp on macOS) does
+  # not break the prefix match below.
+  super=$(cd "$super" 2>/dev/null && pwd -P) || { printf '?'; return 0; }
+  top=$(cd "$top" 2>/dev/null && pwd -P) || { printf '?'; return 0; }
+  # rel = the submodule working tree's path relative to the superproject.
+  case "$top" in
+    "$super")   rel="" ;;
+    "$super"/*) rel="${top#"$super"/}" ;;
+    *)          printf '?'; return 0 ;;
+  esac
+  [ -n "$rel" ] || { printf '?'; return 0; }
+  # The gitlink records the pinned commit sha; `HEAD:<rel>` resolves it WITHOUT
+  # the commit object needing to be present locally (a fetch may be pending).
+  sha=$(git -C "$super" rev-parse "HEAD:$rel" 2>/dev/null) || { printf '?'; return 0; }
+  printf '%s' "$sha"
+}
+
+# runner_pinned_version <dir> — short sha of the superproject's pin for this
+# working tree, "" when not a submodule, "?" when unreadable. Fail-soft like
+# runner_version. The abbreviation uses <dir>'s own object db when the commit is
+# present, else the full sha is returned (a pin can reference a not-yet-fetched
+# commit — issue #105 edge case).
+runner_pinned_version() {
+  local dir="$1" full
+  full=$(_runner_pinned_full "$dir")
+  case "$full" in
+    ''|'?') printf '%s' "$full"; return 0 ;;
+  esac
+  git -C "$dir" rev-parse --short "$full" 2>/dev/null || printf '%s' "$full"
+}
+
+# runner_update_state <dir> — one of four words describing the runner's version
+# state, DERIVED from the existing pieces (no new network call, issue #105):
+#   pin_pending      the superproject pins a commit DIFFERENT from this working
+#                    tree's HEAD. The parent-repo sync is deferring the pin bump
+#                    (typically because a run is live); it self-corrects on the
+#                    next idle. This is NEUTRAL, not a warning.
+#   behind_upstream  pin == HEAD, but HEAD is behind origin — upstream advanced and
+#                    the pin has not been bumped yet.
+#   up_to_date       pin == HEAD (or no submodule) and behind == 0.
+#   unknown          the drift cannot be computed (no origin ref / never fetched)
+#                    or the superproject pin is unreadable. NEVER shown as OK.
+# The pin comparison uses FULL shas so it does not depend on two repos abbreviating
+# the same commit to the same length; the sha compare needs no local object.
+runner_update_state() {
+  local dir="$1" pinned_full head_full behind
+  pinned_full=$(_runner_pinned_full "$dir")
+  [ "$pinned_full" = "?" ] && { printf 'unknown'; return 0; }
+  if [ -n "$pinned_full" ]; then
+    head_full=$(git -C "$dir" rev-parse HEAD 2>/dev/null) || head_full=""
+    [ -n "$head_full" ] || { printf 'unknown'; return 0; }
+    if [ "$pinned_full" != "$head_full" ]; then printf 'pin_pending'; return 0; fi
+  fi
+  behind=$(runner_behind_origin "$dir")
+  case "$behind" in
+    '?') printf 'unknown' ;;
+    0)   printf 'up_to_date' ;;
+    *)   printf 'behind_upstream' ;;
+  esac
+}
+
+# runner_pin_commit_epoch <dir> — committer epoch of the pinned commit, IF that
+# object is present in <dir>'s own object db, else "" (a pin can reference a commit
+# not yet fetched locally — issue #105 edge case). Lets a caller show HOW LONG a
+# pin has waited, but only when the age can actually be measured.
+runner_pin_commit_epoch() {
+  local dir="$1" full
+  full=$(_runner_pinned_full "$dir")
+  case "$full" in ''|'?') printf ''; return 0 ;; esac
+  git -C "$dir" show -s --format=%ct "$full" 2>/dev/null || printf ''
+}
+
 # runner_version_summary <dir> — one-line human string for reports and the
 # --version flag: "<sha> (N commits behind origin/main)" when drifted,
 # "<sha> (up to date)" when even, or bare "<sha>" when the drift is unknown.

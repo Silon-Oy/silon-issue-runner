@@ -96,6 +96,95 @@ printf '%s' "$SUM_Q" | grep -q 'behind' && { echo "FAIL: summary (unknown) claim
 printf '%s' "$SUM_Q" | grep -q 'up to date' && { echo "FAIL: summary (unknown) claims up to date ('$SUM_Q')"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS: runner_version_summary (behind / up to date / bare sha)"
 
+# === runner_pinned_version + runner_update_state (issue #105) ==============
+# Build a superproject that pins a submodule, then drive the pin/HEAD/behind
+# combinations. File-protocol submodules are blocked by default since git 2.38
+# (CVE-2022-39253), so allow them locally for the fixture only.
+SUBSRC="$WORK/subsrc"
+git init -q "$SUBSRC"
+( cd "$SUBSRC" && git config user.email t@t && git config user.name t \
+  && git commit -q --allow-empty -m s1 && git commit -q --allow-empty -m s2 )
+
+SUPER="$WORK/super"
+git init -q "$SUPER"
+( cd "$SUPER" && git config user.email t@t && git config user.name t \
+  && git commit -q --allow-empty -m super1 \
+  && git -c protocol.file.allow=always submodule add -q "$SUBSRC" sub 2>/dev/null \
+  && git commit -q -m 'add sub' )
+SUBWT="$SUPER/sub"
+
+if [ -e "$SUBWT/.git" ] && [ -n "$(git -C "$SUPER" rev-parse HEAD:sub 2>/dev/null)" ]; then
+  PINSTART=0
+  PIN_FULL=$(git -C "$SUPER" rev-parse HEAD:sub)
+
+  # --- runner_pinned_version: the superproject's pin (a prefix of the full sha) ---
+  PV=$(runner_pinned_version "$SUBWT")
+  echo "--- pinned_version: $PV (pin=$PIN_FULL) ---"
+  printf '%s' "$PV" | grep -Eq '^[0-9a-f]{7,}$' \
+    || { echo "FAIL: pinned_version not a short sha ('$PV')"; FAIL=1; }
+  case "$PIN_FULL" in
+    "$PV"*) : ;;
+    *) echo "FAIL: pinned_version '$PV' not a prefix of pin '$PIN_FULL'"; FAIL=1 ;;
+  esac
+
+  # Non-submodule (default install model) => empty pin, no error.
+  PV_NONE=$(runner_pinned_version "$REPO")
+  [ -z "$PV_NONE" ] || { echo "FAIL: pinned_version outside a submodule != '' (got '$PV_NONE')"; FAIL=1; }
+
+  # --- runner_update_state: pin == HEAD, behind 0 => up_to_date ---
+  ( cd "$SUBWT" && git update-ref refs/remotes/origin/main HEAD )
+  ST=$(runner_update_state "$SUBWT")
+  [ "$ST" = "up_to_date" ] \
+    || { echo "FAIL: update_state (pin==HEAD, behind 0) != up_to_date (got '$ST')"; FAIL=1; }
+
+  # pin == HEAD, behind > 0 => behind_upstream. Advance origin/main one commit
+  # ahead of the pinned HEAD.
+  ( cd "$SUBWT" && git config user.email t@t && git config user.name t \
+    && git commit -q --allow-empty -m ahead )
+  AHEAD_FULL=$( cd "$SUBWT" && git rev-parse HEAD )
+  ( cd "$SUBWT" && git reset -q --hard "$PIN_FULL" \
+    && git update-ref refs/remotes/origin/main "$AHEAD_FULL" )
+  ST=$(runner_update_state "$SUBWT")
+  [ "$ST" = "behind_upstream" ] \
+    || { echo "FAIL: update_state (pin==HEAD, behind>0) != behind_upstream (got '$ST')"; FAIL=1; }
+
+  # pin != HEAD => pin_pending, INDEPENDENT of behind (origin/main even with HEAD).
+  ( cd "$SUBWT" && git reset -q --hard "$AHEAD_FULL" \
+    && git update-ref refs/remotes/origin/main HEAD )
+  ST=$(runner_update_state "$SUBWT")
+  [ "$ST" = "pin_pending" ] \
+    || { echo "FAIL: update_state (pin!=HEAD) != pin_pending (got '$ST')"; FAIL=1; }
+
+  # behind is "?" (no upstream ref) => unknown, never up_to_date. Reuse NOUP, a
+  # non-submodule repo with no origin.
+  ST=$(runner_update_state "$NOUP")
+  [ "$ST" = "unknown" ] \
+    || { echo "FAIL: update_state (behind ?) != unknown (got '$ST')"; FAIL=1; }
+
+  # Superproject present but its pin unreadable => runner_pinned_version "?" and
+  # runner_update_state unknown. Break the superproject HEAD so `HEAD:sub` fails
+  # while the submodule linkage (via gitdir) still resolves the superproject.
+  SUPER2="$WORK/super2"
+  git init -q "$SUPER2"
+  ( cd "$SUPER2" && git config user.email t@t && git config user.name t \
+    && git commit -q --allow-empty -m super1 \
+    && git -c protocol.file.allow=always submodule add -q "$SUBSRC" sub 2>/dev/null \
+    && git commit -q -m 'add sub' )
+  SUBWT2="$SUPER2/sub"
+  printf 'ref: refs/heads/does-not-exist\n' > "$SUPER2/.git/HEAD"
+  PV_Q=$(runner_pinned_version "$SUBWT2")
+  echo "--- pinned_version (unreadable super): [$PV_Q] ---"
+  [ "$PV_Q" = "?" ] \
+    || { echo "FAIL: pinned_version (unreadable super) != '?' (got '$PV_Q')"; FAIL=1; }
+  ST=$(runner_update_state "$SUBWT2")
+  [ "$ST" = "unknown" ] \
+    || { echo "FAIL: update_state (unreadable super) != unknown (got '$ST')"; FAIL=1; }
+
+  [ "$FAIL" = "0" ] && echo "PASS: runner_pinned_version + runner_update_state (pin/behind matrix, non-submodule, unreadable)"
+else
+  echo "SKIP: git submodule fixture unavailable (file-protocol submodules blocked?)"
+fi
+
 # === runner_fetch_throttled ================================================
 # A git shim that records every `fetch` and execs real git otherwise, so the
 # throttle decision is observable without a network. version.sh's other git

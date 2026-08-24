@@ -283,6 +283,16 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
   .banner.warn{background:#3a2f10;color:#f0d890;border-color:#5c4a1a}
   .banner.err{background:#3a1616;color:#f0b0b0;border-color:#5c1a1a}
 }
+/* Runner version state (#105): shown only when NOT up_to_date. pin_pending is
+   neutral (plain card); behind_upstream/unknown carry an amber accent — worth
+   noting, never alarming. */
+.runner-state{padding:.55rem .8rem;border-radius:6px;margin:.5rem 0 .8rem;font-size:.9rem;
+  border:1px solid var(--border);background:var(--card)}
+.runner-state.rs-behind_upstream,.runner-state.rs-unknown{border-color:var(--c-attention)}
+.runner-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:.6rem}
+.runner-label{font-weight:600}
+.runner-ver{color:var(--muted);font-size:.82rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.runner-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
 .chips{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.5rem;margin:.4rem 0 .8rem}
 .chip{border:1px solid var(--border);background:var(--card);color:var(--fg);
   padding:.35rem .7rem;border-radius:999px;font-size:.85rem;cursor:pointer;
@@ -376,6 +386,7 @@ a:hover{text-decoration:underline}
   <h1>run-issues status</h1>
   <p class="meta" id="meta"></p>
   <div id="banners"></div>
+  <div id="runner"></div>
   <ul class="chips" id="chips"></ul>
   <div class="controls">
     <label>Järjestys:
@@ -432,6 +443,20 @@ a:hover{text-decoration:underline}
     pr_ci_red:             {label:"CI punainen",             next:"PR:n CI on punainen — korjaa tai anna vahdin korjata."},
     pr_changes_requested:  {label:"Muutoksia pyydetty",      next:"PR:ään on pyydetty muutoksia — käsittele katselmointi."},
     pr_draft_stale:        {label:"Draft jäänyt",            next:"PR on jäänyt draftiksi — merkitse valmiiksi tai sulje."}
+  };
+
+  // runner.update_state -> {label, next} (#105). Shown ONLY when the state is not
+  // up_to_date. pin_pending is NEUTRAL — its wording says it self-corrects and
+  // needs no action, so a deferred pin is never mistaken for a missed update (the
+  // exact #32 diagnosis this distinction exists to prevent). An unknown state
+  // falls back to its raw code.
+  var RUNNER_STATES = {
+    pin_pending:     {label:"Pinni odottaa lykättynä",
+                      next:"Emo-repon sync nostaa pinnin ensimmäisellä idle-hetkellä — korjaantuu itsestään, ei toimenpidettä."},
+    behind_upstream: {label:"Jäljessä yläjuoksusta",
+                      next:"Yläjuoksu on edennyt eikä pinniä ole vielä nostettu. Odota pinnin nostoa (CI) tai nosta se."},
+    unknown:         {label:"Versiotila tuntematon",
+                      next:"Ajautumaa ei voitu laskea (ei origin-remotea tai fetch tekemättä)."}
   };
 
   // github.ci -> {label, css}. An unknown/absent ci renders no chip.
@@ -663,6 +688,32 @@ a:hover{text-decoration:underline}
       box.appendChild(el("div", "banner warn",
         "⚠ Vajaa luenta: " + n + " run.json-tiedostoa oli lukukelvottomia. Muut tiedot ovat täydelliset."));
     }
+  }
+
+  // renderRunner — the runner version banner (#105). Rendered ONLY when
+  // update_state is present and not up_to_date, so a healthy runner shows nothing.
+  // Every data string (version, pinned_version) is inserted via el() => textContent
+  // (allowlist + XSS-safe): a sha literally named "<script>" is shown as text.
+  function renderRunner(data){
+    var box = document.getElementById("runner");
+    clear(box);
+    var rn = data.runner;
+    if (!rn || !rn.update_state || rn.update_state === "up_to_date") return;
+    var info = RUNNER_STATES[rn.update_state] || {label: rn.update_state, next: ""};
+    var wrap = el("div", "runner-state rs-" + rn.update_state);
+    var head = el("div", "runner-head");
+    head.appendChild(el("span", "runner-label", info.label));
+    if (typeof rn.version === "string" && rn.version)
+      head.appendChild(el("span", "runner-ver", "versio " + rn.version));
+    if (rn.update_state === "pin_pending" && typeof rn.pinned_version === "string" && rn.pinned_version)
+      head.appendChild(el("span", "runner-ver", "pinni " + rn.pinned_version));
+    if (rn.update_state === "pin_pending" && rn.pin_age_seconds != null)
+      head.appendChild(el("span", "runner-ver", "odottanut " + dur(rn.pin_age_seconds)));
+    if (rn.update_state === "behind_upstream" && rn.behind_origin != null)
+      head.appendChild(el("span", "runner-ver", rn.behind_origin + " committia jäljessä"));
+    wrap.appendChild(head);
+    if (info.next) wrap.appendChild(el("div", "runner-next", info.next));
+    box.appendChild(wrap);
   }
 
   function renderChips(data){
@@ -926,6 +977,7 @@ a:hover{text-decoration:underline}
     var data = lastData;
     renderMeta(data);
     renderBanners(data);
+    renderRunner(data);
     renderChips(data);
     document.getElementById("sort").value = sortMode;
 

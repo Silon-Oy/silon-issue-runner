@@ -286,6 +286,48 @@ if [ -f "$HTMLEP" ]; then
   presenti "unreadable epic note wording" "lapsijoukkoa ei saatu luettua" "$HTMLEP"
 fi
 
+# ---- Case 4d: runner version state banner (#105) --------------------------
+# A document whose top-level `runner` object is pin_pending, with a version sha
+# that is an XSS payload. The page markup is data-free, so the sha value never
+# lands in it; the banner is rendered client-side. This case asserts the JS reads
+# the named runner fields, has the up_to_date guard (=> nothing shown when healthy),
+# carries distinct pin_pending / behind_upstream wordings, and that pin_pending's
+# wording reads as self-correcting (never a warning). The XSS sha must not appear.
+RUNNER_SHA_LEAK="RUNNERSHA-<script>alert(3)</script>-SECRET"
+cat > "$FX/runner.json" <<JSON
+{"schema_version":1,"generated_at":"2026-08-11T23:30:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "runner":{"version":"$RUNNER_SHA_LEAK","behind_origin":14,"pinned_version":"deadbee",
+           "update_state":"pin_pending","pin_age_seconds":12600},
+ "enrichment":{"mode":"local","fetched_at":null,"cache_age_seconds":null},
+ "totals":{"runs":0,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":0},"degraded":false},
+ "read_errors":[],"runs":[],"epics":[]}
+JSON
+OUTRN="$FX/wwwrn"
+RUN_ISSUES_STATUS_OUT_DIR="$OUTRN" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/runner.json"; rcrn=$?
+HTMLRN="$OUTRN/index.html"
+check "runner doc renders (exit 0)" "$rcrn" "0"
+if [ -f "$HTMLRN" ]; then
+  # Data-free page: the version sha value (incl. its XSS payload) never appears.
+  absent "runner sha value not embedded" "$RUNNER_SHA_LEAK" "$HTMLRN"
+  absent "runner sha XSS not embedded" "<script>alert(3)" "$HTMLRN"
+  # Allowlist: the JS reads the named runner fields and renders the banner.
+  present "JS reads data.runner" "data.runner" "$HTMLRN"
+  present "JS renders runner banner" "renderRunner" "$HTMLRN"
+  present "JS reads runner.update_state" "update_state" "$HTMLRN"
+  present "JS reads runner.pinned_version" "pinned_version" "$HTMLRN"
+  present "JS reads runner.behind_origin" "behind_origin" "$HTMLRN"
+  present "JS reads runner.pin_age_seconds" "pin_age_seconds" "$HTMLRN"
+  # up_to_date guard: a healthy runner shows no element (spec AC #4).
+  present "up_to_date guard present" 'update_state === "up_to_date"' "$HTMLRN"
+  # Distinct wordings for pin_pending vs behind_upstream, each with a next step.
+  presenti "pin_pending label" "Pinni odottaa lykättynä" "$HTMLRN"
+  presenti "pin_pending self-correcting wording" "korjaantuu itsestään" "$HTMLRN"
+  presenti "behind_upstream label" "Jäljessä yläjuoksusta" "$HTMLRN"
+  presenti "behind_upstream next step" "Odota pinnin nostoa" "$HTMLRN"
+fi
+
 # ---- Case 5b: degraded + zero-runs document still renders (exit 0, verbatim) ----
 # The page markup is data-free, so it is identical regardless of input; this case
 # exercises the schema gate + verbatim status.json on a different document.

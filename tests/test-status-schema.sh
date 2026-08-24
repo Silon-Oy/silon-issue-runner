@@ -83,9 +83,20 @@ check "exit code clean" "$rc" "0"
 if jq -e . "$OUT" >/dev/null 2>&1; then ok "output is valid JSON"; else bad "output is not valid JSON"; fi
 
 # ---- top-level required keys ----
-for k in schema_version generated_at host stale_after_seconds enrichment sources totals runs epics read_errors; do
+for k in schema_version generated_at host stale_after_seconds runner enrichment sources totals runs epics read_errors; do
   if jq -e "has(\"$k\")" "$OUT" >/dev/null 2>&1; then ok "top-level key: $k"; else bad "missing top-level key: $k"; fi
 done
+
+# ---- runner object (issue #105): present WITHOUT --github, five named fields.
+# The info is local git metadata, so it is emitted in plain (local) mode too. ----
+check "runner is an object" "$(jq -r '.runner | type' "$OUT")" "object"
+RUNNER_MISSING="$(jq -r '
+  (["version","behind_origin","pinned_version","update_state","pin_age_seconds"]) as $req
+  | ($req - (.runner | keys)) | join(",")' "$OUT")"
+check "runner has all five fields" "$RUNNER_MISSING" ""
+# update_state is one of the four documented words.
+BAD_STATE="$(jq -r '.runner.update_state | select(. != "up_to_date" and . != "pin_pending" and . != "behind_upstream" and . != "unknown")' "$OUT")"
+check "runner.update_state in enum" "$BAD_STATE" ""
 
 # ---- epics[] is an array, and EMPTY in local mode (issue #79). Epic membership
 # is a gh-enrichment product; without --github there are no epics, exactly as
@@ -131,6 +142,25 @@ check "all class_confidence in {high,low}" "$BAD_CONF" ""
 # ---- enrichment provenance: mode local, gh fields inert ----
 check "enrichment.mode local" "$(jq -r '.enrichment.mode' "$OUT")" "local"
 check "enrichment.fetched_at null" "$(jq -r '.enrichment.fetched_at' "$OUT")" "null"
+
+# ---- schema_version stays 1 (runner is ADDITIVE, issue #105) ----
+check "schema_version still 1" "$(jq -r '.schema_version' "$OUT")" "1"
+
+# ---- runner degrades cleanly outside a git repo (issue #105, criterion 5).
+# Point RUN_ISSUES_HOME at a non-git dir (with lib/ symlinked so status.sh can
+# still source its libraries): the document must stay valid and complete, with
+# runner.update_state "unknown" — never an empty output or a non-zero exit. ----
+NONGIT="$FX/nongit"
+mkdir -p "$NONGIT"
+ln -s "$ROOT/lib" "$NONGIT/lib"
+OUT_NG="$FX/out-nongit.json"
+HOME="$FX/home" RUN_ISSUES_HOME="$NONGIT" RUN_ISSUES_WATCHLIST="$WL" \
+  bash "$STATUS" --json > "$OUT_NG"; rc_ng=$?
+if [ "$rc_ng" -eq 0 ] || [ "$rc_ng" -eq 3 ]; then ok "non-git run exits 0/3 ($rc_ng)"; else bad "non-git run exit=$rc_ng"; fi
+if jq -e . "$OUT_NG" >/dev/null 2>&1; then ok "non-git output is valid JSON"; else bad "non-git output not valid JSON"; fi
+check "non-git runner.update_state unknown" "$(jq -r '.runner.update_state' "$OUT_NG")" "unknown"
+check "non-git runner.version '?'" "$(jq -r '.runner.version' "$OUT_NG")" "?"
+check "non-git runner.pinned_version null" "$(jq -r '.runner.pinned_version' "$OUT_NG")" "null"
 
 echo "----------------------------------------"
 echo "status-schema: PASS=$PASS FAIL=$FAIL"

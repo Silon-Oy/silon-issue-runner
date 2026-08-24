@@ -79,6 +79,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 . "$RUN_ISSUES_HOME/lib/locking.sh"
 # shellcheck source=lib/status-read.sh
 . "$RUN_ISSUES_HOME/lib/status-read.sh"
+# version.sh: runner version/pin state, for the top-level `runner` object (issue
+# #105). Pure fail-soft functions, no network — reads git metadata only, so the
+# runner object is available WITHOUT --github (the info is local, not GitHub).
+# shellcheck source=lib/version.sh
+. "$RUN_ISSUES_HOME/lib/version.sh"
 # --github enrichment: pr_decide / pr_ci_state (pr-watch-lib.sh), gha_with_token
 # (github-app-auth.sh), the shared epic child-set resolver (issue.sh's
 # list_epic_children — issue #91: the view resolves epic children through the SAME
@@ -362,6 +367,35 @@ fi
 # ---- clock (shared by enrichment cache-age and the assembled document) ----
 NOW_EPOCH="$(date -u +%s)"
 GENERATED_AT="$(date -u +%FT%TZ)"
+
+# ---- runner version state (issue #105) --------------------------------------
+# The top-level `runner` object distinguishes "pin waiting, self-corrects" from
+# "genuinely behind upstream" — two states that produced the SAME poller log line
+# and one wrong "5 days behind" diagnosis (#32). Read from the package's own git
+# metadata (RUN_ISSUES_HOME); NO new network call — behind_origin is only as fresh
+# as the last runner_fetch_throttled, exactly like the poller. Fail-soft: outside
+# a git repo every field degrades (version "?", update_state "unknown"), never an
+# empty document or a non-zero exit. Available WITHOUT --github (info is local).
+RUNNER_VERSION="$(runner_version "$RUN_ISSUES_HOME")"
+RUNNER_BEHIND="$(runner_behind_origin "$RUN_ISSUES_HOME")"
+RUNNER_PINNED="$(runner_pinned_version "$RUN_ISSUES_HOME")"
+RUNNER_STATE="$(runner_update_state "$RUN_ISSUES_HOME")"
+RUNNER_PIN_EPOCH="$(runner_pin_commit_epoch "$RUN_ISSUES_HOME")"
+RUNNER_JSON="$(jq -nc \
+  --arg version "$RUNNER_VERSION" \
+  --arg behind "$RUNNER_BEHIND" \
+  --arg pinned "$RUNNER_PINNED" \
+  --arg state "$RUNNER_STATE" \
+  --arg pinepoch "$RUNNER_PIN_EPOCH" \
+  --argjson now "$NOW_EPOCH" '
+  {
+    version: $version,
+    behind_origin: (if $behind == "" or $behind == "?" then null else ($behind | tonumber? // null) end),
+    pinned_version: (if $pinned == "" then null else $pinned end),
+    update_state: $state,
+    pin_age_seconds: (if $pinepoch == "" then null
+                      else (($now - ($pinepoch | tonumber)) as $a | if $a < 0 then 0 else $a end) end)
+  }' 2>/dev/null || printf '{"version":"?","behind_origin":null,"pinned_version":null,"update_state":"unknown","pin_age_seconds":null}')"
 
 # ---- optional GitHub enrichment (--github) ----------------------------------
 # Fill each run's `github` sub-object from `gh pr list` ONCE per owner/repo,
@@ -739,6 +773,7 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
     generated_at: \$generated_at,
     host: \$this_host,
     stale_after_seconds: \$stale,
+    runner: \$runner,
     enrichment: { mode: \$enrich_mode, fetched_at: \$enrich_fetched_at,
                   cache_age_seconds: \$enrich_cache_age,
                   repos_enriched: \$enrich_repos_enriched,
@@ -782,6 +817,7 @@ DOC="$(jq -n \
   --slurpfile state "$TMPD/state.json" \
   --slurpfile ghmap "$TMPD/ghmap.json" \
   --argjson epics "$EPICS_JSON" \
+  --argjson runner "$RUNNER_JSON" \
   --argjson now "$NOW_EPOCH" \
   --argjson stale "$STALE_AFTER" \
   --argjson repos_configured "$REPOS_CONFIGURED" \
