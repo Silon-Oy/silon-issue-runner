@@ -394,7 +394,7 @@ automaation lisäämää labelia kannata poistaa käsin ennen kuin syy on korjat
 
 | Label | Kuka lisää | Kuka poistaa | Vaikutus |
 |---|---|---|---|
-| `auto-run` | **sinä** | sinä | Poimintaehto. Nimi tulee konfiguraatiosta (`default_labels` / `RUN_ISSUES_LABELS_CSV`), ei koodista |
+| `auto-run` | **sinä** | sinä | Poimintaehto. Nimi tulee watchlistin konfiguraatiosta (`default_labels` tai repon `labels`), ei koodista |
 | `waiting` | orkestraattori, kun ajo jää odottamaan vastaustasi | orkestraattori, kun `--continue` jatkaa | Estää poiminnan sillä aikaa kun tarkennus on kesken |
 | `wip` | **sinä** | sinä | Estää poiminnan. Tarkoitettu "teen tämän itse" -merkinnäksi |
 | `auto-claimed` | orkestraattori, kun ajo varaa issuen (S3) | orkestraattori, kun ajo perääntyy; `cleanup-run.sh` (myös `/cleanup-run`) siivouksessa | **Varausmerkintä** (6.4): estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Vain automaatio kirjoittaa** — älä lisää tai poista käsin |
