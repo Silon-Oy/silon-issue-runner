@@ -99,7 +99,7 @@ assert_configurable auto-merge PR_WATCH_MERGE_LABEL auto-merge
 # The authoritative pickup query lives in lib/issue.sh. Extract its hardcoded
 # -label: terms (the configurable clean label expands from a variable and is
 # handled separately in case 3) and assert the skill names each as a blocker.
-QUERY_LINE="$(grep -nE 'is:open no:assignee .*-is:blocked' "$ISSUE_LIB" | grep -v '^\s*#' | head -1)"
+QUERY_LINE="$(grep -nE 'is:open .*-is:blocked' "$ISSUE_LIB" | grep -v '^\s*#' | head -1)"
 if [ -z "$QUERY_LINE" ]; then
   echo "FAIL: could not locate the pickup query in $ISSUE_LIB — its shape changed"; FAIL=1
 else
@@ -137,7 +137,7 @@ fi
 derived_labels() {
   {
     # 1. pickup query literals (the ${clean_label} term is a variable → source 4)
-    grep -hE 'is:open no:assignee .*-is:blocked' "$ISSUE_LIB" \
+    grep -hE 'is:open .*-is:blocked' "$ISSUE_LIB" \
       | grep -v '^[[:space:]]*#' \
       | grep -oE -- '-label:[a-z][a-z0-9-]*' | sed 's/^-label://'
 

@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Unit tests for verify_claim — guards against the S2/S3 race where two
 # runners both successfully `gh issue edit --add-assignee @me` and both
-# previously passed verification (issue #6). The fix: verify_claim returns 0
-# only when @me is the SOLE assignee.
+# previously passed verification (issue #6).
+#
+# Issue #99 changed the rule from "@me is the SOLE assignee" to "the assignee set
+# AFTER the claim equals the set BEFORE the claim ∪ {@me}". The before-set is the
+# 4th argument (empty when nobody was assigned, which reduces to the old rule).
+# This lets a hand-assigned issue run — a human who assigned themselves or a
+# colleague no longer fails verification — while a racing runner on another
+# account still shows up as an extra login and loses. Cases 1–5 keep the empty
+# before-set (old semantics still hold); cases 6–8 exercise the new before-set.
 #
 # Tests use a mock `gh` stub on PATH that replays canned JSON for
 # `gh issue view --json assignees`.
@@ -102,6 +109,41 @@ if verify_claim "$TMP" 5; then
   fail "empty assignees → verify_claim should return non-zero"
 else
   pass "empty assignees → verify_claim returns non-zero"
+fi
+reset_path
+
+# ── Test 6: human pre-assigned THEMSELVES (== @me account) → passes ──
+# The bot and maintainer share an account, so a human who assigned themselves looks
+# identical to @me. before={me}, after={me} → before ∪ {me} == after → pass.
+install_gh_stub "maintainer"
+if verify_claim "$TMP" 6 "" "maintainer"; then
+  pass "pre-assigned self → verify_claim returns 0 (before ∪ {me} == after)"
+else
+  fail "pre-assigned self → verify_claim should return 0"
+fi
+reset_path
+
+# ── Test 7: human pre-assigned a COLLEAGUE → passes (the #99 fix) ────
+# A different person was assigned before the claim; after the claim the set is
+# {colleague, me} == {colleague} ∪ {me}. This is the whole point of issue #99: a
+# hand-assigned issue must no longer crash the run at exit 3.
+install_gh_stub "coworker,maintainer"
+if verify_claim "$TMP" 7 "" "coworker"; then
+  pass "pre-assigned colleague → verify_claim returns 0 (hand-assigned issue runs)"
+else
+  fail "pre-assigned colleague → verify_claim should return 0"
+fi
+reset_path
+
+# ── Test 8: racing runner (another account) during the window → fails ─
+# before={coworker}, but after gained BOTH me AND a third login from a competing
+# runner: {coworker, me, other-runner} != {coworker} ∪ {me}. The extra login is
+# the race signal → verify_claim fails, the run backs off with exit 3 as before.
+install_gh_stub "coworker,maintainer,other-runner"
+if verify_claim "$TMP" 8 "" "coworker"; then
+  fail "racing runner during window → verify_claim should return non-zero"
+else
+  pass "racing runner during window → verify_claim returns non-zero (extra login caught)"
 fi
 reset_path
 

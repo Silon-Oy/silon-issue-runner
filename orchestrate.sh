@@ -2,7 +2,7 @@
 # orchestrate.sh — /run-issues orchestrator with resume support.
 #
 # Usage:
-#   orchestrate.sh <repo-root> <issue-number-or-"poll">
+#   orchestrate.sh <repo-root> <issue-number>
 #   orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL
 #
 # The state machine runs in two phases:
@@ -40,7 +40,6 @@
 #   RUN_ISSUES_AUTO         "1" = no interactive prompts (default 0)
 #   RUN_ISSUES_REVIEW_GATE  "auto" or "interactive" (default: interactive
 #                           unless RUN_ISSUES_AUTO=1)
-#   RUN_ISSUES_LABELS_CSV   labels filter for "poll" mode (default empty)
 #   RUN_ISSUES_PR_LABELS_CSV  labels to propagate from the source issue to the
 #                           created PR, if present on the issue (default
 #                           "auto-merge"). Enables the autoflow chain
@@ -50,8 +49,8 @@
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
-#   1   fatal — invalid usage / missing run.json on resume
-#   2   no candidate issue (poll mode, nothing to do)
+#   1   fatal — invalid usage / missing run.json on resume / `poll` argument
+#       (automatic pickup is the poller's job, not the orchestrator's — issue #99)
 #   3   lock/claim race lost
 #   4   cycle review blocked the run (auto mode only)
 #   5   blocked before/at the implementer — db-clone failed, env bootstrap
@@ -118,7 +117,7 @@ FORCE=0
 usage() {
   cat >&2 <<'USAGE'
 usage:
-  orchestrate.sh [--remote <name>] [--force] <repo-root> <issue-number-or-"poll">
+  orchestrate.sh [--remote <name>] [--force] <repo-root> <issue-number>
   orchestrate.sh --resume <run-dir> --decision PROCEED|CANCEL
   orchestrate.sh --restart <run-dir>
   orchestrate.sh --continue <run-dir>
@@ -218,7 +217,6 @@ if [ -z "${RUN_ISSUES_REVIEW_GATE:-}" ]; then
     RUN_ISSUES_REVIEW_GATE="interactive"
   fi
 fi
-LABELS_CSV="${RUN_ISSUES_LABELS_CSV:-}"
 # Merge-relevant labels copied from the source issue onto the created PR.
 PR_LABELS_CSV="${RUN_ISSUES_PR_LABELS_CSV:-auto-merge}"
 
@@ -664,19 +662,17 @@ phase_a() {
   resolve_repo_slug
 
   # ---------- S1: pick issue ----------
+  # A named issue number is REQUIRED (issue #99): the orchestrator no longer polls.
+  # Automatic pickup is the poller's job — the package has exactly one pickup search
+  # (pick_oldest_candidate, driven by the poller). A literal `poll` argument (or any
+  # non-numeric value) falls through the numeric validation and exits 1 as a usage
+  # error, naming the poller as the owner of automatic pickup.
   log "S1_PickIssue (remote=$REMOTE_NAME)"
-  if [ "$ISSUE_ARG" = "poll" ]; then
-    ISSUE_NUM=$(pick_oldest_unassigned "$REPO_ROOT" "$LABELS_CSV" "$OWNER_REPO" || true)
-    if [ -z "$ISSUE_NUM" ]; then
-      log "no candidate issue"
-      exit 2
-    fi
-  else
-    ISSUE_NUM=$(printf '%s' "$ISSUE_ARG" | sed 's/^#//')
-    case "$ISSUE_NUM" in
-      ''|*[!0-9]*) echo "orchestrate: invalid issue argument '$ISSUE_ARG'" >&2; exit 1 ;;
-    esac
-  fi
+  ISSUE_NUM=$(printf '%s' "$ISSUE_ARG" | sed 's/^#//')
+  case "$ISSUE_NUM" in
+    poll)        echo "orchestrate: automatic pickup is the poller's job — pass a concrete issue number" >&2; exit 1 ;;
+    ''|*[!0-9]*) echo "orchestrate: invalid issue argument '$ISSUE_ARG' — expected an issue number" >&2; exit 1 ;;
+  esac
 
   # Snapshot issue payload — used now for branch name and later (incl. resume).
   # Run-id is namespaced by repo AND remote so the same issue number in two
@@ -788,10 +784,17 @@ phase_a() {
   # ---------- S3: claim ----------
   enter_state "S3_Claim"
   log "S3_Claim issue=$ISSUE_NUM"
+  # Snapshot the assignee set BEFORE claiming (issue #99): verify_claim now accepts
+  # a pre-assigned issue (a human may have assigned themselves or a colleague), so
+  # it checks the post-claim set equals this snapshot ∪ {@me} rather than "@me is
+  # the sole assignee". A racing runner on another account still shows up as an
+  # extra login and loses the race.
+  local before_assignees
+  before_assignees=$(issue_assignees "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" || true)
   claim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
   state_event "$RUN_DIR" "claim_attempted"
   sleep 5
-  if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"; then
+  if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$before_assignees"; then
     log "claim race lost after verification — unclaiming and exiting"
     unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
     state_finalize "$RUN_DIR" "lost_race" "claim_lost"
@@ -1490,7 +1493,7 @@ _log_label_err() {
 }
 
 # _add_waiting_label / _remove_waiting_label — best-effort label management for
-# the awaiting_clarification state. The `waiting` label keeps pick_oldest_unassigned
+# the awaiting_clarification state. The `waiting` label keeps pick_oldest_candidate
 # and the poller from re-picking the issue while it waits for maintainer's reply (both
 # exclude -label:waiting). Failures are non-fatal.
 _add_waiting_label() {

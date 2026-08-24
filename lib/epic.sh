@@ -63,11 +63,12 @@ _epic_log() {
 # epic_list_open <repo-root> <labels-csv> [<owner/repo>]
 # Prints the issue number of every OPEN epic that carries the run labels, one per
 # line. The epic must carry the run labels (typically auto-run) for us to touch
-# it: that is the "run this epic" propagation signal (§3.1). No `no:assignee`
-# filter — an epic is never assigned by the automation, and a human assignee must
-# not stop propagation. The run labels are ANDed as separate label:"x" terms,
-# exactly like pick_oldest_unassigned. Reading the list is identity-neutral, so
-# it stays on the gh-CLI default.
+# it: that is the "run this epic" propagation signal (§3.1). No reservation filter
+# (neither the old `no:assignee` nor `-label:auto-claimed`) — an epic is never
+# assigned or auto-claimed by the automation, and a human assignee must not stop
+# propagation. The run labels are ANDed as separate label:"x" terms, exactly like
+# pick_oldest_candidate. Reading the list is identity-neutral, so it stays on the
+# gh-CLI default.
 epic_list_open() {
   local repo="$1"
   local labels_csv="${2:-}"

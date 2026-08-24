@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# test-issue-pick.sh — pick_oldest_unassigned multi-label search syntax.
+# test-issue-pick.sh — pick_oldest_candidate multi-label search syntax.
 #
-# Verifies that pick_oldest_unassigned (lib/issue.sh) encodes a labels-CSV as
+# Verifies that pick_oldest_candidate (lib/issue.sh) encodes a labels-CSV as
 # separate `label:"x"` terms — which gh ANDs — keeps the standing
-# -is:blocked/-label:waiting/-label:wip + is:open/no:assignee/sort filters,
+# -is:blocked/-label:waiting/-label:wip + is:open/-label:auto-claimed/sort filters,
 # and treats an empty gh result as "no candidate" (empty stdout, rc 0).
+#
+# Issue #99 removed `no:assignee` from the pickup search and replaced the
+# reservation with `-label:auto-claimed`: a hand-assigned issue is now a valid
+# candidate, and only the automation-owned auto-claimed label removes an in-flight
+# or un-cleaned run from pickup. The `-label:auto-claimed` term is pinned exactly,
+# for the same fail-open reason as `-is:blocked`: a typo'd negative qualifier does
+# NOT error on GitHub — it silently matches everything.
 #
 # WHY THE -is:blocked TERM IS PINNED EXACTLY, AND WHY THE TWO PICKUP SEARCHES
 # ARE ASSERTED CONGRUENT:
@@ -84,7 +91,7 @@ export PATH="$BIN:$PATH"
 REPO="$WORK"  # any dir; gh is mocked so cwd is irrelevant
 
 # --- 1. multi-label CSV → ANDed label:"x" label:"y" terms ----------------
-out=$(pick_oldest_unassigned "$REPO" "auto-run,enhancement")
+out=$(pick_oldest_candidate "$REPO" "auto-run,enhancement")
 [ "$out" = "12" ] || fail "multi-label: expected 12, got [$out]"
 
 last_search() { tail -n1 "$CAPTURE"; }
@@ -95,7 +102,7 @@ case "$s" in
 esac
 
 # --- 2. standing filters always present ----------------------------------
-for term in 'is:open' 'no:assignee' '-is:blocked' '-label:waiting' '-label:wip' '-label:epic' '-label:auto-clean' 'sort:created-asc'; do
+for term in 'is:open' '-label:auto-claimed' '-is:blocked' '-label:waiting' '-label:wip' '-label:epic' '-label:auto-clean' 'sort:created-asc'; do
   case "$s" in
     *"$term"*) : ;;
     *) fail "search missing standing filter '$term': $s" ;;
@@ -124,8 +131,22 @@ case "$s" in
   *) fail "search missing exact '-label:epic': $s" ;;
 esac
 
+# --- 2c. reservation is -label:auto-claimed, and no:assignee is GONE (#99) -
+# The reservation moved from assignment to the automation-owned auto-claimed
+# label. Pin the exact negative qualifier (a typo fails open, like -is:blocked)
+# and assert `no:assignee` is no longer part of the search — a hand-assigned issue
+# must now be a valid candidate.
+case "$s" in
+  *'-label:auto-claimed'*) : ;;
+  *) fail "search missing exact '-label:auto-claimed': $s" ;;
+esac
+case "$s" in
+  *'no:assignee'*) fail "search still carries 'no:assignee' — issue #99 removed it: $s" ;;
+  *) : ;;
+esac
+
 # --- 3. empty labels CSV → no label: term added --------------------------
-out=$(pick_oldest_unassigned "$REPO" "")
+out=$(pick_oldest_candidate "$REPO" "")
 s=$(last_search)
 case "$s" in
   *'label:"'*) fail "empty CSV should add no label: term, got: $s" ;;
@@ -135,20 +156,20 @@ esac
 
 # --- 4. zero-match → empty stdout, rc 0 ----------------------------------
 set +e
-out=$(pick_oldest_unassigned "$REPO" "auto-run,documentation"); rc=$?
+out=$(pick_oldest_candidate "$REPO" "auto-run,documentation"); rc=$?
 set -e
 [ "$rc" = "0" ] || fail "zero-match: expected rc 0, got $rc"
 [ -z "$out" ]   || fail "zero-match: expected empty stdout, got [$out]"
 
 # --- 5. owner/repo arg is NOT collapsed by the label loop's IFS=',' -------
-# Regression for the IFS leak: pick_oldest_unassigned sets IFS=',' to split the
+# Regression for the IFS leak: pick_oldest_candidate sets IFS=',' to split the
 # labels CSV. If that IFS leaks into the `$(_repo_args "$owner_repo")` word-split
 # below, "--repo owner/repo" stays a single argv entry → gh sees an unknown flag
 # and pickup silently returns nothing for every non-empty owner/repo (every
 # non-origin remote, and origin clones whose URL resolves). We pass BOTH a
 # multi-label CSV (forces IFS=',') AND an owner/repo, then assert gh received
 # "--repo" and "customer-d-oy/rahti" as two distinct argv entries.
-out=$(pick_oldest_unassigned "$REPO" "auto-run,enhancement" "customer-d-oy/rahti")
+out=$(pick_oldest_candidate "$REPO" "auto-run,enhancement" "customer-d-oy/rahti")
 [ "$out" = "12" ] || fail "owner/repo split: expected 12, got [$out]"
 grep -qxF -- '--repo' "$ARGV"        || fail "owner/repo split: '--repo' not a standalone argv entry"
 grep -qxF -- 'customer-d-oy/rahti' "$ARGV" || fail "owner/repo split: 'customer-d-oy/rahti' not a standalone argv entry"
@@ -156,28 +177,20 @@ if grep -qxF -- '--repo customer-d-oy/rahti' "$ARGV"; then
   fail "owner/repo split: IFS=',' leaked — '--repo customer-d-oy/rahti' collapsed into one argv entry"
 fi
 
-# --- 5a. lib/issue.sh and poller.sh pickup searches are congruent ---------
-# There are two parallel pickup searches — pick_oldest_unassigned (lib/issue.sh)
-# and the poller's inline pickup (poller.sh) — that MUST carry the same standing
-# filters. If one is edited and the other is not, blocked/waiting/wip issues
-# would leak into one code path only, and (see -is:blocked note above) a wrong
-# negative qualifier fails open. We extract both search literals from source,
-# normalise the clean-label variable (${clean_label} vs $RUN_ISSUES_CLEAN_LABEL)
-# and drop poller's trailing $extra, then assert the standing portions match.
+# --- 5a. poller.sh no longer has its OWN pickup search (issue #99) ---------
+# There used to be two parallel pickup searches — pick_oldest_candidate
+# (lib/issue.sh) and the poller's inline `gh issue list --search` — that had to be
+# asserted congruent. Issue #99 converged them: the poller now DELEGATES to
+# pick_oldest_candidate, so there is exactly one query and no drift is possible
+# (the #91 pattern, applied to pickup). This case guards that convergence: if a
+# future edit reintroduces an inline `gh issue list --search` pickup in poller.sh,
+# the two-search hazard is back and this fails.
 POLLER_SH="$HERE/../poller.sh"
-norm_filters() {  # read file on $1, print normalised standing-filter string
-  sed -n 's/.*local search="\([^"]*\)".*/\1/p; s/.*--search "\([^"]*\)".*/\1/p' "$1" \
-    | head -n1 \
-    | sed -e 's/\${clean_label}/CLEAN/g' \
-          -e 's/\$RUN_ISSUES_CLEAN_LABEL/CLEAN/g' \
-          -e 's/\$extra//g'
-}
-lib_filters=$(norm_filters "$ISSUE_LIB")
-poller_filters=$(norm_filters "$POLLER_SH")
-[ -n "$lib_filters" ]    || fail "congruence: could not extract lib/issue.sh search literal"
-[ -n "$poller_filters" ] || fail "congruence: could not extract poller.sh search literal"
-if [ "$lib_filters" != "$poller_filters" ]; then
-  fail "congruence: pickup searches drifted — lib=[$lib_filters] poller=[$poller_filters]"
+if grep -qE 'gh issue list.*--search' "$POLLER_SH"; then
+  fail "poller.sh reintroduced an inline 'gh issue list --search' pickup — it must delegate to pick_oldest_candidate (issue #99)"
+fi
+if ! grep -q 'pick_oldest_candidate' "$POLLER_SH"; then
+  fail "poller.sh no longer calls pick_oldest_candidate — the single pickup search was lost"
 fi
 
 # --- 6. optional live AND/OR probe (skipped by default) ------------------

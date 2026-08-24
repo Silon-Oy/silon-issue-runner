@@ -297,8 +297,11 @@ scan_stalled() {
 #
 # After finalization the run carries terminal status=blocked + label
 # needs-human, so subsequent scan_timed_out/scan_answered/scan_stalled passes
-# will NOT re-pick it (terminal status), and the issue's needs-human label
-# blocks pick_oldest_unassigned from re-claiming it as new work.
+# will NOT re-pick it (terminal status). run_terminate deliberately leaves the
+# assignment AND the auto-claimed reservation label in place (issue #99), so
+# pick_oldest_candidate keeps skipping the issue (-label:auto-claimed) until a
+# cleanup releases the reservation — a stalled run stays reserved, exactly as it
+# did under the old no:assignee reservation.
 finalize_stalled() {
   local run_dir="$2"
   # run_terminate is sourced at the top of poller.sh; the guard here is for the
@@ -770,34 +773,15 @@ while IFS= read -r repo_json; do
     done < <(epic_list_open "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO")
 
     # ----- Pick a new candidate issue (per remote) -------------------------
-    # gh issue list is routed via `--repo owner/repo` when known so a
-    # non-origin remote sees its own org's issues. REPO_ARGS is an array so
-    # the `--repo owner/repo` pair stays two distinct argv entries regardless
-    # of $IFS — the label loop below sets IFS=',' to split LABELS_CSV, and an
-    # unquoted string $REPO_ARGS would then fail to word-split on space,
-    # passing "--repo owner/repo" as a single unknown flag (silently swallowed
-    # by 2>/dev/null) and breaking pickup for every remote that resolves an
-    # owner/repo.
-    REPO_ARGS=()
-    [ -n "$OWNER_REPO" ] && REPO_ARGS=(--repo "$OWNER_REPO")
-    ISSUE_NUM=$(
-      cd "$REPO_PATH"
-      extra=""
-      if [ -n "$LABELS_CSV" ]; then
-        IFS=','
-        for label in $LABELS_CSV; do
-          [ -n "$label" ] || continue
-          extra+=" label:\"$label\""
-        done
-      fi
-      # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
-      # no longer accepts standalone --sort/--order flags on `issue list`.
-      gh issue list "${REPO_ARGS[@]}" \
-        --search "is:open no:assignee -is:blocked -label:waiting -label:wip -label:epic -label:$RUN_ISSUES_CLEAN_LABEL sort:created-asc$extra" \
-        --limit 1 \
-        --json number \
-        --jq '.[0].number // empty' 2>/dev/null || true
-    )
+    # The ONLY pickup search in the package lives in lib/issue.sh (issue #99): the
+    # poller delegates to pick_oldest_candidate so there is a single query and a
+    # single change point (label CSV encoding, standing filters, owner/repo routing,
+    # and the IFS=',' word-split guard all live there). This converges the two
+    # searches the way issue #91 converged the epic child resolver — the poller can
+    # never drift from the library. pick_oldest_candidate is testable by sourcing;
+    # this inline call site is not (the poller exits at source time on a foreign
+    # host), which is the other half of the reason to move it into the library.
+    ISSUE_NUM=$(pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" || true)
 
     if [ -z "$ISSUE_NUM" ]; then
       continue
@@ -827,6 +811,6 @@ while IFS= read -r repo_json; do
     # every gh call, git push, fetch, and lock — the entire (issue → PR) chain
     # routes to the source org.
     tmux new-session -d -s "$SESSION" \
-      "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto RUN_ISSUES_LABELS_CSV='$LABELS_CSV' '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '$RUNS_LOG'"
+      "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '$RUNS_LOG'"
   done
 done < <(jq -c '.repos[]?' "$WATCHLIST")

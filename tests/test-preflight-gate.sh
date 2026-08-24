@@ -13,8 +13,11 @@
 #   B3  default (npx) claude command whose package is absent (npx exits 127) —
 #       the production failure mode that `command -v npx` cannot see
 #   C   after B1-B3: no run dir, no lock, no worktree, no issue assignment
-#   B4  a complete environment -> the gate is transparent (run proceeds to the
-#       normal "no candidate issue" exit 2)
+#   B4  a complete environment -> the gate is transparent: S0 passes and the run
+#       proceeds into phase_a. `poll` is no longer a mode (issue #99 made a named
+#       issue REQUIRED), so it is now rejected in S1 as a usage error (exit 1) —
+#       but AFTER S0 has run and logged, with no lock/claim/run-dir side effects.
+#       That still proves the gate did not block a healthy environment.
 #   B5  RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses the gate even when claude is broken
 #   B6  GitHub App mode downgrades the missing personal login to a warning
 #
@@ -160,22 +163,26 @@ else
 fi
 
 # --- B4: a complete environment — the gate must be transparent ------------
+# `poll` is now a S1 usage error (exit 1), but it only fires AFTER S0 passed, so
+# the gate is still proven transparent by the 'S0_Preflight ok' log line and the
+# absence of any run-dir side effect.
 export RUN_ISSUES_CLAUDE_CMD="$BIN/claude"
 run_orch "$REPO" poll
-rc_is 2 "B4 a healthy environment reaches the normal poll exit (no candidate issue)"
+rc_is 1 "B4 a healthy environment passes S0 and reaches phase_a (poll rejected in S1)"
 says 'S0_Preflight ok' "B4 the gate reports itself once"
 if [ -d "$REPO/.claude/run-issues" ]; then
-  bad "B4 poll with no candidate created a run dir"
+  bad "B4 poll rejection created a run dir"
 else
-  ok "B4 poll with no candidate created no run dir"
+  ok "B4 poll rejection created no run dir"
 fi
 
 # --- B5: the escape hatch -------------------------------------------------
 # The gate must never be the reason a machine cannot start a run: a broken
-# claude command plus RUN_ISSUES_SKIP_PREFLIGHT=1 reaches the normal flow.
+# claude command plus RUN_ISSUES_SKIP_PREFLIGHT=1 reaches the normal flow (and
+# then hits the S1 poll rejection, exit 1 — again, after the gate was skipped).
 export RUN_ISSUES_CLAUDE_CMD="$WORK/no-such-claude"
 RUN_ISSUES_SKIP_PREFLIGHT=1 run_orch "$REPO" poll
-rc_is 2 "B5 RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses the gate"
+rc_is 1 "B5 RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses the gate"
 says 'S0_Preflight skipped' "B5 the bypass is logged"
 
 # --- B6: GitHub App mode downgrades the gh-auth finding -------------------

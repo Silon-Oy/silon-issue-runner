@@ -30,6 +30,15 @@
 
 set -euo pipefail
 
+# AUTO_CLAIMED_LABEL — the automation-owned reservation label (issue #99). It is
+# a FIXED name, not configurable — the same call as the epic labels
+# (docs/epic-orchestration.md §6): only automation ever writes it. It replaces the
+# reservation role `no:assignee` used to play in pickup. claim_issue adds it after
+# a verified claim, unclaim_issue removes it, and cleanup-run.sh removes it beside
+# its raw un-assign — so the label tracks the assignment structurally, never
+# per-call. A human never adds it; assignment is left as pure bookkeeping.
+AUTO_CLAIMED_LABEL="auto-claimed"
+
 # _issue_gh [--remote <name>] -- <gh-args>...
 # Runs `gh` either through gha_with_token (App identity) or as a pass-through.
 # When the optional <remote> argument is "origin" or empty (the legacy
@@ -70,9 +79,16 @@ _repo_args() {
   [ -n "$owner_repo" ] && printf -- '--repo %s' "$owner_repo"
 }
 
-# pick_oldest_unassigned <repo-root> <labels-csv> [<owner/repo>]
+# pick_oldest_candidate <repo-root> <labels-csv> [<owner/repo>]
 # Prints issue number on stdout, or empty string if no match.
 # labels-csv may be empty; otherwise it's filtered with -label:waiting -is:blocked -label:wip.
+#
+# Reservation is NOT `no:assignee` (issue #99): a hand-assigned issue is a valid
+# candidate now, and the automation-only reservation moved to the `auto-claimed`
+# label. `-label:auto-claimed` therefore removes an in-flight or un-cleaned run
+# from pickup — the same three roles `no:assignee` used to carry, minus the human
+# opt-out (which is `wip`). claim_issue adds the label, unclaim_issue and
+# cleanup-run.sh remove it (see AUTO_CLAIMED_LABEL below).
 #
 # Blocked issues are excluded with GitHub's native `-is:blocked` qualifier,
 # which reads the `blocked_by` dependency graph directly — no `blocked` label
@@ -95,7 +111,7 @@ _repo_args() {
 #     empty string and the caller sees a clean "no candidate" signal.
 # This AND behaviour is exactly what the orchestrator wants (require every
 # configured label), so separate label:"…" terms are the correct encoding.
-pick_oldest_unassigned() {
+pick_oldest_candidate() {
   local repo="$1"
   local labels_csv="${2:-}"
   local owner_repo="${3:-}"
@@ -113,7 +129,9 @@ pick_oldest_unassigned() {
   # (docs/epic-orchestration.md §2). Like -is:blocked this reads GitHub's
   # eventually-consistent SEARCH index, so orchestrate.sh re-checks authoritatively
   # (is_epic) after the lock — the same second-line-of-defence pattern as S2b.
-  local search="is:open no:assignee -is:blocked -label:waiting -label:wip -label:epic -label:${clean_label} sort:created-asc"
+  # auto-claimed is a FIXED name (like waiting/wip/epic), so it is a literal here;
+  # only the configurable clean label expands from ${clean_label}.
+  local search="is:open -label:auto-claimed -is:blocked -label:waiting -label:wip -label:epic -label:${clean_label} sort:created-asc"
 
   local extra=""
   if [ -n "$labels_csv" ]; then
@@ -147,8 +165,65 @@ pick_oldest_unassigned() {
   )
 }
 
+# issue_assignees <repo-root> <N> [<owner/repo>]
+# Prints the issue's current assignee logins as a comma-joined string (empty when
+# none). The S3 caller snapshots this JUST BEFORE claim_issue so verify_claim can
+# compare against the expected post-claim set (before ∪ {@me}); verify_claim reads
+# it again after the claim. A read with no privacy boundary — plain gh-CLI, like
+# pick_oldest_candidate.
+issue_assignees() {
+  local repo="$1"
+  local n="$2"
+  local owner_repo="${3:-}"
+  (
+    cd "$repo"
+    # shellcheck disable=SC2046
+    gh issue view "$n" $(_repo_args "$owner_repo") --json assignees --jq '[.assignees[].login] | join(",")'
+  )
+}
+
+# _normalize_login_set <csv> — pure. Sorts a comma-separated login list, drops
+# empties and duplicates, and re-joins with commas so two sets are comparable by
+# string equality regardless of order or repetition.
+_normalize_login_set() {
+  printf '%s' "${1:-}" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -
+}
+
+# _reserve_label_add <repo-root> <N> [<owner/repo>]
+# Adds the automation-owned auto-claimed reservation label (issue #99). Best-effort:
+# a transient GitHub error must not abort a claim — same-host tmux dedup and the S2
+# lock still prevent a double run (issue #99 edge case 2), so a fail-closed here
+# would let one GitHub hiccup stall every run. Guarded on labels.sh being loaded so
+# the pure-function contract of this file survives if a caller has not sourced it.
+_reserve_label_add() {
+  local repo="$1" n="$2" owner_repo="${3:-}"
+  declare -F labels_add >/dev/null 2>&1 || return 0
+  (
+    cd "$repo"
+    labels_ensure "$owner_repo" "$AUTO_CLAIMED_LABEL" || true
+    labels_add "$owner_repo" "$n" "$AUTO_CLAIMED_LABEL" || true
+  ) || true
+  return 0
+}
+
+# _reserve_label_remove <repo-root> <N> [<owner/repo>]
+# Removes the auto-claimed label. Idempotent (labels_remove treats an absent label
+# as success). Best-effort, same posture as _reserve_label_add.
+_reserve_label_remove() {
+  local repo="$1" n="$2" owner_repo="${3:-}"
+  declare -F labels_remove >/dev/null 2>&1 || return 0
+  (
+    cd "$repo"
+    labels_remove "$owner_repo" "$n" "$AUTO_CLAIMED_LABEL" || true
+  ) || true
+  return 0
+}
+
 # claim_issue <repo-root> <N> [<owner/repo>]
-# Assigns the issue to @me. Returns 0 on success, non-zero on failure.
+# Assigns the issue to @me AND adds the auto-claimed reservation label (issue #99).
+# Returns 0 when the assignment succeeded (the label is best-effort and never
+# changes the exit code). Binding the label add here — not at the call site — makes
+# it track the assignment structurally: every unclaim path removes it too.
 #
 # Stays on the personal gh-CLI identity even when App mode is on: GitHub Apps
 # CANNOT be issue assignees, so race-arbitration must remain a real-user
@@ -163,33 +238,48 @@ claim_issue() {
     cd "$repo"
     # shellcheck disable=SC2046
     gh issue edit "$n" $(_repo_args "$owner_repo") --add-assignee "@me" >/dev/null
-  )
+  ) || return 1
+  # Reservation label follows the assignment. Best-effort — a transient label
+  # error must not undo a good claim.
+  _reserve_label_add "$repo" "$n" "$owner_repo"
+  return 0
 }
 
-# verify_claim <repo-root> <N> [<owner/repo>]
-# Returns 0 only if the current user is the SOLE assignee. A multi-assignee
-# state means a racing runner has also claimed the issue — caller must lose
-# the race and unclaim. GitHub permits concurrent --add-assignee calls, so
-# verifying singleton membership is the only durable arbiter.
+# verify_claim <repo-root> <N> [<owner/repo>] [<before-assignees-csv>]
+# Returns 0 only if the assignee set after the claim equals the set BEFORE the
+# claim plus @me (issue #99). The before-set is snapshotted by the caller just
+# before claim_issue (issue_assignees) and passed as the 4th argument; empty (or
+# omitted) means "nobody was assigned before", which reduces to the old
+# sole-assignee rule.
 #
-# Stays on the personal identity for the same reason as claim_issue: the
-# arbiter is "is @me alone assigned", and @me only resolves to a user account.
+# Why the set comparison replaces "am I the SOLE assignee": claim_issue assigns
+# @me, which is the SAME account a human uses to hand-assign an issue, so a human
+# who pre-assigned themselves must NOT fail verification (that was the whole point
+# of issue #99). A racing runner on ANOTHER account still adds its own login, so
+# the post-claim set gains an entry the (before ∪ {@me}) set lacks → mismatch →
+# the caller backs off with exit 3, exactly as before. If a human assigns someone
+# during the ~5 s verify window the run backs off needlessly — benign, since the
+# issue is immediately pickable again (its reservation label was removed on unclaim).
+#
+# Stays on the personal identity for the same reason as claim_issue: @me only
+# resolves to a user account.
 verify_claim() {
   local repo="$1"
   local n="$2"
   local owner_repo="${3:-}"
-  local me current
+  local before_csv="${4:-}"
+  local me current expected_set current_set
   me=$(gh api user --jq .login)
-  current=$(
-    cd "$repo"
-    # shellcheck disable=SC2046
-    gh issue view "$n" $(_repo_args "$owner_repo") --json assignees --jq '[.assignees[].login] | join(",")'
-  )
-  [ "$current" = "$me" ]
+  current=$(issue_assignees "$repo" "$n" "$owner_repo")
+  expected_set=$(_normalize_login_set "$before_csv,$me")
+  current_set=$(_normalize_login_set "$current")
+  [ "$current_set" = "$expected_set" ]
 }
 
 # unclaim_issue <repo-root> <N> [<owner/repo>]
-# Removes the @me assignee. Idempotent (best-effort).
+# Removes the @me assignee AND the auto-claimed reservation label (issue #99).
+# Idempotent (best-effort). The label removal is bound here for the same reason
+# the add is bound to claim_issue: it tracks the assignment structurally.
 unclaim_issue() {
   local repo="$1"
   local n="$2"
@@ -199,6 +289,7 @@ unclaim_issue() {
     # shellcheck disable=SC2046
     gh issue edit "$n" $(_repo_args "$owner_repo") --remove-assignee "@me" >/dev/null 2>&1 || true
   )
+  _reserve_label_remove "$repo" "$n" "$owner_repo"
 }
 
 # count_open_blockers <repo-root> <N> [<owner/repo>]
@@ -222,7 +313,7 @@ unclaim_issue() {
 # non-numeric body) returns non-zero rather than a count — the opposite of the
 # `gh api ... || echo 0` idiom, which would fail OPEN. Stays on the personal
 # gh-CLI identity: this is a pick-time read with no privacy boundary, like
-# pick_oldest_unassigned.
+# pick_oldest_candidate.
 count_open_blockers() {
   local repo="$1"
   local n="$2"
@@ -296,7 +387,7 @@ list_blocked_by() {
 # FAIL-CLOSED for the same asymmetry as S2b: refusing a leaf issue costs one
 # skipped tick; running an epic burns the whole implementer timeout on a body
 # that is not a task. Stays on the personal gh-CLI identity — a pick-time read
-# with no privacy boundary, like pick_oldest_unassigned / count_open_blockers.
+# with no privacy boundary, like pick_oldest_candidate / count_open_blockers.
 is_epic() {
   local repo="$1"
   local n="$2"

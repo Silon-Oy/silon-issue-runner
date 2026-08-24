@@ -298,12 +298,18 @@ cleanup_run() {
       cd "$REPO_ROOT"
       f=0
       do_or_dry remote "unassign" gh issue edit "$issue_num" $repo_args --remove-assignee "@me" || f=$((f + 1))
+      # Drop the auto-claimed reservation label so the issue re-enters pickup
+      # (issue #99). This is the reservation that keeps a running or un-cleaned run
+      # out of pickup (-label:auto-claimed), the role assignment used to play, so
+      # releasing it here is what actually re-surfaces the issue — cleanup-run.sh
+      # does a RAW un-assign, so unlike unclaim_issue it cannot rely on the label
+      # being bound to the assignment; it removes it explicitly, in the same place.
+      do_or_dry remote "unlabel-reserve" labels_remove "$owner_repo" "$issue_num" auto-claimed || f=$((f + 1))
       # Drop the needs-human label so the issue re-enters auto-run pickup once
-      # unassigned. Without this the poll re-surfaces the issue as no:assignee
-      # but the stale label lingers. labels_remove treats an absent label (404)
-      # as success, so this only counts as a failure on a REAL error — a 403
-      # (missing read:project scope, the silent breakage that stalled the
-      # pipeline for weeks elsewhere) or a 127 (gh not on PATH).
+      # cleaned. labels_remove treats an absent label (404) as success, so this
+      # only counts as a failure on a REAL error — a 403 (missing read:project
+      # scope, the silent breakage that stalled the pipeline for weeks elsewhere)
+      # or a 127 (gh not on PATH).
       do_or_dry remote "unlabel" labels_remove "$owner_repo" "$issue_num" needs-human || f=$((f + 1))
       exit "$f"
     ) || rf=$?
