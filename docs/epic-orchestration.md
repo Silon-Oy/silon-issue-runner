@@ -1,10 +1,33 @@
 # Epic-ajon arkkitehtuuri
 
-Tämä on **suunnitteludokumentti**, ei toteutus. Se määrittelee, miten `/run-issues`-runner
-ajaa kokonaisen *epicin* — usean toisiinsa liittyvän issuen ketjun — ilman ihmistä silmukassa.
-Kohdeyleisö on ne toteutusissueet (auto-run epic-tasolla; `/run-epic`-komento), jotka
-kirjoitetaan suoraan tämän dokumentin pohjalta. Kaikki *ehdotukset* ja *avoimet päätökset* on
-merkitty näkyvästi; lopullinen päätös tehdään PR-katselmoinnissa.
+> **Toteutustila (päivitetty #93).** Tämä oli alun perin **suunnitteludokumentti** (#80),
+> kirjoitettu *ennen* toteutusta. Sittemmin epic-koneisto on rakennettu:
+>
+> - **#81 toteutti auto-run-tason semantiikan** — muutoskohdat M1–M5 ja M7 (§6): epicin
+>   poissulku poiminnasta (`-label:epic` molemmissa hauissa), autoritatiivinen **S2c
+>   EpicCheck** -portti (`orchestrate.sh` + `lib/issue.sh:is_epic`, exit 12), lapsijoukon
+>   resolvointi (`lib/issue.sh:list_epic_children`), ajolabelien idempotentti propagointi +
+>   `needs-human`-lapsen eskalaatio + valmiuskommentti/-label (`lib/epic.sh`, pollerin
+>   `scan_epics`-vaihe).
+> - **#82 toteutti `/run-epic`-komennon** — M6 (§6): `run-epic.sh` + `commands/run-epic.md`,
+>   validointi suunnittele–sovella-jaolla, `epic`-labelin idempotentti lisäys, ajolabelien
+>   propagointi jaetulla `propagate_run_labels`illa, `--dry-run` ja `--start-now`.
+>
+> Kymmenestä alla luetellusta avoimesta päätöksestä (§"Avoimet päätökset") **yhdeksän on
+> ratkaistu koodissa**; kunkin ratkaisukohta on nimetty päätöstaulukon ratkaisusarakkeessa.
+> Vain **H (epicin keskeytys)** on aidosti auki → **#90**. Osin avoinna ovat vielä lapsijoukon
+> jaettu resolvointi (§1.3, → **#91**) ja cross-repo-rajaus (§Rajaukset, → **#92**).
+>
+> Dokumentin arvo ei ole enää suunnitelmana vaan **perusteluna**: se kertoo *miksi* koneisto on
+> tällainen. Alkuperäiset ehdotukset ja "avoin päätös" -laatikot on säilytetty, mutta kukin on
+> merkitty ratkaistuksi tai avoimeksi, jottei niitä lueta nykytilan kuvauksena.
+
+Alla oleva dokumentti määrittelee, miten `/run-issues`-runner ajaa kokonaisen *epicin* — usean
+toisiinsa liittyvän issuen ketjun — ilman ihmistä silmukassa. Kohdeyleisö oli alun perin ne
+toteutusissueet (auto-run epic-tasolla; `/run-epic`-komento), jotka kirjoitettiin suoraan tämän
+dokumentin pohjalta; nyt se palvelee epic-koneiston kokonaisesityksenä. Alkuperäiset
+*ehdotukset* ja *avoimet päätökset* on merkitty näkyvästi; niiden toteutumistila kerrotaan yllä
+ja päätöskohtaisesti.
 
 **Lähtökohta.** Runnerilla on jo ajettu kokonaisia epicejä — mm. tämän repon statusnäkymä-epic
 (#59–#65) — mutta **käsityönä**: ihminen kirjoittaa alaissueet, luo `blocked_by`-riippuvuudet,
@@ -20,10 +43,13 @@ uutta, ja mikä on jo olemassa.
 
 ## Rajaukset
 
-- **Ei cross-repo-epicejä.** Epicin kaikki alaissueet ovat samassa repossa kuin epic-issue
-  itse. Toisessa repossa oleva alaissue on virhetilanne (§7), ei tuettu muoto. GitHubin
-  sub-issue-relaatio *sallii* cross-repo-lapset, mutta runnerin poiminta, lukot ja worktree
-  ovat kaikki repo-kohtaisia, joten cross-repo-ajo vaatisi oman epicinsä eikä kuulu tähän.
+- **Ei cross-repo-epicejä (toistaiseksi, → #92).** Epicin kaikki alaissueet ovat samassa
+  repossa kuin epic-issue itse. Toisessa repossa oleva alaissue on **nykytoteutuksessa**
+  virhetilanne (§7), ei tuettu muoto: `list_epic_children` ohittaa cross-repo-lapsen
+  varoituksella. GitHubin sub-issue-relaatio *sallii* cross-repo-lapset, mutta runnerin
+  poiminta, lukot ja worktree ovat kaikki repo-kohtaisia, joten cross-repo-ajo vaatisi oman
+  suunnittelunsa. Tämä rajaus **ei ole periaatteellinen vaan toteutuksellinen** ja on **työn
+  alla (#92)**; sitä ei pidä esittää ikuisena.
 - **Ei näkyvyysmuutoksia Ohjaamo-näkymään.** Epicin tila esitetään erikseen Ohjaamon
   V4-näkymäissuessa; tämä dokumentti määrittelee vain *ajon* arkkitehtuurin. Jaettu vaatimus
   molemmille on sama kanoninen muoto ja sama fallback (§1) — tämä dokumentti on siitä
@@ -33,9 +59,14 @@ uutta, ja mikä on jo olemassa.
 
 ## Nykytila-analyysi lyhyesti (§2:n löydös etukäteen)
 
-> **Löydös:** epic-labelillinen issue, jolla on `auto-run` eikä estäjää, **poimitaan tänään
-> tavallisena työissuena**. Koodissa ei ole mitään, joka erottaisi epicin lehti-issuesta.
-> Tarkka koodianalyysi ja seuraukset §2:ssa.
+> **Historiallinen (kirjoitushetki #80).** Löydös oli tosi kun tämä kirjoitettiin, ja se on
+> sittemmin **korjattu #81:ssä** (`-label:epic` poiminnassa + S2c EpicCheck -portti). Säilytetty
+> tähän, koska §2 perustelee siihen koko epic-poissulun tarpeen — mutta sitä ei saa lukea
+> nykytilana. Nykytila: epic **ei** enää poimiudu.
+>
+> **Löydös (kirjoitushetkellä):** epic-labelillinen issue, jolla on `auto-run` eikä estäjää,
+> poimittiin *tuolloin* tavallisena työissuena. Koodissa ei ollut mitään, joka erottaisi epicin
+> lehti-issuesta. Tarkka koodianalyysi ja seuraukset §2:ssa.
 
 ---
 
@@ -81,7 +112,8 @@ fallbackina.**
 4. **Cross-repo-viittaukset** (`owner/repo#N`) fallback-listassa ovat rajausten (ks. Rajaukset)
    ulkopuolella: rivi ohitetaan ja kirjataan varoituksena.
 
-> **Avoin päätös A — kirjoittaako fallback natiivit lapset?**
+> **Päätös A — kirjoittaako fallback natiivit lapset?** — **Ratkaistu (#81):** vaihtoehto (i),
+> fallback on vain lukusääntö (`lib/issue.sh:list_epic_children`). Alkuperäinen harkinta:
 > Vaihtoehdot: (i) fallback on **vain lukusääntö** — runner poimii task-listasta ajettavat
 > numerot mutta ei muuta epiciä; (ii) `/run-epic` **migratoituu** kertaalleen kirjoittamalla
 > task-listan lapset natiiveiksi sub-issueiksi (`POST …/sub_issues`), minkä jälkeen epic on
@@ -99,6 +131,16 @@ jotta näkymä ja ajo eivät voi olla eri mieltä siitä, mitkä issuet epiciin 
 seuraus toteutukselle: lapsijoukon resolvointi (`sub_issues` → fallback) kannattaa toteuttaa
 **yhtenä jaettuna funktiona** (`lib/issue.sh`, §6), jota molemmat kutsuvat.
 
+> **Toteutustila (osittain, → #91).** Jaettu funktio `lib/issue.sh:list_epic_children` on
+> olemassa (#81) ja sitä käyttää **ajopuoli** — `run-epic.sh` ja `lib/epic.sh`
+> (`propagate_run_labels`, `epic_process_one`). **Näkymäpuoli ei sitä vielä kutsu:** Ohjaamon
+> epic-rollup (`lib/status-github.sh`, #79) resolvoi lapsijoukon **omilla** funktioillaan
+> (`status_github_fetch_sub_issues` + `status_github_parse_task_list`). Tavoiteltu invariantti
+> "yksi jaettu funktio molemmille" on siis vasta puoliksi voimassa; näkymän kokoaminen samaan
+> `list_epic_children`iin on avoin työ (**#91**). Toistaiseksi molemmat noudattavat samaa
+> sääntöä (natiivi voittaa, task-lista fallback), mutta kahtena toteutuksena — mikä on juuri se
+> ero, jonka #91 poistaa.
+
 ### 1.4 Kaksi eri graafia — älä sekoita
 
 Epicissä on kaksi toisistaan riippumatonta GitHub-relaatiota, ja niiden erottaminen on
@@ -115,12 +157,18 @@ epiciä, koska S2b lukee vain järjestävää graafia.
 
 ---
 
-## 2. Tunnistus ja poiminta — nykytila koodia vasten
+## 2. Tunnistus ja poiminta — koodianalyysi kirjoitushetkeltä (historiallinen)
 
-**Hyväksyntäkriteeri 2 vaatii, että tämä analyysi on tehty koodia vasten, ei arvailtu.** Alla
-lainatut kohdat on luettu suoraan repon `main`-tilasta (commit `4ad8d5b`).
+> **Historiallinen.** Tämän luvun kaikki lainaukset on luettu repon `main`-tilasta commitissa
+> `4ad8d5b`, joka on **#81:tä edeltävä** tila. Poimintahaut **eivät** silloin vielä sisältäneet
+> `-label:epic`iä eikä S2c-porttia ollut. Luku kuvaa siis lähtötilan, jota vasten M1/M2
+> perusteltiin — **ei nykytilaa**. Nykyinen poimintahaku sisältää `-label:epic`in ja S2c
+> pyydystää epicin autoritatiivisesti (§2.2:n merkintä).
 
-### 2.1 Poimintahaku tänään
+**Hyväksyntäkriteeri 2 vaati, että tämä analyysi tehdään koodia vasten, ei arvailtu.** Alla
+lainatut kohdat on luettu suoraan repon `main`-tilasta (commit `4ad8d5b`, ennen #81:tä).
+
+### 2.1 Poimintahaku kirjoitushetkellä (ennen #81:tä)
 
 Poiminta tapahtuu **kahdessa paikassa samalla hakukyselyllä** (tämä duplikaatio on olemassa,
 ks. §6):
@@ -139,13 +187,22 @@ ks. §6):
 Suodattimet siis ovat: avoin, ei assigneeta, ei `blocked_by`-estetty, ei `waiting`/`wip`/
 `auto-clean`-labelia, ja kaikki konfiguroidut labelit (tyypillisesti `auto-run`) läsnä.
 
-### 2.2 Löydös: epic poimitaan tänään tavallisena issuena
+### 2.2 Löydös (historiallinen): epic poimittiin tavallisena issuena — korjattu #81:ssä
 
-> **`epic`-labelia ei suodateta kummassakaan poimintakyselyssä.** Jos epic-issuelle lisätään
-> `auto-run` tänään, ja se on avoin, assignoimaton eikä `blocked_by`-estetty, se **täyttää
-> poimintaehdon täsmälleen kuten lehti-issue** ja tulee poimituksi.
+> **Historiallinen.** Tämä koko alaluku on **nykytila-analyysi kirjoitushetkeltä (#80)** ja
+> kuvaa vian, jonka #81 nimenomaan korjasi. Nykyään `epic`-labelia **suodatetaan** molemmissa
+> poimintakyselyissä (`-label:epic`, M1) ja **S2c EpicCheck** -portti (M2) pyydystää epicin
+> autoritatiivisesti lukon jälkeen ja claimia ennen (fail-closed, exit 12). Epic ei siis enää
+> poimiudu eikä aja. Alaluku on säilytetty, koska se perustelee, *miksi* poissulku on
+> pakollinen — mutta se ei kuvaa nykytilaa. **Älä "korjaa" tästä mitään: asia on jo korjattu.**
 
-Seuraukset, kun näin käy:
+Löydös kirjoitushetkellä:
+
+> **`epic`-labelia ei suodatettu kummassakaan poimintakyselyssä.** Jos epic-issuelle lisättiin
+> `auto-run` *tuolloin*, ja se oli avoin, assignoimaton eikä `blocked_by`-estetty, se täytti
+> poimintaehdon täsmälleen kuten lehti-issue ja tuli poimituksi.
+
+Seuraukset, kun näin *tuolloin* kävi (nyt M1+M2 estävät tämän):
 
 1. Orkestraattori etenee normaalisti: lukko (S2), S2b-esto-portti, claim (S3), worktree (S4).
    **S2b ei pidättele epiciä**, koska `count_open_blockers` (`lib/issue.sh:218`) lukee
@@ -158,11 +215,15 @@ Seuraukset, kun näin käy:
 3. Epic-issue jää assignatuksi (varaus ei vapaudu epäonnistuneesta ajosta, README 6.4), joten
    se ei toistu — mutta ei myöskään etene ilman siivousta.
 
-**Johtopäätös:** epicin poiminnan esto on **pakollinen ennakkoehto** kaikelle epic-tason
-automaatiolle. Ilman sitä `epic`-labelin ja `auto-run`in samanaikaisuus on jo nyt
-haitallinen. Tämä on §6:n ensimmäinen ja tärkein muutoskohta.
+**Johtopäätös (toteutui näin):** epicin poiminnan esto oli **pakollinen ennakkoehto** kaikelle
+epic-tason automaatiolle — ilman sitä `epic`-labelin ja `auto-run`in samanaikaisuus olisi ollut
+haitallinen. Tämä oli §6:n ensimmäinen ja tärkein muutoskohta, ja **#81 toteutti sen** (M1
+`-label:epic` + M2 S2c-portti).
 
 ### 2.3 Kuinka erottaa epic poiminnassa
+
+> **Toteutettu (#81):** molempiin poimintakyselyihin lisättiin `-label:epic` (M1), ja
+> autoritatiivinen S2c-portti täydentää sen (M2, päätös B). Alla alkuperäinen perustelu.
 
 **Suositus:** lisää molempiin poimintakyselyihin negatiivinen kvalifikaattori **`-label:epic`**.
 Se on symmetrinen olemassa olevien `-label:waiting -label:wip` -suodattimien kanssa, halpa (ei
@@ -176,7 +237,9 @@ luotu repoon, joten indeksin viive koskee vain juuri lisättyä labelia — sama
 kuin `-is:blocked`illa, ja `epic`-labelin lisäys edeltää `auto-run`in lisäystä normaalissa
 työjärjestyksessä.
 
-> **Avoin päätös B — tarvitaanko autoritatiivinen toinen luku (S2b-tyyliin)?**
+> **Päätös B — tarvitaanko autoritatiivinen toinen luku (S2b-tyyliin)?** — **Ratkaistu (#81):**
+> vaihtoehto (ii), autoritatiivinen **S2c EpicCheck** -portti lukon jälkeen ja claimia ennen
+> (`orchestrate.sh` + `lib/issue.sh:is_epic`, fail-closed, exit 12). Alkuperäinen harkinta:
 > S2b (#28) syntyi, koska hakuindeksin viive päästi 25 estettyä issueta poimintaan. Sama riski
 > koskee teoriassa `-label:epic`iä: jos epic-label lisätään ja `auto-run` heti perään, viipyvä
 > indeksi voisi päästää epicin poimintaan yhden tikin ajan.
@@ -214,7 +277,10 @@ Propagointi voi tapahtua kolmessa kohdassa:
 | **P2** | poller | Joka tikillä, kun se kohtaa `auto-run`+`epic`-issuen |
 | **P3** | molemmat | `/run-epic` tekee ensilisäyksen, poller ylläpitää |
 
-> **Avoin päätös C — propagoinnin ajankohta.**
+> **Päätös C — propagoinnin ajankohta.** — **Ratkaistu (#81/#82):** P3, painottuen P2:een.
+> Pollerin `scan_epics` propagoi joka tikki ennen poimintaa (`lib/epic.sh:epic_process_one`);
+> `/run-epic` tekee ensilisäyksen (`run-epic.sh`). Molemmat kutsuvat samaa
+> `propagate_run_labels`ia. Alkuperäinen harkinta:
 > **Suositus: P3, painottuen P2:een.** Perustelu: propagoinnin on oltava **jatkuvaa**, ei
 > kertaluontoista, koska alaissueita voidaan lisätä epiciin myöhemmin (uusi sub-issue keskellä
 > ajoa). Kertapropagointi (`/run-epic` yksin) jättäisi myöhemmin lisätyn lapsen ilman
@@ -246,7 +312,9 @@ Propagointi **on idempotentti** ja se on kriittinen ominaisuus (poller toistaa s
 4. **`epic`-labelia ei propagoida.** Vain `auto-run` (ja watchlistin muut ajolabelit tarpeen
    mukaan, ks. avoin päätös E) siirtyy; `epic` jää epicille.
 
-> **Avoin päätös D — voiko ihminen jättää lapsen ajon ulkopuolelle?**
+> **Päätös D — voiko ihminen jättää lapsen ajon ulkopuolelle?** — **Ratkaistu (#81):** vaihtoehto
+> (i), olemassa oleva `wip` (ja `blocked_by`); `scan_epics` ohittaa `wip`-lapset propagoinnissa,
+> ei uutta opt-out-labelia. Alkuperäinen harkinta:
 > Jos poller propagoi `auto-run`in joka tikki idempotentisti, ihminen ei voi pysyvästi poistaa
 > sitä yksittäiseltä lapselta — se palaa seuraavalla tikillä.
 > Vaihtoehdot: (i) hyväksy tämä — epicin lapset ajetaan kaikki, poikkeukset hoidetaan `wip`- tai
@@ -257,7 +325,9 @@ Propagointi **on idempotentti** ja se on kriittinen ominaisuus (poller toistaa s
 > joten uusi opt-out-label olisi päällekkäinen mekanismi. Dokumentoidaan: "jätä lapsi ajon
 > ulkopuolelle `wip`-labelilla tai `blocked_by`-riippuvuudella".
 
-> **Avoin päätös E — mitkä labelit propagoituvat?**
+> **Päätös E — mitkä labelit propagoituvat?** — **Ratkaistu (#81):** watchlistin repolle vaatima
+> ajolabelijoukko (`auto-run` + repon vaatimat) → `lib/epic.sh:propagate_run_labels`. Alkuperäinen
+> harkinta:
 > Watchlist voi vaatia repolle useampia labeleita (esim. `["auto-run", "backend"]`, AND).
 > Silloin lapsi tarvitsee **kaikki** ne poimintaan.
 > **Suositus:** propagoi täsmälleen se labelijoukko, jonka watchlist vaatii kyseiselle repolle
@@ -273,7 +343,10 @@ Propagointi **on idempotentti** ja se on kriittinen ominaisuus (poller toistaa s
 **Ehdotus:** epic on valmis, kun **kaikki sen alaissuet ovat suljettuja**. GitHub laskee tämän
 valmiiksi: `sub_issues_summary.completed == sub_issues_summary.total` (ja `total > 0`).
 
-> **Avoin päätös F — kuka sulkee epicin?**
+> **Päätös F — kuka sulkee epicin?** — **Ratkaistu (#81):** vaihtoehto (ii) oletuksena, (iii)
+> jos repo konfiguroitu. Runner ei sulje — merkitsee valmiuden (yhteenvetokommentti +
+> `epic-complete`-label, `lib/epic.sh:_epic_announce_complete`); ihminen sulkee, GitHubin natiivi
+> auto-close voittaa jos konfiguroitu. Alkuperäinen harkinta:
 > Vaihtoehdot: (i) **runner sulkee automaattisesti** — kun poller havaitsee epicin, jonka kaikki
 > lapset ovat kiinni, se sulkee epic-issuen ja postaa yhteenvetokommentin; (ii) **ihminen
 > sulkee** — runner vain postaa "kaikki alaissuet valmiit" -kommentin ja jättää sulkemisen
@@ -306,7 +379,9 @@ Tämä nojaa olemassa olevaan käytökseen (§7.1 hyötykäyttönä):
    idempotentti: sama lapsi ei tuota toistuvaa kommenttia (vrt. #65:n `SKIP_CLOSED`-vaimennus —
    luetaan viimeisin kirjattu tila, ei kommentoida uudelleen samasta lapsesta).
 
-> **Avoin päätös G — epic-merkinnän muoto.**
+> **Päätös G — epic-merkinnän muoto.** — **Ratkaistu (#81):** kommentti + label. Per-child
+> piilomarker vartioi kertaluonteisuuden ja `epic-attention`-label tekee jumittuneen epicin
+> suodatettavaksi (`lib/epic.sh:_epic_escalate_child`). Alkuperäinen harkinta:
 > Kommentti vai label vai molemmat? **Suositus:** kommentti (linkittää lapsen ja syyn) + kevyt
 > label epicille (esim. `epic-attention`), jotta jumittunut epic on **suodatettavissa** —
 > sama oppi kuin #43:n `needs-human`-label alaissuetasolla: pelkkä kommentti ei ole
@@ -330,7 +405,10 @@ Kaksi osaa, molemmat olemassa olevalla koneistolla:
    lisätyt lapsilabelit pitää poistaa erikseen — siksi keskeytys poistaa labelit lapsilta
    suoraan.
 
-> **Avoin päätös H — keskeytyskomennon muoto.**
+> **Avoin päätös H — keskeytyskomennon muoto.** — **AVOIN → #90.** Tämä on ainoa yhä avoin
+> päätös. #82 rajasi keskeytyksen tietoisesti scope-outiin (`--start` toteutettiin, `--stop` ei);
+> §5-signatuurin `--stop` on toistaiseksi vain suunnitelmarivi eikä `run-epic.sh` toteuta sitä.
+> Alkuperäinen suositus (yhä voimassa suunnitelmana):
 > Onko keskeytys osa `/run-epic`-komentoa (`/run-epic <N> --stop`) vai erillinen
 > `/stop-epic <N>`? **Suositus:** `/run-epic <N> --stop` (tai `--cancel`), symmetrinen ajon
 > käynnistyksen kanssa, koska molemmat operoivat samaa lapsijoukkoa samalla resolvointilogiikalla.
@@ -367,14 +445,19 @@ Komento validoi **ennen** kuin se koskee mihinkään:
 5. **Onko jollain lapsella jo elävä ajo?** Ei virhe — propagointi on idempotentti ja poller
    hoitaa (§7).
 
-> **Avoin päätös I — lisääkö `/run-epic` puuttuvan `epic`-labelin?**
+> **Päätös I — lisääkö `/run-epic` puuttuvan `epic`-labelin?** — **Ratkaistu (#82):** kyllä,
+> `run-epic.sh` lisää `epic`-labelin idempotentisti jos puuttuu (`--dry-run` ei lisää). Näin
+> komento myös **muuntaa** kokoavan issuen epiciksi. Alkuperäinen harkinta:
 > **Suositus: lisää se** (idempotentisti), koska komennon nimi ilmaisee jo aikomuksen "aja tämä
 > epicinä". Tämä tekee komennosta myös tavan **muuntaa** tavallinen kokoava issue epiciksi
 > yhdellä komennolla. `--dry-run` ei lisää.
 
 ### 5.3 Mitä komento tekee
 
-> **Avoin päätös J — käynnistääkö komento ajon vai pelkkä labelointi?**
+> **Päätös J — käynnistääkö komento ajon vai pelkkä labelointi?** — **Ratkaistu (#82):** (i)
+> oletuksena, (ii) lipulla `--start-now`. `run-epic.sh` propagoi labelit ja jättää ajon
+> pollerille; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen heti. Alkuperäinen
+> harkinta:
 > Vaihtoehdot: (i) **pelkkä labelointi** — komento lisää `epic`-labelin (tarvittaessa) ja
 > propagoi `auto-run`in avoimille lapsille, sitten jättää ajon **pollerin varaan**; (ii)
 > **labelointi + ensimmäisen ajokelpoisen käynnistys** — komento tekee saman ja lisäksi
@@ -426,14 +509,22 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
 
 ### 6.2 Tarvitsee muutoksen
 
-**M1 — Epicin poissulku poiminnasta (pakollinen, §2:n löydös).**
+> **Toteutustila.** M1–M5 ja M7 toteutettiin **#81:ssä**, M6 **#82:ssa**, ja M8 on suurelta
+> osin tehty (README + CLAUDE.md + tämä statuspäivitys). Kunkin kohdan alla kerrotaan, mihin se
+> päätyi. Alkuperäinen "tehdään näin" -kuvaus on säilytetty; toteutus seurasi sitä ellei toisin
+> mainita.
+
+**M1 — Epicin poissulku poiminnasta (pakollinen, §2:n löydös).** — **TOTEUTETTU (#81):**
+`-label:epic` lisätty molempiin poimintakyselyihin.
 - `lib/issue.sh:pick_oldest_unassigned` (rivi 108): lisää `-label:epic` hakumerkkijonoon.
 - `poller.sh` inline-poiminta (rivi 775): **sama lisäys** — nämä kaksi hakua on pidettävä
   synkassa (olemassa oleva duplikaatio; harkitse merkkijonon nostamista jaetuksi vakioksi
   `lib/issue.sh`:ään samalla). Vartija: `tests/test-issue-pick.sh` pinnaa hakumerkkijonon;
   lisää `-label:epic` sen assertioon.
 
-**M2 — (Avoin päätös B) Autoritatiivinen epic-portti claimia ennen.**
+**M2 — (Päätös B) Autoritatiivinen epic-portti claimia ennen.** — **TOTEUTETTU (#81):**
+S2c EpicCheck -portti, `lib/issue.sh:is_epic`, exit 12, `blocked/is_epic_not_runnable`
+(tai `epic_check_failed`), ei `needs-human`-labelia.
 - `orchestrate.sh`: uusi portti S2b:n viereen (lukon jälkeen, claimia ennen), joka lukee issuen
   labelit / `sub_issues_summary`n ja perääntyy jos issue on epic. Uusi finalisointisyy esim.
   `blocked/is_epic_not_runnable`, uusi exit-koodi (jatkaa orkestraattorin koodiavaruutta, §5
@@ -441,49 +532,58 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
 - `lib/issue.sh`: uusi `is_epic <repo> <N> [<owner/repo>]` (label-luku, fail-closed samaan
   tapaan kuin `count_open_blockers`).
 
-**M3 — Lapsijoukon resolvointi (jaettu, §1.3).**
+**M3 — Lapsijoukon resolvointi (jaettu, §1.3).** — **TOTEUTETTU AJOPUOLELLA (#81), NÄKYMÄPUOLI
+AVOIN (#91).**
 - `lib/issue.sh`: uusi `list_epic_children <repo> <N> [<owner/repo>]` — lukee natiivit
   `GET …/issues/{N}/sub_issues`; jos tyhjä, jäsentää rungon task-listan (`- [ ] … #N`).
-  Palauttaa lapsi-issuenumerot + tilan. Sama funktio palvelee ajoa **ja** Ohjaamon näkymää
-  (hyväksyntäkriteeri 4).
+  Palauttaa lapsi-issuenumerot + tilan. **Toteutunut poikkeama:** funktion piti palvella ajoa
+  **ja** Ohjaamon näkymää (hyväksyntäkriteeri 4), mutta tällä hetkellä sitä käyttää vain
+  ajopuoli (`run-epic.sh`, `lib/epic.sh`); Ohjaamon rollup (`lib/status-github.sh`, #79)
+  resolvoi lapset omilla funktioillaan. Näkymän kokoaminen samaan funktioon on **#91** (§1.3).
 
-**M4 — Ajolabelien propagointi (§3).**
-- Uusi funktio (sijainti: `lib/issue.sh` tai uusi `lib/epic.sh`)
-  `propagate_run_labels <repo> <epic-N> <labels-csv> [<owner/repo>]` — iteroi avoimet lapset,
-  lisää puuttuvat ajolabelit idempotentisti `labels_add`illa (`lib/labels.sh:85`) /
-  `labels_ensure`illa (`lib/labels.sh:153`). Ohittaa `wip`- ja suljetut lapset.
+**M4 — Ajolabelien propagointi (§3).** — **TOTEUTETTU (#81):** sijainti `lib/epic.sh`.
+- `lib/epic.sh:propagate_run_labels` — iteroi avoimet lapset, lisää puuttuvat ajolabelit
+  idempotentisti `labels_add`illa. Ohittaa `wip`- ja suljetut lapset. Propagoinnin yksi jaettu
+  primitiivi `_epic_propagate_child` palvelee sekä `epic_process_one`ia (poller) että
+  `propagate_run_labels`ia (`/run-epic`) — ei kahta toteutusta (#82 AC4).
 
-**M5 — Pollerin epic-skannaus (§3.2, avoin päätös C).**
-- `poller.sh`: uusi `scan_epics`-vaihe ennen normaalia poimintaa — hakee `is:open label:epic`
-  (+ watchlistin labelit), kutsuu `propagate_run_labels`in kullekin, ja emittoi epic-merkinnän
-  (4.2) jumittuneista lapsista. Sijoitus poiminnan eteen, jotta juuri propagoitu lapsi on
-  poimittavissa samalla tikillä. Host-portti ja watchlist-resolvointi kuten muillakin
-  poller-vaiheilla (`lib/poller-config.sh`).
+**M5 — Pollerin epic-skannaus (§3.2, päätös C).** — **TOTEUTETTU (#81):**
+- `poller.sh`: `scan_epics`-vaihe ennen normaalia poimintaa — hakee `is:open label:epic`
+  (+ watchlistin labelit, `lib/epic.sh:epic_list_open`), kutsuu `epic_process_one`in kullekin
+  (best-effort, aina rc 0), ja emittoi epic-merkinnän (4.2) jumittuneista lapsista. Sijoitus
+  poiminnan eteen, jotta juuri propagoitu lapsi on poimittavissa samalla tikillä. Host-portti ja
+  watchlist-resolvointi kuten muillakin poller-vaiheilla (`lib/poller-config.sh`).
 
-**M6 — `/run-epic`-komento (§5).**
-- Uusi `commands/run-epic.md` (slash-komento, Claude Code lukee sen suoraan; ei
-  `render_prompt`-käsittelyä). Delegoi validoinnin ja propagoinnin M3/M4-funktioihin.
-  Mahdollinen ohut `run-epic.sh` repo-juureen, jos komento tarvitsee ei-triviaalia
-  bash-logiikkaa (syklintarkistus, topologinen järjestys) — symmetrinen `stop-run.sh`:n kanssa.
-- Asennus: `install.sh` linkittää `commands/*.md` jo globilla, joten uusi komento tulee
-  asennukseen pelkällä nimeämisellä (CLAUDE.md §3). Uusi juuren skripti näkyisi automaattisesti
-  litteässä juuressa (CLAUDE.md §2).
+**M6 — `/run-epic`-komento (§5).** — **TOTEUTETTU (#82):** komento **ja** ohut skripti; `--stop`
+scope-out (→ #90).
+- `commands/run-epic.md` (slash-komento, Claude Code lukee sen suoraan) **ja** `run-epic.sh`
+  repo-juuressa, koska komento tarvitsi ei-triviaalia bash-logiikkaa (syklintarkistus Kahnin
+  algoritmilla bash 3.2:ssa ilman assosiatiivisia taulukoita, topologinen järjestys) —
+  symmetrinen `stop-run.sh`:n kanssa. Validointi suunnittele–sovella-jaolla, delegoi propagoinnin
+  jaettuun `propagate_run_labels`iin (M4). `--dry-run`, `--start-now`; keskeytys `--stop` jäi
+  tietoisesti pois (→ #90, päätös H).
+- Asennus: `install.sh` linkittää `commands/*.md` jo globilla, joten komento tuli asennukseen
+  pelkällä nimeämisellä (CLAUDE.md §3). Juuren skripti näkyy automaattisesti litteässä juuressa
+  (CLAUDE.md §2).
 
-**M7 — Epicin näkyvä merkintä (§4.2, avoin päätös G).**
-- Osa M5:tä: kommentti epic-issuelle jumittuneesta lapsesta + kevyt `epic-attention`-label.
-  Idempotenssi #65:n `pr_last_decision`-hengessä (lue viimeisin kirjattu tila, älä toista).
+**M7 — Epicin näkyvä merkintä (§4.2, päätös G).** — **TOTEUTETTU (#81):**
+- Osa M5:tä: kommentti epic-issuelle jumittuneesta lapsesta (`lib/epic.sh:_epic_escalate_child`,
+  per-child piilomarker) + kevyt `epic-attention`-label. Idempotenssi #65:n
+  `pr_last_decision`-hengessä (kertaluonteinen per lapsi). Lisäksi valmiuden merkintä
+  (`_epic_announce_complete`: yhteenvetokommentti + `epic-complete`-label, päätös F).
 
-**M8 — Dokumentaatio.**
-- `README.md`: uusi alaluku (esim. 6.11 "Epicin ajaminen") ihmiselle.
-- `CLAUDE.md`: viittaus tähän dokumenttiin (hyväksyntäkriteeri 6, tehty tässä PR:ssä).
-- Uudet exit-koodit ja env-muuttujat CLAUDE.md §5/§7:ään toteutuksen yhteydessä.
+**M8 — Dokumentaatio.** — **TOTEUTETTU (#82) + tämä statuspäivitys (#93):**
+- `README.md`: alaluku "Epicit — usean issuen ketjun ajaminen `auto-run`illa" ihmiselle (#82).
+- `CLAUDE.md`: epic-koneisto kuvattu §4:ssä ja §6:ssa; viittaus tähän dokumenttiin.
+- Uudet exit-koodit (12 orkestraattori; `run-epic.sh`-avaruus) ja labelit CLAUDE.md §4/§5:ssä.
+- **Tämä PR (#93):** dokumentin statuspäivitys — suunnitelmasta toteutustilan kuvaukseksi.
 
 ### 6.3 Muutosten kokoluokka
 
-M1 ja M2 ovat **pakollisia ennakkoehtoja** (ilman niitä epic+auto-run on jo haitallinen, §2).
-M3–M7 ovat varsinainen epic-automaatio. Kaikki nojaavat olemassa oleviin abstraktioihin;
-mitään ydinkoneistoa (S2b, lukot, PR-vahti) ei kirjoiteta uusiksi. Tämä on issuen tavoittelema
-minimimuutos.
+M1 ja M2 olivat **pakollisia ennakkoehtoja** (ilman niitä epic+auto-run olisi ollut haitallinen,
+§2). M3–M7 olivat varsinainen epic-automaatio. Kaikki nojasivat olemassa oleviin abstraktioihin;
+mitään ydinkoneistoa (S2b, lukot, PR-vahti) ei kirjoitettu uusiksi. Tämä oli issuen tavoittelema
+minimimuutos, ja se toteutui suunnitellusti (#81 M1–M5 + M7, #82 M6).
 
 ---
 
@@ -503,17 +603,20 @@ minimimuutos.
 
 ## Avoimet päätökset — yhteenveto
 
-Nämä ratkaistaan PR-katselmoinnissa; kullekin on suositus perusteluineen yllä.
+**Yhdeksän kymmenestä on ratkaistu koodissa** (#81, #82). Ratkaisusarake nimeää kunkin
+toteutuskohdan tiedosto/funktio-tasolla; vain **H** on aidosti auki. Suositus-sarake on
+säilytetty osoittamaan, että toteutus seurasi (tai poikkesi) alkuperäisestä suosituksesta —
+perustelut ovat laatikoissa yllä. Ristiriitatilanteessa **koodi (ja CLAUDE.md §12) voittaa**.
 
-| # | Kysymys | Suositus |
-|---|---|---|
-| A | Kirjoittaako task-lista-fallback natiivit lapset? | Ei — fallback on vain lukusääntö |
-| B | Autoritatiivinen epic-portti claimia ennen? | Kyllä, kevyt label-luku S2b:n mallilla |
-| C | Propagoinnin ajankohta? | Poller ylläpitää joka tikki, `/run-epic` tekee ensilisäyksen |
-| D | Voiko lapsen jättää ajon ulkopuolelle? | Kyllä, olemassa olevalla `wip`illä (ei uutta labelia) |
-| E | Mitkä labelit propagoituvat? | Watchlistin repolle vaatima joukko |
-| F | Kuka sulkee valmiin epicin? | Ihminen oletuksena; GitHubin auto-close jos konfiguroitu |
-| G | Epic-merkinnän muoto jumittuneesta lapsesta? | Kommentti + suodatettava `epic-attention`-label |
-| H | Keskeytyskomennon muoto? | `/run-epic <N> --stop`, delegoi `stop-run.sh`:lle |
-| I | Lisääkö `/run-epic` puuttuvan `epic`-labelin? | Kyllä, idempotentisti |
-| J | Käynnistääkö komento ajon vai pelkkä labelointi? | Labelointi + poller oletuksena, `--start-now` synkroniseen |
+| # | Kysymys | Alkuperäinen suositus | Ratkaisu (toteutuskohta / avoin) |
+|---|---|---|---|
+| A | Kirjoittaako task-lista-fallback natiivit lapset? | Ei — fallback on vain lukusääntö | **Ratkaistu (#81):** fallback on vain lukusääntö → `lib/issue.sh:list_epic_children` (natiivit `sub_issues` kanoninen, task-lista fallback vain kun natiiveja on nolla; ei kirjoita natiiveja) |
+| B | Autoritatiivinen epic-portti claimia ennen? | Kyllä, kevyt label-luku S2b:n mallilla | **Ratkaistu (#81):** S2c EpicCheck lukon jälkeen, claimia ennen → `orchestrate.sh` + `lib/issue.sh:is_epic`, fail-closed, **exit 12**, ei `needs-human`-labelia |
+| C | Propagoinnin ajankohta? | Poller ylläpitää joka tikki, `/run-epic` tekee ensilisäyksen | **Ratkaistu (#81/#82):** pollerin `scan_epics`-vaihe joka tikki ennen poimintaa (`lib/epic.sh:epic_process_one`); `/run-epic` tekee ensilisäyksen (`run-epic.sh`). Molemmat kutsuvat samaa `propagate_run_labels`ia |
+| D | Voiko lapsen jättää ajon ulkopuolelle? | Kyllä, olemassa olevalla `wip`illä (ei uutta labelia) | **Ratkaistu (#81):** olemassa oleva `wip` → `scan_epics` ohittaa `wip`-lapset propagoinnissa, poiminta ei poimi `wip`-issueita. Ei uutta opt-out-labelia |
+| E | Mitkä labelit propagoituvat? | Watchlistin repolle vaatima joukko | **Ratkaistu (#81):** watchlistin ajolabelit (`auto-run` + repon vaatimat) → `lib/epic.sh:propagate_run_labels` |
+| F | Kuka sulkee valmiin epicin? | Ihminen oletuksena; GitHubin auto-close jos konfiguroitu | **Ratkaistu (#81):** runner ei sulje — merkitsee valmiuden (yhteenvetokommentti + `epic-complete`-label, `lib/epic.sh:_epic_announce_complete`); ihminen sulkee, GitHubin natiivi auto-close voittaa jos konfiguroitu |
+| G | Epic-merkinnän muoto jumittuneesta lapsesta? | Kommentti + suodatettava `epic-attention`-label | **Ratkaistu (#81):** kommentti (per-child piilomarker, kertaluonteinen) + `epic-attention`-label → `lib/epic.sh:_epic_escalate_child` |
+| H | Keskeytyskomennon muoto? | `/run-epic <N> --stop`, delegoi `stop-run.sh`:lle | **Avoin → #90.** Ei toteutettu #82:ssa (tietoinen scope-out). `docs/…` §5-signatuurin `--stop` on toistaiseksi vain suunnitelmarivi |
+| I | Lisääkö `/run-epic` puuttuvan `epic`-labelin? | Kyllä, idempotentisti | **Ratkaistu (#82):** `run-epic.sh` lisää `epic`-labelin idempotentisti jos puuttuu (`--dry-run` ei lisää) |
+| J | Käynnistääkö komento ajon vai pelkkä labelointi? | Labelointi + poller oletuksena, `--start-now` synkroniseen | **Ratkaistu (#82):** oletus labelointi + poller; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen heti (`run-epic.sh`) |
