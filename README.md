@@ -139,6 +139,59 @@ Kaksi rajoitetta:
 - `install.sh --uninstall` **puuttuu**. Paketin omistamat symlinkit poistetaan toistaiseksi
   käsin.
 
+### 3.1 Linux-ajokone (VPS)
+
+> **Tila: verifioimaton.** Tämä osio on johdettu koodista ja plisteistä, ei ajettu läpi
+> Linuxilla. Riippuvuustaulukko ja yksikkötiedostot on tarkistettu lähdettä vasten,
+> mutta paketilla ei ole Linux-CI:tä eikä `tests/run-all.sh`:ta ole ajettu siellä.
+> Ensimmäinen läpiajo saa korjata tätä osiota.
+
+Paketti on kirjoitettu macOS-koneelle, mutta ajokone voi olla Linux-VPS — esimerkiksi
+silloin kun useampi kehittäjä haluaa oman ajokapasiteetin. Monikonemalli itsessään on
+kunnossa: **assignaatio on koneiden välinen varausmekanismi** (osio 6.4) ja `run.json.host`
+host-porttaa siivouksen, joten kaksi konetta voi pollata samoja repoja törmäämättä.
+
+**Mikä eroaa macOS:stä**
+
+| Sidos | Linuxilla |
+|---|---|
+| `stat -f` | Hoidettu — `uname -s` -haara GNU:n `stat -c`:hen |
+| Lukot `~/Library/Application Support/` | `RUN_ISSUES_LOCK_ROOT` |
+| Lokit `~/Library/Logs/` | `RUN_ISSUES_LOG_DIR` |
+| Status-välimuisti | Hoidettu — `XDG_CACHE_HOME` |
+| `gtimeout` / coreutils | Helpompi — `timeout` on natiivi |
+| **LaunchAgentit + `plutil`** | **Ainoa aito puute.** Korvataan systemd user -yksiköillä, ks. alla. `--with-launchagents` on macOS-polku; älä käytä sitä Linuxilla |
+
+**systemd user -yksiköt.** Mallit: [`examples/systemd/`](examples/systemd/). Ne on johdettu
+plisteistä: kolme timeriä (300 s) ja yksi `Restart=always`-palvelu.
+
+```bash
+mkdir -p ~/.config/systemd/user && cp examples/systemd/* ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now run-issues-poller.timer pr-watch-poller.timer
+sudo loginctl enable-linger "$USER"   # PAKOLLINEN
+```
+
+`enable-linger` on se, jonka unohtaminen tuottaa hiljaisimman vian: user-yksiköt kuolevat
+uloskirjautuessa, poller "ei vain tee mitään", eikä mikään loki kerro miksi.
+
+Yksiköt ajavat `bash -l -c` **tarkoituksella** — login-shelli lataa nvm:n, jotta `npx`
+resolvoituu. Tarkista `bash -lc 'node -v'` ennen kuin luotat niihin: jos login-shellin Node
+on eri kuin interaktiivisen, claude-kutsut kaatuvat koodilla 127.
+
+**Mitoitus.** Ajo pitää yllä samanaikaisesti Claude CLI:tä, kohderepon buildia ja sen
+testiympäristöä. Mitatut luvut yhdestä pnpm-monorepo-kohderepoista: repo + `node_modules`
+1,4 GB, oma worktree per rinnakkainen ajo ~0,7 GB, Playwright-selaimet ~1,5 GB (Linux,
+pelkkä chromium). Käytännön lähtökohta **4 vCPU / 8 GB / 50 GB** kun
+`global_max_concurrent` on 2, tai 2 vCPU / 4 GB kun se on 1. Lisää swap myös isommalle
+koneelle — node-buildit piikittävät.
+
+**Verkko.** Default-deny sisään; vain SSH omasta osoitteestasi. Ohjaamon toimintopalvelua
+ei tarvitse eikä pidä avata: se hakee bind-osoitteen komennolla `tailscale ip -4` ja
+**kieltäytyy käynnistymästä** ilman sitä sen sijaan että putoaisi wildcardiin (osio 7.9).
+Tailscale on siksi luonteva myös ssh:lle, jolloin portti 22 voi olla kiinni julkisesta
+verkosta.
+
 ---
 
 ## 4. Konfigurointi
