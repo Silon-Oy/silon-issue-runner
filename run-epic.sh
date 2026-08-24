@@ -187,8 +187,10 @@ if [ ! -s "$CHILDREN_FILE" ]; then
 fi
 
 # Collect per-child fields into parallel indexed arrays (bash 3.2: no assoc
-# arrays). Order is list order = the epic's declared child order.
-NUMS=(); STATES=(); LABELS=(); TITLES=()
+# arrays). Order is list order = the epic's declared child order. REPOS carries
+# each child's home owner/repo (issue #92): a cross-repo child is labelled,
+# escalated and blocked-checked in its OWN repo, and the report groups by it.
+NUMS=(); STATES=(); LABELS=(); TITLES=(); REPOS=()
 TOTAL=0; CLOSED=0
 while IFS= read -r line; do
   [ -n "$line" ] || continue
@@ -196,11 +198,33 @@ while IFS= read -r line; do
   # a plain IFS=$'\t' read would collapse.
   _epic_parse_child_line "$line"
   [ -n "$REPLY_NUM" ] || continue
-  NUMS+=("$REPLY_NUM"); STATES+=("$REPLY_STATE"); LABELS+=("$REPLY_LABELS"); TITLES+=("$REPLY_TITLE")
+  # An origin-mode child may carry no repo → the epic's own owner/repo.
+  _child_repo="$REPLY_REPO"; [ -n "$_child_repo" ] || _child_repo="$OWNER_REPO"
+  NUMS+=("$REPLY_NUM"); STATES+=("$REPLY_STATE"); LABELS+=("$REPLY_LABELS")
+  TITLES+=("$REPLY_TITLE"); REPOS+=("$_child_repo")
   TOTAL=$((TOTAL + 1))
   [ "$REPLY_STATE" = "closed" ] && CLOSED=$((CLOSED + 1))
 done < "$CHILDREN_FILE"
 OPEN_COUNT=$((TOTAL - CLOSED))
+
+# The epic's effective owner/repo for cross-repo comparison + reporting. In origin
+# mode OWNER_REPO is empty, so resolve it once from the working copy (the same way
+# list_epic_children does) — otherwise every child would look "cross-repo".
+EPIC_REPO="$OWNER_REPO"
+if [ -z "$EPIC_REPO" ]; then
+  EPIC_REPO="$(cd "$REPO_ROOT" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")"
+fi
+
+# _child_ref <i> — human-facing reference for child i: owner/repo#N when it lives
+# in a different repo than the epic, plain #N otherwise (matches lib/epic.sh).
+_child_ref() {
+  local i="$1"
+  if [ -n "${REPOS[$i]}" ] && [ -n "$EPIC_REPO" ] && [ "${REPOS[$i]}" != "$EPIC_REPO" ]; then
+    printf '%s#%s' "${REPOS[$i]}" "${NUMS[$i]}"
+  else
+    printf '#%s' "${NUMS[$i]}"
+  fi
+}
 
 # The set of OPEN child numbers, as a space-delimited string for membership tests.
 OPEN_SET=" "
@@ -327,15 +351,16 @@ if [ "$STOP" -eq 1 ]; then
     echo "  actions per sub-issue:"
     for i in $(seq 0 $((TOTAL - 1))); do
       sfx=""; [ "${HAS_LABEL_I[$i]}" -eq 1 ] && sfx=" · release from pickup"
+      ref="$(_child_ref "$i")"
       case "${CLASS[$i]}" in
-        closed)    echo "    #${NUMS[$i]} ${TITLES[$i]} — closed, skipped" ;;
-        wip)       echo "    #${NUMS[$i]} ${TITLES[$i]} — wip (human opt-out), left untouched" ;;
-        stoppable) echo "    #${NUMS[$i]} ${TITLES[$i]} — live run on '$THIS_HOST' → stop$sfx" ;;
-        foreign)   echo "    #${NUMS[$i]} ${TITLES[$i]} — run on '${RUN_HOST_I[$i]}' NOT stopped (foreign host)$sfx" ;;
-        terminal)  echo "    #${NUMS[$i]} ${TITLES[$i]} — run status '${RUN_STATUS_I[$i]}' (terminal) NOT stopped (stop does not --force)$sfx" ;;
-        ambiguous) echo "    #${NUMS[$i]} ${TITLES[$i]} — multiple runs match; narrow with stop-run --run-dir$sfx" ;;
-        norun)     [ -n "$sfx" ] && echo "    #${NUMS[$i]} ${TITLES[$i]} — no live run$sfx" \
-                                 || echo "    #${NUMS[$i]} ${TITLES[$i]} — no live run, nothing to do" ;;
+        closed)    echo "    ${ref} ${TITLES[$i]} — closed, skipped" ;;
+        wip)       echo "    ${ref} ${TITLES[$i]} — wip (human opt-out), left untouched" ;;
+        stoppable) echo "    ${ref} ${TITLES[$i]} — live run on '$THIS_HOST' → stop$sfx" ;;
+        foreign)   echo "    ${ref} ${TITLES[$i]} — run on '${RUN_HOST_I[$i]}' NOT stopped (foreign host)$sfx" ;;
+        terminal)  echo "    ${ref} ${TITLES[$i]} — run status '${RUN_STATUS_I[$i]}' (terminal) NOT stopped (stop does not --force)$sfx" ;;
+        ambiguous) echo "    ${ref} ${TITLES[$i]} — multiple runs match; narrow with stop-run --run-dir$sfx" ;;
+        norun)     [ -n "$sfx" ] && echo "    ${ref} ${TITLES[$i]} — no live run$sfx" \
+                                 || echo "    ${ref} ${TITLES[$i]} — no live run, nothing to do" ;;
       esac
     done
     if [ -s "$CHILD_WARN_FILE" ]; then
@@ -393,11 +418,13 @@ if [ "$STOP" -eq 1 ]; then
         # release still happens below, but the overall stop is partial.
         PARTIAL=1 ;;
     esac
-    # release the child from pickup: remove the run labels it actually carries.
+    # release the child from pickup: remove the run labels it actually carries,
+    # IN ITS OWN repo (issue #92 — a cross-repo child's labels live in its home
+    # repo, not the epic's).
     for _lbl in $(printf '%s' "$LABELS_CSV" | tr ',' ' '); do
       [ -n "$_lbl" ] || continue
       if _epic_csv_has "${LABELS[$i]}" "$_lbl"; then
-        ( cd "$REPO_ROOT" && labels_remove "$OWNER_REPO" "$num" "$_lbl" ) 2>&1 | sed 's/^/  /'
+        ( cd "$REPO_ROOT" && labels_remove "${REPOS[$i]}" "$num" "$_lbl" ) 2>&1 | sed 's/^/  /'
         [ "${PIPESTATUS[0]}" -eq 0 ] || PARTIAL=1
       fi
     done
@@ -440,9 +467,12 @@ OPEN_BLOCKERS=(); INTRA_BLOCKERS=()
 for i in $(seq 0 $((TOTAL - 1))); do
   OPEN_BLOCKERS[$i]=""; INTRA_BLOCKERS[$i]=""
   [ "${STATES[$i]}" = "open" ] || continue
-  bl_out="$(list_blocked_by "$REPO_ROOT" "${NUMS[$i]}" "$OWNER_REPO")"
+  # Read the child's blocked_by graph in ITS OWN repo (issue #92): a cross-repo
+  # child does not exist in the epic's repo, so reading it there would 404 and
+  # fail-close the whole epic.
+  bl_out="$(list_blocked_by "$REPO_ROOT" "${NUMS[$i]}" "${REPOS[$i]}")"
   if [ "$?" -ne 0 ]; then
-    echo "run-epic: could not read the blocked_by graph of sub-issue #${NUMS[$i]} — refusing (fail-closed)" >&2
+    echo "run-epic: could not read the blocked_by graph of sub-issue $(_child_ref "$i") — refusing (fail-closed)" >&2
     exit 5
   fi
   ob=""; ib=""
@@ -494,28 +524,85 @@ if [ "$remaining" -gt 0 ]; then
 fi
 
 # ---------- derive the report facts ----------
+# Distinct child repos in first-seen order — the report groups by repo (AC "raportoi
+# lapset repoittain"). A single-repo epic yields one group (unchanged shape).
+REPO_ORDER=""
+IS_CROSS_REPO=0
+for i in $(seq 0 $((TOTAL - 1))); do
+  case $'\n'"$REPO_ORDER" in *$'\n'"${REPOS[$i]}"$'\n'*) : ;; *) REPO_ORDER="${REPO_ORDER}${REPOS[$i]}"$'\n' ;; esac
+  [ -n "${REPOS[$i]}" ] && [ -n "$EPIC_REPO" ] && [ "${REPOS[$i]}" != "$EPIC_REPO" ] && IS_CROSS_REPO=1
+done
+
+# ---------- watchlist coverage (issue #92) ----------
+# A cross-repo child gets its run labels, but only a machine whose poller watches
+# that repo will actually RUN it — the most common silent failure of a cross-repo
+# epic. Resolve the set of owner/repos this machine's watchlist covers so the
+# report can NAME the children no local poller will run (AC2). Best-effort: an
+# unreadable watchlist skips the check rather than warning falsely. Only done for a
+# cross-repo epic — a single-repo epic runs where the operator already is, so the
+# coverage note would be pure noise.
+WATCHLIST_REPOS=""       # newline-delimited set of covered owner/repo
+WATCHLIST_READABLE=0
+if [ "$IS_CROSS_REPO" -eq 1 ]; then
+  # shellcheck source=lib/poller-config.sh
+  . "$SCRIPT_DIR/lib/poller-config.sh" 2>/dev/null || true
+  # git-remote.sh may already be sourced (non-origin remote); sourcing is idempotent.
+  # shellcheck source=lib/git-remote.sh
+  . "$SCRIPT_DIR/lib/git-remote.sh" 2>/dev/null || true
+  if declare -F poller_resolve_watchlist >/dev/null 2>&1; then
+    _wl_path="$(poller_resolve_watchlist "${RUN_ISSUES_WATCHLIST:-}" \
+      "${HOME}/.config/run-issues/watchlist.json" \
+      "${HOME}/dotfiles/machine-studio/run-issues-watchlist.json" 2>/dev/null || true)"
+    if [ -n "$_wl_path" ] && jq -e . "$_wl_path" >/dev/null 2>&1; then
+      WATCHLIST_READABLE=1
+      while IFS=$'\t' read -r _wpath _wremote; do
+        [ -n "$_wpath" ] || continue
+        _wor="$(resolve_remote_to_owner_repo "$_wpath" "${_wremote:-origin}" 2>/dev/null || true)"
+        [ -n "$_wor" ] && WATCHLIST_REPOS="${WATCHLIST_REPOS}${_wor}"$'\n'
+      done < <(jq -r '.repos[]? | .path as $p | ((.remotes // ["origin"])[]) | [$p, .] | @tsv' "$_wl_path" 2>/dev/null)
+    fi
+  fi
+fi
+# _repo_watched <owner/repo> — 0 if the repo is in this machine's watchlist set.
+_repo_watched() {
+  [ -n "$1" ] || return 1
+  case $'\n'"$WATCHLIST_REPOS" in *$'\n'"$1"$'\n'*) return 0 ;; *) return 1 ;; esac
+}
+
+# Children whose repo no local poller watches (AC2). Only meaningful for a
+# cross-repo epic with a readable watchlist; else no false warning.
+UNWATCHED_REFS=""
+if [ "$IS_CROSS_REPO" -eq 1 ] && [ "$WATCHLIST_READABLE" -eq 1 ]; then
+  for i in $(seq 0 $((TOTAL - 1))); do
+    [ "${STATES[$i]}" = "open" ] || continue
+    _repo_watched "${REPOS[$i]}" || UNWATCHED_REFS="${UNWATCHED_REFS:+$UNWATCHED_REFS, }$(_child_ref "$i")"
+  done
+fi
+
 # First runnable = first OPEN child (list order) with zero OPEN blockers of any
 # kind — that is exactly S2b's pickup condition.
 FIRST_RUNNABLE=""
+FIRST_RUNNABLE_I=""
 for i in $(seq 0 $((TOTAL - 1))); do
   [ "${STATES[$i]}" = "open" ] || continue
-  if [ -z "${OPEN_BLOCKERS[$i]}" ]; then FIRST_RUNNABLE="${NUMS[$i]}"; break; fi
+  if [ -z "${OPEN_BLOCKERS[$i]}" ]; then FIRST_RUNNABLE="${NUMS[$i]}"; FIRST_RUNNABLE_I="$i"; break; fi
 done
 
-# What propagation WOULD do per open child (also drives the report).
-would_label=""   # "#N,#M" list of open children missing the labels
+# What propagation WOULD do per open child (also drives the report). Refs are
+# repo-qualified for a cross-repo child (issue #92).
+would_label=""   # list of open children missing the labels
 already=""       # already fully labelled
 skipped_wip=""
 for i in $(seq 0 $((TOTAL - 1))); do
   [ "${STATES[$i]}" = "open" ] || continue
   if _epic_csv_has "${LABELS[$i]}" "wip"; then
-    skipped_wip="${skipped_wip:+$skipped_wip, }#${NUMS[$i]}"
+    skipped_wip="${skipped_wip:+$skipped_wip, }$(_child_ref "$i")"
     continue
   fi
   if [ -n "$(_epic_missing_labels "${LABELS[$i]}" "$LABELS_CSV")" ]; then
-    would_label="${would_label:+$would_label, }#${NUMS[$i]}"
+    would_label="${would_label:+$would_label, }$(_child_ref "$i")"
   else
-    already="${already:+$already, }#${NUMS[$i]}"
+    already="${already:+$already, }$(_child_ref "$i")"
   fi
 done
 
@@ -533,28 +620,54 @@ mode_tag="[apply]"; [ "$DRY_RUN" -eq 1 ] && mode_tag="[dry-run — no changes]"
     echo "  epic label:    MISSING — will be added"
   fi
   echo "  sub-issues:    $TOTAL total ($OPEN_COUNT open, $CLOSED closed)  ← chain length"
-  echo "  first to run:  ${FIRST_RUNNABLE:+#}${FIRST_RUNNABLE:-none (all open children are blocked or none open)}"
+  if [ -n "$FIRST_RUNNABLE_I" ]; then
+    echo "  first to run:  $(_child_ref "$FIRST_RUNNABLE_I")"
+  else
+    echo "  first to run:  none (all open children are blocked or none open)"
+  fi
   echo
   echo "  propagation:"
   echo "    label:       ${would_label:-none (all open children already carry the labels)}"
   echo "    already set:  ${already:-none}"
   [ -n "$skipped_wip" ] && echo "    skipped wip: $skipped_wip"
   echo
-  echo "  run order:"
-  for i in $(seq 0 $((TOTAL - 1))); do
-    case "${STATES[$i]}" in
-      closed) echo "    #${NUMS[$i]} ${TITLES[$i]} — closed" ;;
-      open)
-        if [ -z "${OPEN_BLOCKERS[$i]}" ]; then
-          echo "    #${NUMS[$i]} ${TITLES[$i]} — runnable now"
-        else
-          echo "    #${NUMS[$i]} ${TITLES[$i]} — blocked by #$(printf '%s' "${OPEN_BLOCKERS[$i]}" | sed 's/,/, #/g')"
-        fi ;;
-    esac
-  done
-  if [ -s "$CHILD_WARN_FILE" ]; then
+  # Run order, grouped by repo (issue #92: a cross-repo epic lists its children
+  # under each repo). A single-repo epic prints one group.
+  echo "  run order (by repo):"
+  while IFS= read -r _grepo; do
+    [ -n "$_grepo" ] || continue
+    echo "    $_grepo:"
+    for i in $(seq 0 $((TOTAL - 1))); do
+      [ "${REPOS[$i]}" = "$_grepo" ] || continue
+      case "${STATES[$i]}" in
+        closed) echo "      #${NUMS[$i]} ${TITLES[$i]} — closed" ;;
+        open)
+          if [ -z "${OPEN_BLOCKERS[$i]}" ]; then
+            echo "      #${NUMS[$i]} ${TITLES[$i]} — runnable now"
+          else
+            echo "      #${NUMS[$i]} ${TITLES[$i]} — blocked by #$(printf '%s' "${OPEN_BLOCKERS[$i]}" | sed 's/,/, #/g')"
+          fi ;;
+      esac
+    done
+  done <<EOF
+$REPO_ORDER
+EOF
+  # Watchlist coverage warning (AC2, cross-repo only): children whose repo no
+  # local poller runs. A single-repo epic runs where the operator already is, so
+  # the coverage note is skipped there.
+  if [ -n "$UNWATCHED_REFS" ]; then
     echo
     echo "  warnings:"
+    echo "    NOT RUN HERE — no poller on this machine watches the repo of: $UNWATCHED_REFS"
+    echo "    (they will be labelled, but a machine whose watchlist covers that repo must run them.)"
+  elif [ "$IS_CROSS_REPO" -eq 1 ] && [ "$WATCHLIST_READABLE" -ne 1 ]; then
+    echo
+    echo "  warnings:"
+    echo "    watchlist not readable — cannot verify which of these cross-repo children this machine runs."
+  fi
+  if [ -s "$CHILD_WARN_FILE" ]; then
+    echo
+    echo "  resolver warnings:"
     sed 's/^/    /' "$CHILD_WARN_FILE"
   fi
 } >&1
