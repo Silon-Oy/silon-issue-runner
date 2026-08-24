@@ -807,8 +807,11 @@ a:hover{text-decoration:underline}
 
   // epicLaneVisible — an epic produces a lane while it has any OPEN sub-issue OR
   // any sub-issue still backed by a live run (spec goal 3: an epic with no live
-  // run and no open sub-issue produces no lane).
+  // run and no open sub-issue produces no lane). An UNREADABLE epic (issue #91:
+  // the child-set could not be read) also produces a lane — it must stay VISIBLE
+  // and say so, never silently vanish into false "no work".
   function epicLaneVisible(e, runByKey){
+    if (e.source === "unreadable") return true;
     var subs = e.sub_issues || [];
     if (subs.some(function(s){ return s.state === "open"; })) return true;
     return subs.some(function(s){ return isLiveRun(runByKey[subKey(e.repo_slug, s.number)]); });
@@ -826,6 +829,19 @@ a:hover{text-decoration:underline}
     if (e.epic_number != null) head.appendChild(link(e.epic_url, "#" + e.epic_number + " ↗"));
     if (typeof e.epic_title === "string" && e.epic_title)
       head.appendChild(el("span", "epic-title", e.epic_title));
+
+    // Unreadable child-set (issue #91): show the header + a note instead of a
+    // progress bar. No false progress is drawn off an unreadable graph; the lane
+    // reuses existing classes (no new visual style — schema/UI scope-out).
+    if (e.source === "unreadable") {
+      lane.appendChild(head);
+      var warn = el("div", "epic-sub");
+      warn.appendChild(el("span", "epic-mark", "⚠"));
+      warn.appendChild(el("span", "epic-sub-state", "lapsijoukkoa ei saatu luettua"));
+      lane.appendChild(warn);
+      return lane;
+    }
+
     head.appendChild(el("span", "epic-progress-count", closed + "/" + total + " valmis"));
     lane.appendChild(head);
 

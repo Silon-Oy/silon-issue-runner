@@ -34,6 +34,14 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
+# Isolate from the DEVELOPER's real poller.env: status-render.sh sources
+# ${RUN_ISSUES_POLLER_ENV_FILE:-~/.config/run-issues/poller.env} (the LaunchAgent
+# config channel, #78), and a machine that sets RUN_ISSUES_RENDER_GITHUB /
+# RUN_ISSUES_ACTION_BASE there would override this test's per-case env (the file
+# wins). Point it at a non-regular path so the sourcing guard (`[ -f … ]`) skips
+# it — every case then sees ONLY the env it sets itself.
+export RUN_ISSUES_POLLER_ENV_FILE=/dev/null
+
 PASS=0
 FAIL=0
 ok()  { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
@@ -263,6 +271,11 @@ if [ -f "$HTMLEP" ]; then
   # Dedup: epic-member runs are shown inside the lane, not as loose rows. Guard
   # the mechanism (epicMember set + subKey join) is present.
   present "epic dedup via epicMember" "epicMember" "$HTMLEP"
+  # Unreadable child-set (issue #91): the JS keeps such a lane VISIBLE and shows a
+  # note instead of a progress bar (goal 3 — never silently vanish, never false
+  # progress). The page is data-free, so guard the JS branch + wording.
+  present "JS handles unreadable source" 'source === "unreadable"' "$HTMLEP"
+  presenti "unreadable epic note wording" "lapsijoukkoa ei saatu luettua" "$HTMLEP"
 fi
 
 # ---- Case 5b: degraded + zero-runs document still renders (exit 0, verbatim) ----

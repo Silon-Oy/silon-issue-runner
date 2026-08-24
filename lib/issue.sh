@@ -316,17 +316,18 @@ is_epic() {
   esac
 }
 
-# list_epic_children <repo-root> <N> [<owner/repo>]
+# list_epic_children <repo-root> <N> [<owner/repo>] [OPTIONS]
 # Resolves the child issues of epic N and prints one TAB-separated line per
 # child on stdout:
 #
 #   <number>\t<state>\t<labels-csv>\t<title>
 #
-# where <state> is "open"/"closed". This is the SINGLE shared resolver both the
-# running poller (issue #81) and Ohjaamo's V4 epic view consume, so the two can
-# never disagree about which issues belong to an epic (AC5,
-# docs/epic-orchestration.md §1.3). Returns 0 on a successful read (including
-# the empty case — an epic with no children prints nothing), 2 when the native
+# where <state> is "open"/"closed". This is the SINGLE shared resolver every
+# consumer uses — the running poller (lib/epic.sh), /run-epic (run-epic.sh, its
+# --stop path), AND Ohjaamo's V4 epic view (lib/status-github.sh) — so no two can
+# disagree about which issues belong to an epic (AC5, docs/epic-orchestration.md
+# §1.3; issue #91 wired the view onto it). Returns 0 on a successful read
+# (including the empty case — an epic with no children prints nothing), 2 when the
 # read failed (fail-closed: the caller must not treat "unreadable" as "done").
 #
 # Resolution order (docs/epic-orchestration.md §1.2): native GitHub sub-issues
@@ -340,15 +341,57 @@ is_epic() {
 #   needs-human escalation) therefore have them without a per-child read on the
 #   canonical path.
 #
+# FALLBACK STATE IS AUTHORITATIVE (issue #91). A task-list child's state is
+# NEVER inferred from the checkbox alone — the box can lie (a `[ ]` on an issue
+# that is actually closed, or a `[x]` on one still open). It is resolved against
+# the set of OPEN issues in the repo: number IN the open set => "open"; NOT in the
+# set + `[x]` => "closed" (done; the closed issue is absent from the open list);
+# NOT in the set + `[ ]` => SKIPPED (the reference does not resolve to a real open
+# issue). The open set is INJECTED by the view (--open-map, which already has it,
+# so no extra call) or, when absent, fetched once by this function — and a failed
+# fetch is fail-closed (rc 2), so a legacy epic can never announce false
+# completion off an unreadable open list.
+#
 # Cross-repo children are out of scope (Rajaukset): a native child in another
 # repo is filtered out (and would otherwise be mislabelled in the epic's OWN
 # repo, since propagation writes with the epic's owner/repo), and a fallback
 # `owner/repo#N` reference is skipped. Both cases emit a one-line warning on
-# stderr so the exclusion is visible, never silent.
+# stderr so the exclusion is visible, never silent. The view filters IDENTICALLY
+# because it goes through this same function (issue #91 AC5).
+#
+# The function binds NO identity — the caller chooses (issue #91 edge case): the
+# run side uses the plain gh-CLI (a pick-time read, like is_epic); the view passes
+# `--gh-runner gha_with_token` so the App identity is honoured. OPTIONS (after the
+# optional <owner/repo> positional):
+#   --gh-runner <fn>    command prefix to invoke gh (default: none → plain `gh`)
+#   --body <text>       pre-fetched epic body → skip the fallback `gh issue view`
+#   --open-map <json>   {"<num>":…,…} open-issue set for authoritative fallback
+#                       state; when absent this function fetches it once itself
+#   --source-file <p>   path to write the resolution source ("sub_issues" /
+#                       "task_list") so a caller running via $(…) can read it back
 list_epic_children() {
-  local repo="$1"
-  local n="$2"
-  local owner_repo="${3:-}"
+  local repo="$1" n="$2"
+  shift 2 || true
+  # <owner/repo> is optional and precedes the flags; a leading `--` means it was
+  # omitted (2-arg call, origin mode).
+  local owner_repo=""
+  if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
+    owner_repo="$1"; shift
+  fi
+  local gh_runner="" inj_body="" have_body=0 inj_openmap="" have_openmap=0 source_file=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --gh-runner)   gh_runner="${2:-}"; shift 2 ;;
+      --body)        inj_body="${2:-}"; have_body=1; shift 2 ;;
+      --open-map)    inj_openmap="${2:-}"; have_openmap=1; shift 2 ;;
+      --source-file) source_file="${2:-}"; shift 2 ;;
+      *)             shift ;;
+    esac
+  done
+
+  # gh invocation prefix: the caller's identity choice, never this function's.
+  local -a ghc
+  if [ -n "$gh_runner" ]; then ghc=("$gh_runner" gh); else ghc=(gh); fi
 
   # Expected owner/repo for the cross-repo filter. In multi-remote mode it is
   # passed explicitly; in origin mode it is empty, so resolve it once from the
@@ -356,7 +399,7 @@ list_epic_children() {
   # child could be labelled against the epic's repo by number.
   local expected="$owner_repo"
   if [ -z "$expected" ]; then
-    expected=$(cd "$repo" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
+    expected=$(cd "$repo" && "${ghc[@]}" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
   fi
 
   local api_path
@@ -369,7 +412,7 @@ list_epic_children() {
   # 1. Native sub-issues (canonical). --paginate handles an epic with many
   # children; each page is a JSON array, so `jq -s 'add // []'` concatenates them.
   local native
-  if ! native=$(cd "$repo" && gh api --paginate "$api_path" 2>/dev/null); then
+  if ! native=$(cd "$repo" && "${ghc[@]}" api --paginate "$api_path" 2>/dev/null); then
     return 2  # unreadable native graph → fail-closed
   fi
 
@@ -378,6 +421,7 @@ list_epic_children() {
   case "$native_count" in ''|*[!0-9]*) native_count=0 ;; esac
 
   if [ "$native_count" -gt 0 ]; then
+    [ -n "$source_file" ] && printf 'sub_issues' > "$source_file" 2>/dev/null
     # Warn about (and drop) any native child that lives in another repo.
     local skipped
     skipped=$(printf '%s' "$native" | jq -s -r --arg exp "$expected" '
@@ -407,10 +451,20 @@ EOF
   # 2. Fallback: parse the epic body's task-list (legacy epics, pre native
   # sub-issues). Only reached when there are zero native children.
   local body
-  if ! body=$(cd "$repo" && gh issue view "$n" $(_repo_args "$owner_repo") --json body --jq '.body // ""' 2>/dev/null); then
+  if [ "$have_body" -eq 1 ]; then
+    body="$inj_body"
+  elif ! body=$(cd "$repo" && "${ghc[@]}" issue view "$n" $(_repo_args "$owner_repo") --json body --jq '.body // ""' 2>/dev/null); then
     return 2
   fi
-  local line cbox num state title
+
+  [ -n "$source_file" ] && printf 'task_list' > "$source_file" 2>/dev/null
+
+  # Open-issue set for authoritative fallback state. Injected by the view; else
+  # fetched lazily here on the FIRST task-list child (an empty epic body needs no
+  # open list, and must not fail on an unfetchable one). A failed fetch is
+  # fail-closed (rc 2) — see the function header.
+  local openmap="$inj_openmap" openmap_ready="$have_openmap"
+  local line cbox num state title seen=" "
   while IFS= read -r line; do
     # Require a GitHub task-list checkbox: `- [ ]` / `- [x]` (also * and +).
     [[ "$line" =~ ^[[:space:]]*[-*+][[:space:]]+\[([ xX])\][[:space:]] ]] || continue
@@ -424,9 +478,30 @@ EOF
     # Same-repo `#N` reference.
     [[ "$line" =~ \#([0-9]+) ]] || continue
     num="${BASH_REMATCH[1]}"
-    # Checkbox state is the fallback's only truth about the child (§1.2 rule 3):
-    # [x]/[X] = done (closed, not run), [ ] = open.
-    if [ "$cbox" = " " ]; then state="open"; else state="closed"; fi
+    # First reference to a number wins (a body may mention an issue twice).
+    case "$seen" in *" $num "*) continue ;; esac
+    # Resolve the open set on demand, once, on the first real child.
+    if [ "$openmap_ready" -ne 1 ]; then
+      local open_raw
+      if ! open_raw=$(cd "$repo" && "${ghc[@]}" issue list $(_repo_args "$owner_repo") --state open --limit 1000 --json number 2>/dev/null); then
+        return 2
+      fi
+      openmap=$(printf '%s' "$open_raw" | jq -c 'if type == "array" then (reduce .[] as $i ({}; .[($i.number|tostring)] = 1)) else empty end' 2>/dev/null || printf '')
+      [ -n "$openmap" ] || return 2
+      openmap_ready=1
+    fi
+    # Authoritative state (issue #91): the open set, not the checkbox.
+    #   in open set          → open
+    #   not in set, [x]/[X]  → closed (done; absent from the open list)
+    #   not in set, [ ]      → skip (does not resolve to a real open issue)
+    if printf '%s' "$openmap" | jq -e --arg k "$num" 'has($k)' >/dev/null 2>&1; then
+      state="open"
+    elif [ "$cbox" != " " ]; then
+      state="closed"
+    else
+      continue
+    fi
+    seen="$seen$num "
     # Title: the line minus the leading checkbox and the trailing `#N …`.
     title=$(printf '%s' "$line" \
       | sed -E 's/^[[:space:]]*[-*+][[:space:]]+\[[ xX]\][[:space:]]*//; s/[[:space:]]*#[0-9]+.*$//; s/[[:space:]]*$//')

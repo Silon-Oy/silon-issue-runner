@@ -136,12 +136,15 @@ if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
   *"--label epic"*)
     case "\$repo" in
       o/repo-a)
-        # Two epics: #10 has native sub-issues (API path below), #20 is a legacy
-        # epic whose sub-issues live in a body task-list (API returns empty).
+        # Three epics: #10 has native sub-issues (API path below), #20 is a legacy
+        # epic whose sub-issues live in a body task-list (API returns empty), and
+        # #30's sub-issues API ERRORS (issue #91 AC4: the view must mark it
+        # unreadable and NOT fall back to its body task-list).
         cat <<'JSON'
 [
  {"number":10,"title":"Epic Alpha","body":"An epic with native sub-issues."},
- {"number":20,"title":"Epic Beta (legacy)","body":"Legacy epic\n- [x] Done thing #1\n- [ ] Pending thing #2\n- [ ] Ghost thing #999\n"}
+ {"number":20,"title":"Epic Beta (legacy)","body":"Legacy epic\n- [x] Done thing #1\n- [ ] Pending thing #2\n- [ ] Ghost thing #999\n"},
+ {"number":30,"title":"Epic Gamma (unreadable)","body":"Broken epic\n- [ ] Should-not-appear #1\n"}
 ]
 JSON
         exit 0
@@ -190,15 +193,24 @@ if [ "\$1" = "issue" ] && [ "\$2" = "view" ]; then
     *) echo "gh: issue not found (simulated)" >&2; exit 1 ;;
   esac
 fi
-# Sub-issues API: repos/{owner}/{repo}/issues/{n}/sub_issues (issue #79).
+# Sub-issues API: repos/{owner}/{repo}/issues/{n}/sub_issues (issue #79). The
+# shared resolver list_epic_children (issue #91) calls this with --paginate, so
+# the path is not positional — scan for the repos/… argument (like test-epic.sh).
+# repository_url is included because list_epic_children's cross-repo filter reads
+# it (a real sub_issues response always carries it).
 if [ "\$1" = "api" ]; then
-  case "\$2" in
+  apipath=""
+  for a in "\$@"; do case "\$a" in repos/*) [ -z "\$apipath" ] && apipath="\$a";; esac; done
+  case "\$apipath" in
     repos/o/repo-a/issues/10/sub_issues)
-      # Native sub-issues: #11 open, #12 closed.
+      # Native sub-issues: #11 open, #12 closed, plus #13 in ANOTHER repo — the
+      # cross-repo child must be filtered IDENTICALLY on the view side (issue #91
+      # AC5), exactly as the run side drops it (scope-out).
       cat <<'JSON'
 [
- {"number":11,"state":"open","title":"Alpha sub one"},
- {"number":12,"state":"closed","title":"Alpha sub two"}
+ {"number":11,"state":"open","title":"Alpha sub one","repository_url":"https://api.github.com/repos/o/repo-a"},
+ {"number":12,"state":"closed","title":"Alpha sub two","repository_url":"https://api.github.com/repos/o/repo-a"},
+ {"number":13,"state":"open","title":"Cross-repo sub","repository_url":"https://api.github.com/repos/o/other-repo"}
 ]
 JSON
       exit 0
@@ -207,6 +219,11 @@ JSON
       # Legacy epic: no native sub-issues => caller falls back to the task list.
       echo "[]"
       exit 0
+      ;;
+    repos/o/repo-a/issues/30/sub_issues)
+      # Unreadable native graph: the API errors (issue #91 AC4, view fail-closed).
+      echo "gh: sub_issues fetch failed (simulated)" >&2
+      exit 1
       ;;
     *) echo "[]"; exit 0 ;;
   esac
@@ -227,7 +244,7 @@ pr_list_calls() { grep -c 'pr list' "$CALLS" 2>/dev/null || true; }
 # Title-list calls only (exclude the epic list, which also uses `issue list`).
 issue_list_calls() { grep 'issue list' "$CALLS" 2>/dev/null | grep -vc 'label epic' || true; }
 epic_list_calls() { grep -c 'label epic' "$CALLS" 2>/dev/null || true; }
-sub_issue_calls() { grep -c 'api repos/' "$CALLS" 2>/dev/null || true; }
+sub_issue_calls() { grep -c 'sub_issues' "$CALLS" 2>/dev/null || true; }
 issue_view_calls() { grep -c 'issue view' "$CALLS" 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------
@@ -339,12 +356,13 @@ check "#7 reason pr_draft_stale"     "$(gi 7 | jq -r '.class_reason')" "pr_draft
 check "#9 github null (repo failed)" "$(gi 9 | jq -r '.github')" "null"
 check "#9 confidence low"            "$(gi 9 | jq -r '.class_confidence')" "low"
 
-# ---- epic collection (issue #79) ------------------------------------------
-# Epics are fetched ONCE per repo: repo-a succeeds (1 epic-list call, 2 sub-issue
-# API calls), repo-b fails the PR fetch first so it is never queried for epics.
+# ---- epic collection (issue #79, shared resolver issue #91) ---------------
+# Epics are fetched ONCE per repo: repo-a succeeds (1 epic-list call, 3 sub-issue
+# API calls — one per epic #10/#20/#30, i.e. ONE per epic, no per-child reads),
+# repo-b fails the PR fetch first so it is never queried for epics.
 check "epic list called once (repo-a)" "$(epic_list_calls)" "1"
-check "sub-issue API called per epic (2)" "$(sub_issue_calls)" "2"
-check "epics[] has 2 entries" "$(jq '.epics | length' "$OUT")" "2"
+check "sub-issue API called once per epic (3)" "$(sub_issue_calls)" "3"
+check "epics[] has 3 entries" "$(jq '.epics | length' "$OUT")" "3"
 
 # by-epic-number lookup.
 ge() { jq -c --argjson n "$1" '.epics[] | select(.epic_number==$n)' "$OUT"; }
@@ -357,6 +375,10 @@ check "epic #10 source sub_issues" "$(ge 10 | jq -r '.source')" "sub_issues"
 check "epic #10 sub_issues count" "$(ge 10 | jq '.sub_issues | length')" "2"
 check "epic #10 sub #11 open"    "$(ge 10 | jq -r '.sub_issues[] | select(.number==11) | .state')" "open"
 check "epic #10 sub #12 closed"  "$(ge 10 | jq -r '.sub_issues[] | select(.number==12) | .state')" "closed"
+# AC5: the cross-repo child #13 is excluded on the view side, just as on the run
+# side — the same list_epic_children filter, so the two can never disagree.
+check "epic #10 cross-repo #13 excluded (AC5)" \
+  "$(ge 10 | jq '[.sub_issues[] | select(.number==13)] | length')" "0"
 # sub_issues carry ONLY number+state (no title/body leak from the API payload).
 check "epic #10 sub keys number+state" \
   "$(ge 10 | jq -r '.sub_issues[0] | keys | sort | join(",")')" "number,state"
@@ -373,6 +395,15 @@ check "epic #20 sub #2 open" \
   "$(ge 20 | jq -r '.sub_issues[] | select(.number==2) | .state')" "open"
 check "epic #20 ghost #999 absent" \
   "$(ge 20 | jq '[.sub_issues[] | select(.number==999)] | length')" "0"
+
+# Epic #30: the native sub-issues API errors. FAIL-CLOSED (issue #91 AC4): the
+# view marks it source "unreadable" with an EMPTY sub_issues set and does NOT
+# fall back to its body task-list (which would have drawn false progress off a
+# child #1 that the fallback would otherwise have picked up).
+check "epic #30 source unreadable (fail-closed)" "$(ge 30 | jq -r '.source')" "unreadable"
+check "epic #30 sub_issues empty (no false progress)" "$(ge 30 | jq '.sub_issues | length')" "0"
+check "epic #30 did NOT fall back to task-list #1" \
+  "$(ge 30 | jq '[.sub_issues[] | select(.number==1)] | length')" "0"
 
 # ---------------------------------------------------------------------------
 # 2) Cache hit: rerun within TTL => the shim is NOT called for repo-a.
@@ -392,7 +423,7 @@ check "cache hit: #1 title served from cache" \
 # sub-issue API call, yet epics[] is still served (issue #79).
 check "cache hit: no epic list call" "$(epic_list_calls)" "0"
 check "cache hit: no sub-issue API call" "$(sub_issue_calls)" "0"
-check "cache hit: epics[] still served (2)" "$(jq '.epics | length' "$FX/out2.json")" "2"
+check "cache hit: epics[] still served (3)" "$(jq '.epics | length' "$FX/out2.json")" "3"
 # issue-state reads are cached in the SAME owner entry (issue #96): a repo-a cache
 # hit makes NO issue-view call, yet #8 is still classified cleanup/issue_closed.
 check "cache hit: no issue view call (repo-a cached)" "$(issue_view_calls)" "0"

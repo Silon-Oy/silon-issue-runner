@@ -53,6 +53,7 @@ seed_labels()    { printf '%s' "$2" > "$STATE/labels/$1"; }
 seed_body()      { printf '%s' "$2" > "$STATE/body/$1"; }
 seed_title()     { printf '%s' "$2" > "$STATE/title/$1"; }
 seed_subissues() { printf '%s' "$2" > "$STATE/subissues/$1"; }   # JSON array
+seed_open()      { printf '%s' "$1" > "$STATE/open"; }           # JSON [{number}]
 # comments/<n>.jsonl: one JSON object per line
 
 # --- gh mock ---------------------------------------------------------------
@@ -92,14 +93,23 @@ case "\$sub" in
     case "\$action" in
       list)
         # issue list --search S --limit N --json number --jq E
+        # Two distinct callers land here:
+        #   - epic_list_open: has --search "is:open label:epic …" → epic fixture.
+        #   - list_epic_children's authoritative open-issue-set fetch (issue #91):
+        #     --state open, NO --search → return the seeded open set (\$STATE/open).
         search=""; expr=""; prev=""
         for a in "\$@"; do
           case "\$prev" in --search) search="\$a";; --jq) expr="\$a";; esac
           prev="\$a"
         done
-        printf '%s\n' "\$search" >> "\$REC/search"
-        # Fixture: epics 100 and 200 exist and carry the run labels.
-        echo '[{"number":100},{"number":200}]' | jq -r "\$expr" ;;
+        if [ -n "\$search" ]; then
+          printf '%s\n' "\$search" >> "\$REC/search"
+          # Fixture: epics 100 and 200 exist and carry the run labels.
+          echo '[{"number":100},{"number":200}]' | jq -r "\$expr"
+        else
+          open="[]"; [ -f "\$STATE/open" ] && open="\$(cat "\$STATE/open")"
+          if [ -n "\$expr" ]; then printf '%s' "\$open" | jq -r "\$expr"; else printf '%s\n' "\$open"; fi
+        fi ;;
       view)
         n="\$3"; expr=""; prev=""
         for a in "\$@"; do case "\$prev" in --jq) expr="\$a";; esac; prev="\$a"; done
@@ -220,16 +230,33 @@ n=$(printf '%s\n' "$out" | grep -c '^[0-9]')
 [ "$n" = 2 ] && pass "list_epic_children native: 2 same-repo children, cross-repo excluded" \
   || fail "list_epic_children native: expected 2 children, got $n"
 
-# Fallback: zero native → parse task-list from the body.
+# Fallback: zero native → parse task-list from the body. State is resolved
+# AUTHORITATIVELY against the open-issue set, NEVER the checkbox (issue #91, AC3).
+# The checkboxes below are DELIBERATELY WRONG to prove the open set decides:
+#   #501 box [x] but IS open  → open     (open set overrides a checked box)
+#   #502 box [ ] but NOT open → SKIPPED  (a [ ] mark on a non-open issue is not
+#                                         "open" — the old bug this fixes)
+#   #503 box [x] and NOT open → closed   (genuinely done; absent from open list)
+#   owner/repo#999            → cross-repo skip
 seed_subissues 410 '[]'
-seed_body 410 $'- [ ] First #501\n- [x] Second #502\n- [ ] Cross owner/repo#503\nplain line'
+seed_body 410 $'- [x] First #501\n- [ ] Second #502\n- [x] Third #503\n- [ ] Cross owner/repo#999\nplain line'
+seed_open '[{"number":501}]'   # only 501 is open in the repo
 out=$(list_epic_children "$REPO" 410)
-echo "$out" | grep -q "^501	open		First$"   || fail "list_epic_children fallback: missing open 501 (got: $out)"
-echo "$out" | grep -q "^502	closed		Second$" || fail "list_epic_children fallback: missing closed 502"
-echo "$out" | grep -q "503"                        && fail "list_epic_children fallback: cross-repo 503 NOT excluded"
+echo "$out" | grep -q "^501	open		First$"  || fail "list_epic_children fallback: 501 must be open (map wins over [x]) (got: $out)"
+echo "$out" | grep -q "^502"                       && fail "list_epic_children fallback: 502 ([ ] + not open) must be skipped, not reported"
+echo "$out" | grep -q "^503	closed		Third$" || fail "list_epic_children fallback: 503 ([x] + not open) must be closed"
+echo "$out" | grep -q "999"                        && fail "list_epic_children fallback: cross-repo 999 NOT excluded"
 n=$(printf '%s\n' "$out" | grep -c '^[0-9]')
-[ "$n" = 2 ] && pass "list_epic_children fallback: parses checkboxes, excludes cross-repo" \
-  || fail "list_epic_children fallback: expected 2 children, got $n"
+[ "$n" = 2 ] && pass "list_epic_children fallback: state authoritative from open set, cross-repo excluded" \
+  || fail "list_epic_children fallback: expected 2 children (501 open, 503 closed), got $n"
+
+# Fail-closed on the run side: an unreadable native graph → rc 2, no fallback,
+# no output (AC4). Simulate with gh absent from PATH.
+set +e
+o=$(PATH="/nonexistent" list_epic_children "$REPO" 400 "silon-oy/demo" 2>/dev/null); r=$?
+set -e
+{ [ "$r" = 2 ] && [ -z "$o" ]; } && pass "list_epic_children: unreadable native graph → rc 2, empty (fail-closed)" \
+  || fail "list_epic_children: expected rc2/empty when gh absent, got [$o]/rc$r"
 
 # ===========================================================================
 # 3. epic_list_open — pins the epic search string

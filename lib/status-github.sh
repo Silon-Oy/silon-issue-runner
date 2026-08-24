@@ -24,8 +24,9 @@
 #     its runs stay `github: null` with low confidence; exit code is unaffected.
 #
 # Sourced by status.sh. Function-only + a few constants; no top-level work, safe
-# to source. It sources nothing itself — status.sh sources pr-watch-lib.sh and
-# github-app-auth.sh (for pr_decide / pr_ci_state / gha_with_token) before this.
+# to source. It sources nothing itself — status.sh sources pr-watch-lib.sh,
+# github-app-auth.sh (for pr_decide / pr_ci_state / gha_with_token) and issue.sh
+# (for the shared epic resolver list_epic_children, issue #91) before this.
 
 # _STATUS_GH_PR_FIELDS — the --json field set for `gh pr list`. The first seven
 # are byte-identical to pr-watch.sh's `gh pr view --json` call, so a PR object
@@ -248,54 +249,30 @@ status_github_fetch_epics() {
     --json "$_STATUS_GH_EPIC_FIELDS" --limit 100 2>/dev/null
 }
 
-# status_github_fetch_sub_issues <owner/repo> <epic-number> — the epic's native
-# sub-issues (GitHub sub-issues API). Prints the raw JSON array on stdout; the
-# caller decides "empty => fall back to the task list". Best-effort (2>/dev/null).
-status_github_fetch_sub_issues() {
-  local owner_repo="$1" epic_num="$2"
-  gha_with_token gh api "repos/$owner_repo/issues/$epic_num/sub_issues" 2>/dev/null
-}
-
-# status_github_parse_task_list <body> <open-issue-map> — the FALLBACK sub-issue
-# source: parse `- [ ] … #N` / `- [x] … #N` lines from an epic's body into
-# [{number, state}]. State is resolved AUTHORITATIVELY against the open-issue map
-# (the number->title map we already fetch), never from the checkbox alone:
-#   - number IN the open map              => state "open"
-#   - number NOT in the map, box CHECKED  => state "closed" (done; the closed
-#                                            issue is absent from the open list)
-#   - number NOT in the map, box UNCHECKED=> SKIPPED — neither open nor done means
-#                                            the reference does not resolve to a
-#                                            real open issue (spec edge: "viittaus
-#                                            issueen jota ei ole → ohitetaan").
-# First reference to a number wins (a body may mention an issue twice).
-status_github_parse_task_list() {
-  local body="$1" openmap="$2"
-  jq -nc --arg body "$body" --argjson om "$openmap" '
-    [ ($body | split("\n"))[]
-      | (capture("^[[:space:]]*[-*][[:space:]]+\\[(?<x>[ xX])\\][^#]*#(?<n>[0-9]+)")? // empty)
-      | {number: (.n | tonumber), checked: (.x != " ")} ]
-    | reduce .[] as $e ([]; if any(.[]; .number == $e.number) then . else . + [$e] end)
-    | [ .[]
-        | (.number | tostring) as $k
-        | if ($om | has($k)) then {number: .number, state: "open"}
-          elif .checked then {number: .number, state: "closed"}
-          else empty end ]
-  ' 2>/dev/null || printf '[]'
-}
-
 # status_github_build_epics <owner/repo> <epics-json> <open-issue-map>
-# For each epic {number,title,body}, resolve its sub-issues (native API first,
-# task-list fallback when the API returns nothing — spec edge: customer-c-erp #101)
-# and return the resolved epic array:
+# For each epic {number,title,body}, resolve its sub-issues through the SHARED
+# resolver lib/issue.sh:list_epic_children (issue #91: the view no longer owns a
+# second resolution — no direct /sub_issues call, no task-list parsing here) and
+# return the resolved epic array:
 #   [{epic_number, epic_title, epic_url, sub_issues:[{number,state}], source}]
-# `source` is "sub_issues" or "task_list". repo_slug is NOT added here — it is a
-# LOCAL (watchlist) concept, injected by status.sh at assembly so the cached
-# github payload stays purely GitHub-derived. Sub-issue state from the native API
-# is used verbatim ("open"/"closed"); a nested epic is treated as an ordinary
-# sub-issue (no recursion — spec edge).
+# `source` is "sub_issues", "task_list", or "unreadable". The last is the view's
+# FAIL-CLOSED marker (issue #91 AC4): when the native sub-issues read fails,
+# list_epic_children returns rc 2 and we surface an unreadable epic with an empty
+# sub_issues set rather than silently falling back to the task list and drawing
+# false progress. repo_slug is NOT added here — it is a LOCAL (watchlist) concept,
+# injected by status.sh at assembly so the cached github payload stays purely
+# GitHub-derived. Sub-issue state is used verbatim ("open"/"closed"); a nested
+# epic is treated as an ordinary sub-issue (no recursion — spec edge).
+#
+# The view passes the resolver everything it already has so no extra gh call is
+# spent per epic (issue #91 perf edge): --body (the batch-fetched epic body, so
+# the fallback never re-fetches it) and --open-map (the open-issue map, the
+# authoritative fallback state source). --gh-runner gha_with_token keeps the App
+# identity (edge case: the view's auth path must not break). The repo-root arg is
+# "." — every gh call targets an explicit --repo/owner path, so cwd is irrelevant.
 status_github_build_epics() {
   local owner_repo="$1" epics="$2" openmap="$3"
-  local n i epic num title body sub source out='[]' obj
+  local n i epic num title body sub source out='[]' obj lines rc sf
   n="$(jq 'if type == "array" then length else 0 end' <<<"$epics" 2>/dev/null || echo 0)"
   i=0
   while [ "$i" -lt "$n" ]; do
@@ -305,15 +282,24 @@ status_github_build_epics() {
     [ -n "$num" ] || continue
     title="$(jq -r '.title // ""' <<<"$epic")"
     body="$(jq -r '.body // ""' <<<"$epic")"
-    sub="$(status_github_fetch_sub_issues "$owner_repo" "$num")"
-    if printf '%s' "$sub" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
-      sub="$(jq -c '[.[] | {number: .number, state: .state}]' <<<"$sub" 2>/dev/null || printf '[]')"
-      source="sub_issues"
+    sf="$(mktemp "${TMPDIR:-/tmp}/status-epic-src.XXXXXX" 2>/dev/null)" || sf=""
+    lines="$(list_epic_children "." "$num" "$owner_repo" \
+      --gh-runner gha_with_token --body "$body" --open-map "$openmap" \
+      --source-file "$sf" 2>/dev/null)"
+    rc=$?
+    source=""
+    [ -n "$sf" ] && { source="$(cat "$sf" 2>/dev/null || true)"; rm -f "$sf" 2>/dev/null; }
+    if [ "$rc" -ne 0 ]; then
+      # Fail-closed: an unreadable native graph does NOT degrade to the task list.
+      sub='[]'; source="unreadable"
     else
-      sub="$(status_github_parse_task_list "$body" "$openmap")"
-      source="task_list"
+      # TSV (<number>\t<state>\t<labels>\t<title>) → [{number,state}] only, so no
+      # label/title leaks into the payload (the schema carries number+state). The
+      # jq program is ONE line on purpose: a multi-line single-quoted program
+      # inside "$(…)" is mis-parsed by bash 3.2 (macOS).
+      sub="$(printf '%s' "$lines" | jq -R -s -c '[ split("\n")[] | select(length > 0) | split("\t") | select(length >= 2 and (.[0] | test("^[0-9]+$"))) | {number: (.[0] | tonumber), state: .[1]} ]' 2>/dev/null || printf '[]')"
+      [ -n "$sub" ] || sub='[]'
     fi
-    [ -n "$sub" ] || sub='[]'
     obj="$(jq -nc --argjson num "$num" --arg title "$title" \
       --arg url "https://github.com/$owner_repo/issues/$num" \
       --argjson sub "$sub" --arg src "$source" '

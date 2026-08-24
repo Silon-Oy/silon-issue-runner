@@ -80,12 +80,22 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 # shellcheck source=lib/status-read.sh
 . "$RUN_ISSUES_HOME/lib/status-read.sh"
 # --github enrichment: pr_decide / pr_ci_state (pr-watch-lib.sh), gha_with_token
-# (github-app-auth.sh), and the enrichment/cache helpers (status-github.sh). All
-# function-only, safe to source unconditionally; only exercised under --github.
+# (github-app-auth.sh), the shared epic child-set resolver (issue.sh's
+# list_epic_children — issue #91: the view resolves epic children through the SAME
+# function the runner does, never its own copy), and the enrichment/cache helpers
+# (status-github.sh). All function-only, safe to source unconditionally; only
+# exercised under --github.
 # shellcheck source=lib/pr-watch-lib.sh
 . "$RUN_ISSUES_HOME/lib/pr-watch-lib.sh"
 # shellcheck source=lib/github-app-auth.sh
 . "$RUN_ISSUES_HOME/lib/github-app-auth.sh"
+# shellcheck source=lib/issue.sh
+. "$RUN_ISSUES_HOME/lib/issue.sh"
+# issue.sh carries `set -euo pipefail` (it doubles as a standalone lib for
+# orchestrate.sh); status.sh deliberately runs WITHOUT errexit (it collects and
+# classifies rather than aborting on the first non-zero read), so turn errexit
+# back off after the source. -u / pipefail already match status.sh's own `set`.
+set +e
 # shellcheck source=lib/status-github.sh
 . "$RUN_ISSUES_HOME/lib/status-github.sh"
 

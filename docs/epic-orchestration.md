@@ -134,15 +134,28 @@ jotta näkymä ja ajo eivät voi olla eri mieltä siitä, mitkä issuet epiciin 
 seuraus toteutukselle: lapsijoukon resolvointi (`sub_issues` → fallback) kannattaa toteuttaa
 **yhtenä jaettuna funktiona** (`lib/issue.sh`, §6), jota molemmat kutsuvat.
 
-> **Toteutustila (osittain, → #91).** Jaettu funktio `lib/issue.sh:list_epic_children` on
-> olemassa (#81) ja sitä käyttää **ajopuoli** — `run-epic.sh` ja `lib/epic.sh`
-> (`propagate_run_labels`, `epic_process_one`). **Näkymäpuoli ei sitä vielä kutsu:** Ohjaamon
-> epic-rollup (`lib/status-github.sh`, #79) resolvoi lapsijoukon **omilla** funktioillaan
-> (`status_github_fetch_sub_issues` + `status_github_parse_task_list`). Tavoiteltu invariantti
-> "yksi jaettu funktio molemmille" on siis vasta puoliksi voimassa; näkymän kokoaminen samaan
-> `list_epic_children`iin on avoin työ (**#91**). Toistaiseksi molemmat noudattavat samaa
-> sääntöä (natiivi voittaa, task-lista fallback), mutta kahtena toteutuksena — mikä on juuri se
-> ero, jonka #91 poistaa.
+> **Toteutustila (TOTEUTETTU, #91).** Invariantti on voimassa: epicin lapsijoukolle on
+> **yksi** resolvointitoteutus, `lib/issue.sh:list_epic_children`, ja sitä kutsuvat **kaikki**
+> kuluttajat — ajopuoli (`run-epic.sh`, `lib/epic.sh`: `propagate_run_labels`,
+> `epic_process_one`) **ja** näkymäpuoli (`lib/status-github.sh:status_github_build_epics`,
+> Ohjaamon epic-rollup #79). Näkymän aiemmat omat funktiot (`status_github_fetch_sub_issues`,
+> `status_github_parse_task_list`) on **poistettu** — `grep -rn "sub_issues" lib/ --include="*.sh"`
+> ei enää löydä kahta resolvointia. #91 laajensi jaetun funktion kattamaan näkymän tarpeet ilman
+> että ajopuolen semantiikka muuttui:
+>
+> - **Fallback-lapsen tila on autoritatiivinen molemmilla puolilla** (ei enää checkbox-arvaus):
+>   avoimien issueiden joukko ratkaisee — numero joukossa ⇒ `open`; puuttuu + `[x]` ⇒ `closed`;
+>   puuttuu + `[ ]` ⇒ ohitetaan. Näkymä injektoi joukon (`--open-map`, sillä se on jo haettu ⇒
+>   ei lisäkutsua per epic); ajopuoli hakee sen kerran laiskasti ensimmäiselle task-lista-lapselle.
+> - **Fail-closed molemmilla:** lukukelvoton natiivigraafi tuottaa rc 2. Ajo kieltäytyy; näkymä
+>   merkitsee epicin `source: "unreadable"` (tyhjä `sub_issues`) eikä pudota task-lista-fallbackiin.
+> - **Cross-repo-lapsi suodatetaan identtisesti** — sama funktio, joten näkymä ja ajo eivät voi
+>   olla eri mieltä (§Rajaukset; cross-repo-**tuki** on yhä eri issue #92).
+> - **Identiteettiä ei sidota funktioon:** kutsuja valitsee (`--gh-runner`) — näkymä ajaa
+>   `gha_with_token`-kääreen läpi (GitHub App), ajo käyttää paljasta `gh`-CLI:tä.
+>
+> Lähde on nyt tämä yksi funktio: jos näkymä ja ajo näyttäisivät eri lapsijoukon, se olisi bugi
+> `list_epic_children`issä, ei kahden toteutuksen ajautuma.
 
 ### 1.4 Kaksi eri graafia — älä sekoita
 
