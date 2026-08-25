@@ -26,7 +26,7 @@ orchestrate.sh                 poller.sh              pr-watch.sh
 pr-watch-poller.sh             cleanup-run.sh         auto-clean.sh
 stop-run.sh                    status.sh              status-digest.sh
 status-render.sh               action-server.sh       action-dispatch.sh
-install.sh                     run-epic.sh
+install.sh                     run-epic.sh            self-update.sh
 provision-test-env.README.md   README.md              CLAUDE.md
 lib/       18 bash-moduulia + action-service.py (ks. §6)
 prompts/   orkestraattorin claude-kutsujen promptipohjat
@@ -43,6 +43,7 @@ com.claude-issue-runner.run-issues-poller.plist
 com.claude-issue-runner.pr-watch-poller.plist
 com.claude-issue-runner.status-render.plist
 com.claude-issue-runner.action-server.plist
+com.claude-issue-runner.self-update.plist
 .gitignore
 ```
 
@@ -606,6 +607,19 @@ skriptille/labelille eikä toteuta purku-/merge-/restart-logiikkaa itse.
 | 2 | Delegoitu komento **epäonnistui** — sen tuloste on stdout/stderrissä sellaisenaan (turvamalli 5: näytä virhe, älä yritä itse) |
 | 3 | Delegoitava puuttuu (skripti ei suoritettavissa, tmux puuttuu restartista) |
 
+### Self-update (`self-update.sh`, #112)
+
+Oma avaruus. Tikkaava LaunchAgent, joka pitää asennetun paketin ajan tasalla (§7.10 README): pull
+(vain kehittäjäkoneella, vartioitu ff-only) + `install.sh --with-launchagents --quiet`. Pull on aina
+fail-soft; asentajan refuse/conflict on NOTE. `tests/test-self-update.sh` vartioi vartiot,
+idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsikosta.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Tikki valmis, tai siististi ohitettu (idle-portti / kill-switch `RUN_ISSUES_SELF_UPDATE=0` / pull-vartio). Pull on aina fail-soft: verkkovirhe tai jäljessä oleva `main` on NOTE, ei virhe |
+| 1 | Käyttövirhe (tuntematon lippu) |
+| 2 | Asennusvaihe epäonnistui odottamatta (asentajan exit ei ∈ {0,2,4}); lokitettu, seuraava tikki yrittää uudelleen. Asentajan oma refuse (2) / conflict (4) on NOTE eikä yllä tänne |
+
 ## 6. `lib/`-rakenne
 
 | Tiedosto | Vastuu |
@@ -701,14 +715,33 @@ mitään run-issues-kohtaista, joten LaunchAgent-ajossa — ainoassa tuotantotil
 `RUN_ISSUES_HOME` ja `RUN_ISSUES_POLLER_ENV_FILE` resolvoidaan ennen sourcea, joten ne
 luetaan vain ympäristöstä. Malli: `examples/run-issues-poller.env.example`.
 **`status-render.sh` sourceaa saman `poller.env`in (#78)**, koska se on samanlainen
-LaunchAgent samassa ympäristöttömyydessä: yksi konekohtainen tiedosto konfiguroi kaikki kolme
-LaunchAgentia, ja `RUN_ISSUES_RENDER_GITHUB` luetaan sitä kautta LaunchAgent-polulla.
+LaunchAgent samassa ympäristöttömyydessä: yksi konekohtainen tiedosto konfiguroi kaikki
+LaunchAgentit, ja `RUN_ISSUES_RENDER_GITHUB` luetaan sitä kautta LaunchAgent-polulla.
 `tests/test-poller-config.sh` case 9 laskee siksi myös `status-render.sh`:n poller.env-lukijaksi.
+**`self-update.sh` sourceaa saman `poller.env`in samasta syystä (#112)**: sieltä se lukee
+`RUN_ISSUES_SELF_UPDATE`-kill-switchin ja jaetut loki-/rotaatiomuuttujat.
 
 **Pollerit eivät lue `$HOME/.config/run-issues/env`-tiedostoa.** Se sisältää salaisuuksia,
 jotka `orchestrate.sh` ja `pr-watch.sh` sourceavat itse. Poller ei tarvitse niistä yhtäkään ja
 lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
 `tests/test-poller-config.sh` vartioi tätä.
+
+### Self-update (`self-update.sh`, #112)
+
+LaunchAgent (StartInterval 3600), joka pitää asennetun paketin ajan tasalla: kehittäjäkoneella
+vartioitu `git pull --ff-only` + `install.sh`, ylläpitäjän submodule-koneella vain `install.sh`
+(pull ohitetaan aina, §4/§11). Ei host-porttia — opt-in on agentin bootstrap. Sourceaa saman
+`poller.env`in kuin pollerit. Ohjaa oman stdout/stderrinsä `run-issues-self-update.{stdout,stderr}.log`iin
+ja rotatoi kolme lokiaan `RUN_ISSUES_LOG_MAX_BYTES`illa (ennen `exec`-uudelleenohjausta, §6
+`lib/log-rotate.sh`).
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_SELF_UPDATE` | `1` | `0` = ohita tikki (kill-switch). Luetaan `poller.env`istä |
+| `RUN_ISSUES_SELF_UPDATE_INSTALL` | *(pakettijuuren `install.sh`)* | **Testien injektiopiste** asennusvaiheen kutsulle, `RUN_EPIC_ORCHESTRATE`-mallin mukaan. Ei käyttäjäkonfiguraatio |
+| `RUN_ISSUES_HOME` | *(scriptin oma `SCRIPT_DIR`)* | Pakettijuuri, johon git-operaatiot, versiorivi ja asennusvaihe kohdistuvat. Testien injektiopiste, luetaan vain ympäristöstä |
+| `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Idle-portin lukema watchlist (sama resolvointi kuin pollerilla). Elävä ajo (`run.json` `initialized`, host == tämä kone) jossain watchlistin repossa ⇒ koko tikki ohitetaan |
+| `RUN_ISSUES_LOG_DIR`, `RUN_ISSUES_LOG_MAX_BYTES`, `RUN_ISSUES_POLLER_ENV_FILE`, `RUN_ISSUES_LAUNCH_AGENTS_DIR` | *(kuten pollerit / asennin)* | Lokihakemisto + rotaatioraja, poller.env-polku, ja LaunchAgent-hakemisto uuden plistin havaitsemiseen (bootstrap-NOTE) |
 
 ### Kokonaistila (`status.sh`, #59)
 
@@ -972,7 +1005,7 @@ olevia tiedostoja. Konventio itsessään säilyy — `Label` == tiedostonimi ilm
 joka on nyt kantava: asentaja johtaa tulostamansa `launchctl`-labelin tiedostonimestä.
 
 **`com.claude-issue-runner.action-server.plist` on paketin ainoa pitkäikäinen daemon** (#77):
-muut kolme agenttia tikkaavat `StartInterval`illä, mutta toimintopalvelu pitää kuuntelevaa
+muut neljä agenttia tikkaavat `StartInterval`illä, mutta toimintopalvelu pitää kuuntelevaa
 socketia, joten se on `KeepAlive`-daemon. `KeepAlive.SuccessfulExit=false` hoitaa kaksi asiaa
 yhdellä: host-portti (vieras kone → exit 0 → **ei** uudelleenkäynnistystä) ja bind-toipuminen
 (Tailscale-osoite ei vielä ylhäällä bootissa → exit ≠ 0 → uusi yritys `ThrottleInterval`in
@@ -980,6 +1013,17 @@ päästä). §11:n invariantit ennallaan: ei `StandardOutPath`/`StandardErrorPat
 omistaa lokipolkunsa itse), `$HOME` laajenee vain `ProgramArguments`issa, `Label` ==
 tiedostonimi, ohjelmapolku asentajan `scripts`-sidonnan alla. Asentaja ja `install.sh`:n
 per-plist-glob (`com.claude-issue-runner.*.plist`) poimivat sen automaattisesti.
+
+**`com.claude-issue-runner.self-update.plist` on paketin viides plist ja ainoa itsepäivittävä
+agentti** (#112, `StartInterval` 3600). Se on tavallinen tikkaava agentti — **ei** daemon: `StartInterval`
+nimenomaan siksi, ettei epäonnistunut `install.sh` crash-looppaisi (`KeepAlive` yrittäisi heti
+uudelleen). Se on ainoa agentti, joka voi liikuttaa paketin omaa koodia (`git pull --ff-only`
+kehittäjäkoneella; submodule-koneella pull ohitetaan aina, §4/§7.10). Samat §11-invariantit: ei
+loki-avaimia (skripti omistaa kolme lokipolkuaan), `$HOME` vain `ProgramArguments`issa, `Label` ==
+tiedostonimi, ohjelmapolku `$HOME/.claude/scripts/run-issues/self-update.sh` asentajan
+`scripts`-sidonnan alla. Per-plist-glob poimii sen automaattisesti; `tests/test-package-layout.sh`
+vartioi invariantit. self-update **ei kutsu `launchctl`ia** (samat syyt kuin asentaja): jos
+asennusvaihe linkittää uuden plistin, self-update lokittaa `launchctl bootstrap` -NOTE-rivin.
 
 **`$HOME` laajenee plistissä vain `ProgramArguments`issa**, koska laajennuksen tekee
 `/bin/bash -l -c` -kääre, ei launchd. `StandardOutPath` ja `StandardErrorPath` ovat launchd:n

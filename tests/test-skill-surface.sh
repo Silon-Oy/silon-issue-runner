@@ -108,8 +108,8 @@ fi
 
 # ---- Case 5: the operator scripts are each named ----
 # The skill's job is telling a reader WHICH script to reach for. These seven are
-# the ones a human runs by hand; the pollers, the installer and the status
-# renderer are LaunchAgent/setup surface and deliberately out of scope.
+# the ones a human runs by hand; the pollers, the installer, the status renderer
+# and self-update are LaunchAgent/setup surface and deliberately out of scope.
 #   orchestrate.sh  one issue -> one run -> one PR
 #   run-epic.sh     launch / stop a whole epic
 #   pr-watch.sh     CI wait, conflict resolution, auto-merge

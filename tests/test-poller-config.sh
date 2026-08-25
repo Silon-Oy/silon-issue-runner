@@ -207,12 +207,13 @@ done
 # An example is the only documentation an operator reads before editing, and a
 # variable named there that nothing reads is indistinguishable from a working
 # setting that silently does nothing. poller.env is the shared LaunchAgent config
-# channel: the pollers, status-render.sh (#78) AND action-server.sh (#77) all
-# source it, so a variable is "read" if any of them (or the lib) reads it. The
-# action service also passes several vars to lib/action-service.py, which is the
-# real reader — count it too so the action env vars are not flagged as unread.
+# channel: the pollers, status-render.sh (#78), action-server.sh (#77) AND
+# self-update.sh (#112) all source it, so a variable is "read" if any of them
+# (or the lib) reads it. The action service also passes several vars to
+# lib/action-service.py, which is the real reader — count it too so the action
+# env vars are not flagged as unread.
 EXAMPLE_READERS=("${POLLERS[@]}" "$LIB" "$ROOT/status-render.sh" \
-  "$ROOT/action-server.sh" "$ROOT/lib/action-service.py")
+  "$ROOT/action-server.sh" "$ROOT/lib/action-service.py" "$ROOT/self-update.sh")
 EXAMPLE="$ROOT/examples/run-issues-poller.env.example"
 if [ ! -f "$EXAMPLE" ]; then
   bad "case9 examples/run-issues-poller.env.example is missing"

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    No StandardOutPath / StandardErrorPath keys on purpose. launchd reads those
+    keys itself and performs no variable expansion, so a literal $HOME in them
+    resolves to a directory literally named "$HOME". $HOME expands in
+    ProgramArguments only, because that expansion is done by the
+    /bin/bash -l -c wrapper, not by launchd.
+
+    Materialising the plist with the paths already expanded is not an option
+    here: install.sh decides ownership by "is a symlink into the package root"
+    (INV-OWN), and a materialised copy carries no such marker. self-update.sh
+    therefore owns its three log paths itself and redirects its own
+    stdout/stderr into $RUN_ISSUES_LOG_DIR, exactly as the pollers do.
+
+    Every 3600s: on a dev clone, pull origin/main (guarded, ff-only) and run
+    install.sh; on a maintainer submodule the pull is always skipped and only
+    install.sh runs. This is the ONLY self-updating agent; the pull's trust
+    boundary is the PR review, not this install moment (README §7.10).
+    StartInterval, not KeepAlive: a failed install.sh must not crash-loop.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-issue-runner.self-update</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-l</string>
+        <string>-c</string>
+        <string>$HOME/.claude/scripts/run-issues/self-update.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

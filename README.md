@@ -1065,6 +1065,39 @@ Kuten statussivu, myös toimintopalvelu **on pidettävä vain tailnetissä** —
 tuotanto-orkestraatiota. Sen deploy: `install.sh --with-launchagents` (ks. §7.7 ja
 `examples/run-issues-poller.env.example`).
 
+### 7.10 Self-update pitää paketin ajan tasalla — luottamusraja on PR-katselmointi
+
+[`self-update.sh`](self-update.sh) on LaunchAgent (tunnin välein), joka pitää **asennetun
+paketin** itsestään ajan tasalla, jotta uudet ja poistuneet agentit, komennot ja skillit
+linkittyvät ja pruneutuvat ilman käsiajoa. Se sulkee aukon, jossa koneen dotfiles-synkka soveltaa
+submodule-pinnin muttei aja asentajaa. Kaksi ympäristöä eroavat **vain pull-vaiheessa:**
+
+- **Kehittäjäkone** (klooni missä tahansa): vartioitu `git pull --ff-only origin/main`, sitten
+  `install.sh`.
+- **Ylläpitäjän kone** (klooni on dotfiles-submodule): pull ohitetaan **aina** — pinnin omistaa
+  dotfilesin `bump-run-issues`-CI, eikä self-update koskaan liikuta sitä. Vain asennusvaihe ajetaan.
+
+Pull on **vartioitu ja ei-destruktiivinen:** se ajetaan vain kun klooni ei ole submodule, HEAD on
+`main` ja työpuu on puhdas, ja veto on aina `git pull --ff-only` — ei koskaan rebasea eikä resetiä,
+joten paikallista työtä ei tuhota. Minkä tahansa vartion tai vedon kaatuminen (esim. verkkovirhe
+tai jäljessä oleva `main`) on lokirivi, ei virhe; asennusvaihe ajetaan silti. **Idle-portti** edeltää
+tikkiä: jos koneella on elävä ajo (`run.json`, tila `initialized`, host == tämä kone), koko tikki
+ohitetaan — koodia ei liikuteta elävän ajon alta.
+
+**Käyttöönotto** on sama kuin muillakin LaunchAgenteilla: `install.sh --with-launchagents` linkittää
+plistin ja **tulostaa** `launchctl bootstrap gui/<uid> <plist>` -komennon, jonka ajat käsin.
+self-update **ei koskaan kutsu `launchctl`ia** itse (samat syyt kuin asentajalla, §7.7); jos se
+linkittää uuden plistin, se kirjoittaa lokiin NOTE-rivin muistuttamaan bootstrapista. Opt-in on siis
+se, että operaattori bootstrappaa agentin — **ei host-porttia**. **Kill-switch:**
+`RUN_ISSUES_SELF_UPDATE=0` `poller.env`issä ohittaa tikin.
+
+**Luottamusraja on eksplisiittinen ja sitova:** valvomaton pull ajaa `main`iin **mergetyn** koodin
+seuraavalla tikillä ja `install.sh` linkittää sen tälle koneelle. Portti on siis **PR-katselmointi,
+ei asennushetki** — samalla tavalla kuin `RUN_ISSUES_AUTO=1` (§7.3) siirtää luottamuksen issueen ja
+katselmointiin. Kehittäjäkoneella tämä tarkoittaa: jokainen `main`iin mergetty commit ajautuu
+koneellesi tunnin sisällä. Jos et halua sitä, älä bootstrappaa self-update-agenttia — tai aja klooni
+submodulena, jolloin pull ohitetaan ja päivitys on eksplisiittinen pinnin nosto.
+
 ---
 
 ## 8. Perehdytys — miksi se käyttäytyy noin
@@ -1278,11 +1311,26 @@ ensimmäisen ajokelpoisen alaissueen heti. `--stop` **keskeyttää** epicin: se 
 lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla ajolabelit
 **ensin epiciltä, sitten avoimilta lapsilta** (järjestys estää pollerin re-propagoinnin).
 
+### Self-update (`self-update.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Tikki valmis, tai siististi ohitettu (idle-portti / kill-switch / pull-vartio). Pull on aina fail-soft: verkkovirhe tai jäljessä oleva `main` on NOTE, ei virhe — seuraava tikki yrittää uudelleen |
+| 1 | Käyttövirhe (tuntematon lippu) |
+| 2 | Asennusvaihe epäonnistui odottamatta (asentajan exit ei ∈ {0,2,4}); lokitettu, seuraava tikki yrittää uudelleen. Asentajan oma refuse (2) / conflict (4) on NOTE eikä yllä tänne |
+
+`self-update.sh` pitää asennetun paketin ajan tasalla (§7.10): kehittäjäkoneella vartioitu
+`git pull --ff-only` + `install.sh`, ylläpitäjän submodule-koneella vain `install.sh` (pull
+ohitetaan aina). Idle-portti ohittaa koko tikin, jos koneella on elävä ajo. Kill-switch:
+`RUN_ISSUES_SELF_UPDATE=0`.
+
 ### Mistä lokit löytyvät
 
 - **Pollerit:** `$RUN_ISSUES_LOG_DIR` (oletus `$HOME/Library/Logs`), neljä tiedostoa per
   poller: `.log`, `.runs.log`, `.stdout.log`, `.stderr.log`. Tiedostojen etuliitteet ovat
   `run-issues-poller` ja `pr-watch-poller`.
+- **Self-update:** sama `$RUN_ISSUES_LOG_DIR`, etuliite `run-issues-self-update` (`.log`,
+  `.stdout.log`, `.stderr.log`). Rotatoituu `RUN_ISSUES_LOG_MAX_BYTES`illa kuten pollerit.
 - **Yksittäinen ajo:** `<kohderepo>/.claude/run-issues/<run-id>/` — `run.json` (tilan
   tilannekuva) ja `state.jsonl` (append-only tapahtumaloki).
 - **Lukot:** `$HOME/Library/Application Support/run-issues/locks`.
