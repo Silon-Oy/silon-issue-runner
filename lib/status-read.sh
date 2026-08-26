@@ -179,7 +179,7 @@ _STATUS_CLASSIFY_JQ='
 #       A run that ended before a PR (blocked/timed_out/…) whose issue was later
 #       closed by hand would otherwise sit in attention forever. issue_state is
 #       only set when an explicit `gh issue view` confirmed the closure (see
-#       lib/status-github.sh:status_github_issue_state) — absence from the open
+#       lib/status-github.sh:status_github_issue_detail) — absence from the open
 #       map alone is a hint, never proof, so an unread/failed state stays null and
 #       the local class stands (fail-soft). The PR branches above own the
 #       closed-PR case, so this only fires when there is no PR at all.
