@@ -221,6 +221,48 @@ if [ -f "$HTMLGH" ]; then
   presenti "CI red label" "CI punainen" "$HTMLGH"
 fi
 
+# ---- Case 4b2: closed-issue chip (#103) — state + reason on the row ---------
+# A run whose issue is CLOSED as NOT_PLANNED. The page is data-free, so the closed
+# issue's title value never lands in the markup; the chip is rendered client-side.
+# This case asserts the JS reads the named github.issue_state / issue_state_reason
+# fields (allowlist), carries the spec's distinct Finnish wordings (NOT_PLANNED vs
+# COMPLETED), and that the title value (an XSS payload) never appears statically.
+CLOSED_TITLE_LEAK="CLOSED-ISSUE-<script>alert(4)</script>-SECRET"
+cat > "$FX/closed.json" <<JSON
+{"schema_version":1,"generated_at":"2026-08-11T22:10:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "enrichment":{"mode":"github","fetched_at":"2026-08-11T22:10:00Z","cache_age_seconds":30,"repos_enriched":1,"repos_failed":[]},
+ "totals":{"runs":1,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":1},"degraded":false},
+ "read_errors":[],
+ "runs":[
+  {"repo_slug":"acme-site","issue_number":21,
+   "issue_url":"https://github.com/acme/acme-site/issues/21",
+   "class":"cleanup","class_reason":"issue_closed","class_confidence":"high",
+   "current_state":"S6_CycleReview","branch":"auto-run/x",
+   "age_seconds":9300,"idle_seconds":null,
+   "github":{"pr_state":null,"ci":null,"pr_decide_verdict":null,
+             "cache_age_seconds":30,"issue_title":"$CLOSED_TITLE_LEAK",
+             "issue_state":"CLOSED","issue_state_reason":"NOT_PLANNED"}}
+ ]}
+JSON
+OUTCL="$FX/wwwcl"
+RUN_ISSUES_STATUS_OUT_DIR="$OUTCL" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/closed.json"; rccl=$?
+HTMLCL="$OUTCL/index.html"
+check "closed-issue doc renders (exit 0)" "$rccl" "0"
+if [ -f "$HTMLCL" ]; then
+  absent "closed issue title value not embedded" "$CLOSED_TITLE_LEAK" "$HTMLCL"
+  absent "closed issue title XSS not embedded" "<script>alert(4)" "$HTMLCL"
+  # Allowlist: the JS reads these NAMED fields and renders the chip.
+  present "JS reads github.issue_state" "issue_state" "$HTMLCL"
+  present "JS reads github.issue_state_reason" "issue_state_reason" "$HTMLCL"
+  present "JS renders issue-closed chip class" "issue-closed" "$HTMLCL"
+  present "JS gates chip on CLOSED" 'issue_state === "CLOSED"' "$HTMLCL"
+  # Spec-mandated distinct wordings: NOT_PLANNED vs COMPLETED.
+  presenti "issue not-planned wording" "Issue suljettu · ei suunniteltu" "$HTMLCL"
+  presenti "issue closed generic wording" "Issue suljettu" "$HTMLCL"
+fi
+
 # ---- Case 4c: epic rollup lane (#79) --------------------------------------
 # A document with an epics[] list and an epic title that is an XSS payload. The
 # page markup is data-free, so no epic value appears in it; the epic lane is

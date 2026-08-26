@@ -132,24 +132,34 @@ status_github_closed_state() {
   fi
 }
 
-# status_github_issue_state <owner/repo> <issue-number> — the explicit per-issue
-# state read for a SUSPECTED-CLOSED issue (issue #96): a run with NO PR whose issue
-# is absent from the open-issue map. That absence is only a HINT — the open-issue
-# fetch is best-effort (issue #78), so an incomplete/failed fetch would drop an
-# open issue too. We confirm the closure with one `gh issue view --json state`
-# before letting it drive classification. Prints "OPEN", "CLOSED", or empty on any
-# failure (a 404 on a moved/deleted issue, a network error): empty means "not
-# confirmed", and the caller leaves the local class in place (fail-soft). Modelled
-# on status_github_closed_state — one `gh issue view` per suspected-closed issue,
-# cached in the same TTL entry so the read runs at most once per issue per window.
-status_github_issue_state() {
-  local owner_repo="$1" num="$2" state
-  state="$(gha_with_token gh issue view "$num" --repo "$owner_repo" \
-    --json state --jq '.state // ""' 2>/dev/null)" || { printf ''; return 0; }
-  case "$state" in
-    OPEN|CLOSED) printf '%s' "$state" ;;
-    *) printf '' ;;
-  esac
+# status_github_issue_detail <owner/repo> <issue-number> — the explicit per-issue
+# read for an issue ABSENT from the open-issue map (issue #96 read #103, broadened):
+# a run whose issue the cheap per-owner open list does not cover, so it is either
+# closed OR the best-effort open fetch missed it. That absence is only a HINT —
+# the open-issue fetch is best-effort (issue #78) — so we confirm the state with
+# one `gh issue view`, and in the SAME call pull stateReason + title (issue #103):
+# the closed issue's title is otherwise unavailable (the open list is --state open)
+# and stateReason distinguishes "not planned" from "completed" on the row. Prints a
+# compact object {state, state_reason, title} on stdout, or EMPTY on any failure (a
+# 404 on a moved/deleted issue, a network error) — empty means "not confirmed", and
+# the caller leaves the local class in place (fail-soft). state/state_reason are
+# upper-cased so the payload is normalised regardless of gh's casing; an unknown
+# state (not OPEN/CLOSED) yields empty (unconfirmed). Modelled on
+# status_github_closed_state — one `gh issue view` per absent issue, cached in the
+# same TTL entry so the read runs at most once per issue per window.
+status_github_issue_detail() {
+  local owner_repo="$1" num="$2" json
+  json="$(gha_with_token gh issue view "$num" --repo "$owner_repo" \
+    --json state,stateReason,title 2>/dev/null)" || { printf ''; return 0; }
+  [ -n "$json" ] || { printf ''; return 0; }
+  printf '%s' "$json" | jq -c '
+    ((.state // "") | ascii_upcase) as $st
+    | if ($st == "OPEN" or $st == "CLOSED")
+      then {state: $st,
+            state_reason: (if (.stateReason // "") == "" then null
+                           else (.stateReason | ascii_upcase) end),
+            title: (.title // null)}
+      else empty end' 2>/dev/null || printf ''
 }
 
 # status_github_pr_object <pr-json> <fetched_at> <cache_age> <label> <res> <repair>
@@ -175,7 +185,9 @@ status_github_pr_object() {
       labels: [.labels[]?.name],
       review_decision: (if (.reviewDecision // "") == "" then null else .reviewDecision end),
       pr_decide_verdict: $v,
-      issue_title: null
+      issue_title: null,
+      issue_state: null,
+      issue_state_reason: null
     }' <<<"$pr"
 }
 
@@ -221,7 +233,9 @@ status_github_not_open_object() {
       review_decision: null,
       pr_decide_verdict: null,
       closed_as: (if $ca == "" then null else $ca end),
-      issue_title: null
+      issue_title: null,
+      issue_state: null,
+      issue_state_reason: null
     }'
 }
 
@@ -321,10 +335,12 @@ status_github_build_epics() {
 # with every PR field null and pr_state null (so the view shows a title but no CI
 # chips — chips are for OPEN-PR rows only), plus issue_title which status.sh
 # fills from the issue map. This is what lets titles reach attention/running rows,
-# not just PR rows. issue_state (issue #96) is null by default and set to
-# "CLOSED"/"OPEN" by status.sh only when a suspected-closed issue was confirmed by
-# an explicit state read — pr_state null + issue_state "CLOSED" is what the
-# reclassifier turns into cleanup/issue_closed.
+# not just PR rows. issue_state (issue #96) / issue_state_reason (issue #103) are
+# null by default and set by status.sh from the per-owner issue map: "OPEN" when the
+# issue is in the open list, or "CLOSED" + a stateReason when an explicit read
+# confirmed the closure (a moved/deleted/unread issue stays null — fail-soft).
+# pr_state null + issue_state "CLOSED" is what the reclassifier turns into
+# cleanup/issue_closed; the reason (COMPLETED/NOT_PLANNED/DUPLICATE) is view-only.
 status_github_issue_only_object() {
   local fetched_at="$1" age="$2"
   jq -nc --arg fa "$fetched_at" --argjson age "$age" '
@@ -341,6 +357,7 @@ status_github_issue_only_object() {
       pr_decide_verdict: null,
       closed_as: null,
       issue_title: null,
-      issue_state: null
+      issue_state: null,
+      issue_state_reason: null
     }'
 }

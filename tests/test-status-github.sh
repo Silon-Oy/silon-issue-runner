@@ -183,12 +183,16 @@ JSON
     ;;
   esac
 fi
-# issue view <n> --json state (issue #96): the explicit per-issue state read for a
-# suspected-closed no-PR issue. #8 is confirmed CLOSED; #89 simulates a read
-# failure (=> unconfirmed => fail-soft). The shim prints the final --jq value.
+# issue view <n> --json state,stateReason,title (issue #96 read #103): the explicit
+# per-issue detail read for an issue ABSENT from the open list. #8 is CLOSED as
+# NOT_PLANNED (with a title only reachable via this read — the open list is
+# --state open); #90 is CLOSED as COMPLETED (an open PR whose issue closed); #89
+# simulates a read failure (=> unconfirmed => fail-soft). The shim prints the JSON
+# object the caller's jq consumes.
 if [ "\$1" = "issue" ] && [ "\$2" = "view" ]; then
   case "\$repo:\$3" in
-    o/repo-a:8)  echo "CLOSED"; exit 0 ;;
+    o/repo-a:8)  echo '{"state":"CLOSED","stateReason":"NOT_PLANNED","title":"Closed not-planned issue"}'; exit 0 ;;
+    o/repo-a:90) echo '{"state":"CLOSED","stateReason":"COMPLETED","title":"Closed-issue open-PR"}'; exit 0 ;;
     o/repo-a:89) echo "gh: could not read issue (simulated failure)" >&2; exit 1 ;;
     *) echo "gh: issue not found (simulated)" >&2; exit 1 ;;
   esac
@@ -289,6 +293,7 @@ check "#4 github not null (issue-only)" "$(gi 4 | jq -r '.github != null')" "tru
 check "#4 github.pr_state null"         "$(gi 4 | jq -r '.github.pr_state')" "null"
 check "#4 github.ci null (no chips)"    "$(gi 4 | jq -r '.github.ci')" "null"
 check "#4 github.issue_title set"       "$(gi 4 | jq -r '.github.issue_title')" "Blocked no-PR issue"
+check "#4 github.issue_state OPEN (in map, no read)" "$(gi 4 | jq -r '.github.issue_state')" "OPEN"
 check "#4 class attention (untouched)"  "$(gi 4 | jq -r '.class')" "attention"
 check "#4 reason blocked (untouched)"   "$(gi 4 | jq -r '.class_reason')" "blocked"
 check "#4 confidence high (untouched)"  "$(gi 4 | jq -r '.class_confidence')" "high"
@@ -299,6 +304,10 @@ check "#4 confidence high (untouched)"  "$(gi 4 | jq -r '.class_confidence')" "h
 # class, forever).
 check "#8 github.pr_state null (no PR)" "$(gi 8 | jq -r '.github.pr_state')" "null"
 check "#8 github.issue_state CLOSED"    "$(gi 8 | jq -r '.github.issue_state')" "CLOSED"
+# issue #103: the closed issue's stateReason + title come from the SAME per-issue
+# read (the open list is --state open, so the title is otherwise null).
+check "#8 github.issue_state_reason NOT_PLANNED" "$(gi 8 | jq -r '.github.issue_state_reason')" "NOT_PLANNED"
+check "#8 github.issue_title (closed, from detail read)" "$(gi 8 | jq -r '.github.issue_title')" "Closed not-planned issue"
 check "#8 class cleanup"                "$(gi 8 | jq -r '.class')" "cleanup"
 check "#8 reason issue_closed"          "$(gi 8 | jq -r '.class_reason')" "issue_closed"
 check "#8 confidence high"              "$(gi 8 | jq -r '.class_confidence')" "high"
@@ -320,11 +329,21 @@ check "#90 github.pr_state OPEN"        "$(gi 90 | jq -r '.github.pr_state')" "O
 check "#90 class pr_in_flight"          "$(gi 90 | jq -r '.class')" "pr_in_flight"
 check "#90 confidence high (PR confirmed)" "$(gi 90 | jq -r '.class_confidence')" "high"
 check "#90 reason not issue_closed"     "$(gi 90 | jq -r '.class_reason')" "pr_state_unknown"
+# issue #103 AC1: issue_state is carried on PR rows too — #90's issue is CLOSED, so
+# the field is populated even though the OPEN-PR branch owns classification (the
+# reclassifier's OPEN branch wins before the issue_state elif => view-only here).
+check "#90 github.issue_state CLOSED (AC1: PR row too)" "$(gi 90 | jq -r '.github.issue_state')" "CLOSED"
+check "#90 github.issue_state_reason COMPLETED" "$(gi 90 | jq -r '.github.issue_state_reason')" "COMPLETED"
 
-# Call count (criterion 6): the state read runs ONCE per suspected-closed no-PR
-# issue (#8 + #89 = 2), never for #90 (it has a PR) nor #4 (present in the open
-# map). repo-b failed the PR fetch first, so it is never probed for issue state.
-check "gh issue view once per suspected-closed no-PR issue (2)" "$(issue_view_calls)" "2"
+# #1 (open PR, OPEN issue in the map) carries issue_state OPEN with no extra read
+# (the open list already proves it) — AC1: every enriched run gets issue_state.
+check "#1 github.issue_state OPEN (from open map, no read)" "$(gi 1 | jq -r '.github.issue_state')" "OPEN"
+check "#1 github.issue_state_reason null (open)" "$(gi 1 | jq -r '.github.issue_state_reason')" "null"
+
+# Call count (criterion 6/AC5): the detail read runs ONCE per issue ABSENT from the
+# open map (#8 + #89 + #90 = 3), deduped across runs, never for issues present in
+# the map (#1–#7). repo-b failed the PR fetch first, so it is never probed.
+check "gh issue view once per absent issue (3)" "$(issue_view_calls)" "3"
 
 # #2 required check red => attention/pr_ci_red.
 check "#2 class attention"        "$(gi 2 | jq -r '.class')" "attention"

@@ -481,7 +481,7 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     prs=""
     issues=""
     epics=""
-    issue_states=""
+    issue_details=""
     fetched_at=""
     fetched_epoch=""
     used_cache=0
@@ -493,7 +493,14 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
       cached="$(printf '%s' "$CACHE_IN" | jq -c --arg k "$owner" '.[$k] // empty' 2>/dev/null || true)"
       if [ -n "$cached" ]; then
         c_epoch="$(printf '%s' "$cached" | jq -r '.fetched_epoch // empty' 2>/dev/null || true)"
-        if [ -n "$c_epoch" ]; then
+        # A fresh entry that PRE-DATES issue_details (issue #103's key) must be
+        # treated as STALE, not empty: the #96 bug was a fresh legacy entry lacking
+        # the new key served as {} on the cache-hit path, silently skipping the
+        # per-issue reads. Requiring the key present forces a one-time refetch after
+        # deploy, then cache hits work; a fresh entry legitimately WITHOUT any
+        # closed issue still carries the key as {} (always written below).
+        if [ -n "$c_epoch" ] \
+           && printf '%s' "$cached" | jq -e 'has("issue_details")' >/dev/null 2>&1; then
           age=$((NOW_EPOCH - c_epoch))
           if [ "$age" -ge 0 ] && [ "$age" -le "$CACHE_TTL" ]; then
             prs="$(printf '%s' "$cached" | jq -c '.prs // []' 2>/dev/null || echo '[]')"
@@ -502,11 +509,11 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
             # cache hit serves them with no gh/api call (issue #79). Legacy cache
             # entries without .epics degrade to [].
             epics="$(printf '%s' "$cached" | jq -c '.epics // []' 2>/dev/null || echo '[]')"
-            # issue-state reads for suspected-closed issues are cached in the same
-            # owner entry (issue #96): a cache hit serves them with no gh call, so
-            # the read runs at most once per issue per TTL window. Legacy entries
-            # without .issue_states degrade to {}.
-            issue_states="$(printf '%s' "$cached" | jq -c '.issue_states // {}' 2>/dev/null || echo '{}')"
+            # Per-issue detail reads (state + stateReason + title) for issues absent
+            # from the open list are cached in the same owner entry (issue #96 read
+            # #103): a cache hit serves them with no gh call, so the read runs at
+            # most once per issue per TTL window.
+            issue_details="$(printf '%s' "$cached" | jq -c '.issue_details // {}' 2>/dev/null || echo '{}')"
             fetched_at="$(printf '%s' "$cached" | jq -r '.fetched_at // empty' 2>/dev/null || true)"
             fetched_epoch="$c_epoch"
             used_cache=1
@@ -541,37 +548,39 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
         openmap="$(status_github_build_issue_map "$issues")"
         epics="$(status_github_build_epics "$owner" "$epics_raw" "$openmap")"
         [ -n "$epics" ] || epics="[]"
-        # Resolve suspected-closed issue states (issue #96). A candidate is an
-        # issue referenced by a NO-PR run for THIS owner that is ABSENT from the
-        # open-issue map. Absence is a hint, not proof (the open fetch is
-        # best-effort), so confirm each with one explicit `gh issue view`. The
-        # result is cached in this owner's entry, so the read runs at most once per
-        # issue per TTL window (criterion 6). An open issue is skipped (the map
-        # already proves it open); a read that fails is not recorded (=> null =>
-        # local class stands, fail-soft).
-        issue_states="{}"
+        # Resolve issue detail (state + stateReason + title) for every issue a run
+        # references that is ABSENT from the open-issue map (issue #96 read #103,
+        # broadened from no-PR runs to ALL runs so PR rows also carry issue_state).
+        # Absence is a hint, not proof (the open fetch is best-effort), so confirm
+        # each with one explicit `gh issue view` — the SAME call yields the closed
+        # issue's title, which --state open cannot. The result is cached in this
+        # owner's entry, so the read runs at most once per issue per TTL window
+        # (criterion 6/AC5) and is deduped across runs => bounded by the number of
+        # DISTINCT closed issues, never linear in runs. An open issue is skipped
+        # (the map already proves it open + carries its title); a read that fails is
+        # not recorded (=> null => local class stands, fail-soft).
+        issue_details="{}"
         while IFS=$'\t' read -r _ e_issue e_pn e_owner; do
           [ "$e_owner" = "$owner" ] || continue
-          [ "$e_pn" = "-" ] || continue           # no-PR runs only
           [ -n "$e_issue" ] || continue
           # Already resolved (a duplicate issue across two runs)? Skip the 2nd read.
-          if printf '%s' "$issue_states" | jq -e --arg k "$e_issue" 'has($k)' >/dev/null 2>&1; then
+          if printf '%s' "$issue_details" | jq -e --arg k "$e_issue" 'has($k)' >/dev/null 2>&1; then
             continue
           fi
           # In the open map => definitely open, no read needed.
           if printf '%s' "$openmap" | jq -e --arg k "$e_issue" 'has($k)' >/dev/null 2>&1; then
             continue
           fi
-          st="$(status_github_issue_state "$owner" "$e_issue")"
-          [ -n "$st" ] || continue
-          issue_states="$(printf '%s' "$issue_states" | jq -c --arg k "$e_issue" --arg v "$st" '.[$k]=$v' 2>/dev/null || printf '%s' "$issue_states")"
+          det="$(status_github_issue_detail "$owner" "$e_issue")"
+          [ -n "$det" ] || continue
+          issue_details="$(printf '%s' "$issue_details" | jq -c --arg k "$e_issue" --argjson v "$det" '.[$k]=$v' 2>/dev/null || printf '%s' "$issue_details")"
         done < "$GH_ENUM"
-        # Refresh this owner's cache entry (PRs + issue titles + epics + states).
+        # Refresh this owner's cache entry (PRs + issue titles + epics + details).
         CACHE_OUT="$(printf '%s' "$CACHE_OUT" | jq -c \
           --arg k "$owner" --argjson prs "$prs" --argjson issues "$issues" \
-          --argjson epics "$epics" --argjson istates "$issue_states" \
+          --argjson epics "$epics" --argjson idet "$issue_details" \
           --arg fa "$fetched_at" --argjson fe "$fetched_epoch" \
-          '.[$k] = {fetched_at:$fa, fetched_epoch:$fe, prs:$prs, issues:$issues, epics:$epics, issue_states:$istates}' 2>/dev/null || printf '%s' "$CACHE_OUT")"
+          '.[$k] = {fetched_at:$fa, fetched_epoch:$fe, prs:$prs, issues:$issues, epics:$epics, issue_details:$idet}' 2>/dev/null || printf '%s' "$CACHE_OUT")"
       else
         # Network failure / rate limit / bad payload => this repo failed.
         printf '%s\n' "$owner" >> "$FAILED_FILE"
@@ -580,7 +589,7 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     fi
     [ -n "$issues" ] || issues="[]"
     [ -n "$epics" ] || epics="[]"
-    [ -n "$issue_states" ] || issue_states="{}"
+    [ -n "$issue_details" ] || issue_details="{}"
 
     # Emit this owner's epics to the top-level epics[] accumulator, injecting the
     # repo_slug the page groups by (issue #79). One JSONL line per epic. Each
@@ -614,13 +623,22 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     fi
 
     # Build the number->github map for this owner (ci + verdict per open PR) and
-    # the issue_number->title map (issue #78).
+    # the issue_number->meta map (issue #78 title + issue #96/#103 state/reason).
     prmap="$(status_github_build_pr_map "$prs" "$fetched_at" "$age" "$GH_LABEL" "$GH_RES" "$GH_REPAIR")"
     printf '%s' "$prmap" > "$TMPD/gh/$gh_i.prmap.json"
-    issuemap="$(status_github_build_issue_map "$issues")"
-    printf '%s' "$issuemap" > "$TMPD/gh/$gh_i.issuemap.json"
-    # Suspected-closed issue states for the issue-only join below (issue #96).
-    printf '%s' "$issue_states" > "$TMPD/gh/$gh_i.issuestates.json"
+    # One per-owner issue-meta map: { "<n>": {state, state_reason, title} }, keyed
+    # by issue number, merging the OPEN list (state OPEN, reason null, title from the
+    # open map) with the per-issue detail reads for ABSENT issues (state CLOSED/OPEN,
+    # reason, title). status.sh joins this against each run's issue_number at
+    # assembly so EVERY github object (open PR, NOT_OPEN, issue-only) carries
+    # issue_title + issue_state + issue_state_reason uniformly (issue #103 AC1/AC2).
+    openmap="$(status_github_build_issue_map "$issues")"
+    issuemeta="$(jq -nc --argjson om "$openmap" --argjson det "$issue_details" '
+      (($om | to_entries
+        | map({key: .key, value: {state: "OPEN", state_reason: null, title: .value}}))
+       | from_entries) + $det')"
+    [ -n "$issuemeta" ] || issuemeta="{}"
+    printf '%s' "$issuemeta" > "$TMPD/gh/$gh_i.issuemeta.json"
     printf '%s\t%s\t%s\n' "$owner" "$gh_i" "$age" >> "$OWNER_META"
     printf '%s\t%s\n' "$owner" "$fetched_at" >> "$TMPD/gh_owner_fetched.tsv"
     ENRICH_REPOS_ENRICHED=$((ENRICH_REPOS_ENRICHED + 1))
@@ -636,10 +654,10 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   fi
 
   # Map each enumerated run to its ghmap entry.
-  # owner -> prmap/issuemap index + age lookup (built above). Every run carries a
+  # owner -> prmap/issuemeta index + age lookup (built above). Every run carries a
   # github object: an OPEN-PR object, a NOT_OPEN object, or (no PR yet) an
-  # issue-only object — and each gets issue_title joined in from the issue map
-  # by issue_number (issue #78).
+  # issue-only object — and each gets issue_title + issue_state + issue_state_reason
+  # joined in from the per-owner issue-meta map by issue_number (issue #78/#96/#103).
   GHMAP_FILE="$TMPD/ghmap.jsonl"; : > "$GHMAP_FILE"
   while IFS=$'\t' read -r idx issue pn owner; do
     [ -n "$idx" ] || continue
@@ -649,7 +667,7 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
       jq -nc --arg i "$idx" '{($i): {failed:true}}' >> "$GHMAP_FILE"
       continue
     fi
-    # Look up this owner's prmap/issuemap index + age.
+    # Look up this owner's prmap/issuemeta index + age.
     meta="$(grep -F "$owner"$'\t' "$OWNER_META" 2>/dev/null | head -n1 || true)"
     [ -n "$meta" ] || continue
     pmi="$(printf '%s' "$meta" | cut -f2)"
@@ -673,18 +691,21 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     else
       # No PR yet => an issue-only object (title, no PR fields / chips).
       base="$(status_github_issue_only_object "$fetched_at" "$page")"
-      # Inject the confirmed issue_state for a suspected-closed issue (issue #96).
-      # Empty => unconfirmed => stays null => local class stands (fail-soft). Only
-      # a no-PR run reaches here, so issue_state lives ONLY on issue-only objects.
-      ist="$(jq -r --arg k "$issue" '.[$k] // ""' "$TMPD/gh/$pmi.issuestates.json" 2>/dev/null || true)"
-      if [ -n "$ist" ]; then
-        base="$(printf '%s' "$base" | jq -c --arg s "$ist" '.issue_state = $s' 2>/dev/null || printf '%s' "$base")"
-      fi
     fi
-    # Join the issue title in by issue_number (null when absent / closed issue).
+    # Join the issue meta in by issue_number: title + state + state_reason (issue
+    # #78/#96/#103). An absent issue (unread / read-failed / no meta) => all three
+    # null, so the row keeps its V1 shape and the local class stands (fail-soft).
+    # The OPEN-PR branch above still wins classification (the reclassifier's OPEN
+    # branch returns before the issue_state elif), so setting issue_state on a PR
+    # object is view-only — it never reclassifies (scope-out: classification is #96).
     jq -nc --arg i "$idx" --argjson o "$base" \
-      --slurpfile im "$TMPD/gh/$pmi.issuemap.json" --arg k "$issue" \
-      '{($i): {github: ($o + {issue_title: ($im[0][$k] // null)})}}' >> "$GHMAP_FILE"
+      --slurpfile mm "$TMPD/gh/$pmi.issuemeta.json" --arg k "$issue" \
+      '($mm[0][$k] // {}) as $m
+       | {($i): {github: ($o + {
+            issue_title: ($m.title // null),
+            issue_state: ($m.state // null),
+            issue_state_reason: ($m.state_reason // null)
+          })}}' >> "$GHMAP_FILE"
   done < "$GH_ENUM"
 
   if [ -s "$GHMAP_FILE" ]; then

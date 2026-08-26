@@ -39,8 +39,9 @@
 #      the provenance stays obvious (gh data is confined to `github`). Titles are
 #      shown deliberately for a tailnet-only page; see README §7.8.
 #   2. The inline JS reads ONLY those named fields — including github.issue_title,
-#      github.ci, github.pr_decide_verdict, github.cache_age_seconds and
-#      github.pr_state as an explicit allowlist — and inserts every data string
+#      github.ci, github.pr_decide_verdict, github.cache_age_seconds,
+#      github.pr_state, github.issue_state and github.issue_state_reason (#103) as
+#      an explicit allowlist — and inserts every data string
 #      with textContent (never innerHTML), so a title or branch literally named
 #      "<script>" is shown as text and never executes. The JS never iterates the
 #      run or github object, so a field the schema grows later cannot leak. The
@@ -334,6 +335,7 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .gh-chip.ci-green{color:#fff;background:var(--c-pr);border-color:var(--c-pr)}
 .gh-chip.ci-red{color:#fff;background:var(--c-stalled);border-color:var(--c-stalled)}
 .gh-chip.ci-pending{color:#fff;background:var(--c-attention);border-color:var(--c-attention)}
+.gh-chip.issue-closed{color:#fff;background:var(--c-cleanup);border-color:var(--c-cleanup)}
 .gh-age{color:var(--muted);font-size:.72rem}
 .row-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
 .row-sub{color:var(--muted);font-size:.78rem;margin-top:.15rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -465,6 +467,21 @@ a:hover{text-decoration:underline}
     RED:     {label:"CI punainen", css:"ci-red"},
     PENDING: {label:"CI kesken",  css:"ci-pending"}
   };
+
+  // github.issue_state_reason -> the Finnish chip text for a CLOSED issue (#103).
+  // The chip distinguishes "not planned" from "completed"; any other reason
+  // (COMPLETED, DUPLICATE, null, unknown) falls back to the plain "Issue suljettu"
+  // via issueClosedLabel below, so a new stateReason never crashes or hides.
+  var ISSUE_STATE_REASONS = {
+    NOT_PLANNED: "Issue suljettu · ei suunniteltu",
+    DUPLICATE:   "Issue suljettu · duplikaatti"
+  };
+  function issueClosedLabel(reason){
+    if (typeof reason === "string" &&
+        Object.prototype.hasOwnProperty.call(ISSUE_STATE_REASONS, reason))
+      return ISSUE_STATE_REASONS[reason];
+    return "Issue suljettu";
+  }
 
   // github.pr_decide_verdict -> plain-Finnish "what the watcher would do next".
   // Mirrors lib/pr-watch-lib.sh's pr_decide verdicts; an unknown code falls back
@@ -798,6 +815,18 @@ a:hover{text-decoration:underline}
         chips.appendChild(el("span", "gh-age", "gh " + dur(g.cache_age_seconds) + " sitten"));
       }
       if (chips.firstChild) row.appendChild(chips);
+    }
+
+    // Issue-closed chip (#103): the GitHub issue state on ANY row whose issue is
+    // confirmed CLOSED (no-PR or NOT_OPEN-PR rows both reach here — the OPEN-PR
+    // chips above are gated on pr_state, this one only on issue_state). Naming why
+    // it closed ("ei suunniteltu" vs "Issue suljettu") tells the operator the row
+    // moved class because the issue is gone, not because the run is stuck. Read by
+    // name + textContent-inserted (allowlist / XSS-safe).
+    if (g && g.issue_state === "CLOSED") {
+      var iclosed = el("div", "gh-chips");
+      iclosed.appendChild(el("span", "gh-chip issue-closed", issueClosedLabel(g.issue_state_reason)));
+      row.appendChild(iclosed);
     }
 
     if (info.next) row.appendChild(el("div", "row-next", info.next));
