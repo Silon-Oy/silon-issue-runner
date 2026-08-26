@@ -35,12 +35,39 @@
 # `reviewDecision` fill schema fields the watcher does not read.
 _STATUS_GH_PR_FIELDS='number,state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName,isDraft,reviewDecision'
 
-# _STATUS_GH_ISSUE_FIELDS — the --json field set for `gh issue list` (issue #78).
-# We fetch ONLY number+title: the title is the one gh-only datum the status page
-# shows as a row's main text, and pulling nothing else keeps the payload small
-# and the provenance obvious (gh data lives in the `github` sub-object, never at
-# the run's top level).
-_STATUS_GH_ISSUE_FIELDS='number,title'
+# _STATUS_GH_ISSUE_FIELDS — the --json field set for `gh issue list` (issue #78,
+# #106). number+title is the title the status page shows as a row's main text;
+# labels (issue #106) carry the three state labels below so the Ohjaamo can show a
+# run's reservation/cleanup/attention state as a chip. We pull nothing else, so
+# the payload stays small and the provenance stays obvious (gh data lives in the
+# `github` sub-object, never at the run's top level).
+_STATUS_GH_ISSUE_FIELDS='number,title,labels'
+
+# _STATUS_GH_STATE_LABELS — the ONLY issue labels the Ohjaamo surfaces (issue
+# #106): the reservation (auto-clean), failed-cleanup (auto-clean-skipped) and
+# attention (needs-human) signals a run's issue carries. These three pass into the
+# github payload as github.issue_labels; the issue's FULL label set is NEVER
+# carried (scope-out: not a general label view, and a tight whitelist keeps the
+# leak surface the same as the title in #78). A jq array and the SINGLE source of
+# truth for which labels surface: both places that extract labels (the map builder
+# below and the detail read) filter against it with the same `index($n)` idiom.
+_STATUS_GH_STATE_LABELS='["auto-clean","auto-clean-skipped","needs-human"]'
+
+# status_github_build_issue_labels_map <issues-json> — map every OPEN issue to the
+# whitelisted subset of its labels (issue #106), keyed by issue number as a string:
+# { "42": ["auto-clean"], "43": [] }. status.sh merges this into the per-owner
+# issue-meta map so each run's github object carries issue_labels. Only the three
+# named labels pass; the issue's full label set never reaches the payload.
+# Empty/invalid array => {}.
+status_github_build_issue_labels_map() {
+  local issues="$1"
+  jq -c --argjson wl "$_STATUS_GH_STATE_LABELS" '
+    if type == "array"
+    then (reduce .[] as $i ({};
+            .[($i.number|tostring)] =
+              ([$i.labels[]?.name] | map(select(. as $n | $wl | index($n))))))
+    else {} end' <<<"$issues" 2>/dev/null || printf '{}'
+}
 
 # _STATUS_GH_EPIC_FIELDS — the --json field set for `gh issue list --label epic`
 # (issue #79). number + title feed the epic lane header; body is only used for the
@@ -137,28 +164,32 @@ status_github_closed_state() {
 # a run whose issue the cheap per-owner open list does not cover, so it is either
 # closed OR the best-effort open fetch missed it. That absence is only a HINT —
 # the open-issue fetch is best-effort (issue #78) — so we confirm the state with
-# one `gh issue view`, and in the SAME call pull stateReason + title (issue #103):
-# the closed issue's title is otherwise unavailable (the open list is --state open)
-# and stateReason distinguishes "not planned" from "completed" on the row. Prints a
-# compact object {state, state_reason, title} on stdout, or EMPTY on any failure (a
-# 404 on a moved/deleted issue, a network error) — empty means "not confirmed", and
-# the caller leaves the local class in place (fail-soft). state/state_reason are
-# upper-cased so the payload is normalised regardless of gh's casing; an unknown
-# state (not OPEN/CLOSED) yields empty (unconfirmed). Modelled on
-# status_github_closed_state — one `gh issue view` per absent issue, cached in the
-# same TTL entry so the read runs at most once per issue per window.
+# one `gh issue view`, and in the SAME call pull stateReason + title (issue #103)
+# + labels (issue #106): the closed issue's title/labels are otherwise unavailable
+# (the open list is --state open), stateReason distinguishes "not planned" from
+# "completed", and labels carry the state chips (auto-clean lingers on CLOSED
+# issues most of all — the very rows this read reaches). Prints a compact object
+# {state, state_reason, title, labels} on stdout, or EMPTY on any failure (a 404 on
+# a moved/deleted issue, a network error) — empty means "not confirmed", and the
+# caller leaves the local class in place (fail-soft). state/state_reason are
+# upper-cased so the payload is normalised regardless of gh's casing; labels are
+# whitelisted to the three state labels; an unknown state (not OPEN/CLOSED) yields
+# empty (unconfirmed). Modelled on status_github_closed_state — one `gh issue view`
+# per absent issue, cached in the same TTL entry so the read runs at most once per
+# issue per window.
 status_github_issue_detail() {
   local owner_repo="$1" num="$2" json
   json="$(gha_with_token gh issue view "$num" --repo "$owner_repo" \
-    --json state,stateReason,title 2>/dev/null)" || { printf ''; return 0; }
+    --json state,stateReason,title,labels 2>/dev/null)" || { printf ''; return 0; }
   [ -n "$json" ] || { printf ''; return 0; }
-  printf '%s' "$json" | jq -c '
+  printf '%s' "$json" | jq -c --argjson wl "$_STATUS_GH_STATE_LABELS" '
     ((.state // "") | ascii_upcase) as $st
     | if ($st == "OPEN" or $st == "CLOSED")
       then {state: $st,
             state_reason: (if (.stateReason // "") == "" then null
                            else (.stateReason | ascii_upcase) end),
-            title: (.title // null)}
+            title: (.title // null),
+            labels: ([.labels[]?.name] | map(select(. as $n | $wl | index($n))))}
       else empty end' 2>/dev/null || printf ''
 }
 
@@ -187,7 +218,8 @@ status_github_pr_object() {
       pr_decide_verdict: $v,
       issue_title: null,
       issue_state: null,
-      issue_state_reason: null
+      issue_state_reason: null,
+      issue_labels: []
     }' <<<"$pr"
 }
 
@@ -235,7 +267,8 @@ status_github_not_open_object() {
       closed_as: (if $ca == "" then null else $ca end),
       issue_title: null,
       issue_state: null,
-      issue_state_reason: null
+      issue_state_reason: null,
+      issue_labels: []
     }'
 }
 
@@ -358,6 +391,7 @@ status_github_issue_only_object() {
       closed_as: null,
       issue_title: null,
       issue_state: null,
-      issue_state_reason: null
+      issue_state_reason: null,
+      issue_labels: []
     }'
 }

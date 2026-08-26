@@ -263,6 +263,56 @@ if [ -f "$HTMLCL" ]; then
   presenti "issue closed generic wording" "Issue suljettu" "$HTMLCL"
 fi
 
+# ---- Case 4b3: issue state-label chips + Siivoa disable (#106) --------------
+# A run whose issue carries auto-clean + needs-human PLUS a bogus label value. The
+# page is data-free, so the bogus value never lands in the markup; the chips are
+# rendered client-side. With the action channel configured, the Siivoa button must
+# disable (auto-clean present) and name why. This case asserts the JS reads the
+# named github.issue_labels array (allowlist), carries the three fixed chip
+# wordings, the auto-clean disable logic + reason, and that the bogus value never
+# appears statically.
+LABEL_LEAK="LABEL-<script>alert(6)</script>-SECRET"
+cat > "$FX/labels.json" <<JSON
+{"schema_version":1,"generated_at":"2026-08-11T22:20:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "enrichment":{"mode":"github","fetched_at":"2026-08-11T22:20:00Z","cache_age_seconds":30,"repos_enriched":1,"repos_failed":[]},
+ "totals":{"runs":1,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":1},"degraded":false},
+ "read_errors":[],
+ "runs":[
+  {"repo_slug":"acme-site","issue_number":22,"run_dir":"/x/run-22","status":"completed",
+   "issue_url":"https://github.com/acme/acme-site/issues/22",
+   "class":"cleanup","class_reason":"pr_not_open","class_confidence":"high",
+   "current_state":"S12_Finalize","branch":"auto-run/x",
+   "age_seconds":9300,"idle_seconds":null,
+   "github":{"pr_state":null,"ci":null,"pr_decide_verdict":null,
+             "cache_age_seconds":30,"issue_title":null,
+             "issue_state":null,"issue_state_reason":null,
+             "issue_labels":["auto-clean","needs-human","$LABEL_LEAK"]}}
+ ]}
+JSON
+OUTLB="$FX/wwwlb"
+RUN_ISSUES_ACTION_BASE="http://studio:8081" RUN_ISSUES_ACTION_TOKEN_FILE="$FX/lb-token" \
+  RUN_ISSUES_STATUS_OUT_DIR="$OUTLB" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/labels.json"; rclb=$?
+HTMLLB="$OUTLB/index.html"
+check "label doc renders (exit 0)" "$rclb" "0"
+if [ -f "$HTMLLB" ]; then
+  # Data-free page: a bogus label value (incl. its XSS payload) never appears.
+  absent "bogus label value not embedded" "$LABEL_LEAK" "$HTMLLB"
+  absent "label XSS not embedded" "<script>alert(6)" "$HTMLLB"
+  # Allowlist: the JS reads the named github.issue_labels array + the hasLabel guard.
+  present "JS reads github.issue_labels" "issue_labels" "$HTMLLB"
+  present "JS has a hasLabel guard" "hasLabel" "$HTMLLB"
+  present "JS carries a fixed LABEL_ORDER" "LABEL_ORDER" "$HTMLLB"
+  # AC2: the three fixed chip wordings.
+  presenti "auto-clean chip wording" "Siivousjonossa" "$HTMLLB"
+  presenti "auto-clean-skipped chip wording" "Siivous epäonnistui" "$HTMLLB"
+  presenti "needs-human chip wording" "Vaatii ihmisen" "$HTMLLB"
+  # AC3: the Siivoa button disables (with a reason) when auto-clean is present.
+  present "JS computes queued from auto-clean" 'hasLabel(r.github, "auto-clean")' "$HTMLLB"
+  presenti "Siivoa disable reason names the label" "Jo siivousjonossa (auto-clean-label issuella)" "$HTMLLB"
+fi
+
 # ---- Case 4c: epic rollup lane (#79) --------------------------------------
 # A document with an epics[] list and an epic title that is an XSS payload. The
 # page markup is data-free, so no epic value appears in it; the epic lane is

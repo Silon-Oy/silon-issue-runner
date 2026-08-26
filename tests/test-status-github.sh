@@ -159,17 +159,20 @@ JSON
   *)
     case "\$repo" in
       o/repo-a)
-        # Titles for the open issues, including a special-char title (#1) to prove
-        # the JSON round-trip preserves it, and issue 4 (the no-PR blocked run).
+        # Titles + labels for the open issues (issue #106 added labels). #1 has a
+        # special-char title (JSON round-trip) and ONLY a non-whitelisted label
+        # (auto-merge => issue_labels []). #4 (the no-PR blocked run) carries
+        # needs-human PLUS a non-whitelisted label (wip => filtered out, proving the
+        # whitelist). The rest carry no labels (=> issue_labels []).
         cat <<'JSON'
 [
- {"number":1,"title":"Fix <b>bug</b> & ship ä title"},
- {"number":2,"title":"Red CI issue"},
- {"number":3,"title":"Unstable issue"},
- {"number":4,"title":"Blocked no-PR issue"},
- {"number":5,"title":"Closed-PR issue"},
- {"number":6,"title":"Changes requested issue"},
- {"number":7,"title":"Draft issue"}
+ {"number":1,"title":"Fix <b>bug</b> & ship ä title","labels":[{"name":"auto-merge"}]},
+ {"number":2,"title":"Red CI issue","labels":[]},
+ {"number":3,"title":"Unstable issue","labels":[]},
+ {"number":4,"title":"Blocked no-PR issue","labels":[{"name":"needs-human"},{"name":"wip"}]},
+ {"number":5,"title":"Closed-PR issue","labels":[]},
+ {"number":6,"title":"Changes requested issue","labels":[]},
+ {"number":7,"title":"Draft issue","labels":[]}
 ]
 JSON
         exit 0
@@ -191,8 +194,8 @@ fi
 # object the caller's jq consumes.
 if [ "\$1" = "issue" ] && [ "\$2" = "view" ]; then
   case "\$repo:\$3" in
-    o/repo-a:8)  echo '{"state":"CLOSED","stateReason":"NOT_PLANNED","title":"Closed not-planned issue"}'; exit 0 ;;
-    o/repo-a:90) echo '{"state":"CLOSED","stateReason":"COMPLETED","title":"Closed-issue open-PR"}'; exit 0 ;;
+    o/repo-a:8)  echo '{"state":"CLOSED","stateReason":"NOT_PLANNED","title":"Closed not-planned issue","labels":[{"name":"auto-clean"},{"name":"needs-human"},{"name":"bug"}]}'; exit 0 ;;
+    o/repo-a:90) echo '{"state":"CLOSED","stateReason":"COMPLETED","title":"Closed-issue open-PR","labels":[{"name":"auto-clean-skipped"}]}'; exit 0 ;;
     o/repo-a:89) echo "gh: could not read issue (simulated failure)" >&2; exit 1 ;;
     *) echo "gh: issue not found (simulated)" >&2; exit 1 ;;
   esac
@@ -340,6 +343,36 @@ check "#90 github.issue_state_reason COMPLETED" "$(gi 90 | jq -r '.github.issue_
 check "#1 github.issue_state OPEN (from open map, no read)" "$(gi 1 | jq -r '.github.issue_state')" "OPEN"
 check "#1 github.issue_state_reason null (open)" "$(gi 1 | jq -r '.github.issue_state_reason')" "null"
 
+# ---- issue #106: issue state-labels on the github sub-object -----------------
+# AC1: every enriched run's github object carries issue_labels — a WHITELISTED
+# array of only {auto-clean, auto-clean-skipped, needs-human}. Open-issue labels
+# come from the open list (with title), closed-issue labels from the detail read
+# (the SAME read that yields the closed title/state), so a closed issue's lingering
+# auto-clean is visible too (edge case). Non-whitelisted labels are filtered out.
+
+# #1: open issue, only a non-whitelisted label (auto-merge) => [] (filtered).
+check "#1 github.issue_labels is []" "$(gi 1 | jq -c '.github.issue_labels')" "[]"
+# #4: no-PR blocked run, needs-human + wip => ["needs-human"] (wip filtered out).
+check "#4 github.issue_labels [needs-human]" "$(gi 4 | jq -c '.github.issue_labels')" '["needs-human"]'
+# #8: closed issue via detail read, auto-clean + needs-human + bug => the two
+# whitelisted labels, bug filtered out (a closed run's cleanup queue IS visible).
+check "#8 issue_labels has auto-clean" \
+  "$(gi 8 | jq -r '.github.issue_labels | index("auto-clean") != null')" "true"
+check "#8 issue_labels has needs-human" \
+  "$(gi 8 | jq -r '.github.issue_labels | index("needs-human") != null')" "true"
+check "#8 issue_labels drops non-whitelisted bug" \
+  "$(gi 8 | jq -r '.github.issue_labels | index("bug")')" "null"
+# #90: OPEN PR whose CLOSED issue carries auto-clean-skipped — a PR row carries
+# issue_labels too (AC1), from the same detail read as its issue_state.
+check "#90 issue_labels [auto-clean-skipped]" "$(gi 90 | jq -c '.github.issue_labels')" '["auto-clean-skipped"]'
+# #89: detail read FAILED => fail-soft, issue_labels defaults to [] (AC6: an error
+# drops the chips, never manufactures a label).
+check "#89 issue_labels [] (fail-soft)" "$(gi 89 | jq -c '.github.issue_labels')" "[]"
+# Every enriched run carries issue_labels as an ARRAY (never null / never the full
+# label set) — the schema invariant the render side relies on.
+check "every enriched run issue_labels is an array" \
+  "$(jq -c '[.runs[] | select(.github != null) | .github.issue_labels | type] | unique' "$OUT")" '["array"]'
+
 # Call count (criterion 6/AC5): the detail read runs ONCE per issue ABSENT from the
 # open map (#8 + #89 + #90 = 3), deduped across runs, never for issues present in
 # the map (#1–#7). repo-b failed the PR fetch first, so it is never probed.
@@ -459,6 +492,11 @@ check "cache hit: epics[] still served (3)" "$(jq '.epics | length' "$FX/out2.js
 check "cache hit: no issue view call (repo-a cached)" "$(issue_view_calls)" "0"
 check "cache hit: #8 still issue_closed from cache" \
   "$(jq -r '.runs[] | select(.issue_number==8) | .class_reason' "$FX/out2.json")" "issue_closed"
+# issue #106: labels ride the SAME cache entry — a repo-a cache hit serves #8's
+# auto-clean from cache with no gh call (the raw issues array + detail reads carry
+# labels, both cached).
+check "cache hit: #8 issue_labels served from cache (auto-clean)" \
+  "$(jq -r '.runs[] | select(.issue_number==8) | .github.issue_labels | index("auto-clean") != null' "$FX/out2.json")" "true"
 check "cache hit: cache_age_seconds >= 0" \
   "$(jq -r '.enrichment.cache_age_seconds >= 0' "$FX/out2.json")" "true"
 

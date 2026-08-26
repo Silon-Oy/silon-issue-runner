@@ -40,8 +40,9 @@
 #      shown deliberately for a tailnet-only page; see README §7.8.
 #   2. The inline JS reads ONLY those named fields — including github.issue_title,
 #      github.ci, github.pr_decide_verdict, github.cache_age_seconds,
-#      github.pr_state, github.issue_state and github.issue_state_reason (#103) as
-#      an explicit allowlist — and inserts every data string
+#      github.pr_state, github.issue_state, github.issue_state_reason (#103) and
+#      github.issue_labels (#106, a whitelisted 3-label array) as an explicit
+#      allowlist — and inserts every data string
 #      with textContent (never innerHTML), so a title or branch literally named
 #      "<script>" is shown as text and never executes. The JS never iterates the
 #      run or github object, so a field the schema grows later cannot leak. The
@@ -336,6 +337,12 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .gh-chip.ci-red{color:#fff;background:var(--c-stalled);border-color:var(--c-stalled)}
 .gh-chip.ci-pending{color:#fff;background:var(--c-attention);border-color:var(--c-attention)}
 .gh-chip.issue-closed{color:#fff;background:var(--c-cleanup);border-color:var(--c-cleanup)}
+/* Issue state-label chips (#106): the three whitelisted labels a run's issue
+   carries. needs-human is the loud attention signal, auto-clean the reservation,
+   auto-clean-skipped the failed-cleanup warning. */
+.gh-chip.label-needs-human{color:#fff;background:var(--c-stalled);border-color:var(--c-stalled)}
+.gh-chip.label-auto-clean{color:#fff;background:var(--c-cleanup);border-color:var(--c-cleanup)}
+.gh-chip.label-auto-clean-skipped{color:#fff;background:var(--c-attention);border-color:var(--c-attention)}
 .gh-age{color:var(--muted);font-size:.72rem}
 .row-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
 .row-sub{color:var(--muted);font-size:.78rem;margin-top:.15rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -483,6 +490,25 @@ a:hover{text-decoration:underline}
     return "Issue suljettu";
   }
 
+  // github.issue_labels -> row chips (#106). The three whitelisted state labels a
+  // run's issue carries, rendered in a FIXED priority order (most important first)
+  // so a row reads the same regardless of the array's order. needs-human is the
+  // system's loudest "needs a human" signal; auto-clean marks the run already in
+  // the cleanup queue; auto-clean-skipped means a cleanup was attempted and failed
+  // (also needs a human). The chip TEXT comes from this static map, never from the
+  // raw GitHub label string — the array is only tested for membership.
+  var LABEL_ORDER = ["needs-human", "auto-clean", "auto-clean-skipped"];
+  var LABEL_CHIPS = {
+    "needs-human":        {label:"Vaatii ihmisen",       css:"label-needs-human"},
+    "auto-clean":         {label:"Siivousjonossa",       css:"label-auto-clean"},
+    "auto-clean-skipped": {label:"Siivous epäonnistui",  css:"label-auto-clean-skipped"}
+  };
+  // hasLabel(g, name) — is the named label on the run's issue? Reads only the named
+  // github.issue_labels array (allowlist), never iterates the github object.
+  function hasLabel(g, name){
+    return !!(g && Array.isArray(g.issue_labels) && g.issue_labels.indexOf(name) !== -1);
+  }
+
   // github.pr_decide_verdict -> plain-Finnish "what the watcher would do next".
   // Mirrors lib/pr-watch-lib.sh's pr_decide verdicts; an unknown code falls back
   // to the raw code so a new verdict never crashes or hides.
@@ -609,19 +635,30 @@ a:hover{text-decoration:underline}
     var msg = el("div", "act-msg");
     var disabled = !serviceUp;
 
-    function add(cond, label, cls, action, confirmText){
+    // lockReason (optional): when set (and the service is up), the button renders
+    // DISABLED with that title and NO click handler — a data-driven "already done,
+    // no repeat" state, distinct from the service-down disable (#106 AC3).
+    function add(cond, label, cls, action, confirmText, lockReason){
       if (!cond) return;
       var b = mkBtn(label, cls);
-      b.disabled = disabled;
+      var locked = !!lockReason;
+      b.disabled = disabled || locked;
       if (disabled) b.title = "Toimintopalvelu ei tavoitettavissa";
+      else if (locked) b.title = lockReason;
       else b.addEventListener("click", function(){ doAction(action, r, confirmText, msg); });
       bar.appendChild(b);
     }
     var idn = (r.issue_number != null ? " #" + r.issue_number : "");
+    // AC3: a run whose issue already carries auto-clean is in the cleanup queue —
+    // the Siivoa button disables (no silent no-op re-click) and names why. The
+    // signal is data-driven (github.issue_labels from status.json), so it survives
+    // a page refresh (AC4).
+    var queued = hasLabel(r.github, "auto-clean");
     add(stop, "Pysäytä", "danger", "stop",
         "Pysäytä ajo" + idn + "?\n\ntmux-istunto tapetaan; worktree, haara ja run-dir SÄILYVÄT.");
     add(clean, "Siivoa", "danger", "clean",
-        "Siivoa ajo" + idn + "?\n\nLisää auto-clean-label — poller poistaa worktreen, haaran, run-dirin ja assignaation turvaportteineen.");
+        "Siivoa ajo" + idn + "?\n\nLisää auto-clean-label — poller poistaa worktreen, haaran, run-dirin ja assignaation turvaportteineen.",
+        queued ? "Jo siivousjonossa (auto-clean-label issuella)" : null);
     add(merge, "Salli auto-merge", "go", "allow-merge",
         "Salli auto-merge PR #" + (r.pr_number != null ? r.pr_number : "?") + "?\n\nLisää auto-merge-label — vahti mergeää (ja ratkaisee konfliktin) kun CI on vihreä.");
     add(resume, "Jatka", null, "resume",
@@ -827,6 +864,22 @@ a:hover{text-decoration:underline}
       var iclosed = el("div", "gh-chips");
       iclosed.appendChild(el("span", "gh-chip issue-closed", issueClosedLabel(g.issue_state_reason)));
       row.appendChild(iclosed);
+    }
+
+    // Issue state-label chips (#106): the whitelisted labels a run's issue carries,
+    // rendered in fixed priority order. Issue-level, so every run of the same issue
+    // shows the same chips (spec edge). Read by name + textContent-inserted (the
+    // chip text is our own static label, never the raw GitHub string) — allowlist /
+    // XSS-safe. This is the DATA path that survives a page refresh (AC4): the chip
+    // comes from status.json, not browser memory.
+    if (g && Array.isArray(g.issue_labels) && g.issue_labels.length) {
+      var lchips = el("div", "gh-chips");
+      LABEL_ORDER.forEach(function(name){
+        if (!hasLabel(g, name)) return;
+        var info2 = LABEL_CHIPS[name];
+        lchips.appendChild(el("span", "gh-chip " + info2.css, info2.label));
+      });
+      if (lchips.firstChild) row.appendChild(lchips);
     }
 
     if (info.next) row.appendChild(el("div", "row-next", info.next));

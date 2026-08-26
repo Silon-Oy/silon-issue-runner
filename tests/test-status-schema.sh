@@ -119,6 +119,12 @@ check "github always null" "$NON_NULL_GH" "0"
 TOP_TITLE="$(jq '[.runs[] | select(has("issue_title"))] | length' "$OUT")"
 check "no top-level issue_title on any run" "$TOP_TITLE" "0"
 
+# ---- provenance: issue labels never land at a run's top level (issue #106). Like
+# the title, they live only in github.issue_labels; with github null they are
+# absent (gh data confined to the github sub-object). ----
+TOP_LABELS="$(jq '[.runs[] | select(has("issue_labels"))] | length' "$OUT")"
+check "no top-level issue_labels on any run" "$TOP_LABELS" "0"
+
 # ---- totals.by_class sums to totals.runs ----
 SUM="$(jq '.totals.by_class | to_entries | map(.value) | add' "$OUT")"
 RUNS_TOTAL="$(jq '.totals.runs' "$OUT")"

@@ -626,16 +626,21 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     # the issue_number->meta map (issue #78 title + issue #96/#103 state/reason).
     prmap="$(status_github_build_pr_map "$prs" "$fetched_at" "$age" "$GH_LABEL" "$GH_RES" "$GH_REPAIR")"
     printf '%s' "$prmap" > "$TMPD/gh/$gh_i.prmap.json"
-    # One per-owner issue-meta map: { "<n>": {state, state_reason, title} }, keyed
-    # by issue number, merging the OPEN list (state OPEN, reason null, title from the
-    # open map) with the per-issue detail reads for ABSENT issues (state CLOSED/OPEN,
-    # reason, title). status.sh joins this against each run's issue_number at
-    # assembly so EVERY github object (open PR, NOT_OPEN, issue-only) carries
-    # issue_title + issue_state + issue_state_reason uniformly (issue #103 AC1/AC2).
+    # One per-owner issue-meta map: { "<n>": {state, state_reason, title, labels} },
+    # keyed by issue number, merging the OPEN list (state OPEN, reason null, title +
+    # whitelisted labels from the open list) with the per-issue detail reads for
+    # ABSENT issues (state CLOSED/OPEN, reason, title, labels). status.sh joins this
+    # against each run's issue_number at assembly so EVERY github object (open PR,
+    # NOT_OPEN, issue-only) carries issue_title + issue_state + issue_state_reason +
+    # issue_labels uniformly (issue #103 AC1/AC2, issue #106). The label map is
+    # rebuilt from the cached `issues` array (which now carries labels), so a cache
+    # hit serves labels with no gh call; the detail reads already carry labels.
     openmap="$(status_github_build_issue_map "$issues")"
-    issuemeta="$(jq -nc --argjson om "$openmap" --argjson det "$issue_details" '
+    openlabels="$(status_github_build_issue_labels_map "$issues")"
+    issuemeta="$(jq -nc --argjson om "$openmap" --argjson lm "$openlabels" --argjson det "$issue_details" '
       (($om | to_entries
-        | map({key: .key, value: {state: "OPEN", state_reason: null, title: .value}}))
+        | map({key: .key, value: {state: "OPEN", state_reason: null, title: .value,
+                                  labels: ($lm[.key] // [])}}))
        | from_entries) + $det')"
     [ -n "$issuemeta" ] || issuemeta="{}"
     printf '%s' "$issuemeta" > "$TMPD/gh/$gh_i.issuemeta.json"
@@ -692,19 +697,21 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
       # No PR yet => an issue-only object (title, no PR fields / chips).
       base="$(status_github_issue_only_object "$fetched_at" "$page")"
     fi
-    # Join the issue meta in by issue_number: title + state + state_reason (issue
-    # #78/#96/#103). An absent issue (unread / read-failed / no meta) => all three
-    # null, so the row keeps its V1 shape and the local class stands (fail-soft).
-    # The OPEN-PR branch above still wins classification (the reclassifier's OPEN
-    # branch returns before the issue_state elif), so setting issue_state on a PR
-    # object is view-only — it never reclassifies (scope-out: classification is #96).
+    # Join the issue meta in by issue_number: title + state + state_reason + labels
+    # (issue #78/#96/#103/#106). An absent issue (unread / read-failed / no meta) =>
+    # title/state/reason null and labels [], so the row keeps its V1 shape and the
+    # local class stands (fail-soft). The OPEN-PR branch above still wins
+    # classification (the reclassifier's OPEN branch returns before the issue_state
+    # elif), so setting issue_state/issue_labels on a PR object is view-only — it
+    # never reclassifies (scope-out: classification is #96).
     jq -nc --arg i "$idx" --argjson o "$base" \
       --slurpfile mm "$TMPD/gh/$pmi.issuemeta.json" --arg k "$issue" \
       '($mm[0][$k] // {}) as $m
        | {($i): {github: ($o + {
             issue_title: ($m.title // null),
             issue_state: ($m.state // null),
-            issue_state_reason: ($m.state_reason // null)
+            issue_state_reason: ($m.state_reason // null),
+            issue_labels: ($m.labels // [])
           })}}' >> "$GHMAP_FILE"
   done < "$GH_ENUM"
 
