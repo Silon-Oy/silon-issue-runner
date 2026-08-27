@@ -27,11 +27,14 @@ Todettu tuoreesta Spritestä:
 | Playwright-selaimet | ⚠️ asennettuina (`~/.cache/ms-playwright`), mutta **Chromium kaatuu** — E2E ei aja, ks. alla |
 | `sudo` | ✅ ilman salasanaa |
 | `apt-get` | ✅ |
-| **Docker** | ❌ `docker run hello-world` epäonnistuu — käyttäjäkoodi ajaa jo konttikerroksessa |
+| **Docker** | ⚠️ Docker 29 + Compose 2.40 asennettuina, mutta **daemon ei ole käynnissä** — `docker run` kaatuu puuttuvaan `/var/run/docker.sock`iin kunnes `sudo dockerd` on käynnistetty, ks. alla |
 | **PostgreSQL-palvelin** | ❌ vain `postgresql-client-18`, ei `postgres`-binääriä |
 
-Kaksi viimeistä ovat ne, jotka yllättävät. **Docker ei ole este** (ks. alla), mutta
-Postgres on asennettava käsin, jos kohderepo tarvitsee tietokannan.
+Kaksi viimeistä ovat ne, jotka yllättävät. **Docker toimii, kunhan daemon käynnistetään
+ikkunan alussa** (ks. alla) — ensimmäinen versio tästä dokumentista luki `docker run
+hello-world`in kaatumisen "Docker ei toimi Spritessä" -tulokseksi, vaikka syy oli vain
+käynnistämätön daemon. Postgres sen sijaan on asennettava käsin, jos kohderepo tarvitsee
+tietokannan.
 
 ## Pystytys
 
@@ -147,15 +150,34 @@ käsin.
 **TCP:n yli käyttäjänä, jonka `PGUSER`/`PGPASSWORD` nimeävät** — paikallinen
 `sudo -u postgres` -yhteys ei todista mitään hookin polusta.
 
-#### Miksi Docker ei ole este
+#### Docker: daemon käynnistetään ikkunan alussa
 
-`customer-a-report`in `.claude/provision-test-env.sh` yrittää **TCP:tä ensin** ja `docker exec`
--yhteyttä vasta varamekanismina (PR #368). Natiivi Postgres täyttää ensisijaisen polun,
-joten S7c ei blokkaa ajoa vaikka Dockeria ei ole.
+Spritessä on Docker 29 ja Compose 2.40 valmiina, mutta **`dockerd` ei käynnisty koneen
+mukana** eikä palaa checkpoint/restore-syklistä — sama ilmiö kuin Postgres-klusterilla.
+Ilman daemonia jokainen `docker`-komento kaatuu riviin `failed to connect to the docker API
+at unix:///var/run/docker.sock`, mikä näyttää siltä kuin Docker ei toimisi lainkaan.
 
-Jos kohdereposi hook osaa vain `docker exec`in, vaihtoehtoja on kaksi: lisää sille
-TCP-polku, tai lisää hookiin Docker-vartija (puuttuva Docker → skip, ei rc≠0). Jälkimmäinen
-tarkoittaa ettei implementer aja testejä paikallisesti — **CI on silti laatuportti**, ja
+Todennettu 27.8.2026 `iraudasoja/putkiwelho`n pystytyksessä (Docker Compose -pohjainen
+WordPress-repo, jonka implementer ajaa `bin/up && bin/install`in Spritessä):
+
+```bash
+sudo dockerd >/tmp/dockerd.log 2>&1 &
+docker run --rm alpine:3.20 echo docker-ok           # → docker-ok
+docker run -d --name t -p 18080:80 nginx:alpine
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:18080/   # → 200
+docker rm -f t
+```
+
+Konttien ajo, kuvien lataus, `-p`-porttijulkaisu ja `curl localhost:<portti>` toimivat —
+siis kaikki, mitä Compose-pohjaisen repon savutesti tarvitsee. Vartija kuuluu
+`wake-run.sh`:ään Postgres-vartijan rinnalle (ks. osio 5): jos `docker info` ei vastaa,
+käynnistä `sudo dockerd` taustalle ja odota enintään 30 s ennen kuin drain alkaa.
+
+Kohderepon hookin ei silti kannata **olettaa** Dockeria: `customer-a-report`in
+`.claude/provision-test-env.sh` yrittää **TCP:tä ensin** ja `docker exec`-yhteyttä vasta
+varamekanismina (PR #368), joten se toimii natiivilla Postgresilla myös koneella, jolla
+daemon on jäänyt käynnistämättä. Jos hook osaa vain `docker exec`in, lisää sille TCP-polku
+tai Docker-vartija (daemon ei vastaa → skip, ei rc≠0) — **CI on silti laatuportti**, ja
 `pr-watch` mergeää vasta kun CI on vihreä, joten menetys on palautesyklin nopeus eikä
 lopputuloksen oikeellisuus.
 
@@ -211,9 +233,29 @@ set -euo pipefail
 pg_isready -h 127.0.0.1 -p 5433 -q || sudo pg_ctlcluster 18 main start
 pg_isready -h 127.0.0.1 -p 5433 -q
 
-export RUN_ISSUES_LABELS_CSV=auto-run-ilkka
-exec "$HOME/bin/drain-queue.sh" "$HOME/projektit/customer-a-report"
+# Docker-daemon ei myöskään nouse itsestään. Compose-pohjainen kohderepo tarvitsee sen
+# ennen kuin implementer ajaa bin/up:n — käynnistä ja odota, kaadu jos se ei nouse.
+if ! docker info >/dev/null 2>&1; then
+  sudo dockerd >/tmp/dockerd.log 2>&1 &
+  for _ in $(seq 1 30); do
+    docker info >/dev/null 2>&1 && break
+    sleep 1
+  done
+fi
+docker info >/dev/null   # kova virhe, jos daemon ei noussut — syy on /tmp/dockerd.log:ssa
+
+# Label per repo: drain-queue.sh kieltäytyy tyhjästä RUN_ISSUES_LABELS_CSV:stä (ks. alla),
+# ja eri repoilla voi olla eri poimintalabel. Epäonnistunut drain ei saa ohittaa seuraavaa.
+rc=0
+RUN_ISSUES_LABELS_CSV=auto-run-ilkka "$HOME/bin/drain-queue.sh" "$HOME/projektit/customer-a-report" || rc=$?
+RUN_ISSUES_LABELS_CSV=auto-run       "$HOME/bin/drain-queue.sh" "$HOME/projektit/putkiwelho"   || rc=$?
+exit "$rc"
 ```
+
+Koska Spritessä ei ole `pr-watch`-polleria, ikkunan kannattaa myös skannata valmiit ajot
+(`pr-watch.sh <repo> scan`) ennen drainia — edellisen ikkunan vihreät PR:t mergeytyvät ja
+ketjun seuraava lenkki vapautuu — ja drainin jälkeen uusintayrityksin niin kauan kuin
+`pr-watch` palauttaa 4 (CI kesken). Muuten `auto-merge`-PR:t jäävät odottamaan ihmistä.
 
 **Label asetetaan käärässä, ei skriptissä.** `drain-queue.sh` kieltäytyy (exit 1) tyhjästä
 `RUN_ISSUES_LABELS_CSV`-arvosta tarkoituksella: `pick_oldest_candidate` tulkitsee tyhjän
@@ -264,9 +306,11 @@ kilpailevat samasta työstä.
    viive noin 25 s. Tyhjä tulos välittömästi labeloinnin jälkeen **ei** tarkoita että
    poiminta on rikki. Odota ja kysy uudelleen.
 
-2. **Postgres-klusteri ei nouse itsestään.** Sprite nukkuu ja herää; klusteri ei
-   välttämättä palaa mukana. Siksi `wake-run.sh` alkaa `pg_isready`-vartijalla — älä poista
-   sitä.
+2. **Postgres-klusteri ja Docker-daemon eivät nouse itsestään.** Sprite nukkuu ja herää;
+   kumpikaan ei välttämättä palaa mukana. Siksi `wake-run.sh` alkaa `pg_isready`- ja
+   `docker info` -vartijoilla — älä poista niitä. Puuttuva daemon näkyy rivinä
+   `failed to connect to the docker API at unix:///var/run/docker.sock`, ei "Docker ei
+   toimi Spritessä" -tuloksena.
 
 3. **`hostname -s` on omistajuuden perusta.** `run.json.host` ja `cleanup-run.sh`:n
    host-portti nojaavat siihen. Jos Sprite luodaan uudelleen ja nimi muuttuu, edellisen
