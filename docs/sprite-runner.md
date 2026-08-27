@@ -24,7 +24,7 @@ Todettu tuoreesta Spritestä:
 | `pnpm` | ✅ 11.23.0 |
 | `claude` | ✅ `~/.local/bin/claude` — **autentikointi tehtävä erikseen** |
 | `gh` | ✅ `/.sprite/bin/gh` — **autentikointi tehtävä erikseen** |
-| Playwright-selaimet | ✅ `~/.cache/ms-playwright` (chromium + headless shell + ffmpeg) |
+| Playwright-selaimet | ⚠️ asennettuina (`~/.cache/ms-playwright`), mutta **Chromium kaatuu** — E2E ei aja, ks. alla |
 | `sudo` | ✅ ilman salasanaa |
 | `apt-get` | ✅ |
 | **Docker** | ❌ `docker run hello-world` epäonnistuu — käyttäjäkoodi ajaa jo konttikerroksessa |
@@ -159,6 +159,36 @@ tarkoittaa ettei implementer aja testejä paikallisesti — **CI on silti laatup
 `pr-watch` mergeää vasta kun CI on vihreä, joten menetys on palautesyklin nopeus eikä
 lopputuloksen oikeellisuus.
 
+#### E2E ei aja Spritessä — Chromium kaatuu
+
+Playwrightin selaimet ovat imagessa valmiina, mutta **headless Chromium kaatuu jokaisella
+spektillä** Spriten hiekkalaatikossa. Todennettu 27.8.2026 ajossa `20260827-072017`
+(`customer-a-report`in issue #353): implementer erotti ympäristövian omasta virheestään
+toistamalla kaatumisen **koskemattomalla spektillä**, eli vika ei ollut sen kirjoittamissa
+testeissä.
+
+Tämä on hyvä tapa varmistaa asia myös itse ennen kuin lähtee korjaamaan sovelluskoodia:
+jos jokin spekti kaatuu Spritessä, aja sama koskemattomalla spektillä. Kaatuuko sekin?
+Silloin kyse on ympäristöstä.
+
+Käytännön seuraus ajokoneen valintaan:
+
+| Vaihe | Ajaako Spritessä |
+|---|---|
+| `pnpm typecheck` | ✅ |
+| `pnpm test` (unit, kaikki paketit) | ✅ |
+| `pnpm test:e2e` (Playwright) | ❌ |
+
+**Tämä on syy, miksi CI on laatuportti eikä muodollisuus.** Ajokoneen testit ovat
+implementerin palautesykli, eivät hyväksymiskriteeri: E2E-kattavuus todennetaan vasta
+PR:n CI-ajossa, ja `pr-watch` mergeää vasta kun se on vihreä. Älä siis lue Spritessä
+onnistunutta ajoa todisteeksi siitä, että E2E menee läpi — sitä tietoa siellä ei
+syntynyt lainkaan.
+
+Jos E2E:n saaminen toimimaan Spritessä on joskus tarpeen, lähtökohta on Chromiumin
+sandbox-lippujen ja jaetun muistin (`/dev/shm`) tutkiminen — mutta tätä ei ole yritetty,
+eikä se ole tarpeen niin kauan kuin CI ajaa spektit.
+
 ### 5. Ajuriskripti ja herätyskäärä
 
 `drain-queue.sh` ei kuulu runner-pakettiin (se asuu ylläpitäjän dotfileissa), joten se
@@ -250,3 +280,26 @@ kilpailevat samasta työstä.
 
 5. **Nukkuva kone ei tee mitään.** Ikkunamalli tarkoittaa, että labeloitu issue jää
    odottamaan seuraavaa herätystä. Jos issuen pitää lähteä heti, herätä kone käsin.
+
+6. **Selain-OAuth-istunto ei kelpaa ajokoneelle — käytä `claude setup-token`ia.**
+   `claude`-CLI:n tavallinen istunto umpeutuu vuorokaudessa. Ajokoneella se tarkoittaa, että
+   ajo kaatuu **vasta S6:ssa** riviin `Failed to authenticate: OAuth session expired and
+   could not be refreshed` — siis claimin, worktreen ja haaran luonnin jälkeen. Pitkäikäinen
+   token (`setup-token`, voimassa vuoden) menee `~/.config/run-issues/env`:iin muodossa
+   `export CLAUDE_CODE_OAUTH_TOKEN=…`, jonka orkestraattori sourcaa ennen jokaista vaihetta.
+
+   **S0-preflight ei suojaa tältä:** `claude check: have` perustuu `--version`-kutsuun, joka
+   onnistuu myös tunnistautumattomalla CLI:llä. Todellinen tarkistus on kutsu, joka vaatii
+   tunnistautumisen:
+
+   ```bash
+   source ~/.config/run-issues/env
+   echo "sano tasan sana: OK" | $RUN_ISSUES_CLAUDE_CMD -p
+   ```
+
+   Aja tämä aina tokenin vaihdon jälkeen ja aina kun ajo kaatuu selittämättä S6:ssa.
+
+7. **Vaiheen sisällä kuollut ajo ei ole jatkettavissa.** `--restart` vaatii tilan
+   `timed_out`, `--continue` tilan `awaiting_clarification` ja `--resume` review-portin.
+   Kesken vaihetta kaatunut ajo jää tilaan `initialized`, johon mikään lipuista ei osu:
+   ainoa ulospääsy on `cleanup-run.sh --issue N --force --yes` ja uusi ajo alusta.
