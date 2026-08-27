@@ -1354,6 +1354,8 @@ testit voi ajaa samalla koneella jolla poller pyörii.
 - [`db-clone/README.md`](db-clone/README.md) — tietokannan kloonaus (S5).
 - [`provision-test-env.README.md`](provision-test-env.README.md) — testiympäristön
   provisiointihook (S7c).
+- [`docs/sprite-runner.md`](docs/sprite-runner.md) — ajokone Fly.io Spritessä
+  (ikkunamalli pollerin sijaan): pystytys, Postgres ilman Dockeria, työnjako labeleilla.
 - [`docs/diagrams/`](docs/diagrams) — mermaid-kaaviot tilakoneista, poluista ja
   konfiguraation resolvoinnista.
 - [`examples/`](examples) — watchlistin ja `poller.env`:n itsedokumentoivat mallit.
