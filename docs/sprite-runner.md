@@ -211,6 +211,45 @@ Jos E2E:n saaminen toimimaan Spritessä on joskus tarpeen, lähtökohta on Chrom
 sandbox-lippujen ja jaetun muistin (`/dev/shm`) tutkiminen — mutta tätä ei ole yritetty,
 eikä se ole tarpeen niin kauan kuin CI ajaa spektit.
 
+### 4b. Kohderepon työkaluketju — asenna ennen kuin repo saa lockfilen
+
+Orkestraattorin **S7b env-bootstrap** lukee kohderepon juuren: `composer.lock` → ajaa
+`composer install`, `package.json` (+ lockfile) → ajaa `pnpm`/`npm`/`yarn install`
+(`lib/env-bootstrap.sh`). Se tekee tämän **fail-fast ennen implementeria**: jos työkalu
+puuttuu, ajo päättyy tilaan `env_bootstrap_failed`, issue saa `needs-human`in ja
+tilannekommentin, eikä implementer-budjettia kulu. Pollerikoneella tämä on harvinaista, koska
+työkalut on asennettu jo projektin takia; Spritessä se osuu heti, kun **jokin aiempi ajo tuo
+lockfilen repoon**.
+
+Todennettu 27.8.2026 (`iraudasoja/putkiwelho`): CI-issuen PR toi `composer.json` +
+`composer.lock`in `main`iin, ja seuraava ajo kaatui ennen toteutusta lokiin
+
+```
+timeout: failed to execute process: No such file or directory (os error 2)
+```
+
+— `timeout` ei löytänyt `composer`-binääriä (rc 127). Spritessä ei ollut PHP:tä lainkaan.
+Korjaus on asentaa työkaluketju etukäteen ja **todeta se samalla komennolla, jota
+env-bootstrap käyttää**:
+
+```bash
+# PHP-projektit (WordPress, Laravel, phpcs …)
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y php-cli php-xml php-mbstring php-curl composer
+cd ~/projektit/<repo> && composer install --no-interaction   # sama komento kuin S7b:ssä
+
+# Node-projektit: node ja pnpm ovat imagessa valmiina (ks. valmiustaulukko),
+# mutta `bash -lc` on pakollinen, jotta nvm:n Node on PATHissa.
+```
+
+Ubuntun `php-cli` on tällä hetkellä 8.5 — kelpaa dev-riippuvuuksien (phpcs, wpcs) ajoon
+vaikka CI lukitsisi toisen version, koska Spritessä PHP:tä käytetään vain lintaukseen; itse
+sovellus ajaa kontissa omalla PHP:llään.
+
+**Kun este on poistettu, Spritessä ei ole polleria, joka tekisi luvatun "kommentoi issueen —
+ajo yritetään uudelleen" -kierroksen.** Siivoa ajo käsin (`cleanup-run.sh --issue N --force
+--yes` poistaa `auto-claimed`in ja `needs-human`in) ja herätä kone — seuraava drain poimii
+issuen normaalisti.
+
 ### 5. Ajuriskripti ja herätyskäärä
 
 `drain-queue.sh` ei kuulu runner-pakettiin (se asuu ylläpitäjän dotfileissa), joten se
@@ -372,3 +411,10 @@ kilpailevat samasta työstä.
    `timed_out`, `--continue` tilan `awaiting_clarification` ja `--resume` review-portin.
    Kesken vaihetta kaatunut ajo jää tilaan `initialized`, johon mikään lipuista ei osu:
    ainoa ulospääsy on `cleanup-run.sh --issue N --force --yes` ja uusi ajo alusta.
+
+8. **Lockfile repossa = työkalu Spritessä.** Heti kun jokin ajo tuo `composer.lock`in tai
+   `package.json`in kohderepoon, env-bootstrap vaatii vastaavan työkalun jokaisessa
+   seuraavassa ajossa. Puuttuva `composer` näkyy rivinä `timeout: failed to execute process`
+   (rc 127) — ei "composer install epäonnistui". Asenna työkaluketju etukäteen (osio 4b) ja
+   muista, että `needs-human`-tilan purku on Spritessä käsityötä: `cleanup-run.sh --force`
+   ja uusi herätys.
