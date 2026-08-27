@@ -268,6 +268,27 @@ avoimen issuen labeleista riippumatta.
 sprite exec -s claude-issue-runner -- bash -lc '~/bin/wake-run.sh'
 ```
 
+**Komento on synkroninen tarkoituksella — yhteyden on pysyttävä auki ikkunan loppuun.**
+"Käyttämättömyys", josta Sprite nukahtaa, tarkoittaa *ulkoisen yhteyden* puuttumista, ei
+CPU:n joutilaisuutta: kone jäätyy noin 30 s kuluttua siitä, kun viimeinen `sprite exec`-
+tai `console`-sessio sulkeutuu, **vaikka sisällä olisi prosesseja kesken**. `nohup`/`setsid`-
+irrotettu `wake-run.sh` näyttää `pgrep`issä käynnissä olevalta, mutta etenee vain niinä
+sekunteina, kun joku sattuu avaamaan yhteyden.
+
+Todennettu 27.8.2026 (`iraudasoja/putkiwelho` #11): irrotettu ajo tuotti `state.jsonl`:ään
+tapahtumat 16:39:37, 16:44:35 ja 16:49:25 — täsmälleen kolmen käsin tehdyn `sprite exec`
+-tarkistuksen hetket, muuten ei mitään 15 minuuttiin. Kun rinnalle avattiin yhteys, joka
+pysyy auki niin kauan kuin orkestraattori elää, ajo eteni saman tien viisi vaihetta:
+
+```bash
+# Keepalive jo irrotetulle ajolle — poistuu, kun orkestraattori päättyy
+sprite exec -s claude-issue-runner -- bash -lc \
+  'while pgrep -f orchestrate.sh >/dev/null; do sleep 20; done'
+```
+
+Sama pätee ulkoiseen herätykseen: cron-job ei voi olla fire-and-forget-kutsu, vaan sen on
+pidettävä sessio auki siihen asti, että `wake-run.sh` palaa.
+
 Ikkuna ajaa `RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto` -tilassa kuten poller — muuten
 ajo pysähtyisi review-porttiin eikä kukaan olisi vastaamassa. Rajat: `DRAIN_BUDGET_SECONDS`
 (3600) ei keskeytä kesken olevaa ajoa vaan estää uuden aloittamisen, `DRAIN_MAX_RUNS` (20)
@@ -322,8 +343,12 @@ kilpailevat samasta työstä.
    issue lähtee ajoon siinä missä assignoimatonkin. Työnjako koneiden välillä tehdään
    **vain** labeleilla, kunnes reititys on muuta kautta toteutettu.
 
-5. **Nukkuva kone ei tee mitään.** Ikkunamalli tarkoittaa, että labeloitu issue jää
-   odottamaan seuraavaa herätystä. Jos issuen pitää lähteä heti, herätä kone käsin.
+5. **Nukkuva kone ei tee mitään — eikä irrotettu prosessi pidä sitä hereillä.** Ikkunamalli
+   tarkoittaa, että labeloitu issue jää odottamaan seuraavaa herätystä. Jos issuen pitää
+   lähteä heti, herätä kone käsin, ja pidä yhteys auki ikkunan loppuun: `nohup`-irrotettu
+   `wake-run.sh` jäätyy ~30 s kuluttua yhteyden sulkeuduttua (ks. "Ajon käynnistys"). Jumiin
+   näyttävä ajo, jonka `state.jsonl`-aikaleimat osuvat omiin `sprite exec` -kutsuihisi, on
+   tämä ilmiö, ei runnerin vika.
 
 6. **Selain-OAuth-istunto ei kelpaa ajokoneelle — käytä `claude setup-token`ia.**
    `claude`-CLI:n tavallinen istunto umpeutuu vuorokaudessa. Ajokoneella se tarkoittaa, että
