@@ -14,7 +14,9 @@
 #   0  cleaned + issue closed + label removed
 #   1  usage error
 #   3  per-issue lock held by another run — safe to retry on a later tick
-#   4  any completed run exists (PR likely open) — labelled auto-clean-skipped
+#   4  a completed run has an OPEN (or unresolvable) PR — labelled
+#      auto-clean-skipped. A completed run whose PR is already MERGED/CLOSED is
+#      cleaned normally (issue #116); only a live PR earns the precaution.
 #   5  no local run-dirs for this issue (likely cross-machine) — machine-agnostic
 #      cleanup hint posted
 #   6  cleanup-run.sh teardown failed
@@ -23,6 +25,13 @@
 # `auto-clean-skipped` label so the poller's scan_clean stops re-emitting the
 # issue. We deliberately do NOT reuse `needs-human` here — auto-clean-skipped is
 # a distinct, auto-clean-specific signal so the two concerns never collide.
+#
+# PR merge-state (issue #116): auto-clean used to refuse on ANY completed run,
+# assuming its PR might be open. It never checked. A merged PR does not close its
+# issue unless the PR body carries `Closes #N`, so a merged-PR issue stayed open
+# + reserved and its dependents stalled silently. We now read each completed
+# run's PR state (from run.json .pr_url) and refuse ONLY for a genuinely OPEN (or
+# unresolvable — fail-closed) PR.
 #
 # Multi-remote (issue #53): --remote scopes the teardown to a specific git
 # remote so multi-org clones do not cross issues with the same number across
@@ -118,6 +127,17 @@ add_skipped_label() {
   ) 2>&1 | while IFS= read -r l; do log "$l"; done || true
 }
 
+# pr_state_of <pr-url> — prints the PR's GitHub state (OPEN/MERGED/CLOSED),
+# upper-cased, or empty on any failure (no URL, gh missing, network/API error).
+# The URL carries its own owner/repo, so gh needs no --repo routing. Read-only —
+# it never mutates. Plain `gh`, matching the rest of auto-clean.sh (gh issue
+# close); the completed-run gate treats an empty result as fail-closed.
+pr_state_of() {
+  local url="$1"
+  [ -n "$url" ] || { printf ''; return 0; }
+  gh pr view "$url" --json state --jq '(.state // "") | ascii_upcase' 2>/dev/null || printf ''
+}
+
 # ---------- 1. lock ----------
 # Acquire the per-issue lock BEFORE any teardown. The lock is namespaced by repo
 # AND remote so customer-d#5, Silon-Oy#5 and another repo's #5 hold distinct locks and
@@ -141,6 +161,8 @@ fi
 # REMOTE_NAME picks them up). bash 3.2 compatible — plain counters.
 total=0
 completed=0
+completed_prs=()
+TEARDOWN_FORCE=0
 shopt -s nullglob
 for rj in "$RUNS_DIR"/*/run.json; do
   n=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
@@ -149,7 +171,12 @@ for rj in "$RUNS_DIR"/*/run.json; do
   [ "$r" = "$REMOTE_NAME" ] || continue
   total=$((total + 1))
   s=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
-  [ "$s" = "completed" ] && completed=$((completed + 1))
+  if [ "$s" = "completed" ]; then
+    completed=$((completed + 1))
+    # Record the run's PR URL (empty if legacy/unset) so the completed-run gate
+    # below can resolve each PR's merge state. orchestrate.sh S12 writes pr_url.
+    completed_prs+=("$(jq -r '.pr_url // ""' "$rj" 2>/dev/null || echo "")")
+  fi
 done
 
 if [ "$total" -eq 0 ]; then
@@ -185,39 +212,75 @@ Issueen on lisätty label \`$SKIPPED_LABEL\` jotta auto-clean ei poimi sitä uud
 fi
 
 if [ "$completed" -gt 0 ]; then
-  # ANY completed run for this issue means a PR is likely open. We refuse to
-  # touch the issue at all — closing it (or tearing down sibling non-completed
-  # runs) could orphan an open PR.
-  log "$completed of $total run-dir(s) for issue #$ISSUE_NUM are completed — skipping (PR may be open)"
-  if [ "$DRY_RUN" = "1" ]; then
-    log "[dry] would post completed-present notice + label $SKIPPED_LABEL"
-  else
-    comment_issue "$REPO_ROOT" "$ISSUE_NUM" \
-"## auto-clean: completed-ajo(ja) läsnä
+  # A completed run normally has an OPEN PR, and closing the issue or tearing
+  # down the run-dir could orphan it — the original blanket refusal. But once
+  # that PR is MERGED (or CLOSED) there is nothing left to orphan: the work is
+  # in, the issue should close, and any issues blocked on it must be unblocked.
+  # Refusing regardless left merged-PR issues open + reserved and silently
+  # stalled their dependency chains (issue #116).
+  #
+  # So resolve each completed run's PR state from its recorded pr_url and refuse
+  # ONLY if some PR is still OPEN, or its state cannot be determined. The latter
+  # is FAIL-CLOSED on purpose: an unresolvable state (missing pr_url on a legacy
+  # run, a network/gh error) must never be mistaken for "merged" and orphan a
+  # live PR — an unnecessary skip is recoverable, a torn-down open PR is not.
+  blocking=0
+  for pr in "${completed_prs[@]}"; do
+    st=$(pr_state_of "$pr")
+    case "$st" in
+      MERGED|CLOSED) : ;;  # not open — safe to tear down
+      OPEN)
+        blocking=$((blocking + 1))
+        log "issue #$ISSUE_NUM: a completed run's PR is OPEN ($pr) — protecting it"
+        ;;
+      *)
+        blocking=$((blocking + 1))
+        log "issue #$ISSUE_NUM: completed-run PR state unresolved (${pr:-no pr_url}) — fail-closed, protecting"
+        ;;
+    esac
+  done
 
-Issuella #$ISSUE_NUM on completed-ajo(ja) ($completed/$total), joilla voi olla avoin PR — ei siivottu eikä suljettu. auto-clean ei kosketa issuea turvallisuussyistä.
+  if [ "$blocking" -gt 0 ]; then
+    log "$blocking of $completed completed run-dir(s) for issue #$ISSUE_NUM have an open/unknown PR — skipping"
+    if [ "$DRY_RUN" = "1" ]; then
+      log "[dry] would post open-PR notice + label $SKIPPED_LABEL"
+    else
+      comment_issue "$REPO_ROOT" "$ISSUE_NUM" \
+"## auto-clean: avoin PR läsnä
 
-Sulje PR ensin tai aja käsin:
+Issuella #$ISSUE_NUM on completed-ajo(ja) ($blocking/$completed), joiden PR on yhä avoin tai sen tilaa ei saatu selvitettyä — ei siivottu eikä suljettu. auto-clean ei kosketa issuea, jottei avointa PR:ää orvoteta.
+
+Kun PR on mergetty (tai suljettu), auto-clean siivoaa ja sulkee issuen itse seuraavalla tikillä. Voit myös ajaa siivouksen käsin:
 
 \`\`\`bash
 ~/.claude/scripts/run-issues/cleanup-run.sh --issue $ISSUE_NUM --force
 \`\`\`
 
 Issueen on lisätty label \`$SKIPPED_LABEL\` jotta auto-clean ei poimi sitä uudelleen." \
-      "$OWNER_REPO" "$REMOTE_NAME" \
-      || log "comment post failed (non-fatal)"
+        "$OWNER_REPO" "$REMOTE_NAME" \
+        || log "comment post failed (non-fatal)"
+    fi
+    add_skipped_label
+    unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"
+    exit 4
   fi
-  add_skipped_label
-  unlock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"
-  exit 4
+
+  # Every completed run's PR is MERGED/CLOSED — nothing to orphan. Fall through
+  # to teardown, forcing cleanup-run.sh to include the completed run-dirs (it
+  # skips completed runs without --force).
+  log "$completed completed run-dir(s) for issue #$ISSUE_NUM all have a merged/closed PR — cleaning"
+  TEARDOWN_FORCE=1
 fi
 
 # ---------- 3. teardown ----------
-# Reached only when completed == 0: every run-dir for this issue is
-# non-completed, so there is no open PR to protect. cleanup-run.sh WITHOUT
-# --force tears them down and also removes the per-issue lock.
-log "tearing down issue #$ISSUE_NUM remote=$REMOTE_NAME ($total non-completed run-dir(s))"
+# Reached when no completed run needs protecting: either every run-dir is
+# non-completed (no PR to orphan), or every completed run's PR is already
+# MERGED/CLOSED (issue #116). In the latter case cleanup-run.sh needs --force to
+# include the completed run-dirs (it skips them otherwise). cleanup-run.sh also
+# removes the per-issue lock as part of its teardown.
+log "tearing down issue #$ISSUE_NUM remote=$REMOTE_NAME ($total run-dir(s), force=$TEARDOWN_FORCE)"
 CLEANUP_ARGS=(--repo "$REPO_ROOT" --issue "$ISSUE_NUM" --remote "$REMOTE_NAME" --yes)
+[ "$TEARDOWN_FORCE" = "1" ] && CLEANUP_ARGS+=(--force)
 [ "$DRY_RUN" = "1" ] && CLEANUP_ARGS+=(--dry-run)
 
 if bash "$CLEANUP" "${CLEANUP_ARGS[@]}"; then
@@ -250,12 +313,18 @@ REPO_ARGS=""
   gh issue close "$ISSUE_NUM" $REPO_ARGS >/dev/null 2>&1 || true
 )
 
+# Completed run-dirs are torn down here (not skipped) only because their PRs are
+# merged/closed — note that in the summary so the count is not misread as "an
+# open PR was cleaned".
+completed_note=""
+[ "$completed" -gt 0 ] && completed_note=" (näistä $completed completed-tilassa; PR mergetty/suljettu)"
+
 comment_issue "$REPO_ROOT" "$ISSUE_NUM" \
 "## auto-clean: siivous valmis
 
 Issueen #$ISSUE_NUM liittyvät paikalliset väliaikaisresurssit on siivottu koneella \`$(hostname -s)\` (remote \`$REMOTE_NAME\`):
 
-- Siivotut run-dirit: $total (joista $completed completed-tilassa ohitettiin)
+- Siivotut run-dirit: $total$completed_note
 - Worktree ja branch poistettu
 - DB-klooni dropattu (jos käytössä, best-effort)
 - Issue suljettu

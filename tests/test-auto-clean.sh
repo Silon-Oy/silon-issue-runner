@@ -13,10 +13,17 @@
 # Cases:
 #   A success      — non-completed run, cleanup rc=0 → exit 0, gh close + remove-label
 #   B lock held    — lock pre-acquired → exit 3, no cleanup, no close
-#   C completed     — only completed runs → exit 4, auto-clean-skipped added,
-#                     auto-clean NOT removed
+#   C completed     — completed run, no pr_url → unresolved state → fail-closed
+#                     → exit 4, auto-clean-skipped added, auto-clean NOT removed
 #   D no run-dirs   — exit 5 (cross-machine), auto-clean-skipped added
 #   E cleanup fail  — cleanup rc=1 → exit 6
+#   G completed+MERGED — completed run whose PR is MERGED → cleaned normally:
+#                     exit 0, cleanup-run --force, issue closed, auto-clean removed
+#   H completed+OPEN — completed run whose PR is OPEN → exit 4, skipped added,
+#                     no teardown, issue NOT closed (live PR protected)
+#   I completed+CLOSED — PR CLOSED (not merged) → cleaned like MERGED (exit 0)
+#   J mixed states  — one MERGED + one OPEN completed run → the OPEN one blocks:
+#                     exit 4, no teardown
 #
 # Run: bash tests/test-auto-clean.sh
 
@@ -38,17 +45,31 @@ CALLS="$WORK/gh-calls.log"
 . "$REAL_SCRIPTS/lib/locking.sh"
 
 # ---- mock gh on PATH ----
+# 'gh pr view <url> --json state --jq ...' is how auto-clean.sh resolves a
+# completed run's PR merge-state (issue #116). The mock echoes a per-PR state
+# read from env MOCK_PR_STATE_<num> (num = last path segment of the URL), falling
+# back to MOCK_PR_STATE, then empty. Empty means "unresolved" — the fail-closed
+# path — which is exactly what the pre-#116 cases (no pr_url) exercise.
 BIN="$WORK/bin"; mkdir -p "$BIN"
-cat > "$BIN/gh" <<SH
+cat > "$BIN/gh" <<'SH'
 #!/usr/bin/env bash
-echo "gh \$*" >> "$CALLS"
+echo "gh $*" >> "__CALLS__"
+case "$1 $2" in
+  "pr view")
+    url="$3"; num="${url##*/}"
+    var="MOCK_PR_STATE_${num}"
+    printf '%s\n' "${!var:-${MOCK_PR_STATE:-}}"
+    exit 0
+    ;;
+esac
 # 'gh issue comment ... --body-file -' reads stdin; drain it so the pipe in
 # comment_issue does not SIGPIPE the producer.
-case "\$*" in
+case "$*" in
   *"--body-file -"*) cat >/dev/null 2>&1 || true ;;
 esac
 exit 0
 SH
+sed -i.bak "s#__CALLS__#$CALLS#" "$BIN/gh" && rm -f "$BIN/gh.bak"
 chmod +x "$BIN/gh"
 export PATH="$BIN:$PATH"
 
@@ -97,6 +118,17 @@ mk_run() {  # <repo> <issue> <status> [<suffix>]
   state_finalize "$rd" "$status"
 }
 
+mk_run_pr() {  # <repo> <issue> <status> <pr-num> [<suffix>]
+  # Like mk_run but records a pr_url whose last path segment is <pr-num>, so the
+  # gh mock resolves its state from MOCK_PR_STATE_<pr-num> (issue #116).
+  local repo="$1" n="$2" status="$3" prnum="$4" suffix="${5:-a}"
+  local rid="20260521-00${n}${suffix}-issue-$n"
+  local rd="$repo/.claude/run-issues/$rid"
+  state_init "$rd" "$rid" "$repo" "$n"
+  state_set "$rd" "pr_url" "https://github.com/acme/repo/pull/$prnum"
+  state_finalize "$rd" "$status"
+}
+
 run_ac() {  # <cleanup-rc> <repo> <issue> -> sets RC, resets CALLS
   local rc="$1" repo="$2" issue="$3"
   : > "$CALLS"
@@ -141,17 +173,56 @@ expect_nocall "labels/auto-clean" "C does NOT remove auto-clean"
 expect_nocall "issue close 13" "C does not close issue"
 
 echo "=== Case F: mixed (1 completed + 1 non-completed) ==="
-# completed > 0 must short-circuit to exit 4 even though a non-completed run
-# also exists — the completed run likely has an open PR we must not orphan.
+# A completed run coexisting with a non-completed one must still refuse — here
+# the completed run has no pr_url, so its PR state is unresolved → fail-closed.
 R=$(mk_repo)
 mk_run "$R" 16 "completed" "a"
 mk_run "$R" 16 "blocked"   "b"
 run_ac 0 "$R" 16
-expect_rc 4 "F mixed exit 4 (completed>0 short-circuits)"
+expect_rc 4 "F mixed exit 4 (completed w/o pr_url → fail-closed)"
 expect_call "labels[]=auto-clean-skipped" "F adds auto-clean-skipped"
 expect_nocall "labels/auto-clean" "F does NOT remove auto-clean"
 expect_nocall "cleanup-run --issue 16" "F does NOT run teardown"
 expect_nocall "issue close 16" "F does not close issue"
+
+echo "=== Case G: completed + MERGED PR (issue #116) ==="
+# A completed run whose PR is already merged must be cleaned normally, not
+# refused — the bug this change fixes.
+R=$(mk_repo); mk_run_pr "$R" 17 "completed" 201
+MOCK_PR_STATE_201=MERGED run_ac 0 "$R" 17
+expect_rc 0 "G merged-PR exit 0"
+expect_call "cleanup-run --issue 17" "G runs teardown"
+expect_call "issue close 17" "G closes issue"
+expect_call "labels/auto-clean" "G removes auto-clean label"
+expect_nocall "labels[]=auto-clean-skipped" "G does NOT add skipped label"
+
+echo "=== Case H: completed + OPEN PR ==="
+# A genuinely open PR still earns the precaution.
+R=$(mk_repo); mk_run_pr "$R" 18 "completed" 202
+MOCK_PR_STATE_202=OPEN run_ac 0 "$R" 18
+expect_rc 4 "H open-PR exit 4"
+expect_call "labels[]=auto-clean-skipped" "H adds auto-clean-skipped"
+expect_nocall "cleanup-run --issue 18" "H does NOT run teardown"
+expect_nocall "issue close 18" "H does not close issue"
+expect_nocall "labels/auto-clean" "H does NOT remove auto-clean"
+
+echo "=== Case I: completed + CLOSED (unmerged) PR ==="
+# A closed-but-not-merged PR is also non-open → nothing to orphan → clean.
+R=$(mk_repo); mk_run_pr "$R" 19 "completed" 203
+MOCK_PR_STATE_203=CLOSED run_ac 0 "$R" 19
+expect_rc 0 "I closed-PR exit 0"
+expect_call "cleanup-run --issue 19" "I runs teardown"
+expect_call "issue close 19" "I closes issue"
+
+echo "=== Case J: mixed PR states (one MERGED + one OPEN) ==="
+# The single open PR must block the whole issue even though a sibling merged.
+R=$(mk_repo)
+mk_run_pr "$R" 20 "completed" 204 "a"
+mk_run_pr "$R" 20 "completed" 205 "b"
+MOCK_PR_STATE_204=MERGED MOCK_PR_STATE_205=OPEN run_ac 0 "$R" 20
+expect_rc 4 "J mixed-states exit 4 (open blocks)"
+expect_call "labels[]=auto-clean-skipped" "J adds auto-clean-skipped"
+expect_nocall "cleanup-run --issue 20" "J does NOT run teardown"
 
 echo "=== Case D: no run-dirs (cross-machine) ==="
 R=$(mk_repo)   # no runs at all
