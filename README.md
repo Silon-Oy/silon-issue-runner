@@ -1265,13 +1265,16 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 0 | Siivottu, issue suljettu, `auto-clean`-label poistettu |
 | 1 | Käyttövirhe tai remotea ei voitu selvittää |
 | 3 | Issuen lukko on toisella ajolla — turvallista yrittää seuraavalla tikillä |
-| 4 | Issuella on `completed`-ajo (todennäköisesti avoin PR) — ei siivottu, `auto-clean-skipped` lisätty |
+| 4 | Issuen `completed`-ajolla on **avoin** (tai selvittämätön) PR — ei siivottu, `auto-clean-skipped` lisätty. Mergetyn/suljetun PR:n ajo siivotaan normaalisti |
 | 5 | Tältä koneelta ei löydy ajoja tälle issuelle — `auto-clean-skipped` lisätty ja kommenttiin kirjattu konekohtainen ohje |
 | 6 | Purku (`cleanup-run.sh`) epäonnistui |
 
 Koodit 4 ja 5 eivät ole virheitä vaan **kieltäytymisiä**: siivous ei koske avoimen PR:n ajoon
-eikä arvaile toisen koneen tilaa. `auto-clean-skipped` on silmukkasuoja — poista se käsin,
-kun olet hoitanut asian, jos haluat siivouksen yrittävän uudelleen.
+eikä arvaile toisen koneen tilaa. `completed`-ajon PR-tila luetaan run.jsonin `pr_url`ista
+(`gh pr view --json state`): vain aidosti `OPEN` — tai selvittämätön tila (fail-closed) —
+kieltäytyy, `MERGED`/`CLOSED` siivotaan ja issue suljetaan. `auto-clean-skipped` on
+silmukkasuoja — poista se käsin, kun olet hoitanut asian, jos haluat siivouksen yrittävän
+uudelleen.
 
 ### Yksittäisen ajon pysäytys (`stop-run.sh`)
 
