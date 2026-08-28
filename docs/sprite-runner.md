@@ -328,6 +328,48 @@ sprite exec -s claude-issue-runner -- bash -lc \
 Sama pätee ulkoiseen herätykseen: cron-job ei voi olla fire-and-forget-kutsu, vaan sen on
 pidettävä sessio auki siihen asti, että `wake-run.sh` palaa.
 
+#### Katkennut yhteys tappaa ikkunan, ellei sitä irroteta sessiosta
+
+Jäätyminen ei ole katkoksen pahin seuraus. Kun kone myöhemmin herätetään, **kuolleen session
+SIGHUP purkautuu viiveellä** ja osuu kaikkeen, mitä `sprite exec` käynnisti: `wake-run.sh`,
+`drain-queue.sh` ja orkestraattori kuolevat, ja jäljelle jää **orpo implementer-prosessi,
+jonka tulosta kukaan ei lue**. Vaiheen sisällä kuollut ajo ei ole jatkettavissa (ks.
+sudenkuoppa 7) — vain worktreen commitit säilyvät.
+
+Todennettu kahdesti 27.8.2026 (`iraudasoja/putkiwelho`, verkkovirheet
+`read tcp …: operation timed out` ja `i/o timeout`): ensimmäisellä kerralla ajo #6 menetettiin
+S8:n keskeltä, toisella kerralla ajo #10 oli 150 työkalukutsun päässä valmiista ja jouduttiin
+viimeistelemään käsin sen worktreessä.
+
+Korjaus on `wake-run.sh`:n alussa — **kaksi riviä, jotka irrottavat ikkunan kutsujan
+sessiosta ilman että lokitulostus katoaa**:
+
+```bash
+set -euo pipefail
+
+trap "" HUP
+if [ "${WAKE_RUN_DETACHED:-0}" != "1" ] && command -v setsid >/dev/null 2>&1; then
+  export WAKE_RUN_DETACHED=1
+  exec setsid -w "$0" "$@"     # oma sessio; -w odottaa, joten exit-koodi ja loki säilyvät
+fi
+```
+
+`setsid -w` antaa ikkunalle oman session ja prosessiryhmän, `trap "" HUP` suojaa itse
+skriptin, ja `-w` pitää `sprite exec`in edelleen synkronisena: näet lokin ja saat exit-koodin
+kuten ennenkin. Katkoksen jälkeen ajo on yhä käynnissä — kiinnitä keepalive takaisin, älä
+siivoa. Vartija `WAKE_RUN_DETACHED` estää ikuisen uudelleen-exec-silmukan.
+
+Tarkista asennuksen jälkeen, että irrotus todella tapahtui — pid:n on oltava oma sid, ja
+`SigIgn`-maskin bitin 0 (SIGHUP) on oltava asetettu:
+
+```bash
+ps -eo pid,sid,args | grep "[w]ake-run.sh"     # pid == sid → oma sessio
+grep SigIgn /proc/<pid>/status                 # …0005 → HUP ignoroitu
+```
+
+Lapsiprosessien (orkestraattori, `claude`) on oltava samassa sidissä; vain lokia kirjoittava
+`tee` jää kutsujan sessioon, ja senkin kuolema on harmiton.
+
 Ikkuna ajaa `RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto` -tilassa kuten poller — muuten
 ajo pysähtyisi review-porttiin eikä kukaan olisi vastaamassa. Rajat: `DRAIN_BUDGET_SECONDS`
 (3600) ei keskeytä kesken olevaa ajoa vaan estää uuden aloittamisen, `DRAIN_MAX_RUNS` (20)
@@ -388,6 +430,11 @@ kilpailevat samasta työstä.
    `wake-run.sh` jäätyy ~30 s kuluttua yhteyden sulkeuduttua (ks. "Ajon käynnistys"). Jumiin
    näyttävä ajo, jonka `state.jsonl`-aikaleimat osuvat omiin `sprite exec` -kutsuihisi, on
    tämä ilmiö, ei runnerin vika.
+
+   **Katkos ei kuitenkaan vain jäädytä: herätessä kuolleen session SIGHUP tappaa ikkunan**,
+   ellei `wake-run.sh` irrota itseään (`trap "" HUP` + `setsid -w`, ks. "Ajon käynnistys").
+   Ilman sitä jäljelle jää orpo `claude`-prosessi, jonka tulosta kukaan ei lue, ja ajo on
+   menetetty — vaiheen sisällä kuollut ajo ei ole jatkettavissa (sudenkuoppa 7).
 
 6. **Selain-OAuth-istunto ei kelpaa ajokoneelle — käytä `claude setup-token`ia.**
    `claude`-CLI:n tavallinen istunto umpeutuu vuorokaudessa. Ajokoneella se tarkoittaa, että
