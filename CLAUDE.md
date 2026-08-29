@@ -501,6 +501,18 @@ kun se ei ole `up_to_date`** (`pin_pending` neutraalina, ei varoituksena). Varti
 `tests/test-status-schema.sh` (objekti + kentät + ei-git), `tests/test-status-render.sh`
 (up_to_date⇒piilossa, pin_pending/behind_upstream⇒selitteet, `textContent`-insertointi).
 
+**#126 laajensi saman objektin rate-limit-tilaan** additiivisesti (`schema_version` pysyy `1`:ssä,
+`runs[]` ei muutu): `runner` kantaa nyt myös kentät `rate_limited_until` (perääntymisen takaraja
+epoch-sekunteina) ja `rate_limit_backoff_seconds` (paljonko sitä on jäljellä). Molemmat ovat
+**ei-null vain kun takaraja on aidosti tulevaisuudessa** (`rate_limit_status_json`, §6) — vanhentunut
+tilatiedosto ei siis voi saada tervettä runneria näyttämään kuristetulta. Kuten muutkin `runner`-kentät,
+ne emittoidaan `--github`ista riippumatta (tieto on paikallinen tilatiedosto, ei GitHub-rikastusta), ja
+fail-soft-oletus on `null`/`null`. `status-render.sh` renderöi kutsurajabannerin **ennen
+`up_to_date`-varhaispaluuta** ja `update_state`ista riippumatta: runner voi olla täsmälleen ajan tasalla
+ja silti lukittuna ulos GitHubin API:sta — juuri se tila, joka jäi 2026-08-28 näkymättömäksi kymmeneksi
+tunniksi. Vartijat `tests/test-status-schema.sh` (kentät + null kun ei perääntymistä),
+`tests/test-status-render.sh` (banneri näkyy myös `up_to_date`-runnerille, `textContent`-insertointi).
+
 **#106 toi issue-tilalabelit riville** ilman `runs[]`-skeemamuutosta — lisäys elää `github`-
 aliobjektissa (`github.issue_labels`, ks. §6 keräyspuoli). JS lukee **vain nimetyn**
 `issue_labels`-taulukon osana samaa valkolistaa ja renderöi kolme chippiä **kiinteässä
@@ -938,11 +950,16 @@ no-op, ei virhe.
   riippuvuus — ilman sitä tai ilman vastaanottajaa runko tulostetaan stdoutiin (exit 0), sama
   SKIP-henki kuin testeissä, joten koosteen voi putkittaa mihin tahansa kanavaan; (2)
   toistokuoleman torjunta: sormenjälki = `sha256` järjestetystä `(run_id, class,
-  class_reason)`-listasta tallennetaan `RUN_ISSUES_DIGEST_STATE_FILE`iin (rivi 1 sha, rivi 2
+  class_reason)`-listasta **+ termi `rate_limited=yes|no`** (#126) tallennetaan
+  `RUN_ISSUES_DIGEST_STATE_FILE`iin (rivi 1 sha, rivi 2
   lähetys-epoch, kirjoitus atominen `mktemp`+`mv -f`), ja muuttumaton tilanne ei lähetä mitään
   ellei `--force`; (3) `--max-silence <vrk>` (oletus 7): jos mitään ei ole lähetetty näin
   kauan, lähetetään silti (tyhjässä tapauksessa "kaikki kunnossa" -viesti) — hiljaisuus ei saa
-  tarkoittaa "rikki". `schema_version` tarkistetaan: tuntematon versio ⇒ exit 2 ilman
+  tarkoittaa "rikki". **Aktiivinen kutsuraja omistaa otsikkorivin** (#126: "GitHubin kutsuraja —
+  ajo tauolla") ja tuottaa runkoon varoituslohkon jäljellä olevine minuutteineen; ilman
+  sormenjälkitermiä ja otsikkoa kuristettu tehdas näyttäisi identtiseltä hiljaisen terveen kanssa
+  (se ei tuota uusia `attention`-ajoja) ja vaikenisi heartbeatiin asti — täsmälleen se hiljaisuus,
+  jonka torjumiseksi kooste on olemassa. `schema_version` tarkistetaan: tuntematon versio ⇒ exit 2 ilman
   lähetystä (skeemasopimus alkaa maksaa itsensä takaisin). Konfiguraatio §7:ssä, malli
   `examples/status-digest.env.example`, testit `tests/test-status-digest.sh`. Ajastus
   (LaunchAgent/cron) on erillinen pieni lisäys, ei tässä. Exit-koodit: 0 lähetetty/ei

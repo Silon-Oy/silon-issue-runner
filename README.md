@@ -816,7 +816,13 @@ neljästä:
 | `behind_upstream` | Pinni == työpuu, mutta yläjuoksu on edennyt | Odota pinnin nostoa (CI) tai nosta se |
 | `unknown` | Ajautumaa ei voitu laskea (ei originia / fetch tekemättä / pinni lukukelvoton) | — |
 
-Sivu näyttää tilan yläosassa **vain kun se ei ole `up_to_date`**, suomenkielisin selittein. `pin_pending`
+Sama objekti kertoo myös **GitHubin kutsurajan** tilan (#126): `rate_limited_until` (perääntymisen
+takaraja) ja `rate_limit_backoff_seconds` (paljonko sitä on jäljellä). Molemmat ovat `null`, ellei
+perääntyminen ole juuri nyt voimassa, joten vanha häiriö ei jää roikkumaan näkymään. Sivu näyttää
+kutsurajabannerin **myös silloin kun `update_state` on `up_to_date`** — runner voi olla ajan tasalla ja
+silti lukittuna ulos API:sta. Sama tieto nostaa myös sähköpostikoosteen otsikkoriville.
+
+Sivu näyttää versiotilan yläosassa **vain kun se ei ole `up_to_date`**, suomenkielisin selittein. `pin_pending`
 on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsestään. Erottelu on
 olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka
 johti kerran väärään "5 vuorokautta jäljessä" -diagnoosiin ja aikeeseen tehdä käsin checkout elävän ajon
