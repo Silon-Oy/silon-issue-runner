@@ -376,15 +376,27 @@ käsittely on kuvattu kohdassa 6.6.
 
 ### 6.2 Milloin issue lähtee ajoon
 
-Poiminta on **yksi GitHub-haku**, ja sen ehdot ovat sanatarkasti nämä (`lib/issue.sh`
-orkestraattorille, sama lauseke `poller.sh`:ssa):
+Poiminta on **yksi REST-listaus ja sen päälle paikallinen suodatus**
+(`lib/issue.sh:pick_oldest_candidate`, jota `poller.sh` kutsuu — koko paketissa on vain tämä
+yksi poimintakysely):
 
 ```
-is:open -label:auto-claimed
--is:blocked -label:waiting -label:wip -label:epic -label:auto-clean
-label:"<jokainen konfiguroitu label>"
-sort:created-asc  →  ensimmäinen osuma
+gh api repos/<owner>/<repo>/issues
+        ?labels=<jokainen konfiguroitu label>      ← palvelimen suodatin (JA-ehto)
+        &state=open&sort=created&direction=asc
+  → pudota PR:t sekä issuet, joilla on jokin näistä labeleista:   ← paikallinen suodatin (jq)
+    auto-claimed, waiting, wip, epic, auto-clean
+  → koeta jäljelle jääneitä vanhimmasta alkaen: onko avoimia blocked_by-estäjiä?
+    ensimmäinen estämätön lähtee ajoon
 ```
+
+**Miksi REST eikä `gh issue list`?** `--label`-suodatettu `gh issue list` kulkee GitHubin
+GraphQL-hakuyhteyden kautta, ja **se yhteys voi olla estetty vaikka muu API vastaa
+normaalisti** — näin kävi 27 tunnin ajan 2026-08-28/29, jolloin poiminta ei voinut ajaa
+lainkaan (#133). REST-listaus ei koske hakuyhteyteen. Sivuhyöty: poissulkuehdot ovat nyt
+paikallisia jäsenyystestejä, jotka epäonnistuvat **umpeen** — vanha `-label:x` epäonnistui
+auki, eli kirjoitusvirhe vuoti poissuljettuja issueita poimintaan. Tekniset yksityiskohdat:
+CLAUDE.md §7.2.
 
 Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
 
@@ -392,7 +404,8 @@ Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
 2. Issuella **ei ole `auto-claimed`-labelia** — se on automaation oma varaus käynnissä olevalle
    tai siivoamattomalle ajolle (ks. 6.4). **Assignaatio ei ole poimintaehto:** käsin assignattu
    issue lähtee ajoon normaalisti.
-3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa (`-is:blocked`, ks. 6.5).
+3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa — poiminta lukee graafin
+   suoraan riippuvuusrajapinnasta ehdokas kerrallaan (ks. 6.5).
 4. Issuella **ei ole** labelia `waiting`, `wip`, `epic` eikä `auto-clean`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: `auto-run`).
 6. Se on vanhin ehdot täyttävä issue — **yksi issue per tikki per remote**.
@@ -400,8 +413,9 @@ Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
 Viides kohta on se, joka useimmiten yllättää: **labelit yhdistyvät JA-ehdolla, eivät
 TAI-ehdolla.** Jos watchlistin `labels`-listassa on kaksi labelia, issue tarvitsee molemmat.
 Ja koska `auto-clean` on aina poissuljettu, **sen listaaminen poimintalabeliksi tekee reposta
-pysyvästi tyhjän** — haku sisältäisi silloin sekä `label:"auto-clean"` että
-`-label:auto-clean`. Tulos on nolla osumaa, eikä siitä synny virhettä eikä lokiriviä.
+pysyvästi tyhjän** — listaus pyytäisi silloin palvelimelta `labels=auto-clean` ja paikallinen
+suodatin pudottaisi jokaisen osuman. Tulos on nolla ehdokasta, eikä siitä synny virhettä eikä
+lokiriviä.
 
 Poimintalabelit tulevat konfiguraatiosta kolmessa portaassa: watchlistin repokohtainen
 `labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. **Mikään
@@ -511,13 +525,17 @@ liikkeelle, tarkista `auto-claimed`-label ensin.
 ### 6.5 Riippuvuudet toisiin issueihin
 
 Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as blocked by"**
--toiminnolla — siinä kaikki. Ei labelia lisättäväksi eikä skriptiä ajettavaksi: poimintahaku
-suodattaa estetyt issuet kvalifikaattorilla `-is:blocked`, joka lukee `blocked_by`-graafin
-suoraan.
+-toiminnolla — siinä kaikki. Ei labelia lisättäväksi eikä skriptiä ajettavaksi: poiminta lukee
+`blocked_by`-graafin suoraan GitHubin riippuvuusrajapinnasta ja ohittaa estetyt issuet. (Ennen
+#133:a saman teki hakukvalifikaattori `-is:blocked`; se poistui, kun poiminta siirtyi REST:iin.)
 
 - Yksi avoin estäjä riittää pitämään issuen poiminnan ulkopuolella.
 - Kun viimeinen estäjä sulkeutuu, issue vapautuu poimintaan **seuraavalla tikillä** ilman
-  mitään synkronointia — mekanismi lukee graafin joka haussa uudelleen.
+  mitään synkronointia — mekanismi lukee graafin joka tikillä uudelleen.
+- Ehdokkaita koetetaan vanhimmasta alkaen ja pysähdytään ensimmäiseen estämättömään.
+  Koetusten katto per tikki on `RUN_ISSUES_PICK_BLOCKED_PROBES` (oletus 20), jottei kokonaan
+  estetty backlog polta koko tikkiä; katon täyttyessä tikki ei poimi mitään ja seuraava yrittää
+  uudelleen. Tavallinen hinta on yksi koetus: riippuvuusketjussa vanhin lapsi on se ajettava.
 - Esto ei näy issuen labeleissa, joten sitä ei myöskään voi vahingossa poistaa labelia
   poistamalla. Vastaavasti: jos issue ei lähde ajoon eikä yksikään estolabeli ole päällä,
   tarkista riippuvuudet issuen omasta näkymästä.
@@ -1276,10 +1294,10 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) aikakatkaistiin — ajo on `--restart`-kelpoinen |
 | 8 | **Puuttuva pakollinen riippuvuus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon |
-| 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (`-is:blocked`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia: se on odotustila, joka jatkuu itsestään kun estäjä sulkeutuu. Nimetyn ajon voi pakottaa `--force`-lipulla |
+| 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia: se on odotustila, joka jatkuu itsestään kun estäjä sulkeutuu. Nimetyn ajon voi pakottaa `--force`-lipulla |
 | 10 | Odottaa ihmisen katselmointia — jatka komennolla `--resume` |
 | 11 | Odottaa tarkennusta — vastaa issuelle, poller jatkaa `--continue`-ajolla |
-| 12 | **Issue kantaa `epic`-labelia** — S2c-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota (issue #81). Epic kokoaa ajettavat alaissueet mutta ei ole itse ajettava; ajo viimeisteltiin `blocked`-tilaan (`is_epic_not_runnable`, tai `epic_check_failed` jos labelit lukukelvottomat) ja lukko vapautettiin. Portti lukee labelin suoraan (`-label:epic`-hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`-lipulla |
+| 12 | **Issue kantaa `epic`-labelia** — S2c-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota (issue #81). Epic kokoaa ajettavat alaissueet mutta ei ole itse ajettava; ajo viimeisteltiin `blocked`-tilaan (`is_epic_not_runnable`, tai `epic_check_failed` jos labelit lukukelvottomat) ja lukko vapautettiin. Portti lukee labelin suoraan (hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`-lipulla |
 
 ### Asennin (`install.sh`)
 
