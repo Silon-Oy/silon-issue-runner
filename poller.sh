@@ -498,8 +498,8 @@ scan_blocked_answered() {
 # Two phases keep network use minimal (the same discipline as scan_answered):
 #   Phase 1 — collect the unique set of issue numbers that have a local run-dir
 #             matching the (host, remote) gate. No network.
-#   Phase 2 — ONE `gh issue list --label <clean-label>` for the whole repo,
-#             then intersect against phase 1 locally (issue #124).
+#   Phase 2 — ONE REST label query for the whole repo, then intersect against
+#             phase 1 locally (issue #124, moved to REST by issue #133).
 #
 # Phase 2 used to be one `gh issue view` PER unique local issue. That made the
 # cost O(historical run-dirs) rather than O(work): measured at 337 GraphQL calls
@@ -560,26 +560,42 @@ scan_clean() {
     return 0
   fi
 
-  # Phase 2: ONE label query for the whole repo, routed via `gh --repo` when
-  # owner_repo is set so non-origin remotes hit the right org's API.
-  local repo_args=""
-  [ -n "$owner_repo" ] && repo_args="--repo $owner_repo"
+  # Phase 2: ONE label query for the whole repo. The owner/repo is baked into the
+  # REST path (_rest_issues_path) so a non-origin remote hits the right org's API;
+  # an empty owner/repo falls back to gh's {owner}/{repo} placeholders, which it
+  # substitutes from the cwd's remote.
   local limit="${RUN_ISSUES_CLEAN_SCAN_LIMIT:-200}"
-  local labelled rows truncated
+  local labelled rows truncated page chunk got
   truncated=0
   labelled=$(mktemp)
-  # shellcheck disable=SC2086  # intentional word-splitting on repo_args
-  (
-    cd "$repo_path"
-    gh issue list $repo_args \
-      --label "$RUN_ISSUES_CLEAN_LABEL" \
-      --state all \
-      --limit "$limit" \
-      --json number,labels \
-      --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))"' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
-  ) > "$labelled" || true
-  rows=$(wc -l < "$labelled" 2>/dev/null | tr -d ' ')
-  [ -n "$rows" ] || rows=0
+  # REST, not `gh issue list --label` (issue #133): a FILTERED gh issue list
+  # routes through GitHub's GraphQL search connection, which was blocked for 27
+  # hours on 2026-08-28/29 while REST answered normally. Issue #124 had moved
+  # this query from `gh issue view` (unfiltered, unaffected) onto that blocked
+  # path as a side effect of collapsing 337 calls into one — the call-count win
+  # stands, but the one remaining call has to leave the search connection too.
+  #
+  # Pagination is explicit and BOUNDED rather than `gh api --paginate`: the
+  # label is never removed after a successful clean, so it accumulates on closed
+  # issues (measured 2026-08-29: customer-a-report 100), and an unbounded walk would
+  # grow without limit for a signal whose live set is nearly always empty.
+  page=1
+  rows=0
+  : > "$labelled"
+  while [ "$rows" -lt "$limit" ]; do
+    chunk=$(
+      cd "$repo_path"
+      gh api "$(_rest_issues_path "$owner_repo" "labels=${RUN_ISSUES_CLEAN_LABEL}&state=all&per_page=100&page=${page}")" \
+        --jq '.[] | select(.pull_request == null) | "\(.number)\t\([.labels[].name] | join(","))"' \
+        2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
+    ) || break
+    [ -n "$chunk" ] || break
+    printf '%s\n' "$chunk" >> "$labelled"
+    got=$(printf '%s\n' "$chunk" | grep -c .) || got=0
+    rows=$((rows + got))
+    [ "$got" -lt 100 ] && break
+    page=$((page + 1))
+  done
   if [ "$rows" -ge "$limit" ] 2>/dev/null; then
     truncated=1
     printf '%s scan_clean: WARNING %s carries >= %s "%s" issues — list truncated, falling back to per-issue reads for uncovered runs\n' \
@@ -594,10 +610,10 @@ scan_clean() {
       labels=$(sed -n "s/^${n}${tab}//p" "$labelled" | head -1)
     elif [ "$truncated" -eq 1 ]; then
       # Absence is not proof while the list is truncated — ask about this one.
-      # shellcheck disable=SC2086  # intentional word-splitting on repo_args
       labels=$(
         cd "$repo_path"
-        gh issue view "$n" $repo_args --json labels --jq '[.labels[].name] | join(",")' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || echo ""
+        gh api "$(_rest_issue_path "$owner_repo" "$n")" \
+          --jq '[.labels[].name] | join(",")' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || echo ""
       )
     else
       # The list is complete and does not mention this issue => not labelled.

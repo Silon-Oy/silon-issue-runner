@@ -130,11 +130,13 @@ JSON
     *) echo "[]"; exit 0 ;;
   esac
 fi
-if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
-  # An epic list (--label epic) is distinct from the title list (no label).
-  case "\$*" in
-  *"--label epic"*)
-    case "\$repo" in
+# Epic list: REST (issue #133). `--label` is what routes gh's issue list through
+# the GraphQL search connection, which was blocked for 27 hours on 2026-08-28/29
+# while REST answered normally, so this one call had to move. The shim emits the
+# POST-jq shape the real --jq projects.
+if [ "\$1" = "api" ] && case "\$*" in *"labels=epic"*) true ;; *) false ;; esac; then
+  repo=\$(printf '%s' "\$2" | sed -n 's|^repos/\\([^/]*/[^/]*\\)/issues?.*|\\1|p')
+  case "\$repo" in
       o/repo-a)
         # Three epics: #10 has native sub-issues (API path below), #20 is a legacy
         # epic whose sub-issues live in a body task-list (API returns empty), and
@@ -154,9 +156,9 @@ JSON
         exit 1
         ;;
       *) echo "[]"; exit 0 ;;
-    esac
-    ;;
-  *)
+  esac
+fi
+if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
     case "\$repo" in
       o/repo-a)
         # Titles + labels for the open issues (issue #106 added labels). #1 has a
@@ -183,8 +185,6 @@ JSON
         ;;
       *) echo "[]"; exit 0 ;;
     esac
-    ;;
-  esac
 fi
 # issue view <n> --json state,stateReason,title (issue #96 read #103): the explicit
 # per-issue detail read for an issue ABSENT from the open list. #8 is CLOSED as
@@ -249,8 +249,10 @@ run_status() {
 # count is a single clean integer.
 pr_list_calls() { grep -c 'pr list' "$CALLS" 2>/dev/null || true; }
 # Title-list calls only (exclude the epic list, which also uses `issue list`).
-issue_list_calls() { grep 'issue list' "$CALLS" 2>/dev/null | grep -vc 'label epic' || true; }
-epic_list_calls() { grep -c 'label epic' "$CALLS" 2>/dev/null || true; }
+# The epic list moved to REST (issue #133), so `issue list` is now the title
+# fetch alone and the epic call is counted by its REST path.
+issue_list_calls() { grep -c 'issue list' "$CALLS" 2>/dev/null || true; }
+epic_list_calls() { grep -c 'labels=epic' "$CALLS" 2>/dev/null || true; }
 sub_issue_calls() { grep -c 'sub_issues' "$CALLS" 2>/dev/null || true; }
 issue_view_calls() { grep -c 'issue view' "$CALLS" 2>/dev/null || true; }
 

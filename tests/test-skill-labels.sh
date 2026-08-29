@@ -95,19 +95,22 @@ assert_configurable() {
 assert_configurable auto-clean RUN_ISSUES_CLEAN_LABEL auto-clean
 assert_configurable auto-merge PR_WATCH_MERGE_LABEL auto-merge
 
-# ---- Case 4: pickup-query negative labels match the skill's blocker claim ----
-# The authoritative pickup query lives in lib/issue.sh. Extract its hardcoded
-# -label: terms (the configurable clean label expands from a variable and is
-# handled separately in case 3) and assert the skill names each as a blocker.
-QUERY_LINE="$(grep -nE 'is:open .*-is:blocked' "$ISSUE_LIB" | grep -v '^\s*#' | head -1)"
+# ---- Case 4: pickup exclusion labels match the skill's blocker claim ----
+# The authoritative pickup exclusions live in lib/issue.sh. They used to be
+# `-label:x` terms in a search string; issue #133 moved pickup to REST, so they
+# are now literals in the local jq filter _pick_filter_jq. Same vocabulary, and
+# the same thing to guard: every label that removes an issue from pickup must be
+# named in the skill. The configurable clean label reaches the filter through
+# $ENV and is handled separately in case 3.
+QUERY_LINE="$(sed -n '/^_pick_filter_jq() {/,/^}/p' "$ISSUE_LIB" | tr '\n' ' ')"
 if [ -z "$QUERY_LINE" ]; then
-  echo "FAIL: could not locate the pickup query in $ISSUE_LIB — its shape changed"; FAIL=1
+  echo "FAIL: could not locate the pickup exclusion filter (_pick_filter_jq) in $ISSUE_LIB"; FAIL=1
 else
-  echo "PASS: pickup query located in lib/issue.sh"
-  # Pull out -label:<word> terms whose target is a literal (not a ${var}).
-  NEG_LABELS="$(printf '%s\n' "$QUERY_LINE" | grep -oE -- '-label:[a-z-]+' | sed 's/^-label://' | sort -u)"
+  echo "PASS: pickup exclusion filter located in lib/issue.sh"
+  # Pull out the literal index("<label>") targets (the clean label is $ENV-fed).
+  NEG_LABELS="$(printf '%s\n' "$QUERY_LINE" | grep -oE 'index\("[a-z-]+"\)' | sed 's/index("//; s/")//' | sort -u)"
   if [ -z "$NEG_LABELS" ]; then
-    echo "FAIL: no literal -label: terms parsed from the pickup query"; FAIL=1
+    echo "FAIL: no literal exclusion labels parsed from the pickup filter"; FAIL=1
   fi
   while IFS= read -r lbl; do
     [ -n "$lbl" ] || continue

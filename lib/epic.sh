@@ -66,33 +66,28 @@ _epic_log() {
 # it: that is the "run this epic" propagation signal (§3.1). No reservation filter
 # (neither the old `no:assignee` nor `-label:auto-claimed`) — an epic is never
 # assigned or auto-claimed by the automation, and a human assignee must not stop
-# propagation. The run labels are ANDed as separate label:"x" terms, exactly like
-# pick_oldest_candidate. Reading the list is identity-neutral, so it stays on the
-# gh-CLI default.
+# propagation.
+#
+# REST rather than `gh issue list --search` (issue #133): a filtered `gh issue
+# list` routes through GitHub's GraphQL search connection, which was blocked for
+# 27 hours while REST answered normally. REST ANDs the `labels=` list exactly
+# like the separate `label:"x"` search terms did (measured: labels=auto-run,epic
+# returned 0 while labels=auto-run returned 5), so `epic` plus the run labels is
+# a faithful translation. Pull requests are excluded because REST's /issues
+# endpoint returns them too.
 epic_list_open() {
   local repo="$1"
   local labels_csv="${2:-}"
   local owner_repo="${3:-}"
-  local search="is:open label:epic sort:created-asc"
-  local extra=""
-  if [ -n "$labels_csv" ]; then
-    extra=$(
-      IFS=','
-      for label in $labels_csv; do
-        [ -n "$label" ] || continue
-        printf ' label:"%s"' "$label"
-      done
-    )
-  fi
+  local want
+  # `epic` is a FIXED name, not configurable (docs/epic-orchestration.md §6),
+  # so it is a literal here — only the run labels come from the watchlist.
+  want="$(_labels_query_csv "$labels_csv" "epic")"
   (
-    cd "$repo"
-    # shellcheck disable=SC2046
-    gh issue list \
-      $(_repo_args "$owner_repo") \
-      --search "${search}${extra}" \
-      --limit 100 \
-      --json number \
-      --jq '.[].number' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
+    cd "$repo" || exit 1
+    gh api "$(_rest_issues_path "$owner_repo" "labels=${want}&state=open&sort=created&direction=asc&per_page=100")" \
+      --jq '.[] | select(.pull_request == null) | .number' \
+      2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ) || true
 }
 

@@ -290,10 +290,27 @@ status_github_not_open_object() {
 # pull number+title+body (body only for the task-list fallback). Best-effort: the
 # caller treats a failure as "no epics for this repo" WITHOUT marking it failed —
 # the PR fetch is the primary enrichment and owns repos_failed.
+# REST, not `gh issue list --label` (issue #133). A `--label` filter is what
+# routes gh's issue list through GitHub's GraphQL search connection; `--state`
+# alone does not. Measured 2026-08-29 on one repo, interleaved with an
+# unfiltered control:
+#
+#   gh issue list --limit 1                     OK
+#   gh pr list --state open                     OK
+#   gh issue list --state open                  OK
+#   gh issue list --label epic --state open     REJECTED
+#   gh issue view <n> --json state              OK
+#
+# So of this module's four calls only the epic fetch sat on the blocked
+# connection, and its failure is quiet by design (best-effort => epics simply
+# vanish from the Ohjaamo while everything else keeps working). The REST shape
+# returns the same three fields; `.body` is null-safe for the task-list fallback.
 status_github_fetch_epics() {
   local owner_repo="$1"
-  gha_with_token gh issue list --repo "$owner_repo" --label epic --state open \
-    --json "$_STATUS_GH_EPIC_FIELDS" --limit 100 2>/dev/null
+  gha_with_token gh api \
+    "repos/${owner_repo}/issues?labels=epic&state=open&per_page=100" \
+    --jq '[ .[] | select(.pull_request == null)
+            | {number, title, body: (.body // "")} ]' 2>/dev/null
 }
 
 # status_github_build_epics <owner/repo> <epics-json> <open-issue-map>

@@ -146,6 +146,15 @@ case "\$sub" in
     fi
 
     case "\$path" in
+      *"/issues?"*)
+        # epic_list_open (issue #133): REST, not `gh issue list --search`. The
+        # `--label` form is what routes gh's issue list through the GraphQL
+        # search connection, which was blocked for 27 hours on 2026-08-28/29.
+        printf '%s\n' "\$path" >> "\$REC/search"
+        expr=""; prev=""
+        for a in "\$@"; do case "\$prev" in --jq) expr="\$a";; esac; prev="\$a"; done
+        echo '[{"number":100},{"number":200}]' | jq -r "\${expr:-.}"
+        exit 0 ;;
       *"/sub_issues")
         n="\${path##*/issues/}"; n="\${n%%/*}"
         if [ -f "\$STATE/subissues/\$n" ]; then cat "\$STATE/subissues/\$n"; else echo '[]'; fi ;;
@@ -281,15 +290,27 @@ set -e
   || fail "list_epic_children: expected rc2/empty when gh absent, got [$o]/rc$r"
 
 # ===========================================================================
-# 3. epic_list_open — pins the epic search string
+# 3. epic_list_open — pins the REST query (issue #133)
 # ===========================================================================
+# The epic list used to be `gh issue list --search "is:open label:epic …"`. A
+# `--label`-filtered issue list routes through GitHub's GraphQL search
+# connection, which was blocked for 27 hours on 2026-08-28/29 while REST
+# answered normally, so the query moved to REST. The terms pinned here are the
+# faithful translation: REST ANDs the labels= list exactly like the separate
+# label:"x" search terms did (measured: labels=auto-run,epic → 0 while
+# labels=auto-run → 5).
 epics=$(epic_list_open "$REPO" "auto-run")
 printf '%s' "$epics" | grep -q '^100$' || fail "epic_list_open: expected epic 100 in output (got: $epics)"
 s=$(tail -n1 "$REC/search")
-for term in 'is:open' 'label:epic' 'label:"auto-run"'; do
-  case "$s" in *"$term"*) : ;; *) fail "epic_list_open search missing '$term': $s" ;; esac
+case "$s" in
+  repos/*/issues\?*) : ;;
+  *) fail "epic_list_open is not on the REST issues endpoint: $s" ;;
+esac
+for term in 'labels=epic' 'auto-run' 'state=open'; do
+  case "$s" in *"$term"*) : ;; *) fail "epic_list_open query missing '$term': $s" ;; esac
 done
-[ "$FAIL" = 0 ] && pass "epic_list_open: search carries is:open label:epic label:\"auto-run\"" || true
+case "$s" in *'--search'*|*'is:open'*) fail "epic_list_open drifted back to a search query: $s" ;; esac
+[ "$FAIL" = 0 ] && pass "epic_list_open: REST query carries labels=epic,auto-run + state=open" || true
 
 # ===========================================================================
 # 4. epic_process_one — propagation + idempotency + escalation

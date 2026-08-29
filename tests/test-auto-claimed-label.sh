@@ -38,20 +38,31 @@ func_body() {
   ' "$1"
 }
 
-# ---- Case 1: the pickup search reserves via -label:auto-claimed, not no:assignee ----
-SEARCH_LINE="$(grep -nE 'is:open .*-is:blocked' "$ISSUE_LIB" | grep -v '^[0-9]*:[[:space:]]*#' | head -1)"
-if [ -z "$SEARCH_LINE" ]; then
-  fail "could not locate the pickup search in $ISSUE_LIB"
+# ---- Case 1: pickup reserves via the auto-claimed label, not via an assignee ----
+# The reservation used to be a `-label:auto-claimed` term in the pickup SEARCH
+# string. Issue #133 moved pickup to REST, so the exclusion now lives in the
+# local jq filter (_pick_filter_jq) — same rule, different mechanism, and the
+# invariant to guard is unchanged: auto-claimed removes an issue from pickup and
+# assignee never does.
+FILTER_BODY="$(func_body "$ISSUE_LIB" _pick_filter_jq)"
+if [ -z "$FILTER_BODY" ]; then
+  fail "could not locate the pickup exclusion filter (_pick_filter_jq) in $ISSUE_LIB"
 else
-  case "$SEARCH_LINE" in
-    *'-label:auto-claimed'*) pass "pickup search reserves via -label:auto-claimed" ;;
-    *) fail "pickup search missing -label:auto-claimed: $SEARCH_LINE" ;;
+  case "$FILTER_BODY" in
+    *'"auto-claimed"'*) pass "pickup excludes auto-claimed" ;;
+    *) fail "pickup filter no longer excludes auto-claimed" ;;
   esac
-  case "$SEARCH_LINE" in
-    *'no:assignee'*) fail "pickup search still carries no:assignee — issue #99 removed it" ;;
-    *) pass "pickup search no longer carries no:assignee" ;;
+  case "$FILTER_BODY" in
+    *'assignee'*) fail "pickup filter reintroduced an assignee condition — issue #99 removed it" ;;
+    *) pass "pickup does not filter on assignee" ;;
   esac
 fi
+# And the query itself must not have drifted back onto a search-routed shape.
+PICK_BODY="$(func_body "$ISSUE_LIB" pick_oldest_candidate)"
+case "$PICK_BODY" in
+  *'gh api'*) pass "pickup queries REST (issue #133)" ;;
+  *) fail "pickup no longer uses gh api — a filtered gh issue list is search-routed" ;;
+esac
 
 # ---- Case 2: claim adds the label, unclaim removes it (bound to the functions) ----
 CLAIM_BODY="$(func_body "$ISSUE_LIB" claim_issue)"

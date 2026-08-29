@@ -56,7 +56,7 @@ bad() { echo "FAIL: $1"; FAIL=1; }
 
 TMUX_LOG="$WORK/tmux.log"
 GH_LOG="$WORK/gh.log"
-GH_ISSUE="$WORK/gh-issue"   # contents = what `gh issue list` prints; empty = none
+GH_ISSUE="$WORK/gh-issue"   # contents = the candidate number the REST pickup yields; empty = none
 : > "$GH_ISSUE"
 
 # ---- stubs ------------------------------------------------------------------
@@ -65,8 +65,14 @@ BIN="$WORK/bin"; mkdir -p "$BIN"
 cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
 echo "gh \$*" >> "$GH_LOG"
-if [ "\${1:-}" = "issue" ] && [ "\${2:-}" = "list" ]; then
-  cat "$GH_ISSUE"
+# Pickup, the epic list and the clean-label scan are all REST since issue #133
+# (a --label-filtered \`gh issue list\` routes through the GraphQL search
+# connection, which GitHub can block independently — measured 2026-08-28/29).
+if [ "\${1:-}" = "api" ]; then
+  case "\${2:-}" in
+    */dependencies/blocked_by) echo 0 ;;   # nothing is blocked in these fixtures
+    */issues\?*)               cat "$GH_ISSUE" ;;
+  esac
 fi
 exit 0
 SH

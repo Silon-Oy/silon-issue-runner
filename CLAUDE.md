@@ -660,7 +660,7 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `pick_oldest_candidate` paketin **ainoa** poimintahaku, ent. `pick_oldest_unassigned` — `no:assignee` → `-label:auto-claimed`, #99, pollerin delegoima; `claim_issue`/`unclaim_issue` assignoivat + lisäävät/poistavat `auto-claimed`-varauslabelin rakenteellisesti (`AUTO_CLAIMED_LABEL`, kiinteä nimi, vain automaation kirjoittama), `issue_assignees` snapshottaa assignee-joukon S3:ssa ja `verify_claim` tarkistaa "joukko claimin jälkeen == joukko ennen ∪ {@me}" (käsin assignattu issue ei kaada ajoa, kilpaileva toinen tili huomataan yhä), #99; `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon **yksi jaettu resolvointi** natiivi→fallback, TSV `<number>\t<state>\t<labels>\t<owner/repo>\t<title>` — kaikki kuluttajat kutsuvat tätä, myös näkymä (`lib/status-github.sh`, #91), joten näkymä ja ajo eivät voi olla eri mieltä lapsijoukosta; fallback-tila autoritatiivinen avoimien issueiden joukosta (ei checkbox-arvaus), lähde (`sub_issues`/`task_list`) `--source-file`in kautta luettavissa, identiteetti kutsujan valinta `--gh-runner`illa (näkymä ajaa `gha_with_token`in läpi, ajo paljasta `gh`:ta), fail-closed rc 2 lukukelvottomasta natiivigraafista, #81/#91; **cross-repo (#92):** jokainen lapsi kantaa oman `owner/repo`nsa (natiivi `repository_url`ista, task-lista `owner/repo#N`-viittauksesta), cross-repo-lapsen tila ratkaistaan kyseisen repon avoin-joukosta (kerran per repo, fail-closed) — ei enää pudoteta pois; `count_open_blockers` laskee cross-repo-estäjän jo valmiiksi (pelkkä `.state`-suodatus, AC4); `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
+| `issue.sh` | GitHub-issue-operaatiot `gh`-CLI:n ympärillä (ml. `pick_oldest_candidate` paketin **ainoa** poimintakysely — **REST `gh api repos/…/issues?labels=…`, ei `gh issue list` (#133, ks. §7.2)**; poissulkuehdot suodatetaan paikallisesti jq:lla ja `-is:blocked` korvautuu `count_open_blockers`-koettamisella vanhimmasta alkaen (`_rest_issues_path`/`_rest_issue_path`/`_labels_query_csv`/`_pick_filter_jq`, koetusbudjetti `RUN_ISSUES_PICK_BLOCKED_PROBES`); ent. `pick_oldest_unassigned` — `no:assignee` → `-label:auto-claimed`, #99, pollerin delegoima; `claim_issue`/`unclaim_issue` assignoivat + lisäävät/poistavat `auto-claimed`-varauslabelin rakenteellisesti (`AUTO_CLAIMED_LABEL`, kiinteä nimi, vain automaation kirjoittama), `issue_assignees` snapshottaa assignee-joukon S3:ssa ja `verify_claim` tarkistaa "joukko claimin jälkeen == joukko ennen ∪ {@me}" (käsin assignattu issue ei kaada ajoa, kilpaileva toinen tili huomataan yhä), #99; `count_open_blockers`, S2b:n autoritatiivinen esto-luku dependencies-API:sta, #28; `list_blocked_by` saman graafin lukeva sisar joka palauttaa estäjien numerot+tilat `/run-epic`in syklintarkistukseen ja ajojärjestykseen, #82; `is_epic` S2c:n autoritatiivinen epic-luku ja `list_epic_children` epicin lapsijoukon **yksi jaettu resolvointi** natiivi→fallback, TSV `<number>\t<state>\t<labels>\t<owner/repo>\t<title>` — kaikki kuluttajat kutsuvat tätä, myös näkymä (`lib/status-github.sh`, #91), joten näkymä ja ajo eivät voi olla eri mieltä lapsijoukosta; fallback-tila autoritatiivinen avoimien issueiden joukosta (ei checkbox-arvaus), lähde (`sub_issues`/`task_list`) `--source-file`in kautta luettavissa, identiteetti kutsujan valinta `--gh-runner`illa (näkymä ajaa `gha_with_token`in läpi, ajo paljasta `gh`:ta), fail-closed rc 2 lukukelvottomasta natiivigraafista, #81/#91; **cross-repo (#92):** jokainen lapsi kantaa oman `owner/repo`nsa (natiivi `repository_url`ista, task-lista `owner/repo#N`-viittauksesta), cross-repo-lapsen tila ratkaistaan kyseisen repon avoin-joukosta (kerran per repo, fail-closed) — ei enää pudoteta pois; `count_open_blockers` laskee cross-repo-estäjän jo valmiiksi (pelkkä `.state`-suodatus, AC4); `build_marker`/`parse_marker`/`detect_answer` vastattaville kommenteille; `fetch_issue_json` palauttaa myös `state`n blocked-uusinnan avoimuustarkistukseen, #57) |
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
 | `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Propagoinnin **yksi jaettu primitiivi** `_epic_propagate_child` (AC4, #82): sekä `epic_process_one` että julkinen `propagate_run_labels` (lapsijoukon resolvointi + propagointi, `/run-epic`in kirjoituspolku) kutsuvat sitä — ei kahta label-propagointitoteutusta. `_epic_parse_child_line` säilyttää `list_epic_children`in tyhjän label-sarakkeen (tab on IFS-whitespace ⇒ `IFS=$'\t' read` romahduttaisi sen) ja palauttaa `REPLY_REPO`n (lapsen `owner/repo`, #92) ⇒ propagointi/eskalaatio/valmius kohdistuvat lapsen omaan repoon; `_epic_child_ref`/`_epic_attn_marker` nimeävät cross-repo-lapsen `owner/repo#N`-muodossa ja repo-tarkennetulla markerilla (saman repon lapsi säilyttää vanhan `child=<N>`-muodon, taaksepäin yhteensopiva). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartijat `tests/test-epic.sh`, `tests/test-run-epic.sh` |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
@@ -717,6 +717,7 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 | `RUN_ISSUES_HOME` | *(pollerin oma `SCRIPT_DIR`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Luetaan vain ympäristöstä |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Liveness-raja: vanhempi ajo tapetaan ja finalisoidaan `blocked/stalled_in_<state>`. **Täytyy** ylittää pisin laillinen yksivaiheinen claude-kutsu |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee `auto-clean.sh`:n |
+| `RUN_ISSUES_PICK_BLOCKED_PROBES` | `20` | Montako poimintaehdokasta enintään koetetaan `count_open_blockers`illa ennen kuin tikki luovuttaa (#133). `-is:blocked`illa ei ole REST-vastinetta, joten esto tarkistetaan ehdokas kerrallaan vanhimmasta alkaen ja pysähdytään ensimmäiseen vapaaseen. Tavallinen hinta on **yksi** koetus (riippuvuusketjussa vanhin lapsi on se ajettava); katto estää kokonaan estetyn backlogin kävelemisen joka tikillä. Katon täyttyminen = "ei ehdokasta", seuraava tikki yrittää uudelleen |
 | `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` = poista perääntyminen käytöstä (#126). Hätävara samalla perusteella kuin `RUN_ISSUES_SKIP_PREFLIGHT`: uusi portti ei saa koskaan olla syy siihen, ettei ajo käynnisty toimivalla koneella. Luetaan kummassakin pollerissa, `pr-watch.sh`:ssa ja `status.sh`:ssa |
 | `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | **Vain `poller.sh`:n `scan_clean`.** Montako riviä siivouslabelin repo-laajuinen listaus hakee (#124). Ylittyessään lista ei enää todista poissaoloa, joten kattamattomat paikalliset issuet luetaan yksitellen ja lokiin tulee WARNING. Nosto on halpa; oletus riittää kunnes labeloituja issueita on ≥200 |
 | `PR_WATCH_GLOBAL_MAX` | *(watchlistin `pr_watch_max_concurrent`, tai sen puuttuessa `global_max_concurrent`)* | **Vain `pr-watch-poller.sh`.** PR-vahdin oma rinnakkaisuuskatto (#47). PR-skannaus on sekuntien työ, joten se voi käydä selvästi korkeammalla katolla kuin kymmenien minuuttien orkestraattoriajot ilman että `poller.sh`:n rinnakkaisuus kasvaa. Ympäristömuuttuja voittaa watchlist-avaimen |
@@ -751,6 +752,42 @@ jatkokohtaa) ja puuttuva/korruptoitunut tiedosto vain aloittaa alusta. `poller.s
 kursoria — sen pitkät ajot varaavat slotit yli tikkien, joten se ei kärsi samasta
 nälkiintymisestä. `tests/test-pr-watch-poller-rotation.sh` vartioi rotaatiota, kattoa ja
 kursorin kestävyyttä.
+
+**Hakuyhteys on erikseen estettävissä — siksi listaukset ovat REST:iä (#133).** `gh issue list`
+reitittää **`--label`-suodatetun** kyselyn GitHubin GraphQL-`search`-yhteyden kautta; pelkkä
+`--state` ei. Tuo yhteys oli estettynä **27 tuntia** 2026-08-28/29 samalla kun REST ja
+suodattamaton listaus vastasivat normaalisti, joten poiminta ei voinut ajaa lainkaan. Mittaus
+yhdellä repolla, neljän sekunnin välein, **suodattamaton kontrolli lomitettuna**:
+
+| Kutsumuoto | Tulos |
+|---|---|
+| `gh issue list --limit 1` (kontrolli) | OK ×3 |
+| `gh issue list --label X --state all` | torjuttu |
+| `gh issue list --search "…"` | torjuttu |
+| `gh issue list --state open` | OK |
+| `gh pr list --state open` | OK |
+| `gh issue view <n>` | OK |
+| `gh api repos/…/issues?labels=…` | OK |
+
+**Kontrolli on koko koe.** Ilman sitä molemmat haarat kaatuvat ja johtopäätös olisi "tili on
+estetty" — mikä johti aiemmin väärään diagnoosiin (purskeeksi, jota tahdistus muka korjaisi;
+18 kutsua sekunnin välein kaatui silti).
+
+Siirretyt kyselyt: `pick_oldest_candidate` (`lib/issue.sh`), `epic_list_open` (`lib/epic.sh`),
+`scan_clean`in labelikysely (`poller.sh`) ja `status_github_fetch_epics` (`lib/status-github.sh`)
+— moduulin kolme muuta kutsua eivät osu hakuyhteyteen eivätkä siirtyneet. Semantiikka säilyy:
+REST **ANDaa** `labels=`-listan kuten erilliset `label:"x"`-termit (mitattu: `labels=auto-run,epic`
+→ 0, `labels=auto-run` → 5), ja REST `/issues` palauttaa **myös PR:t**, joten `.pull_request`
+suodatetaan aina pois.
+
+Kaksi muutosta, jotka eivät ole käännöksiä:
+1. **Negatiiviset labelisuodattimet paranivat.** `-label:x` epäonnistui **auki**: tuntematon
+   negatiivinen kvalifikaattori ei virheile vaan täsmää kaikkeen, joten kirjoitusvirhe vuoti
+   poissuljettuja issueita poimintaan. jq:n `index()`-jäsenyystesti epäonnistuu umpeen.
+2. **`-is:blocked` katosi.** Sillä ei ole REST-vastinetta, ja pelkkä poisto **linkoaisi**: S2b
+   torjuu estetyn issuen ennen claimia, joten sama issue poimittaisiin joka tikki ikuisesti.
+   Tilalla ehdokkaiden koettaminen `count_open_blockers`illa — sama autoritatiivinen luku jota
+   S2b käyttää, REST:n yli, fail-closed — vanhimmasta alkaen ensimmäiseen vapaaseen asti.
 
 **Rate-limit-perääntyminen (#126).** Kumpikin poller tarkistaa tikin **alussa, ennen ensimmäistäkään
 gh-kutsua**, jaetun takarajan (`lib/rate-limit.sh`, §6) ja exittaa siististi 0 yhdellä lokirivillä jos se
@@ -1196,10 +1233,9 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   dokumentaatiohygienian muutoksensa, joka ei kuulunut #12:n δψ-refaktorointiin ja ansaitsee
   oman katselmuksensa. Rikkinäinen diagrammi renderöityy tyhjäksi, joten korjaus on puhdasta
   parannusta — mutta label-uudelleensanoitus muuttaa dokumentaation sisältöä.
-- **`-is:blocked` edellyttää github.com:ia.** Poimintahaun estosuodatin nojaa GitHubin
-  natiiviin `is:blocked`-kvalifikaattoriin. Jos ominaisuus puuttuu GitHub Enterprise
-  Serveristä, poiminta hiljenisi siellä (tuntematon negatiivinen kvalifikaattori palauttaa
-  kaikki, ei virhettä). Merkitys tälle asennukselle on nolla: kaikki repot ovat github.com:issa.
+- **Poiminnan estosuodatus ei enää nojaa hakuindeksiin (#133).** `-is:blocked` poistui poiminnasta
+  kun kysely siirtyi REST:iin (§7.2), joten myös vanha huoli hakukvalifikaattorin puuttumisesta
+  GitHub Enterprise Serveristä poistui: esto luetaan nyt dependencies-API:sta ehdokas kerrallaan.
   Sama koskee S2b-portin (#28) dependencies-API:a: jos `…/dependencies/blocked_by` puuttuu tai
   virheilee, `count_open_blockers` tulkitsee sen estoksi (fail-closed) ⇒ portti kieltäytyisi
   ajamasta. Hätävara on nimetyn ajon `--force`.

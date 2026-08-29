@@ -34,6 +34,12 @@ mkdir -p "$REPO/.git"
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"
 
+# scan_clean builds its REST paths with _rest_issues_path / _rest_issue_path
+# (lib/issue.sh, issue #133), so that file must be loaded for the extracted
+# function to run. It defines functions only, so sourcing is side-effect-free.
+# shellcheck source=lib/issue.sh
+. "$HERE/../lib/issue.sh"
+
 # Extract scan_clean from poller.sh and source it.
 FN=$(awk '/^scan_clean\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$POLLER")
 eval "$FN"
@@ -48,6 +54,11 @@ RUN_ISSUES_CLEAN_LABEL="auto-clean"
 # would report for that issue. It drives BOTH mocked gh paths, so the list and
 # the per-issue fallback can never disagree about the same issue.
 LABELDIR="$WORK/labels"; mkdir -p "$LABELDIR"
+# Issue numbers the list mock omits, simulating rows lost past the page limit.
+# Without this the truncation case could only prove the fallback runs, not that
+# it RESCUES a clean target the truncated list failed to mention — which is the
+# entire reason the fallback exists.
+HIDDEN="$WORK/hidden"; : > "$HIDDEN"
 
 # Call ledgers. scan_clean calls gh inside a subshell, so counters must be files.
 LIST_CALLS="$WORK/calls-list"; VIEW_CALLS="$WORK/calls-view"; LIST_ARGS="$WORK/args-list"
@@ -56,34 +67,35 @@ reset_ledgers() { : > "$LIST_CALLS"; : > "$VIEW_CALLS"; : > "$LIST_ARGS"; }
 n_list() { wc -l < "$LIST_CALLS" | tr -d ' '; }
 n_view() { wc -l < "$VIEW_CALLS" | tr -d ' '; }
 
-# Mock gh: dispatches on `issue list` vs `issue view`.
-#   list — emits "<number>\t<labels-csv>" for every fixture issue carrying the
-#          clean label, honouring --limit so truncation is testable.
-#   view — emits the CSV for one issue (the truncation fallback path).
+# Mock gh: dispatches on the REST path (issue #133 moved both calls off the
+# GraphQL search connection and onto `gh api`).
+#   repos/O/R/issues?labels=…&page=N  — the repo-wide label list, paginated
+#   repos/O/R/issues/<n>              — the truncation fallback, one issue
+# The mock emits POST-jq output, exactly as the real gh --jq would.
 gh() {
-  case "${1:-} ${2:-}" in
-    "issue list")
+  [ "${1:-}" = "api" ] || return 0
+  local path="$2"
+  case "$path" in
+    */issues/[0-9]*)
+      echo "call" >> "$VIEW_CALLS"
+      local num="${path##*/}" csv=""
+      [ -f "$LABELDIR/$num" ] && csv=$(cat "$LABELDIR/$num")
+      printf '%s' "$csv"
+      ;;
+    */issues\?*)
       echo "call" >> "$LIST_CALLS"
-      printf '%s\n' "$*" >> "$LIST_ARGS"
-      local limit=0 prev="" a
-      for a in "$@"; do
-        [ "$prev" = "--limit" ] && limit="$a"
-        prev="$a"
-      done
-      local emitted=0 f n csv
+      printf '%s\n' "$path" >> "$LIST_ARGS"
+      # Honour page= so the bounded pagination loop is exercised for real.
+      local page="${path##*page=}"; page="${page%%&*}"
+      case "$page" in ''|*[!0-9]*) page=1 ;; esac
+      [ "$page" = "1" ] || return 0     # fixtures never fill a page
+      local f n csv
       for f in $(ls "$LABELDIR" | sort -n); do
         n="$f"; csv=$(cat "$LABELDIR/$n")
         case ",$csv," in *,auto-clean,*) ;; *) continue ;; esac
-        [ "$limit" -gt 0 ] && [ "$emitted" -ge "$limit" ] && break
+        grep -qx "$n" "$HIDDEN" 2>/dev/null && continue
         printf '%s\t%s\n' "$n" "$csv"
-        emitted=$((emitted + 1))
       done
-      ;;
-    "issue view")
-      echo "call" >> "$VIEW_CALLS"
-      local num="$3" csv=""
-      [ -f "$LABELDIR/$num" ] && csv=$(cat "$LABELDIR/$num")
-      printf '%s' "$csv"
       ;;
   esac
 }
@@ -119,6 +131,9 @@ mk_run 40 "test-host"; set_labels 40 "auto-clean,auto-clean-skipped"
 # DIRECTION: the repo-wide list is a superset of what we may act on, and only
 # issues with a local run-dir are ours to clean.
 set_labels 50 "auto-clean"
+# Issue 60: local + auto-clean, but dropped by the truncated list in case 2. It
+# must still be selected there, via the per-issue fallback.
+mk_run 60 "test-host"; set_labels 60 "auto-clean"
 
 # ---- Case 1: selection gates + dedup + API cost (untruncated list) ---------
 reset_ledgers
@@ -136,9 +151,9 @@ echo "$OUT" | grep -q "^50 " && fail "issue 50 (labelled, no local run-dir) WAS 
 C11=$(echo "$OUT" | grep -c "^11 ")
 check "issue 11 emitted once (dedup)" "$C11" "1"
 COUNT=$(printf '%s\n' "$OUT" | grep -c '^[0-9]')
-check "candidate count" "$COUNT" "3"
+check "candidate count" "$COUNT" "4"
 
-# THE regression guard (issue #124): 6 unique local issues, ONE list call and
+# THE regression guard (issue #124): 7 unique local issues, ONE list call and
 # ZERO per-issue views. If this goes back to 6 views the gates above still pass.
 check "gh issue list calls" "$(n_list)" "1"
 check "gh issue view calls" "$(n_view)" "0"
@@ -147,23 +162,31 @@ check "gh issue view calls" "$(n_view)" "0"
 # merged => issue auto-closed => run-dir still on disk). --state open would drop
 # those silently, and no fixture can catch it because the mock cannot model a
 # state it was never asked to filter on — so assert the flag itself.
-grep -q -- "--state all" "$LIST_ARGS" || fail "list call missing --state all (closed clean targets would be dropped)"
-grep -q -- "--label auto-clean" "$LIST_ARGS" || fail "list call missing --label auto-clean"
+grep -q -- "state=all" "$LIST_ARGS" || fail "REST call missing state=all (closed clean targets would be dropped)"
+grep -q -- "labels=auto-clean" "$LIST_ARGS" || fail "REST call missing labels=auto-clean"
+# The whole point of #133: this must NOT go through the search connection.
+grep -q -- "issues?" "$LIST_ARGS" || fail "clean scan is not using the REST issues endpoint"
 
 # ---- Case 2: truncated list falls back to per-issue reads ------------------
 # limit=1 => the list returns only issue 10 and rows >= limit, so absence is no
 # longer proof. Every uncovered local issue must be resolved individually, and
 # the SELECTION must be identical to case 1.
 reset_ledgers
+printf '60\n' > "$HIDDEN"          # the truncated page loses issue 60
 OUT2=$(RUN_ISSUES_CLEAN_SCAN_LIMIT=1 scan_clean "$REPO" 2>/dev/null | sort)
+: > "$HIDDEN"
 COUNT2=$(printf '%s\n' "$OUT2" | grep -c '^[0-9]')
-check "truncated: candidate count unchanged" "$COUNT2" "3"
+check "truncated: candidate count unchanged" "$COUNT2" "4"
+echo "$OUT2" | grep -q "^60 " \
+  && ok_rescue=1 || { echo "FAIL: truncated: issue 60 lost — the fallback did not rescue a dropped clean target"; FAIL=1; }
 echo "$OUT2" | grep -q "^11 " || fail "truncated: issue 11 lost (fallback did not run)"
 echo "$OUT2" | grep -q "^12 " || fail "truncated: issue 12 lost (fallback did not run)"
 echo "$OUT2" | grep -q "^40 " && fail "truncated: issue 40 (skipped) WAS selected"
 check "truncated: list calls" "$(n_list)" "1"
-# Uncovered local issues are 11, 12, 30, 40 (10 came from the truncated list).
-check "truncated: view calls (uncovered only)" "$(n_view)" "4"
+# Only issues the list did not mention are read individually: 30 (unlabelled, so
+# never listed) and 60 (dropped by the truncated page). Everything else came from
+# the list, so the fallback stays proportional to what was actually missing.
+check "truncated: view calls (uncovered only)" "$(n_view)" "2"
 
 # ---- Case 3: no local run-dirs => no network at all ------------------------
 # Every run-dir belongs to another host, so there is nothing to intersect. The

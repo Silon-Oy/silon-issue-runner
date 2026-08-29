@@ -79,90 +79,150 @@ _repo_args() {
   [ -n "$owner_repo" ] && printf -- '--repo %s' "$owner_repo"
 }
 
+# _rest_issues_path <owner/repo> <query-string>
+# Builds the `gh api` path for the repo's issues endpoint. An empty owner/repo
+# uses gh's {owner}/{repo} placeholders, which it substitutes from the cwd's
+# remote — the same idiom count_open_blockers already relies on, so the legacy
+# single-remote callers keep working without resolving anything themselves.
+_rest_issues_path() {
+  local owner_repo="${1:-}" qs="${2:-}"
+  if [ -n "$owner_repo" ]; then
+    printf 'repos/%s/issues?%s' "$owner_repo" "$qs"
+  else
+    printf 'repos/{owner}/{repo}/issues?%s' "$qs"
+  fi
+}
+
+# _rest_issue_path <owner/repo> <issue-number>
+# The single-issue REST path, same {owner}/{repo} placeholder rule as
+# _rest_issues_path.
+_rest_issue_path() {
+  local owner_repo="${1:-}" n="${2:-}"
+  if [ -n "$owner_repo" ]; then
+    printf 'repos/%s/issues/%s' "$owner_repo" "$n"
+  else
+    printf 'repos/{owner}/{repo}/issues/%s' "$n"
+  fi
+}
+
+# _labels_query_csv <labels-csv> [<extra-label>...]
+# Comma-joins the configured run labels with any extra required labels for the
+# REST `labels=` parameter. REST ANDs them, exactly like the separate
+# `label:"x"` terms the old search query used (measured 2026-08-29:
+# labels=auto-run,epic returned 0 while labels=auto-run returned 5).
+_labels_query_csv() {
+  local csv="${1:-}"; shift
+  local out="" label
+  for label in "$@"; do
+    [ -n "$label" ] || continue
+    out="${out:+$out,}$label"
+  done
+  if [ -n "$csv" ]; then
+    local IFS=','
+    for label in $csv; do
+      [ -n "$label" ] || continue
+      out="${out:+$out,}$label"
+    done
+  fi
+  printf '%s' "$out"
+}
+
 # pick_oldest_candidate <repo-root> <labels-csv> [<owner/repo>]
-# Prints issue number on stdout, or empty string if no match.
-# labels-csv may be empty; otherwise it's filtered with -label:waiting -is:blocked -label:wip.
+# Prints the issue number of the oldest runnable candidate, or nothing.
 #
-# Reservation is NOT `no:assignee` (issue #99): a hand-assigned issue is a valid
-# candidate now, and the automation-only reservation moved to the `auto-claimed`
-# label. `-label:auto-claimed` therefore removes an in-flight or un-cleaned run
-# from pickup — the same three roles `no:assignee` used to carry, minus the human
-# opt-out (which is `wip`). claim_issue adds the label, unclaim_issue and
-# cleanup-run.sh remove it (see AUTO_CLAIMED_LABEL below).
+# WHY THIS IS REST AND NOT `gh issue list` (issue #133). `gh issue list` routes
+# any FILTERED query through GitHub's GraphQL `search` connection, which carries
+# its own limit and its own block. Measured 2026-08-29 with an interleaved
+# control on one repo, four seconds apart:
 #
-# Blocked issues are excluded with GitHub's native `-is:blocked` qualifier,
-# which reads the `blocked_by` dependency graph directly — no `blocked` label
-# and no synchronising script. A single open blocker is enough to hold an issue
-# back, and closing the last blocker clears it within seconds, without any sync.
-# NOTE: an unknown negative qualifier does NOT error on GitHub — it silently
-# matches everything (measured: `-is:totallynotreal` returned all open issues),
-# so a typo here would leak blocked issues into pickup. tests/test-issue-pick.sh
-# pins the exact `-is:blocked` string for this reason.
+#   gh issue list --limit 1 --json number          OK  (x3, unfiltered)
+#   gh issue list --label X --state all            REJECTED
+#   gh issue list --search "…"                     REJECTED
+#   gh pr list --state open                        OK
+#   gh api repos/…/issues?labels=…                 OK
 #
-# gh search label semantics (probed empirically against a live repo with
-# gh 2.88.0, issue #12 — see tests/test-issue-pick.sh):
-#   - Multiple `label:"x" label:"y"` terms are ANDed: only issues carrying
-#     BOTH labels match. (label:"auto-run" label:"enhancement" → only the
-#     issue with both; an issue with auto-run alone does NOT match.)
-#   - Negative `-label:"x"` excludes and composes with positive label: terms
-#     (label:"auto-run" -label:"enhancement" → auto-run issues lacking
-#     enhancement).
-#   - Zero matches → gh exits 0 with empty/[] output, so `// empty` yields an
-#     empty string and the caller sees a clean "no candidate" signal.
-# This AND behaviour is exactly what the orchestrator wants (require every
-# configured label), so separate label:"…" terms are the correct encoding.
+# The account had been locked out of the search connection for 27 hours while
+# REST and plain listing answered normally, so pickup could not run at all. The
+# unfiltered control is what separates "the account is throttled" from "this
+# query shape is blocked" — without it both arms fail and prove nothing.
+#
+# The standing exclusions move from query qualifiers to LOCAL filtering, which
+# REST cannot express. That is a straight win for the negative label terms: the
+# old `-label:x` qualifiers failed OPEN (an unknown negative qualifier silently
+# matches everything, so a typo leaked excluded issues into pickup), whereas a
+# jq membership test on the label array cannot silently pass.
+#
+# `-is:blocked` has no REST equivalent, so its replacement is a real change and
+# not a translation. Dropping it outright would spin: S2b rejects a blocked issue
+# BEFORE the claim, so the same issue would be re-picked every tick forever. So
+# the candidates are walked oldest-first and each is probed with
+# count_open_blockers — the SAME authoritative dependency read S2b uses, over
+# REST, fail-closed — stopping at the first unblocked one. The usual cost is one
+# probe: in a dependency chain the oldest child is the runnable one. The probe
+# budget is capped so a repo whose backlog is entirely blocked cannot spend a
+# tick walking it; the cap yields "no candidate" and the next tick retries.
+# _pick_filter_jq — the local exclusion filter. These were query qualifiers
+# (`-label:waiting` …) until issue #133 moved pickup to REST. As a jq membership
+# test the set is strictly safer than it was: an unknown NEGATIVE qualifier does
+# not error on GitHub, it silently matches everything, so a typo used to leak
+# excluded issues into pickup. A typo here yields no match instead.
+_pick_filter_jq() {
+  printf '%s' '[ .[]
+     | select(.pull_request == null)
+     | select([.labels[].name] as $l
+              | ($l | index("auto-claimed")) == null
+              and ($l | index("waiting")) == null
+              and ($l | index("wip")) == null
+              and ($l | index("epic")) == null
+              and ($l | index($ENV.RUN_ISSUES_PICK_CLEAN)) == null)
+     | .number ] | .[]'
+}
+
 pick_oldest_candidate() {
   local repo="$1"
   local labels_csv="${2:-}"
   local owner_repo="${3:-}"
   # auto-clean issues are a teardown signal handled by the poller's scan_clean,
-  # never a development candidate — exclude them from new-issue pickup so a
-  # labelled issue is not picked up as work.
+  # never a development candidate.
   local clean_label="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
-  # Sort is encoded inside --search (sort:created-asc) because gh 2.83+
-  # no longer accepts standalone --sort/--order flags on `issue list`.
-  #
-  # `-label:epic` excludes epic issues from pickup (issue #81). An epic COLLECTS
-  # runnable sub-issues; it is never itself runnable (its "implementation" is its
-  # children's). Without this an epic carrying auto-run matches the pickup filter
-  # exactly like a leaf issue and would be launched against its aggregating body
-  # (docs/epic-orchestration.md §2). Like -is:blocked this reads GitHub's
-  # eventually-consistent SEARCH index, so orchestrate.sh re-checks authoritatively
-  # (is_epic) after the lock — the same second-line-of-defence pattern as S2b.
-  # auto-claimed is a FIXED name (like waiting/wip/epic), so it is a literal here;
-  # only the configurable clean label expands from ${clean_label}.
-  local search="is:open -label:auto-claimed -is:blocked -label:waiting -label:wip -label:epic -label:${clean_label} sort:created-asc"
+  local probe_cap="${RUN_ISSUES_PICK_BLOCKED_PROBES:-20}"
 
-  local extra=""
-  if [ -n "$labels_csv" ]; then
-    # Each label becomes a separate `label:"x"` term; gh ANDs them (see above).
-    # The IFS=',' split is confined to this command substitution so it does NOT
-    # leak into the subshell below — otherwise `$(_repo_args "$owner_repo")`
-    # would word-split on comma instead of space, passing "--repo owner/repo"
-    # as a single unknown flag and silently breaking pickup for any non-empty
-    # owner/repo. (See the matching fix in poller.sh's inline pickup.)
-    extra=$(
-      IFS=','
-      for label in $labels_csv; do
-        [ -n "$label" ] || continue
-        printf ' label:"%s"' "$label"
-      done
-    )
+  local qs candidates
+  qs="state=open&sort=created&direction=asc&per_page=100"
+  local want
+  want="$(_labels_query_csv "$labels_csv")"
+  [ -n "$want" ] && qs="labels=${want}&${qs}"
+
+  # REST /issues returns pull requests too (they are issues in GitHub's data
+  # model), so .pull_request must be excluded or a PR number would be handed to
+  # the orchestrator as an issue.
+  if ! candidates=$(
+    cd "$repo" || exit 1
+    # `gh api --jq` runs jq WITHOUT exposing jq's own --arg, so the configurable
+    # clean label is passed through the environment and read with jq's $ENV.
+    export RUN_ISSUES_PICK_CLEAN="$clean_label"
+    gh api "$(_rest_issues_path "$owner_repo" "$qs")" \
+      --jq "$(_pick_filter_jq)" 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
+  ); then
+    return 0   # unreachable / rejected => no candidate, same as an empty result
   fi
 
-  (
-    cd "$repo"
-    # Reading the issue list is unaffected by identity (no privacy boundary
-    # crossed) and used during pick — keep this on the gh-CLI default to avoid
-    # spending an App API call on every pick attempt.
-    # shellcheck disable=SC2046  # intentional word-splitting on _repo_args
-    gh issue list \
-      $(_repo_args "$owner_repo") \
-      --search "${search}${extra}" \
-      --limit 1 \
-      --json number \
-      --jq '.[0].number // empty'
-  )
+  local n probes=0 blockers
+  for n in $candidates; do
+    [ -n "$n" ] || continue
+    if [ "$probes" -ge "$probe_cap" ]; then
+      return 0
+    fi
+    probes=$((probes + 1))
+    if blockers=$(count_open_blockers "$repo" "$n" "$owner_repo"); then
+      if [ "$blockers" = "0" ]; then
+        printf '%s' "$n"
+        return 0
+      fi
+    fi
+    # Non-zero blockers, or an unreadable graph (fail-closed): not this one.
+  done
+  return 0
 }
 
 # issue_assignees <repo-root> <N> [<owner/repo>]
