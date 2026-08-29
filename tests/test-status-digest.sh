@@ -78,6 +78,36 @@ if printf '%s' "$OUT" | grep -q "orpo ajo"; then ok "A: stalled group present (m
 if printf '%s' "$OUT" | grep -q "issues/92"; then ok "A: issue link present"; else bad "A: issue link missing"; fi
 # cleanup runs must never appear.
 if printf '%s' "$OUT" | grep -q "#21"; then bad "A: cleanup run leaked into digest"; else ok "A: cleanup excluded"; fi
+
+# ---- fixture RL: an ACTIVE GitHub backoff (issue #126) ---------------------
+# A rate-limited factory produces no NEW attention runs, so without an explicit
+# signal it reads exactly like a quiet, healthy one. Three things must carry it:
+# the subject line, the body, and the fingerprint — the last so entering or
+# leaving the backoff sends a mail instead of waiting days for the heartbeat.
+FXRL="$FX/rl.json"
+jq '.runner = {version:"abc1234",behind_origin:0,pinned_version:null,
+               update_state:"up_to_date",pin_age_seconds:null,
+               rate_limited_until:1900000000,rate_limit_backoff_seconds:1200}' \
+   "$FXA" > "$FXRL"
+run "$FXRL" --dry-run --force
+check "RL: dry-run exit 0" "$RC" "0"
+if printf '%s' "$OUT" | grep -q "GitHubin kutsuraja"; then ok "RL: backoff named in body"; else bad "RL: backoff missing from body"; fi
+if printf '%s' "$OUT" | grep -q "Aihe:.*kutsuraja"; then ok "RL: backoff owns the subject line"; else bad "RL: subject does not mention the backoff"; fi
+if printf '%s' "$OUT" | grep -q "Aihe:.*kaikki kunnossa"; then bad "RL: subject still claims all is well"; else ok "RL: subject does not claim all is well"; fi
+if printf '%s' "$OUT" | grep -q "20 min"; then ok "RL: remaining backoff shown in minutes"; else bad "RL: remaining backoff not shown"; fi
+
+# The fingerprint must differ from the same document WITHOUT the backoff,
+# otherwise the state change is silently swallowed as "no change".
+: > "$STATE"
+run "$FXA" --dry-run --force >/dev/null 2>&1
+run "$FXA"            # writes the healthy fingerprint to $STATE
+run "$FXRL"           # same runs, backoff added
+if [ "$RC" = "0" ] && printf '%s' "$OUT" | grep -q "kutsuraja"; then
+  ok "RL: entering the backoff changes the fingerprint (sends despite identical runs)"
+else
+  bad "RL: backoff did not change the fingerprint (rc=$RC)"
+fi
+rm -f "$STATE"
 # dry-run must not create the state file.
 if [ -f "$STATE" ]; then bad "A: dry-run wrote state file"; else ok "A: dry-run wrote no state"; fi
 

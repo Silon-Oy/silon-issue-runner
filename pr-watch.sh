@@ -79,6 +79,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/pr-watch-lib.sh
 . "$SCRIPT_DIR/lib/pr-watch-lib.sh"
+
+# rate_limit_* (issue #126): the watcher spends the SAME GitHub quota as the
+# pollers, so it must be able to trip the shared backoff. Functions only.
+# shellcheck source=lib/rate-limit.sh
+. "$SCRIPT_DIR/lib/rate-limit.sh"
 # shellcheck source=lib/claude-call.sh
 . "$SCRIPT_DIR/lib/claude-call.sh"
 # shellcheck source=lib/preflight.sh
@@ -180,7 +185,28 @@ gh_route() {
   # ${repo_args[@]+"${repo_args[@]}"} expands to nothing when the array is empty
   # WITHOUT tripping `set -u` on bash 3.2 (macOS), which otherwise errors
   # "unbound variable" on a bare "${repo_args[@]}" for an empty array.
-  ( cd "$REPO_ROOT" && gha_with_token gh "$@" ${repo_args[@]+"${repo_args[@]}"} )
+  #
+  # Every gh call the watcher makes passes through here, which makes this the
+  # one place a rate-limit rejection can be seen (issue #126). stderr is captured
+  # rather than inherited so it can be INSPECTED, then re-emitted unchanged so
+  # nothing downstream loses an error message. On a rejection we trip the backoff
+  # the pollers share and set PR_RATE_LIMITED, which stops the scan loop — the
+  # alternative is what the 2026-08-28 outage did: keep asking, and keep feeding
+  # the limit that is refusing us.
+  local err rc=0
+  err=$(mktemp -t pr-watch-gh-err.XXXXXX)
+  ( cd "$REPO_ROOT" && gha_with_token gh "$@" ${repo_args[@]+"${repo_args[@]}"} ) 2>"$err" || rc=$?
+  if [ -s "$err" ]; then
+    cat "$err" >&2
+    if [ "${PR_RATE_LIMITED:-0}" -eq 0 ] && rate_limit_matches "$(cat "$err" 2>/dev/null || printf '')"; then
+      PR_RATE_LIMITED=1
+      local info
+      info="$(rate_limit_trip "$(rate_limit_state_file)")"
+      log "GitHub rate limit hit — backing off ${info##* }s and stopping this scan"
+    fi
+  fi
+  rm -f "$err"
+  return "$rc"
 }
 
 # run_field <run-id> <jq-path> — empty string if file/key missing.
@@ -1131,6 +1157,10 @@ if [ "$TARGET" = "scan" ]; then
   rc_final=2
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    if [ "${PR_RATE_LIMITED:-0}" -eq 1 ]; then
+      log "scan: stopping early — GitHub rate limit (remaining PRs deferred to a later tick)"
+      break
+    fi
     found=1
     pr_num="${line%% *}"
     rid="${line#* }"

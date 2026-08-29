@@ -418,6 +418,23 @@ if [ -f "$HTMLRN" ]; then
   presenti "pin_pending self-correcting wording" "korjaantuu itsestään" "$HTMLRN"
   presenti "behind_upstream label" "Jäljessä yläjuoksusta" "$HTMLRN"
   presenti "behind_upstream next step" "Odota pinnin nostoa" "$HTMLRN"
+  # Rate-limit banner (issue #126). It must be INDEPENDENT of update_state: a
+  # runner can be perfectly up to date and still locked out of the API, which is
+  # exactly the state that stayed invisible for ten hours on 2026-08-28.
+  present "JS reads runner.rate_limited_until" "rate_limited_until" "$HTMLRN"
+  present "JS reads runner.rate_limit_backoff_seconds" "rate_limit_backoff_seconds" "$HTMLRN"
+  presenti "rate-limit banner label" "GitHubin kutsuraja" "$HTMLRN"
+  presenti "rate-limit banner says it resumes by itself" "jatkuu automaattisesti" "$HTMLRN"
+  # The banner is rendered BEFORE the up_to_date early return, so an up-to-date
+  # runner still shows it. Guard the ordering, since a later edit that moved the
+  # early return back up would silently hide every rate-limit banner.
+  RL_POS=$(grep -n "rate_limited_until != null" "$HTMLRN" | head -1 | cut -d: -f1)
+  UD_POS=$(grep -n 'update_state === "up_to_date"' "$HTMLRN" | head -1 | cut -d: -f1)
+  if [ -n "$RL_POS" ] && [ -n "$UD_POS" ] && [ "$RL_POS" -lt "$UD_POS" ]; then
+    ok "rate-limit banner renders before the up_to_date early return"
+  else
+    bad "rate-limit banner is behind the up_to_date guard (rl=$RL_POS ud=$UD_POS)"
+  fi
 fi
 
 # ---- Case 5b: degraded + zero-runs document still renders (exit 0, verbatim) ----

@@ -164,14 +164,24 @@ N_SELECTED="$(printf '%s' "$INPUT" | jq --argjson classes "$CLASSES" \
   '[.runs[] | select(.class as $c | $classes | index($c))] | length')"
 
 # Fingerprint = sha256 over the sorted (run_id, class, class_reason) list of the
-# selected runs. Empty set => sha of the empty string, a stable constant.
+# selected runs, plus whether a GitHub backoff is active (issue #126). Empty set
+# => sha of a stable constant.
+#
+# The backoff belongs in the fingerprint because entering or leaving it IS the
+# news: a rate-limited factory produces no new attention runs, so without this
+# term it fingerprints identically to a quiet, healthy one and stays silent until
+# the heartbeat fires days later — the exact failure this digest exists to
+# prevent.
 sha256() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 | awk '{print $1}'
   else sha256sum | awk '{print $1}'; fi
 }
 FINGERPRINT="$(printf '%s' "$INPUT" | jq -r --argjson classes "$CLASSES" '
-  [.runs[] | select(.class as $c | $classes | index($c))
-   | "\(.run_id)\t\(.class)\t\(.class_reason)"] | sort | .[]' | sha256)"
+  (((.runner // {}) | .rate_limited_until) | if . == null then "no" else "yes" end) as $rl
+  | ([.runs[] | select(.class as $c | $classes | index($c))
+      | "\(.run_id)\t\(.class)\t\(.class_reason)"] | sort)
+    + ["rate_limited=\($rl)"]
+  | .[]' | sha256)"
 
 # ---- read prior state (fingerprint + last-send epoch) ----
 PRIOR_FP=""
@@ -247,6 +257,8 @@ build_body() {
     | ($sel | length) as $n
     | ($sel | map(.repo_path) | unique | length) as $nrepos
     | (.read_errors // [] | length) as $nerr
+    | ((.runner // {}) | .rate_limited_until) as $rl
+    | ((.runner // {}) | .rate_limit_backoff_seconds) as $rlsecs
     | ($sel | group_by(.class_reason)
         | map({ reason: .[0].class_reason,
                 count: length,
@@ -257,6 +269,10 @@ build_body() {
         ["\($host) — \($generated) — paikallinen data", ""]
         + (if $nerr > 0 then
              ["⚠ Vajaa luenta: \($nerr) run.json-tiedostoa lukukelvottomia — kooste voi olla epätäydellinen.", ""]
+           else [] end)
+        + (if $rl != null then
+             ["⚠ GitHubin kutsuraja: ajo on tauolla ja jatkuu automaattisesti noin \(($rlsecs // 0) / 60 | floor) min kuluttua.",
+              "  Pollerit perääntyvät eivätkä kuormita rajaa lisää. Alla oleva tilanne voi siis olla vanhentunut.", ""]
            else [] end)
         + (if $n == 0 then
              ["Kaikki kunnossa: ei huomiota vaativia ajoja.",
@@ -303,7 +319,14 @@ fi
 
 BODY="$(build_body)"
 
-if [ "$N_SELECTED" -gt 0 ]; then
+# An active GitHub backoff OWNS the subject line (issue #126). A rate-limited
+# factory produces no new attention runs, so N_SELECTED is typically 0 and the
+# subject would read "kaikki kunnossa" while nothing is running at all — the
+# precise illusion that let the 2026-08-28 outage go unnoticed for ten hours.
+RL_ACTIVE="$(printf '%s' "$INPUT" | jq -r '((.runner // {}) | .rate_limited_until) // empty' 2>/dev/null || printf '')"
+if [ -n "$RL_ACTIVE" ]; then
+  SUBJECT="$SUBJECT_PREFIX: GitHubin kutsuraja — ajo tauolla ($HOST)"
+elif [ "$N_SELECTED" -gt 0 ]; then
   SUBJECT="$SUBJECT_PREFIX: $N_SELECTED huomiota vaativaa ajoa ($HOST)"
 else
   SUBJECT="$SUBJECT_PREFIX: kaikki kunnossa ($HOST)"

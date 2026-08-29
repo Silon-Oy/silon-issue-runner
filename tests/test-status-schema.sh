@@ -91,9 +91,18 @@ done
 # The info is local git metadata, so it is emitted in plain (local) mode too. ----
 check "runner is an object" "$(jq -r '.runner | type' "$OUT")" "object"
 RUNNER_MISSING="$(jq -r '
-  (["version","behind_origin","pinned_version","update_state","pin_age_seconds"]) as $req
+  (["version","behind_origin","pinned_version","update_state","pin_age_seconds",
+    "rate_limited_until","rate_limit_backoff_seconds"]) as $req
   | ($req - (.runner | keys)) | join(",")' "$OUT")"
-check "runner has all five fields" "$RUNNER_MISSING" ""
+check "runner has all seven fields" "$RUNNER_MISSING" ""
+# Rate-limit fields (issue #126) are ADDITIVE to the #105 object and, like the
+# rest of it, local — present without --github. They are null unless a backoff
+# deadline is actually in the future, so a stale state file from a past outage
+# can never make a healthy runner look throttled.
+check "runner.rate_limited_until null when healthy" \
+  "$(jq -r '.runner.rate_limited_until' "$OUT")" "null"
+check "runner.rate_limit_backoff_seconds null when healthy" \
+  "$(jq -r '.runner.rate_limit_backoff_seconds' "$OUT")" "null"
 # update_state is one of the four documented words.
 BAD_STATE="$(jq -r '.runner.update_state | select(. != "up_to_date" and . != "pin_pending" and . != "behind_upstream" and . != "unknown")' "$OUT")"
 check "runner.update_state in enum" "$BAD_STATE" ""
@@ -167,6 +176,7 @@ if jq -e . "$OUT_NG" >/dev/null 2>&1; then ok "non-git output is valid JSON"; el
 check "non-git runner.update_state unknown" "$(jq -r '.runner.update_state' "$OUT_NG")" "unknown"
 check "non-git runner.version '?'" "$(jq -r '.runner.version' "$OUT_NG")" "?"
 check "non-git runner.pinned_version null" "$(jq -r '.runner.pinned_version' "$OUT_NG")" "null"
+check "non-git runner.rate_limited_until null" "$(jq -r '.runner.rate_limited_until' "$OUT_NG")" "null"
 
 echo "----------------------------------------"
 echo "status-schema: PASS=$PASS FAIL=$FAIL"

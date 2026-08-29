@@ -279,6 +279,7 @@ jotta kaksi listaa ei ajaudu erilleen.
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku; asetettuna ainoa ehdokas |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Pollerien lokihakemisto |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee siivouksen |
+| `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` poistaa GitHubin kutsurajan perääntymisen käytöstä (#126). Oletuksena pollerit odottavat kasvavan ajan (5→60 min) rajaan törmättyään, koska torjuttu pyyntö pidentää estoa |
 | `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | Siivouslabelin repo-laajuisen listauksen rivikatto (#124); ylittyessä kattamattomat issuet luetaan yksitellen ja lokiin tulee WARNING |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Kuinka vanha ajo tulkitaan jumiutuneeksi ja tapetaan (6.6 f) |
 

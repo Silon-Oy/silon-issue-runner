@@ -84,6 +84,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 # runner object is available WITHOUT --github (the info is local, not GitHub).
 # shellcheck source=lib/version.sh
 . "$RUN_ISSUES_HOME/lib/version.sh"
+
+# rate_limit_* (issue #126): the runner object reports an ACTIVE backoff, and the
+# --github sweep stops early on a rejection instead of asking 18 more times.
+# shellcheck source=lib/rate-limit.sh
+. "$RUN_ISSUES_HOME/lib/rate-limit.sh"
 # --github enrichment: pr_decide / pr_ci_state (pr-watch-lib.sh), gha_with_token
 # (github-app-auth.sh), the shared epic child-set resolver (issue.sh's
 # list_epic_children — issue #91: the view resolves epic children through the SAME
@@ -381,12 +386,16 @@ RUNNER_BEHIND="$(runner_behind_origin "$RUN_ISSUES_HOME")"
 RUNNER_PINNED="$(runner_pinned_version "$RUN_ISSUES_HOME")"
 RUNNER_STATE="$(runner_update_state "$RUN_ISSUES_HOME")"
 RUNNER_PIN_EPOCH="$(runner_pin_commit_epoch "$RUN_ISSUES_HOME")"
+# Only an ACTIVE deadline is reported: a stale state file left over from a past
+# outage must not make a healthy runner look throttled.
+RUNNER_RATE_LIMIT="$(rate_limit_status_json "$(rate_limit_state_file)" "$NOW_EPOCH")"
 RUNNER_JSON="$(jq -nc \
   --arg version "$RUNNER_VERSION" \
   --arg behind "$RUNNER_BEHIND" \
   --arg pinned "$RUNNER_PINNED" \
   --arg state "$RUNNER_STATE" \
   --arg pinepoch "$RUNNER_PIN_EPOCH" \
+  --argjson rl "$RUNNER_RATE_LIMIT" \
   --argjson now "$NOW_EPOCH" '
   {
     version: $version,
@@ -395,7 +404,7 @@ RUNNER_JSON="$(jq -nc \
     update_state: $state,
     pin_age_seconds: (if $pinepoch == "" then null
                       else (($now - ($pinepoch | tonumber)) as $a | if $a < 0 then 0 else $a end) end)
-  }' 2>/dev/null || printf '{"version":"?","behind_origin":null,"pinned_version":null,"update_state":"unknown","pin_age_seconds":null}')"
+  } + $rl' 2>/dev/null || printf '{"version":"?","behind_origin":null,"pinned_version":null,"update_state":"unknown","pin_age_seconds":null,"rate_limited_until":null,"rate_limit_backoff_seconds":null}')"
 
 # ---- optional GitHub enrichment (--github) ----------------------------------
 # Fill each run's `github` sub-object from `gh pr list` ONCE per owner/repo,
@@ -470,6 +479,10 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   CACHE_OUT="$CACHE_IN"
   mkdir -p "$TMPD/gh"
   FAILED_FILE="$TMPD/gh_failed.txt"; : > "$FAILED_FILE"
+  # Captured gh stderr for the enrichment sweep (issue #126). Inspected only to
+  # tell a rate-limit rejection apart from an ordinary per-repo failure.
+  GH_ENRICH_ERR="$TMPD/gh_enrich_err.txt"; : > "$GH_ENRICH_ERR"
+  ENRICH_RATE_LIMITED=0
   OWNER_META="$TMPD/gh_owner_meta.tsv"; : > "$OWNER_META"  # owner \t status \t age
   gh_i=0
   MIN_FETCHED_EPOCH=""
@@ -526,7 +539,7 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     # enrichment and owns repos_failed; the issue-title fetch is best-effort on
     # top (a failure only drops titles for this repo, never marks it failed).
     if [ "$used_cache" -ne 1 ]; then
-      if prs="$(status_github_fetch_open_prs "$owner")" && [ -n "$prs" ] \
+      if prs="$(status_github_fetch_open_prs "$owner" 2>>"$GH_ENRICH_ERR")" && [ -n "$prs" ] \
          && printf '%s' "$prs" | jq -e 'type == "array"' >/dev/null 2>&1; then
         fetched_at="$GENERATED_AT"
         fetched_epoch="$NOW_EPOCH"
@@ -584,6 +597,18 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
       else
         # Network failure / rate limit / bad payload => this repo failed.
         printf '%s\n' "$owner" >> "$FAILED_FILE"
+        # A rate-limit rejection is not this repo's problem, it is the account's
+        # (issue #126): the remaining owners would fail identically, and each
+        # rejection feeds the limit that produced it. Stop the sweep. Enrichment
+        # stays fail-soft — the document is still emitted and the un-attempted
+        # repos simply keep their local classification (github: null), exactly as
+        # if they had been unreachable. status.sh does NOT trip the shared backoff:
+        # it is a read-only view, and a page refresh must not be able to throttle
+        # the pollers.
+        if rate_limit_file_matches "$GH_ENRICH_ERR"; then
+          ENRICH_RATE_LIMITED=1
+          break
+        fi
         continue
       fi
     fi

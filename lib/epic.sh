@@ -92,7 +92,7 @@ epic_list_open() {
       --search "${search}${extra}" \
       --limit 100 \
       --json number \
-      --jq '.[].number' 2>/dev/null
+      --jq '.[].number' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ) || true
 }
 

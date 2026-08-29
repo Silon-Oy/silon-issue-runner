@@ -34,6 +34,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/log-rotate.sh
 . "${RUN_ISSUES_HOME}/lib/log-rotate.sh"
 
+# rate_limit_* (issue #126). Functions only; the gate itself runs below, once the
+# log path is known.
+# shellcheck source=lib/rate-limit.sh
+. "${RUN_ISSUES_HOME}/lib/rate-limit.sh"
+
 # Machine configuration; the pollers' only channel under launchd, which hands
 # an agent no environment of its own. Sourced, so the FILE WINS over an
 # inherited environment variable. Deliberately not ~/.config/run-issues/env:
@@ -130,6 +135,18 @@ RUNNER_BEHIND=$(runner_behind_origin "$RUN_ISSUES_HOME")
 echo "$(date -u +%FT%TZ) pr-watch-poller: version=$RUNNER_VER behind_origin=$RUNNER_BEHIND" >> "$LOG"
 if [ "$RUNNER_BEHIND" != "?" ] && [ "$RUNNER_BEHIND" -gt 0 ] 2>/dev/null; then
   echo "$(date -u +%FT%TZ) pr-watch-poller: WARNING running $RUNNER_BEHIND commits behind origin/main (pinned submodule?)" >> "$LOG"
+fi
+
+# ----- Rate-limit backoff gate (issue #126) --------------------------------
+# The two pollers spend ONE GitHub quota, so they share one backoff deadline:
+# a watcher that kept scanning while the issue poller backed off would keep the
+# secondary limit alive for both. The deadline is checked before any gh call and
+# the tick exits 0 with a single log line — pr-watch.sh itself trips the ladder
+# (see gh_route), so a rejection seen by either side stops both.
+RATE_LIMIT_FILE="$(rate_limit_state_file)"
+if rate_limit_active "$RATE_LIMIT_FILE"; then
+  echo "$(date -u +%FT%TZ) pr-watch-poller: backing off after GitHub rate limit — skipping tick until $(date -u -r "$RATE_LIMIT_DEADLINE" +%FT%TZ 2>/dev/null || echo "$RATE_LIMIT_DEADLINE")" >> "$LOG"
+  exit 0
 fi
 
 GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")

@@ -291,6 +291,7 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .runner-state{padding:.55rem .8rem;border-radius:6px;margin:.5rem 0 .8rem;font-size:.9rem;
   border:1px solid var(--border);background:var(--card)}
 .runner-state.rs-behind_upstream,.runner-state.rs-unknown{border-color:var(--c-attention)}
+.runner-state.rs-rate_limited{border-color:var(--c-attention)}
 .runner-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:.6rem}
 .runner-label{font-weight:600}
 .runner-ver{color:var(--muted);font-size:.82rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -752,7 +753,24 @@ a:hover{text-decoration:underline}
     var box = document.getElementById("runner");
     clear(box);
     var rn = data.runner;
-    if (!rn || !rn.update_state || rn.update_state === "up_to_date") return;
+    if (!rn) return;
+    // Rate-limit banner (#126). Deliberately INDEPENDENT of update_state: a
+    // runner can be perfectly up to date and still be locked out of the GitHub
+    // API, and that is the state the 2026-08-28 outage left invisible for ten
+    // hours. Shown only while a deadline is actually in the future (status.sh
+    // nulls the field otherwise), so a past outage leaves nothing behind.
+    if (rn.rate_limited_until != null) {
+      var rlw = el("div", "runner-state rs-rate_limited");
+      var rlh = el("div", "runner-head");
+      rlh.appendChild(el("span", "runner-label", "GitHubin kutsuraja — ajo tauolla"));
+      if (rn.rate_limit_backoff_seconds != null)
+        rlh.appendChild(el("span", "runner-ver", "jatkuu " + dur(rn.rate_limit_backoff_seconds) + " kuluttua"));
+      rlw.appendChild(rlh);
+      rlw.appendChild(el("div", "runner-next",
+        "Pollerit perääntyvät itsestään eivätkä kuormita rajaa lisää. Ajo jatkuu automaattisesti."));
+      box.appendChild(rlw);
+    }
+    if (!rn.update_state || rn.update_state === "up_to_date") return;
     var info = RUNNER_STATES[rn.update_state] || {label: rn.update_state, next: ""};
     var wrap = el("div", "runner-state rs-" + rn.update_state);
     var head = el("div", "runner-head");

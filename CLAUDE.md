@@ -657,6 +657,7 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 | `log-rotate.sh` | Pollerien koon perusteella laukeava lokirotaatio (#65): `rotate_log_if_big` siirtää lokitiedoston `.1`:ksi rajan ylittyessä, yksi sukupolvi. Erillinen lib eikä `poller-config.sh`, jotta sen puhtausväite säilyy — tämä tekee levykirjoituksen (`mv`). Sourcetaan **ennen** pollerin `exec`-uudelleenohjausta, koska jo avatun fd:n tiedoston siirto olisi no-op |
 | `pr-watch-lib.sh` | PR:n luokittelu- ja merge-päätöslogiikka (irrotettu testattavaksi). Ml. `pr_last_decision` (#65): lukee state.jsonlin **hännästä** viimeisimmän `pr_classified`-päätöksen, jotta `pr-watch.sh` osaa vaieta toistuvan `SKIP_CLOSED`-tapahtumatrion |
 | `preflight.sh` | Jaettu ulkoisten riippuvuuksien tarkistus. Puhtaat funktiot, vakavuus paluukoodissa: `install.sh` käyttää neuvoa-antavasti, orkestraattorin S0-portti (#7) tekee samasta lähteestä fataalin (exit 8). Korjauskomennot tulevat yhdestä lähteestä (`preflight_install_hint`) |
+| `rate-limit.sh` | GitHub-rate-limitin tunnistus ja perääntyminen (#126). `rate_limit_matches` (puhdas predikaatti gh:n virhetekstille), `rate_limit_active`/`rate_limit_trip`/`rate_limit_clear` (jaettu tilatiedosto `$RUN_ISSUES_LOG_DIR/.rate-limit-backoff`, yksi rivi `<deadline-epoch> <askel>`, portaat 300→600→1200→2400→3600 s) ja `rate_limit_status_json` (`runner`-objektin kentät). **Tunnistus on tekstuaalinen eikä mittariin perustuva** — ks. §7.1:n mittaus. Tilatiedosto on **molempien pollerien jakama**: ne kuluttavat samaa kiintiötä, joten toisen perääntyminen ei auta jos toinen jatkaa. Puhtaita funktiomääritelmiä; korruptoitunut tai puuttuva tila = "ei perääntymistä", ei koskaan pysyvä esto. Vartija `tests/test-rate-limit-backoff.sh` |
 | `render-prompt.test.sh` | `render_prompt`in yksikkötestit (rekursiivinen sijoitus) |
 | `run-terminate.sh` | Elävän ajon turvallinen lopetus kutsuttavana funktiona (#63): `run_terminate <run-dir> <reason-slug> [<context>]` — host-portti, eksakti tmux-tappo, `state_finalize`+`state_event`, best-effort `needs-human`-label + tilannekommentti, lukon purku ajon **omasta** tallennetusta identiteetistä (`repo_slug`+`remote`, #67). Irrotettu `poller.sh:finalize_stalled`in rungosta, joka `exit 0`si source-hetkellä vieraalla koneella eikä siksi ollut kutsuttavissa muualta; `stop-run.sh` (#64) käyttää samaa polkua monistamatta turvakriittistä logiikkaa. Puhtaasti funktiomääritelmiä, sourcetaan turvallisesti (sourcaa omat riippuvuutensa). Loki `_run_terminate_log`illa (`declare -F log` → `$LOG` → stderr). Tilannekommentti haarautuu `context`in mukaan (#64): `stalled` kantaa awaiting-answer-markerin (`scan_blocked_answered` uusii ajon vastauksella, #57), `stopped` **ei** kanna markeria (scope-out: ei automaattista uudelleenkäynnistystä) ja osoittaa siivoukseen. `finalize_stalled` on nyt ohut kutsuja joka välittää `stalled_in_<current_state>`; vartija `tests/test-poller-stale-detection.sh` (muuttumaton) + `tests/test-run-terminate.sh` |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
@@ -704,6 +705,7 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 | `RUN_ISSUES_HOME` | *(pollerin oma `SCRIPT_DIR`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Luetaan vain ympäristöstä |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Liveness-raja: vanhempi ajo tapetaan ja finalisoidaan `blocked/stalled_in_<state>`. **Täytyy** ylittää pisin laillinen yksivaiheinen claude-kutsu |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee `auto-clean.sh`:n |
+| `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` = poista perääntyminen käytöstä (#126). Hätävara samalla perusteella kuin `RUN_ISSUES_SKIP_PREFLIGHT`: uusi portti ei saa koskaan olla syy siihen, ettei ajo käynnisty toimivalla koneella. Luetaan kummassakin pollerissa, `pr-watch.sh`:ssa ja `status.sh`:ssa |
 | `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | **Vain `poller.sh`:n `scan_clean`.** Montako riviä siivouslabelin repo-laajuinen listaus hakee (#124). Ylittyessään lista ei enää todista poissaoloa, joten kattamattomat paikalliset issuet luetaan yksitellen ja lokiin tulee WARNING. Nosto on halpa; oletus riittää kunnes labeloituja issueita on ≥200 |
 | `PR_WATCH_GLOBAL_MAX` | *(watchlistin `pr_watch_max_concurrent`, tai sen puuttuessa `global_max_concurrent`)* | **Vain `pr-watch-poller.sh`.** PR-vahdin oma rinnakkaisuuskatto (#47). PR-skannaus on sekuntien työ, joten se voi käydä selvästi korkeammalla katolla kuin kymmenien minuuttien orkestraattoriajot ilman että `poller.sh`:n rinnakkaisuus kasvaa. Ympäristömuuttuja voittaa watchlist-avaimen |
 
@@ -737,6 +739,28 @@ jatkokohtaa) ja puuttuva/korruptoitunut tiedosto vain aloittaa alusta. `poller.s
 kursoria — sen pitkät ajot varaavat slotit yli tikkien, joten se ei kärsi samasta
 nälkiintymisestä. `tests/test-pr-watch-poller-rotation.sh` vartioi rotaatiota, kattoa ja
 kursorin kestävyyttä.
+
+**Rate-limit-perääntyminen (#126).** Kumpikin poller tarkistaa tikin **alussa, ennen ensimmäistäkään
+gh-kutsua**, jaetun takarajan (`lib/rate-limit.sh`, §6) ja exittaa siististi 0 yhdellä lokirivillä jos se
+ei ole ohi. Havainto tehdään **gh:n virhetekstistä**, ei kiintiömittarista, ja tästä on mittaus: 2026-08-29
+luettiin `gh api rate_limit`, tehtiin kolme kutsua (`gh issue list --search`, `gh issue view`,
+`gh issue list --label`) ja luettiin uudelleen — `search`-, `graphql`- ja `core`-laskurit **eivät liikkuneet
+lainkaan**, ja estotilan aikana sama endpoint raportoi `graphql 5000/5000, used 0` samalla kun jokainen
+kutsu kaatui. Estävä raja on sekundäärinen eikä ole näkyvissä. **Sitova seuraus: kutsua ei saa koskaan
+portittaa kiintiölukemalla.**
+
+Ensimmäisestä havainnosta `poller.sh` keskeyttää koko tikin (`break 2`) sen sijaan että toistaisi saman
+kutsun lopuille repoille; `pr-watch.sh` tunnistaa saman `gh_route`ssa — sen ainoassa gh-kuristuskohdassa —
+ja pysäyttää skannauksensa. Jo tmuxiin käynnistettyihin ajoihin ei kosketa: ne ovat pitkäkestoisia ja
+etenevät ilman listauskutsuja. Vaiennettu stderr saadaan talteen `RUN_ISSUES_GH_ERR`-muuttujalla, jonka
+kirjastopolut (`epic_list_open`, siivouslabelin haku, `fetch_issue_json`) kirjoittavat sen sijaan että
+heittäisivät virheen `/dev/null`iin; asettamattomana se **on** `/dev/null`, joten muiden kutsujien käytös
+ei muutu. Puhtaasti läpi mennyt tikki nollaa portaan. `status.sh --github` keskeyttää sweepin samasta
+havainnosta muttei **koskaan kirjoita** takarajaa — se on lukeva näkymä, eikä sivun päivityksen kuulu
+voida hidastaa pollereita.
+
+Lokikohina vaimennetaan tarkoituksella: yksi rivi per ohitettu tikki, ei per kutsu. Se on #65:n oppi
+sovellettuna — alkuperäinen häiriö kirjoitti 1754 identtistä riviä eikä yksikään niistä ollut signaali.
 
 **Toimituskanava.** launchd ei anna agentille omaa ympäristöä, eivätkä login-tiedostot sisällä
 mitään run-issues-kohtaista, joten LaunchAgent-ajossa — ainoassa tuotantotilassa —

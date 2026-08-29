@@ -36,6 +36,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/log-rotate.sh
 . "${RUN_ISSUES_HOME}/lib/log-rotate.sh"
 
+# rate_limit_* (issue #126). Sourced here so the backoff gate below can run
+# before the first gh call of the tick. Defines functions only; no top-level work.
+# shellcheck source=lib/rate-limit.sh
+. "${RUN_ISSUES_HOME}/lib/rate-limit.sh"
+
 # Machine configuration. launchd hands an agent no environment of its own and
 # the login files hold nothing run-issues-specific, so this file is the only
 # channel through which a machine can configure its pollers. It is sourced, so
@@ -398,7 +403,7 @@ scan_answered() {
 
     # Network: only for this local, parked run. Find the marker, then a reply.
     local issue_json
-    issue_json=$(fetch_issue_json "$repo" "$inum" "$owner_repo" "$effective_remote" 2>/dev/null || true)
+    issue_json=$(fetch_issue_json "$repo" "$inum" "$owner_repo" "$effective_remote" 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || true)
     [ -n "$issue_json" ] || continue
     local tmp_json
     tmp_json=$(mktemp)
@@ -465,7 +470,7 @@ scan_blocked_answered() {
 
     # Network: only for this local, blocked run. One fetch yields state + comments.
     local issue_json
-    issue_json=$(fetch_issue_json "$repo" "$inum" "$owner_repo" "$effective_remote" 2>/dev/null || true)
+    issue_json=$(fetch_issue_json "$repo" "$inum" "$owner_repo" "$effective_remote" 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || true)
     [ -n "$issue_json" ] || continue
     local tmp_json
     tmp_json=$(mktemp)
@@ -571,7 +576,7 @@ scan_clean() {
       --state all \
       --limit "$limit" \
       --json number,labels \
-      --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))"' 2>/dev/null
+      --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))"' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ) > "$labelled" || true
   rows=$(wc -l < "$labelled" 2>/dev/null | tr -d ' ')
   [ -n "$rows" ] || rows=0
@@ -592,7 +597,7 @@ scan_clean() {
       # shellcheck disable=SC2086  # intentional word-splitting on repo_args
       labels=$(
         cd "$repo_path"
-        gh issue view "$n" $repo_args --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo ""
+        gh issue view "$n" $repo_args --json labels --jq '[.labels[].name] | join(",")' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || echo ""
       )
     else
       # The list is complete and does not mention this issue => not labelled.
@@ -627,6 +632,48 @@ echo "$(date -u +%FT%TZ) poller: version=$RUNNER_VER behind_origin=$RUNNER_BEHIN
 if [ "$RUNNER_BEHIND" != "?" ] && [ "$RUNNER_BEHIND" -gt 0 ] 2>/dev/null; then
   echo "$(date -u +%FT%TZ) poller: WARNING running $RUNNER_BEHIND commits behind origin/main (pinned submodule?)" >> "$LOG"
 fi
+
+# ----- Rate-limit backoff gate (issue #126) --------------------------------
+# GitHub's blocking limit is secondary and invisible to `gh api rate_limit`
+# (measured: the counters do not move, and during the outage the endpoint
+# reported a full quota while every call failed). So the only signal is a
+# rejection, and the only safe response is to stop asking for a while: each
+# rejected request feeds the very limit that produced it, which is how one
+# outage lasted ten hours and wrote 1754 identical stderr lines.
+#
+# The deadline is checked BEFORE any network work — including the liveness
+# sweep, which posts situation comments — and the tick exits 0. One log line per
+# skipped tick, not one per call: the suppression IS the feature (issue #65's
+# lesson). State is shared with pr-watch-poller because they spend one quota.
+RATE_LIMIT_FILE="$(rate_limit_state_file)"
+if rate_limit_active "$RATE_LIMIT_FILE"; then
+  echo "$(date -u +%FT%TZ) poller: backing off after GitHub rate limit — skipping tick until $(date -u -r "$RATE_LIMIT_DEADLINE" +%FT%TZ 2>/dev/null || echo "$RATE_LIMIT_DEADLINE")" >> "$LOG"
+  exit 0
+fi
+
+# Every gh call this tick appends its stderr here as well as to its usual sink,
+# so a rejection is detectable even on the paths that deliberately discard it
+# (epic_list_open, the clean-label query, fetch_issue_json). Library helpers
+# honour RUN_ISSUES_GH_ERR and fall back to /dev/null when it is unset, so no
+# other caller changes behaviour.
+GH_ERR=$(mktemp -t run-issues-gh-err.XXXXXX)
+export RUN_ISSUES_GH_ERR="$GH_ERR"
+trap 'rm -f "$GH_ERR"' EXIT
+RATE_LIMIT_HIT=0
+
+# _rl_hit — 0 when a rejection has appeared in this tick's captured stderr. On
+# the first hit it escalates the backoff and logs once; callers break out of the
+# repo loop. Runs already spawned into tmux are left alone: they are long-lived
+# and can make progress without the listing calls that failed here.
+_rl_hit() {
+  [ "$RATE_LIMIT_HIT" -eq 0 ] || return 0
+  rate_limit_file_matches "$GH_ERR" || return 1
+  RATE_LIMIT_HIT=1
+  local info
+  info="$(rate_limit_trip "$RATE_LIMIT_FILE")"
+  echo "$(date -u +%FT%TZ) poller: GitHub rate limit hit — aborting tick, backing off ${info##* }s" >> "$LOG"
+  return 0
+}
 
 # ----- Pre-loop liveness sweep (across ALL watchlist repos) ----------------
 # A wedged orchestrator can keep its tmux session alive forever (issue #49: a
@@ -833,6 +880,10 @@ while IFS= read -r repo_json; do
         >> "$LOG" 2>&1 || true
     done < <(epic_list_open "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO")
 
+    # Everything above this line touched the network. Stop the whole sweep on
+    # the first rejection rather than repeating it for the remaining repos.
+    if _rl_hit; then break 2; fi
+
     # ----- Pick a new candidate issue (per remote) -------------------------
     # The ONLY pickup search in the package lives in lib/issue.sh (issue #99): the
     # poller delegates to pick_oldest_candidate so there is a single query and a
@@ -842,7 +893,9 @@ while IFS= read -r repo_json; do
     # never drift from the library. pick_oldest_candidate is testable by sourcing;
     # this inline call site is not (the poller exits at source time on a foreign
     # host), which is the other half of the reason to move it into the library.
-    ISSUE_NUM=$(pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" || true)
+    ISSUE_NUM=$(pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" 2>>"$GH_ERR" || true)
+
+    if _rl_hit; then break 2; fi
 
     if [ -z "$ISSUE_NUM" ]; then
       continue
@@ -875,3 +928,9 @@ while IFS= read -r repo_json; do
       "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '$RUNS_LOG'"
   done
 done < <(jq -c '.repos[]?' "$WATCHLIST")
+
+# A tick that got through every repo without a rejection means GitHub is serving
+# us again — forget the ladder so the next outage starts from the first rung.
+if [ "$RATE_LIMIT_HIT" -eq 0 ]; then
+  rate_limit_clear "$RATE_LIMIT_FILE"
+fi
