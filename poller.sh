@@ -493,11 +493,33 @@ scan_blocked_answered() {
 # Two phases keep network use minimal (the same discipline as scan_answered):
 #   Phase 1 — collect the unique set of issue numbers that have a local run-dir
 #             matching the (host, remote) gate. No network.
-#   Phase 2 — for each unique issue only, one `gh issue view --repo owner/repo`
-#             to read its labels in the right org. When owner/repo is empty,
-#             gh falls back to cwd-based resolution (legacy single-remote).
-# bash 3.2 has no associative arrays, so the unique set is a temp file fed
-# through `sort -u`.
+#   Phase 2 — ONE `gh issue list --label <clean-label>` for the whole repo,
+#             then intersect against phase 1 locally (issue #124).
+#
+# Phase 2 used to be one `gh issue view` PER unique local issue. That made the
+# cost O(historical run-dirs) rather than O(work): measured at 337 GraphQL calls
+# per tick across the Studio watchlist (~4000/hour from this function alone),
+# which is what exhausted the shared GitHub quota on 2026-08-28 and stalled all
+# 18 repos for over ten hours. Asking about the LABEL instead of about every
+# issue makes it O(1) per repo while the answer stays identical: the label list
+# comes from the issues connection (authoritative), NOT the eventually-consistent
+# search index, and auto-clean-skipped is read from the same payload.
+#
+# `--state all` is REQUIRED. A clean target is frequently already closed (PR
+# merged => issue auto-closed => run-dir still on disk; the Ohjaamo "Siivoa"
+# button targets exactly those). `--state open` would drop them silently —
+# measured 2026-08-29: every auto-clean-labelled issue in the org was closed.
+#
+# TRUNCATION. gh caps the list at --limit rows, and past that the list is no
+# longer proof of ABSENCE. Every local issue the list did not cover is therefore
+# resolved with the old targeted `gh issue view`, and a WARNING names the repo.
+# Without that fallback the fast path would be a SILENT correctness regression:
+# a truncated list would read as "nothing to clean" exactly when there is
+# something to clean. The ceiling is real rather than theoretical because the
+# label is never removed after a successful clean, so it accumulates on closed
+# issues (measured 2026-08-29: customer-a-report 100, claude-issue-runner 29).
+# bash 3.2 has no associative arrays, so both the unique set and the label map
+# are temp files.
 scan_clean() {
   local repo_path="$1"
   local want_remote="${2:-}"
@@ -525,18 +547,57 @@ scan_clean() {
     [ -n "$inum" ] && printf '%s\n' "$inum" >> "$seen"
   done
 
-  # Phase 2: per unique issue, read labels and decide. The label fetch is
-  # routed via `gh --repo` when owner_repo is set so non-origin remotes hit
-  # the right org's API.
-  local n labels repo_args=""
+  # Nothing local to intersect (every run-dir belongs to another host or to
+  # another remote) => no network at all. Without this guard the repo-wide label
+  # query below would ADD a call to repos that previously made none.
+  if [ ! -s "$seen" ]; then
+    rm -f "$seen"
+    return 0
+  fi
+
+  # Phase 2: ONE label query for the whole repo, routed via `gh --repo` when
+  # owner_repo is set so non-origin remotes hit the right org's API.
+  local repo_args=""
   [ -n "$owner_repo" ] && repo_args="--repo $owner_repo"
+  local limit="${RUN_ISSUES_CLEAN_SCAN_LIMIT:-200}"
+  local labelled rows truncated
+  truncated=0
+  labelled=$(mktemp)
+  # shellcheck disable=SC2086  # intentional word-splitting on repo_args
+  (
+    cd "$repo_path"
+    gh issue list $repo_args \
+      --label "$RUN_ISSUES_CLEAN_LABEL" \
+      --state all \
+      --limit "$limit" \
+      --json number,labels \
+      --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))"' 2>/dev/null
+  ) > "$labelled" || true
+  rows=$(wc -l < "$labelled" 2>/dev/null | tr -d ' ')
+  [ -n "$rows" ] || rows=0
+  if [ "$rows" -ge "$limit" ] 2>/dev/null; then
+    truncated=1
+    printf '%s scan_clean: WARNING %s carries >= %s "%s" issues — list truncated, falling back to per-issue reads for uncovered runs\n' \
+      "$(date -u +%FT%TZ)" "${owner_repo:-$repo_path}" "$limit" "$RUN_ISSUES_CLEAN_LABEL" >&2
+  fi
+
+  local n labels tab
+  tab=$(printf '\t')
   while IFS= read -r n; do
     [ -n "$n" ] || continue
-    # shellcheck disable=SC2086  # intentional word-splitting on repo_args
-    labels=$(
-      cd "$repo_path"
-      gh issue view "$n" $repo_args --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo ""
-    )
+    if grep -q "^${n}${tab}" "$labelled"; then
+      labels=$(sed -n "s/^${n}${tab}//p" "$labelled" | head -1)
+    elif [ "$truncated" -eq 1 ]; then
+      # Absence is not proof while the list is truncated — ask about this one.
+      # shellcheck disable=SC2086  # intentional word-splitting on repo_args
+      labels=$(
+        cd "$repo_path"
+        gh issue view "$n" $repo_args --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo ""
+      )
+    else
+      # The list is complete and does not mention this issue => not labelled.
+      continue
+    fi
     # auto-clean-skipped wins: already handed to a human, never re-emit.
     case ",$labels," in
       *,auto-clean-skipped,*) continue ;;
@@ -546,7 +607,7 @@ scan_clean() {
     esac
   done < <(sort -u "$seen")
 
-  rm -f "$seen"
+  rm -f "$seen" "$labelled"
   # Return 0 regardless: callers capture this in a command substitution under
   # `set -e`, where a trailing-false branch would otherwise abort the caller.
   return 0

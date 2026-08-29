@@ -704,11 +704,26 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 | `RUN_ISSUES_HOME` | *(pollerin oma `SCRIPT_DIR`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Luetaan vain ympäristöstä |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Liveness-raja: vanhempi ajo tapetaan ja finalisoidaan `blocked/stalled_in_<state>`. **Täytyy** ylittää pisin laillinen yksivaiheinen claude-kutsu |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee `auto-clean.sh`:n |
+| `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | **Vain `poller.sh`:n `scan_clean`.** Montako riviä siivouslabelin repo-laajuinen listaus hakee (#124). Ylittyessään lista ei enää todista poissaoloa, joten kattamattomat paikalliset issuet luetaan yksitellen ja lokiin tulee WARNING. Nosto on halpa; oletus riittää kunnes labeloituja issueita on ≥200 |
 | `PR_WATCH_GLOBAL_MAX` | *(watchlistin `pr_watch_max_concurrent`, tai sen puuttuessa `global_max_concurrent`)* | **Vain `pr-watch-poller.sh`.** PR-vahdin oma rinnakkaisuuskatto (#47). PR-skannaus on sekuntien työ, joten se voi käydä selvästi korkeammalla katolla kuin kymmenien minuuttien orkestraattoriajot ilman että `poller.sh`:n rinnakkaisuus kasvaa. Ympäristömuuttuja voittaa watchlist-avaimen |
 
 Watchlistin resolvointijärjestys ilman overridea: `$HOME/.config/run-issues/watchlist.json` →
 `$HOME/dotfiles/machine-studio/run-issues-watchlist.json`. Jälkimmäinen on **vain fallback**
 (ks. §12); ensisijainen polku ei koskaan ole dotfiles-puu.
+
+**Siivousskannauksen kustannusinvariantti (#124).** `scan_clean` kysyy **labelia, ei issueita**:
+yksi `gh issue list --label <clean> --state all` per repo × remote, ja leikkaus paikallisten
+run-dirien issue-numeroihin tehdään muistissa. Aiemmin se luki yhden `gh issue view`n **per uniikki
+paikallinen issue**, jolloin hinta oli `O(historialliset run-dirit)` eikä `O(työ)` — mitattuna 337
+GraphQL-kutsua per tikki (~4000/h pelkästään tästä funktiosta), mikä täytti jaetun GitHub-kiintiön
+2026-08-28 ja pysäytti kaikkien 18 repon ajon yli kymmeneksi tunniksi. Invariantti on **kutsumäärä,
+ei valinta**: valintaportit voivat pysyä vihreinä samalla kun kustannus palaa lineaariseksi, joten
+`tests/test-scan-clean.sh` assertoi kutsumäärän eksplisiittisesti (yksi listaus, nolla per-issue-lukua)
+eikä päättele sitä tuloksesta. Kaksi asiaa kantaa korrektiuden: `--state all` (siivottava issue on
+usein jo suljettu — mitattuna **jokainen** orgin `auto-clean`-issue oli suljettu) ja katkaisu-fallback
+(`RUN_ISSUES_CLEAN_SCAN_LIMIT`), ilman jota katkennut lista lukisi "ei siivottavaa" juuri silloin kun
+siivottavaa on. Label ei poistu onnistuneen siivouksen jälkeen, joten se kertyy suljetuille issueille
+ja katto on aito eikä teoreettinen.
 
 **PR-vahdin rotaatiokursori (#47).** `pr-watch-poller.sh` iteroi watchlistiä
 rotaatiokursorilla: se muistaa mihin repoon jäi ja jatkaa seuraavalla tikillä siitä eteenpäin
