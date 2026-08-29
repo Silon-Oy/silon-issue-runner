@@ -50,6 +50,27 @@ assert "label+behind+resOFF=WAIT"  WAIT_DIRTY    "$(mk OPEN MERGEABLE BEHIND $L 
 assert "closed=SKIP_CLOSED"        SKIP_CLOSED   "$(mk MERGED MERGEABLE CLEAN $L SUCCESS)"      0 "$L"
 assert "blocked=SKIP_BLOCKED"      SKIP_BLOCKED  "$(mk OPEN MERGEABLE BLOCKED $L SUCCESS)"      0 "$L"
 
+# --- issue #131: a failed/empty fetch is SKIP_UNKNOWN, NOT SKIP_CLOSED ---------
+# A blank .state or an absent .labels / .statusCheckRollup means `gh pr view`
+# failed (rate limit / network / permissions), not that the PR is closed.
+# Conflating the two silently stalls an open auto-merge PR for a whole rate-limit
+# episode: SKIP_CLOSED is the very decision #65 suppresses on repeat, so the stall
+# would leave no log line at all. These must classify DISTINCTLY as SKIP_UNKNOWN.
+assert "empty-payload=SKIP_UNKNOWN"   SKIP_UNKNOWN ""              0 "$L"
+assert "empty-object=SKIP_UNKNOWN"    SKIP_UNKNOWN "{}"            0 "$L"
+assert "broken-json=SKIP_UNKNOWN"     SKIP_UNKNOWN "{not valid"   0 "$L"
+# Partial payload: .state present but a required key missing (truncated response).
+# No merge/skip decision is drawn from half a payload — SKIP_UNKNOWN.
+assert "partial-no-labels=SKIP_UNKNOWN" SKIP_UNKNOWN \
+  '{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[]}' 0 "$L"
+assert "partial-no-rollup=SKIP_UNKNOWN" SKIP_UNKNOWN \
+  '{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","labels":[]}'            0 "$L"
+# Regression: genuine CLOSED/MERGED stay SKIP_CLOSED (blank state is the ONLY
+# unknown), and an OPEN PR with a COMPLETE payload but an empty labels array is
+# SKIP_NO_LABEL, NOT SKIP_UNKNOWN — an empty array is present, not missing.
+assert "genuine-closed=SKIP_CLOSED"    SKIP_CLOSED   "$(mk CLOSED MERGEABLE CLEAN $L SUCCESS)"  0 "$L"
+assert "open+empty-labels=SKIP_NO_LABEL" SKIP_NO_LABEL "$(mk OPEN MERGEABLE CLEAN '' SUCCESS)"  0 "$L"
+
 # --- conflict resolution ON ---
 assert "label+behind+resON=REBASE" REBASE        "$(mk OPEN MERGEABLE BEHIND $L SUCCESS)"       1 "$L"
 assert "label+dirty+resON=REBASE"  REBASE        "$(mk OPEN CONFLICTING DIRTY $L SUCCESS)"      1 "$L"
@@ -109,6 +130,90 @@ for has_label in 0 1; do
     done
   done
 done
+
+# ---------------------------------------------------------------------------
+# Layer 2 (issue #131): SKIP_UNKNOWN must NEVER be written to state.jsonl as a
+# pr_classified decision — otherwise the pr_last_decision tail-read learns a
+# transient rate-limit failure as history (and, should #130 ever filter the scan
+# on that history, permanently drops the PR). Runs pr-watch.sh with a mocked gh
+# whose `pr view` serves an empty payload (an exit-0 soft failure that slips past
+# the hard `if ! gh pr view` guard), and asserts: no pr_classified event, no
+# merge, and a log line. A genuine CLOSED PR is the contrast — it DOES record the
+# first SKIP_CLOSED — proving the non-recording is specific to the unknown case.
+# ---------------------------------------------------------------------------
+echo "--- pr-watch.sh integration: SKIP_UNKNOWN is not recorded ---"
+
+PRWATCH="$HERE/../pr-watch.sh"
+STATE_LIB="$HERE/../lib/state.sh"
+
+# run_unknown_case <name> <pr-view-payload> <expect-classified:0|1>
+run_unknown_case() {
+  local name="$1" payload="$2" expect_classified="$3"
+
+  local WORK; WORK=$(mktemp -d -t prwatch-unknown.XXXXXX)
+  local REPO="$WORK/repo"
+  git -C "$WORK" init -q "repo"
+
+  local BIN="$WORK/bin"; mkdir -p "$BIN"
+  local CALL_LOG="$WORK/gh-calls.log"; : > "$CALL_LOG"
+
+  # gh mock: `pr view` prints the given payload (empty string => soft failure);
+  # `pr merge` is recorded so we can assert it never fires. Everything else 0.
+  cat > "$BIN/gh" <<SH
+#!/usr/bin/env bash
+echo "gh \$*" >> "$CALL_LOG"
+case "\$1 \$2" in
+  "pr view")  printf '%s' '$payload' ;;
+  "pr merge") echo "merged (mock)" ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$BIN/gh"
+
+  local RID="20260829-1200-issue-77"
+  local RD="$REPO/.claude/run-issues/$RID"
+  # shellcheck source=../lib/state.sh
+  . "$STATE_LIB"
+  state_init "$RD" "$RID" "$REPO" "77"
+  state_set "$RD" "pr_url" "https://github.com/Silon-Oy/dotfiles/pull/900"
+  state_finalize "$RD" "completed"
+
+  local out; out="$WORK/out.log"
+  local rc=0
+  (
+    export PATH="$BIN:$PATH"
+    export RUN_ISSUES_LOCK_ROOT="$WORK/locks"
+    export PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0
+    set +e
+    "$PRWATCH" "$REPO" 900 >"$out" 2>&1
+    set -e
+  ) || rc=$?
+
+  local classified=0
+  grep -q '"event":"pr_classified"' "$RD/state.jsonl" 2>/dev/null && classified=1
+  local merged=0
+  grep -q '^gh pr merge' "$CALL_LOG" && merged=1
+
+  local ok=1
+  [ "$classified" = "$expect_classified" ] || ok=0
+  # Fail-closed: an unknown payload must NEVER merge.
+  [ "$expect_classified" = "0" ] && [ "$merged" = "1" ] && ok=0
+
+  if [ "$ok" = "1" ]; then
+    PASS=$((PASS + 1)); printf 'PASS  %-44s -> classified=%s merged=%s\n' "$name" "$classified" "$merged"
+  else
+    FAIL=$((FAIL + 1)); printf 'FAIL  %-44s -> classified=%s (want %s) merged=%s\n' \
+      "$name" "$classified" "$expect_classified" "$merged"
+    echo "    watcher output:"; sed 's/^/      /' "$out"
+    echo "    state.jsonl:";    sed 's/^/      /' "$RD/state.jsonl"
+  fi
+  rm -rf "$WORK"
+}
+
+# Empty payload (soft fetch failure) => SKIP_UNKNOWN, not recorded.
+run_unknown_case "empty payload -> not recorded"   ""                                        0
+# Genuine closed PR => SKIP_CLOSED, IS recorded (first transition) — the contrast.
+run_unknown_case "closed PR -> recorded (contrast)" '{"state":"CLOSED","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","labels":[],"statusCheckRollup":[]}' 1
 
 echo "----------------------------------------"
 printf 'pr-watch-decision: %d passed, %d failed\n' "$PASS" "$FAIL"

@@ -405,7 +405,16 @@ watch_one() {
   # state and is logged as before. emit_events also gates pr_watch_started below,
   # so a suppressed tick writes nothing at all.
   local emit_events=1
-  if [ "$decision" = "SKIP_CLOSED" ] && [ -n "$run_dir" ] && [ -d "$run_dir" ] \
+  if [ "$decision" = "SKIP_UNKNOWN" ]; then
+    # A failed/empty fetch (issue #131). Already logged above and always logged
+    # (no #65 suppression — that gates a repeated KNOWN state, not an unknown
+    # one). It must NEVER be written to state.jsonl: recording it as a
+    # pr_classified decision would poison the pr_last_decision tail-read, so a
+    # transient rate-limit read could become the run's history — and (should #130
+    # ever filter the scan on that history) permanently drop the PR. Suppress the
+    # whole trio; the classify line above carries the signal.
+    emit_events=0
+  elif [ "$decision" = "SKIP_CLOSED" ] && [ -n "$run_dir" ] && [ -d "$run_dir" ] \
      && [ "$(pr_last_decision "$run_dir/state.jsonl")" = "SKIP_CLOSED" ]; then
     emit_events=0
   fi
@@ -439,6 +448,16 @@ watch_one() {
         _release
         return "$rc"
       fi
+      ;;
+    SKIP_UNKNOWN)
+      # Empty/partial payload (issue #131): the FETCH failed (rate limit, network,
+      # permissions), NOT "PR is closed". Fail-closed to a plain skip — never
+      # merge/close/clean/label. Always logged (the classify line above fires
+      # regardless of emit_events); emit_events=0 keeps it out of state.jsonl so a
+      # transient failure never becomes pr_last_decision history.
+      log "PR #$pr_num: could not read PR state (empty/partial payload — fetch failed?); skipping this tick, not recording"
+      _release
+      return 4
       ;;
     SKIP_NO_LABEL|SKIP_CLOSED|SKIP_BLOCKED)
       # Third leg of the trio: suppressed together with the two above on a
