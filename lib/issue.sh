@@ -13,13 +13,25 @@
 # falls back to its cwd-based resolution — fully backward compatible with
 # single-remote callers and existing tests.
 #
-# GitHub App identity: when the orchestrator has loaded lib/github-app-auth.sh
-# and gha_enabled is true, the helpers below route comment / view / label
-# operations through gha_with_token so they post as <app>[bot] instead of the
-# personal gh-CLI identity. claim_issue / verify_claim / unclaim_issue
-# DELIBERATELY stay on the personal identity: GitHub Apps cannot be issue
-# assignees, so the race-arbitration logic ("am I the sole assignee?") must
-# continue to use a real user account.
+# GitHub App identity: when the caller has loaded lib/github-app-auth.sh and
+# gha_enabled is true, the helpers below route their GitHub operations through
+# gha_with_token so they run as <app>[bot] instead of the personal gh-CLI
+# identity. This covers BOTH the write paths (comment / label — attributed to
+# the App) AND the heavy LIST reads (pick_oldest_candidate, issue_assignees,
+# epic_list_open — issue #127). Identity does not change what a read RETURNS, but
+# it decides WHOSE rate limit pays for it. The whole automation used to share
+# maintainer's personal quota, so a busy pickup loop could exhaust it and stall human
+# work (and vice versa); routing the pickup / scan volume through the App gives
+# the runner its own 15k/h budget. That is why the reads follow the writes onto
+# the App path even though attribution is irrelevant for a read (issue #127).
+#
+# claim_issue / verify_claim / unclaim_issue DELIBERATELY stay on the personal
+# identity: GitHub Apps cannot be issue assignees, so the race-arbitration logic
+# ("am I the sole assignee?") must continue to use a real user account —
+# verify_claim's `gh api user` in particular MUST resolve to the personal login,
+# not the App. count_open_blockers / list_blocked_by / is_epic likewise stay on
+# the personal identity: they are low-volume PER-ISSUE reads (one per candidate /
+# run), not the per_page=100 LIST reads whose volume issue #127 moved.
 #
 # Per-org App scope: the App identity is per-org (token is minted for one
 # installation). When the active remote is NOT origin, the App-mode wrapper
@@ -127,8 +139,16 @@ _labels_query_csv() {
   printf '%s' "$out"
 }
 
-# pick_oldest_candidate <repo-root> <labels-csv> [<owner/repo>]
+# pick_oldest_candidate <repo-root> <labels-csv> [<owner/repo>] [<remote>]
 # Prints the issue number of the oldest runnable candidate, or nothing.
+#
+# The list read routes through _issue_gh (issue #127): with App mode on and an
+# origin (or empty) <remote> it spends the App's rate limit, not maintainer's personal
+# one — the pickup search is the package's single hottest read, so its volume is
+# exactly what must move off the shared personal quota. Without App wiring, or on
+# a non-origin remote, _issue_gh is a pass-through to bare gh (unchanged). The
+# per-candidate count_open_blockers probe stays on the personal identity (a
+# low-volume per-issue read, not the per_page=100 list).
 #
 # WHY THIS IS REST AND NOT `gh issue list` (issue #133). `gh issue list` routes
 # any FILTERED query through GitHub's GraphQL `search` connection, which carries
@@ -182,6 +202,7 @@ pick_oldest_candidate() {
   local repo="$1"
   local labels_csv="${2:-}"
   local owner_repo="${3:-}"
+  local remote="${4:-}"
   # auto-clean issues are a teardown signal handled by the poller's scan_clean,
   # never a development candidate.
   local clean_label="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
@@ -201,7 +222,7 @@ pick_oldest_candidate() {
     # `gh api --jq` runs jq WITHOUT exposing jq's own --arg, so the configurable
     # clean label is passed through the environment and read with jq's $ENV.
     export RUN_ISSUES_PICK_CLEAN="$clean_label"
-    gh api "$(_rest_issues_path "$owner_repo" "$qs")" \
+    _issue_gh --remote "$remote" -- api "$(_rest_issues_path "$owner_repo" "$qs")" \
       --jq "$(_pick_filter_jq)" 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ); then
     return 0   # unreachable / rejected => no candidate, same as an empty result
@@ -225,20 +246,28 @@ pick_oldest_candidate() {
   return 0
 }
 
-# issue_assignees <repo-root> <N> [<owner/repo>]
+# issue_assignees <repo-root> <N> [<owner/repo>] [<remote>]
 # Prints the issue's current assignee logins as a comma-joined string (empty when
 # none). The S3 caller snapshots this JUST BEFORE claim_issue so verify_claim can
 # compare against the expected post-claim set (before ∪ {@me}); verify_claim reads
-# it again after the claim. A read with no privacy boundary — plain gh-CLI, like
-# pick_oldest_candidate.
+# it again after the claim.
+#
+# Routes through _issue_gh (issue #127): App identity does not change the assignee
+# list it reads (assignees are the same data under either credential), but it puts
+# this read on the App's rate limit. verify_claim runs this on every claim, so its
+# volume belongs to the App, not maintainer's personal quota. The `me` login verify_claim
+# compares against still comes from bare `gh api user`, so the personal identity
+# remains the anchor of the sole-assignee check. Pass-through to bare gh without
+# App wiring or on a non-origin remote.
 issue_assignees() {
   local repo="$1"
   local n="$2"
   local owner_repo="${3:-}"
+  local remote="${4:-}"
   (
     cd "$repo"
     # shellcheck disable=SC2046
-    gh issue view "$n" $(_repo_args "$owner_repo") --json assignees --jq '[.assignees[].login] | join(",")'
+    _issue_gh --remote "$remote" -- issue view "$n" $(_repo_args "$owner_repo") --json assignees --jq '[.assignees[].login] | join(",")'
   )
 }
 
@@ -305,7 +334,7 @@ claim_issue() {
   return 0
 }
 
-# verify_claim <repo-root> <N> [<owner/repo>] [<before-assignees-csv>]
+# verify_claim <repo-root> <N> [<owner/repo>] [<before-assignees-csv>] [<remote>]
 # Returns 0 only if the assignee set after the claim equals the set BEFORE the
 # claim plus @me (issue #99). The before-set is snapshotted by the caller just
 # before claim_issue (issue_assignees) and passed as the 4th argument; empty (or
@@ -321,16 +350,20 @@ claim_issue() {
 # during the ~5 s verify window the run backs off needlessly — benign, since the
 # issue is immediately pickable again (its reservation label was removed on unclaim).
 #
-# Stays on the personal identity for the same reason as claim_issue: @me only
-# resolves to a user account.
+# The `me` lookup stays on the personal identity for the same reason as
+# claim_issue: @me only resolves to a user account, and `gh api user` under an
+# App token would return the App, breaking the comparison. The assignee read is
+# delegated to issue_assignees, which routes through the App for its rate limit
+# (issue #127) — safe because both credentials see the same assignee logins.
 verify_claim() {
   local repo="$1"
   local n="$2"
   local owner_repo="${3:-}"
   local before_csv="${4:-}"
+  local remote="${5:-}"
   local me current expected_set current_set
   me=$(gh api user --jq .login)
-  current=$(issue_assignees "$repo" "$n" "$owner_repo")
+  current=$(issue_assignees "$repo" "$n" "$owner_repo" "$remote")
   expected_set=$(_normalize_login_set "$before_csv,$me")
   current_set=$(_normalize_login_set "$current")
   [ "$current_set" = "$expected_set" ]
@@ -372,8 +405,9 @@ unclaim_issue() {
 # whole out-of-order run. So any read error (network, auth, endpoint absent, or a
 # non-numeric body) returns non-zero rather than a count — the opposite of the
 # `gh api ... || echo 0` idiom, which would fail OPEN. Stays on the personal
-# gh-CLI identity: this is a pick-time read with no privacy boundary, like
-# pick_oldest_candidate.
+# gh-CLI identity: this is a low-volume PER-ISSUE probe (one per candidate), not
+# the per_page=100 LIST read pick_oldest_candidate moved onto the App for its
+# rate limit (issue #127) — the reduction of these singleton reads is scoped out.
 count_open_blockers() {
   local repo="$1"
   local n="$2"
@@ -411,7 +445,8 @@ count_open_blockers() {
 # the child-set dependency graph (cycle check + run order) and to name the
 # blocker in its report. Reading the same GET .../dependencies/blocked_by graph
 # keeps the two helpers consistent. Stays on the personal gh-CLI identity — a
-# read with no privacy boundary, like count_open_blockers.
+# low-volume per-issue read like count_open_blockers, outside issue #127's
+# list-read routing.
 list_blocked_by() {
   local repo="$1"
   local n="$2"
@@ -446,8 +481,8 @@ list_blocked_by() {
 # against its aggregating body (docs/epic-orchestration.md §2.3, avoin päätös B).
 # FAIL-CLOSED for the same asymmetry as S2b: refusing a leaf issue costs one
 # skipped tick; running an epic burns the whole implementer timeout on a body
-# that is not a task. Stays on the personal gh-CLI identity — a pick-time read
-# with no privacy boundary, like pick_oldest_candidate / count_open_blockers.
+# that is not a task. Stays on the personal gh-CLI identity — a low-volume
+# per-issue read like count_open_blockers, outside issue #127's list-read routing.
 is_epic() {
   local repo="$1"
   local n="$2"
