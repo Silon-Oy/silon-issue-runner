@@ -16,6 +16,17 @@
 #                    AND mergeable == "MERGEABLE" / mergeStateStatus CLEAN.
 #   SKIP_NO_LABEL  — the merge label is absent (nothing to do).
 #   SKIP_CLOSED    — PR is not OPEN (merged/closed).
+#   SKIP_UNKNOWN   — the payload is empty or incomplete (missing/blank .state, or
+#                    absent .labels / .statusCheckRollup): the `gh pr view` FETCH
+#                    itself failed (rate limit, network, permissions) rather than
+#                    the PR being closed (issue #131). Kept DISTINCT from
+#                    SKIP_CLOSED so the caller logs every occurrence and never
+#                    conflates "couldn't ask" with "PR is closed" — otherwise an
+#                    open auto-merge PR silently stalls for a whole rate-limit
+#                    episode (SKIP_CLOSED is the very decision #65 suppresses on
+#                    repeat, so the stall leaves no log line at all). Fail-closed:
+#                    never merges, closes, cleans up or labels; the caller skips
+#                    this tick and always logs it.
 #   WAIT_CI        — label present but checks are pending (or failing while CI
 #                    repair is OFF — see FIX_CI). A no-op; retry next poll.
 #   FIX_CI         — label present, CI is RED (a required/blocking check failed),
@@ -61,11 +72,37 @@ pr_decide() {
   local enable_ci_repair="${4:-0}"
 
   local state mergeable merge_state has_label ci
+
+  # Fail-closed on an empty or half payload (issue #131). A successful
+  # `gh pr view --json state,mergeable,mergeStateStatus,labels,statusCheckRollup`
+  # returns ALL requested keys (empty arrays/strings when there is nothing to
+  # report); a blank .state or an absent .labels / .statusCheckRollup means the
+  # fetch failed or was truncated (rate limit, network, permissions). We must not
+  # derive ANY decision from such a payload: a missing .state would read as
+  # "closed", an absent .labels as "no merge label", an absent rollup as "green
+  # CI" — three false certainties. Any of them => SKIP_UNKNOWN, which the caller
+  # treats as "skip this tick, but always log it" and never records as history.
+  # Checks .state's VALUE (non-empty string) but the others' KEY PRESENCE: an
+  # OPEN PR legitimately has labels:[] / statusCheckRollup:[] (present but empty),
+  # which is a complete payload, not a partial one.
+  local complete
+  complete=$(jq -r '
+    if type != "object" then "0"
+    elif ((.state | type) != "string") or ((.state | length) == 0) then "0"
+    elif (has("mergeable") | not) or (has("mergeStateStatus") | not) then "0"
+    elif (has("labels") | not) or (has("statusCheckRollup") | not) then "0"
+    else "1" end' <<<"$json" 2>/dev/null) || complete=0
+  if [ "$complete" != "1" ]; then
+    echo "SKIP_UNKNOWN"
+    return 0
+  fi
+
   state=$(jq -r '.state // empty' <<<"$json")
   mergeable=$(jq -r '.mergeable // empty' <<<"$json")
   merge_state=$(jq -r '.mergeStateStatus // empty' <<<"$json")
 
-  # PR must be open to be actionable.
+  # PR must be open to be actionable. (A blank state was already caught above as
+  # SKIP_UNKNOWN, so a non-OPEN state here is a genuine merged/closed PR.)
   if [ "$state" != "OPEN" ]; then
     echo "SKIP_CLOSED"
     return 0

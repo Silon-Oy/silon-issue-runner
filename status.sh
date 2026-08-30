@@ -58,6 +58,13 @@
 #   RUN_ISSUES_STATUS_CACHE_FILE --github cache path (default
 #                                ${XDG_CACHE_HOME:-$HOME/Library/Caches}/run-issues/status-github.json)
 #   RUN_ISSUES_STATUS_CACHE_TTL  --github cache TTL seconds (default 300)
+#   RUN_ISSUES_STATUS_DETAIL_TTL per-entry TTL (seconds) for the cached per-issue
+#                                detail reads, carried forward across cache misses
+#                                (issue #125, default 86400). A closed issue is a
+#                                terminal state, so its detail is re-read only once
+#                                a day, not every time the main cache TTL lapses.
+#                                0 disables the carry-forward (details re-read on
+#                                every miss).
 #   RUN_ISSUES_HOME              install root (test injection point; defaults to
 #                                this script's directory)
 
@@ -122,6 +129,13 @@ GITHUB_MODE=0        # 1 when --github given
 GITHUB_FULL=0        # 1 when --github-full given (implies --github)
 NO_CACHE=0           # 1 when --no-cache given
 CACHE_TTL="${RUN_ISSUES_STATUS_CACHE_TTL:-300}"
+# Per-entry TTL for the cached per-issue detail reads (issue #125). Unlike the
+# owner-wide CACHE_TTL (which governs the PR/issue/epic lists), a resolved detail
+# for a CLOSED issue is effectively terminal — its state, reason and title do not
+# change — so it is carried forward across cache misses and only re-read after
+# this longer window. A per-entry `fetched_epoch` (stamped at read time) drives
+# the expiry; a legacy entry without one is treated as stale.
+DETAIL_TTL="${RUN_ISSUES_STATUS_DETAIL_TTL:-86400}"
 
 usage() {
   sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -498,6 +512,10 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     fetched_at=""
     fetched_epoch=""
     used_cache=0
+    # Reset per owner so the cache-miss carry-forward (issue #125) never reads a
+    # stale value from a previous iteration under set -u (the block that assigns
+    # `cached` is skipped entirely when --no-cache is given).
+    cached=""
 
     # Cache hit? Entry present, fresh, and caching not disabled. One entry per
     # owner holds BOTH the PR list and the issue-title list (issue #78), fetched
@@ -572,7 +590,35 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
         # DISTINCT closed issues, never linear in runs. An open issue is skipped
         # (the map already proves it open + carries its title); a read that fails is
         # not recorded (=> null => local class stands, fail-soft).
+        #
+        # Carry-forward (issue #125): instead of starting from {}, seed the map
+        # from the STALE cache entry's resolved details so a closed issue's detail
+        # survives a cache miss and is not re-read every time CACHE_TTL lapses. In
+        # the steady state this drops ~318 gh calls/refresh on Studio to ~0. Two
+        # filters keep it honest, applied in the jq below:
+        #   1. per-entry TTL — keep only details fetched within DETAIL_TTL; a
+        #      truncated or wrong read cannot linger forever (a legacy entry with
+        #      no fetched_epoch is dropped => one-time refetch after deploy).
+        #   2. reopened issues — drop every key present in the FRESH open map. The
+        #      issuemeta merge below is (openmap-derived) + $det with jq's + giving
+        #      the right operand priority, so a carried CLOSED would otherwise mask
+        #      a fresh OPEN and a reopened issue would read closed forever (spec
+        #      decision 3; the drop is more local than flipping the merge and keeps
+        #      #103's detail-authoritative-for-closed intent).
+        # --no-cache leaves `cached` empty (the read block is skipped), so it
+        # carries nothing and re-reads everything, exactly as before (spec edge).
         issue_details="{}"
+        if [ -n "$cached" ]; then
+          issue_details="$(printf '%s' "$cached" | jq -c \
+            --argjson now "$NOW_EPOCH" --argjson ttl "$DETAIL_TTL" --argjson om "$openmap" '
+            (.issue_details // {})
+            | with_entries(.key as $k | select(
+                (.value.fetched_epoch // null) != null
+                and (($now - .value.fetched_epoch) >= 0)
+                and (($now - .value.fetched_epoch) < $ttl)
+                and (($om | has($k)) | not)))' 2>/dev/null || echo '{}')"
+          [ -n "$issue_details" ] || issue_details="{}"
+        fi
         while IFS=$'\t' read -r _ e_issue e_pn e_owner; do
           [ "$e_owner" = "$owner" ] || continue
           [ -n "$e_issue" ] || continue
@@ -586,7 +632,11 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
           fi
           det="$(status_github_issue_detail "$owner" "$e_issue")"
           [ -n "$det" ] || continue
-          issue_details="$(printf '%s' "$issue_details" | jq -c --arg k "$e_issue" --argjson v "$det" '.[$k]=$v' 2>/dev/null || printf '%s' "$issue_details")"
+          # Stamp the fetch time so the per-entry TTL (issue #125) can expire this
+          # detail on a future cache miss. The field is cache-internal — the
+          # issuemeta consumer whitelists title/state/state_reason/labels, so
+          # fetched_epoch never reaches the emitted github object.
+          issue_details="$(printf '%s' "$issue_details" | jq -c --arg k "$e_issue" --argjson v "$det" --argjson fe "$NOW_EPOCH" '.[$k]=($v + {fetched_epoch:$fe})' 2>/dev/null || printf '%s' "$issue_details")"
         done < "$GH_ENUM"
         # Refresh this owner's cache entry (PRs + issue titles + epics + details).
         CACHE_OUT="$(printf '%s' "$CACHE_OUT" | jq -c \

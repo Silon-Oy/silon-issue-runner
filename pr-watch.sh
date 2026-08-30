@@ -263,7 +263,31 @@ scan_candidates() {
     # (stalled_in_*, env_bootstrap_failed, pr_conflicted) stays out of the scan
     # exactly as before; watch_one applies the needs-human hold gate before acting.
     case "$status" in
-      completed) : ;;
+      completed)
+        # Cost gate (issue #130): a completed run whose LAST recorded PR
+        # classification is SKIP_CLOSED is in a permanently final state — a
+        # closed PR never reopens on its own. Emitting it would make watch_one
+        # fetch the PR from GitHub only to re-derive SKIP_CLOSED, one GraphQL
+        # call per tick forever (the third O(historical run-dirs) leak, after
+        # #124 scan_clean and #125 status detail; #65 silenced the state.jsonl
+        # WRITE but not this fetch). Read finality from LOCAL state only —
+        # state.jsonl's tail via pr_last_decision, the same reader #65 built —
+        # never a fresh gh call, or the fix would cost what it saves.
+        #   Decision 2: only SKIP_CLOSED is final. SKIP_NO_LABEL is NOT filtered
+        #     (a missing auto-merge label can appear at any time), so it is not
+        #     matched here and keeps being emitted.
+        #   Decision 3: this gate lives in the completed branch ONLY — the
+        #     blocked/ci_repair_failed re-arm path below is untouched (#45).
+        #   Decision 4: a named `pr-watch <repo> #<PR>` run bypasses
+        #     scan_candidates entirely (straight to watch_one), so the paluutie
+        #     for a wrongly-closed PR is structural, no code here.
+        #   Decision 5 (fail-closed): a missing/unreadable state.jsonl yields an
+        #     empty decision != SKIP_CLOSED, so the run is emitted exactly as
+        #     before — a filter error costs a call, never a missed merge.
+        if [ "$(pr_last_decision "$d/state.jsonl")" = "SKIP_CLOSED" ]; then
+          continue
+        fi
+        ;;
       blocked)
         reason=$(run_field "$rid" '.blocked_reason')
         case "$reason" in
@@ -405,7 +429,16 @@ watch_one() {
   # state and is logged as before. emit_events also gates pr_watch_started below,
   # so a suppressed tick writes nothing at all.
   local emit_events=1
-  if [ "$decision" = "SKIP_CLOSED" ] && [ -n "$run_dir" ] && [ -d "$run_dir" ] \
+  if [ "$decision" = "SKIP_UNKNOWN" ]; then
+    # A failed/empty fetch (issue #131). Already logged above and always logged
+    # (no #65 suppression — that gates a repeated KNOWN state, not an unknown
+    # one). It must NEVER be written to state.jsonl: recording it as a
+    # pr_classified decision would poison the pr_last_decision tail-read, so a
+    # transient rate-limit read could become the run's history — and (should #130
+    # ever filter the scan on that history) permanently drop the PR. Suppress the
+    # whole trio; the classify line above carries the signal.
+    emit_events=0
+  elif [ "$decision" = "SKIP_CLOSED" ] && [ -n "$run_dir" ] && [ -d "$run_dir" ] \
      && [ "$(pr_last_decision "$run_dir/state.jsonl")" = "SKIP_CLOSED" ]; then
     emit_events=0
   fi
@@ -439,6 +472,16 @@ watch_one() {
         _release
         return "$rc"
       fi
+      ;;
+    SKIP_UNKNOWN)
+      # Empty/partial payload (issue #131): the FETCH failed (rate limit, network,
+      # permissions), NOT "PR is closed". Fail-closed to a plain skip — never
+      # merge/close/clean/label. Always logged (the classify line above fires
+      # regardless of emit_events); emit_events=0 keeps it out of state.jsonl so a
+      # transient failure never becomes pr_last_decision history.
+      log "PR #$pr_num: could not read PR state (empty/partial payload — fetch failed?); skipping this tick, not recording"
+      _release
+      return 4
       ;;
     SKIP_NO_LABEL|SKIP_CLOSED|SKIP_BLOCKED)
       # Third leg of the trio: suppressed together with the two above on a
