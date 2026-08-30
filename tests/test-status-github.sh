@@ -197,6 +197,9 @@ if [ "\$1" = "issue" ] && [ "\$2" = "view" ]; then
     o/repo-a:8)  echo '{"state":"CLOSED","stateReason":"NOT_PLANNED","title":"Closed not-planned issue","labels":[{"name":"auto-clean"},{"name":"needs-human"},{"name":"bug"}]}'; exit 0 ;;
     o/repo-a:90) echo '{"state":"CLOSED","stateReason":"COMPLETED","title":"Closed-issue open-PR","labels":[{"name":"auto-clean-skipped"}]}'; exit 0 ;;
     o/repo-a:89) echo "gh: could not read issue (simulated failure)" >&2; exit 1 ;;
+    # #91 — a NEW closed issue introduced only by the carry-forward test (#125);
+    # untouched by earlier tests because no run references it until then.
+    o/repo-a:91) echo '{"state":"CLOSED","stateReason":"COMPLETED","title":"Newly closed issue","labels":[]}'; exit 0 ;;
     *) echo "gh: issue not found (simulated)" >&2; exit 1 ;;
   esac
 fi
@@ -525,6 +528,86 @@ check "local mode: gh never called" "$(pr_list_calls)" "0"
 check "local mode: enrichment.mode local" "$(jq -r '.enrichment.mode' "$FX/out_local.json")" "local"
 check "local mode: every github null" \
   "$(jq '[.runs[] | select(.github != null)] | length' "$FX/out_local.json")" "0"
+
+# ---------------------------------------------------------------------------
+# 6) Carry-forward of resolved per-issue details across cache misses (issue #125).
+#    A closed issue's detail (state/reason/title/labels) is terminal, so it is
+#    carried across a cache MISS instead of re-read. Steady state: 318 -> ~0 calls.
+# ---------------------------------------------------------------------------
+# Count `gh issue view <n>` calls for ONE issue (trailing space disambiguates
+# 8 from 89). The shim logs "$*", so a view call is "issue view <n> --repo …".
+iv_calls() { grep -c "issue view $1 " "$CALLS" 2>/dev/null || true; }
+
+# Re-establish a known-fresh cache: details for #8 and #90 (closed, absent from
+# the open list) are resolved and cached; #89's read fails and is never cached.
+: > "$CALLS"
+run_status --json --github --no-cache > /dev/null 2>&1
+
+# 6a) Main cache TTL expires (--cache-ttl 0) but the detail TTL has NOT: the PR/
+#     issue/epic lists are refetched, yet the carried details are NOT re-read.
+: > "$CALLS"
+run_status --json --github --cache-ttl 0 > "$FX/out_cf.json" 2>/dev/null
+check "carry-forward: PR lists refetched (main TTL 0 => 2)" "$(pr_list_calls)" "2"
+check "carry-forward: #8 detail NOT re-read (carried across miss)"  "$(iv_calls 8)"  "0"
+check "carry-forward: #90 detail NOT re-read (carried across miss)" "$(iv_calls 90)" "0"
+# A failed read is not negatively cached (spec edge), so #89 is legitimately
+# retried — the only detail call on an unchanged issue set.
+check "carry-forward: #89 (failed read) IS retried" "$(iv_calls 89)" "1"
+check "carry-forward: total detail calls == just the failing #89" "$(issue_view_calls)" "1"
+# The carried detail still drives classification: #8 stays cleanup/issue_closed.
+check "carry-forward: #8 still issue_closed from carried detail" \
+  "$(jq -r '.runs[] | select(.issue_number==8) | .class_reason' "$FX/out_cf.json")" "issue_closed"
+
+# 6b) A NEW closed issue in the set costs EXACTLY ONE new detail read; the carried
+#     ones are still not re-read.
+mkdir -p "$RUNS_A/r91"
+cat > "$RUNS_A/r91/run.json" <<JSON
+{"run_id":"r91","repo":"$REPO_A","issue_number":91,"status":"blocked","started_at":"2026-08-01T10:00:00Z","finished_at":"2026-08-01T10:05:00Z","host":"$HOST","current_state":"S6_CycleReview","blocked_reason":"cycle_review_blocker","remote":"origin","repo_slug":"repo-a"}
+JSON
+: > "$CALLS"
+run_status --json --github --cache-ttl 0 > "$FX/out_new.json" 2>/dev/null
+check "carry-forward: new closed #91 => exactly one new detail read" "$(iv_calls 91)" "1"
+check "carry-forward: carried #8 still NOT re-read with new issue present" "$(iv_calls 8)" "0"
+check "carry-forward: #91 classified issue_closed" \
+  "$(jq -r '.runs[] | select(.issue_number==91) | .class_reason' "$FX/out_new.json")" "issue_closed"
+
+# 6c) Reopened issue: a detail cached as CLOSED for an issue that now appears in
+#     the FRESH open list must be dropped (spec decision 3), so issue_state is
+#     OPEN — not the masked CLOSED — and it is NOT re-read (the open map proves
+#     it open). Seed the cache with a stale CLOSED detail for #4 (a run that IS in
+#     the open list), then force a cache miss.
+SEED_NOW="$(date -u +%s)"
+SEEDED="$(jq -c --arg k "o/repo-a" --argjson now "$SEED_NOW" '
+  .[$k].issue_details["4"] = {state:"CLOSED",state_reason:"COMPLETED",title:"Was closed",labels:[],fetched_epoch:$now}
+' "$CACHE" 2>/dev/null || true)"
+[ -n "$SEEDED" ] && printf '%s' "$SEEDED" > "$CACHE"
+: > "$CALLS"
+run_status --json --github --cache-ttl 0 > "$FX/out_reopen.json" 2>/dev/null
+check "reopened: #4 issue_state OPEN (carried CLOSED dropped, openmap wins)" \
+  "$(jq -r '.runs[] | select(.issue_number==4) | .github.issue_state' "$FX/out_reopen.json")" "OPEN"
+check "reopened: #4 NOT re-read (open map proves it open, no detail call)" "$(iv_calls 4)" "0"
+
+# 6d) Detail-TTL expiry: with RUN_ISSUES_STATUS_DETAIL_TTL=0 the carried details
+#     are all considered stale, so #8/#90 ARE re-read — the carry-forward has a
+#     bounded exit, it is not permanent.
+: > "$CALLS"
+RUN_ISSUES_STATUS_DETAIL_TTL=0 run_status --json --github --cache-ttl 0 > /dev/null 2>&1
+check "detail-TTL 0: #8 re-read (bounded exit from carry-forward)"  "$(iv_calls 8)"  "1"
+check "detail-TTL 0: #90 re-read" "$(iv_calls 90)" "1"
+
+# 6e) #96's legacy guard is intact: a FRESH cache entry that PRE-DATES the
+#     issue_details key still forces a full refetch (a closed issue is re-resolved,
+#     not served as {} on the cache-hit path). Strip issue_details from the cached
+#     repo-a entry and keep it fresh; the hit path must fall through to a fetch.
+run_status --json --github --no-cache > /dev/null 2>&1  # rebuild a fresh cache
+LEGACY="$(jq -c --arg k "o/repo-a" 'if .[$k] then .[$k] |= del(.issue_details) else . end' "$CACHE" 2>/dev/null || true)"
+[ -n "$LEGACY" ] && printf '%s' "$LEGACY" > "$CACHE"
+: > "$CALLS"
+run_status --json --github > "$FX/out_legacy.json" 2>/dev/null
+check "legacy guard: issue_details-less fresh entry forces refetch (pr list 2)" \
+  "$(pr_list_calls)" "2"
+check "legacy guard: #8 still issue_closed after forced re-resolve" \
+  "$(jq -r '.runs[] | select(.issue_number==8) | .class_reason' "$FX/out_legacy.json")" "issue_closed"
 
 echo "----------------------------------------"
 echo "status-github: PASS=$PASS FAIL=$FAIL"

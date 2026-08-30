@@ -1136,6 +1136,19 @@ tai jäljessä oleva `main`) on lokirivi, ei virhe; asennusvaihe ajetaan silti. 
 tikkiä: jos koneella on elävä ajo (`run.json`, tila `initialized`, host == tämä kone), koko tikki
 ohitetaan — koodia ei liikuteta elävän ajon alta.
 
+**Arkistointivaihe (run-dirien elinkaari).** Asennuksen jälkeen tikki siirtää kunkin watchlistin
+repon **terminaalitilaiset, ikääntyneet ja PR:ttä vailla olevat** ajohakemistot pois aktiivisesta
+`.claude/run-issues/`-hakemistosta repo-kohtaiseen arkistoon `.claude/run-issues-archive/`. Run-dirit
+eivät ennen poistuneet koskaan itsestään, ja niiden määrä kasvatti jokaista skannausta joka luki
+hakemistoja tai issueita ajoa kohti (`scan_clean`, `status.sh`). Arkistointi **ei poista** mitään —
+ajohistoria säilyy levyllä, se vain lakkaa maksamasta kuumilla poluilla. Siirretään vain
+`completed`/`merged`-tila (elävä `initialized` sekä vastausta odottavat `blocked`/
+`awaiting_clarification` jätetään rauhaan), ja `completed`-ajo jonka PR on paikallisen tilan mukaan
+yhä auki suojataan (tarkistus tehdään ilman gh-kutsua). Ikäraja on `RUN_ISSUES_ARCHIVE_AFTER_DAYS`
+(oletus 30 vrk; `0` tai alle poistaa arkistoinnin käytöstä). Siirto on atominen `mv` samalla levyllä,
+idempotentti ja keskeytyskestävä. Tämä elää self-updatessa — ei pollerin kiintiökriittisessä tikissä —
+juuri siksi että se on jo tunnittainen ja idle-portitettu.
+
 **Käyttöönotto** on sama kuin muillakin LaunchAgenteilla: `install.sh --with-launchagents` linkittää
 plistin ja **tulostaa** `launchctl bootstrap gui/<uid> <plist>` -komennon, jonka ajat käsin.
 self-update **ei koskaan kutsu `launchctl`ia** itse (samat syyt kuin asentajalla, §7.7); jos se
