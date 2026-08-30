@@ -152,6 +152,22 @@ LIB_ISSUE="${RUN_ISSUES_HOME}/lib/issue.sh"
 # shellcheck source=lib/issue.sh
 . "$LIB_ISSUE"
 
+# gha_with_token / gha_enabled live in lib/github-app-auth.sh. Sourcing this
+# DEFINES the App-identity wrapper so pick_oldest_candidate, epic_list_open and
+# scan_clean's label read route their per-tick LIST reads through the App's rate
+# limit instead of maintainer's personal one (issue #127) — the whole reason the runner
+# gets its own quota. It is a benign no-op without App config: gha_enabled reads
+# the RUN_ISSUES_GITHUB_APP_* env vars at CALL time (not source time, so this
+# reads no secret), and returns 1 unless they are set AND the private key is
+# readable, in which case gha_with_token passes straight through to bare gh —
+# bit-for-bit the pre-#127 behaviour. The App identity vars reach the poller via
+# poller.env (identity config, NOT the key itself — the .pem stays a 0600 file
+# referenced by path; see examples/run-issues-poller.env.example). Function-only,
+# no top-level work; safe to source.
+LIB_GHA="${RUN_ISSUES_HOME}/lib/github-app-auth.sh"
+# shellcheck source=lib/github-app-auth.sh
+. "$LIB_GHA"
+
 # state_finalize / state_event are sourced from lib/state.sh — finalize_stalled
 # writes run.json + state.jsonl directly (the orchestrator process is dead by
 # the time we tap the session, so there is no other code path to delegate to).
@@ -499,7 +515,10 @@ scan_blocked_answered() {
 #   Phase 1 — collect the unique set of issue numbers that have a local run-dir
 #             matching the (host, remote) gate. No network.
 #   Phase 2 — ONE REST label query for the whole repo, then intersect against
-#             phase 1 locally (issue #124, moved to REST by issue #133).
+#             phase 1 locally (issue #124, moved to REST by issue #133). The query
+#             routes through _issue_gh (issue #127): a per-tick per-repo LIST read
+#             whose volume belongs on the App's rate limit, not maintainer's personal
+#             one. Identity does not change the label set it returns.
 #
 # Phase 2 used to be one `gh issue view` PER unique local issue. That made the
 # cost O(historical run-dirs) rather than O(work): measured at 337 GraphQL calls
@@ -585,7 +604,7 @@ scan_clean() {
   while [ "$rows" -lt "$limit" ]; do
     chunk=$(
       cd "$repo_path"
-      gh api "$(_rest_issues_path "$owner_repo" "labels=${RUN_ISSUES_CLEAN_LABEL}&state=all&per_page=100&page=${page}")" \
+      _issue_gh --remote "$want_remote" -- api "$(_rest_issues_path "$owner_repo" "labels=${RUN_ISSUES_CLEAN_LABEL}&state=all&per_page=100&page=${page}")" \
         --jq '.[] | select(.pull_request == null) | "\(.number)\t\([.labels[].name] | join(","))"' \
         2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
     ) || break
@@ -612,7 +631,7 @@ scan_clean() {
       # Absence is not proof while the list is truncated — ask about this one.
       labels=$(
         cd "$repo_path"
-        gh api "$(_rest_issue_path "$owner_repo" "$n")" \
+        _issue_gh --remote "$want_remote" -- api "$(_rest_issue_path "$owner_repo" "$n")" \
           --jq '[.labels[].name] | join(",")' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || echo ""
       )
     else
@@ -894,7 +913,7 @@ while IFS= read -r repo_json; do
       [ -n "$epic_num" ] || continue
       epic_process_one "$REPO_PATH" "$epic_num" "$LABELS_CSV" "$OWNER_REPO" "$REMOTE" \
         >> "$LOG" 2>&1 || true
-    done < <(epic_list_open "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO")
+    done < <(epic_list_open "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" "$REMOTE")
 
     # Everything above this line touched the network. Stop the whole sweep on
     # the first rejection rather than repeating it for the remaining repos.
@@ -909,7 +928,7 @@ while IFS= read -r repo_json; do
     # never drift from the library. pick_oldest_candidate is testable by sourcing;
     # this inline call site is not (the poller exits at source time on a foreign
     # host), which is the other half of the reason to move it into the library.
-    ISSUE_NUM=$(pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" 2>>"$GH_ERR" || true)
+    ISSUE_NUM=$(pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" "$REMOTE" 2>>"$GH_ERR" || true)
 
     if _rl_hit; then break 2; fi
 

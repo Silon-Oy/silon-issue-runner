@@ -224,6 +224,49 @@ ympäristömuuttujan**. Malli, joka selittää jokaisen avaimen:
 kopioi siitä, älä kirjoita ulkomuistista. Kaavio:
 [`docs/diagrams/poller-config-resolution.mmd`](docs/diagrams/poller-config-resolution.mmd).
 
+### GitHub App -identiteetti (opt-in) — runnerille oma kiintiö
+
+Oletuksena koko automaatio ajaa maintainern henkilökohtaisella GitHub-tilillä. Se on ongelma
+kahdesta syystä:
+
+1. **Attribuutio.** Botin kommentit, labelit ja PR:t näyttävät GitHubissa maintainern tekemiltä —
+   ihmistä ja automaatiota ei voi erottaa historiasta.
+2. **Kiintiö.** GitHubin API-kiintiö on tilikohtainen. Automaatio jakaa saman kiintiön jokaisen
+   interaktiivisen Claude-session ja `gh`-käytön kanssa: kun poller täyttää sen, myös käsityö
+   pysähtyy — ja päinvastoin. Näin 18 repon ajo jäätyi kerran yli kymmeneksi tunniksi.
+
+Valinnainen **GitHub App** korjaa molemmat. App on istumapaikkaton (ei kuluta maksullista
+org-seatia): sen asennus toimii `<app-nimi>[bot]`-identiteettinä ja saa **oman 15 000 kutsua/h
+-kiintiönsä**. Kun App-tila on päällä, paketti reitittää sen kautta:
+
+- **kirjoitukset** — kommentit ja labelit (attribuutio: `<app>[bot]`), ja
+- **raskaimmat luvut** — poiminta (`pick_oldest_candidate`), assignee-tarkistus claimissa,
+  epic-listaus ja siivousskannauksen labelikysely. Nämä ovat per-tikki-listahakuja joka
+  watchlist-repolle; identiteetti ei muuta *mitä* ne palauttavat, mutta se ratkaisee **kenen
+  kiintiöstä** ne maksetaan. Volyymi kuuluu Appille, ei henkilökohtaiselle tilille
+  (issue #127). Claimin `@me`-assignaatio ja `gh api user` pysyvät henkilökohtaisella tilillä —
+  GitHub App ei voi olla assignee.
+
+**Konfigurointi.** Kolme muuttujaa + yksityisavaintiedosto (`.pem`, mode 0600):
+
+```bash
+RUN_ISSUES_GITHUB_APP_ID=<numero>
+RUN_ISSUES_GITHUB_APP_INSTALLATION_ID=<numero>
+RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH=$HOME/.config/run-issues/app.pem
+```
+
+- `orchestrate.sh` ja `pr-watch.sh` lukevat ne **`env`-tiedostosta** (kirjoitukset + orkestraattorin
+  luvut).
+- **Pollerin oma poiminta lukee ne `poller.env`istä** — poller ei koskaan sourcea `env`iä
+  (salaisuudet + runsas lokitus). Nämä kolme ovat identiteettikonfiguraatiota, eivät salaista
+  materiaalia: **varsinainen salaisuus on `.pem`-tiedosto**, joka pysyy levyllä (mode 0600) ja
+  johon viitataan vain polulla. Siksi ne saavat olla `poller.env`issä, vaikka tokenit ja avaimet
+  eivät saa. Malli: [`examples/run-issues-poller.env.example`](examples/run-issues-poller.env.example).
+
+Puuttuva App-konfiguraatio on **hyvänlaatuinen no-op**: ilman muuttujia (tai jos `.pem` ei ole
+luettavissa) kaikki putoaa paljaaseen `gh`:hon täsmälleen kuten ennen — App ei ole asennusehto.
+Ei-origin-remote ohittaa Appin aina (App-asennus on org-kohtainen).
+
 ### Watchlist — mitkä repot pollataan
 
 Oletuspolku `$HOME/.config/run-issues/watchlist.json`. Skeema ja multi-remote-esimerkki:

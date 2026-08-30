@@ -211,9 +211,12 @@ done
 # self-update.sh (#112) all source it, so a variable is "read" if any of them
 # (or the lib) reads it. The action service also passes several vars to
 # lib/action-service.py, which is the real reader — count it too so the action
-# env vars are not flagged as unread.
+# env vars are not flagged as unread. poller.sh sources lib/github-app-auth.sh
+# (#127) so the poller's own pickup reads can route through the App, so the
+# RUN_ISSUES_GITHUB_APP_* identity vars the example documents are read there.
 EXAMPLE_READERS=("${POLLERS[@]}" "$LIB" "$ROOT/status-render.sh" \
-  "$ROOT/action-server.sh" "$ROOT/lib/action-service.py" "$ROOT/self-update.sh")
+  "$ROOT/action-server.sh" "$ROOT/lib/action-service.py" "$ROOT/self-update.sh" \
+  "$ROOT/lib/github-app-auth.sh")
 EXAMPLE="$ROOT/examples/run-issues-poller.env.example"
 if [ ! -f "$EXAMPLE" ]; then
   bad "case9 examples/run-issues-poller.env.example is missing"

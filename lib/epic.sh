@@ -60,7 +60,7 @@ _epic_log() {
   fi
 }
 
-# epic_list_open <repo-root> <labels-csv> [<owner/repo>]
+# epic_list_open <repo-root> <labels-csv> [<owner/repo>] [<remote>]
 # Prints the issue number of every OPEN epic that carries the run labels, one per
 # line. The epic must carry the run labels (typically auto-run) for us to touch
 # it: that is the "run this epic" propagation signal (§3.1). No reservation filter
@@ -75,17 +75,24 @@ _epic_log() {
 # returned 0 while labels=auto-run returned 5), so `epic` plus the run labels is
 # a faithful translation. Pull requests are excluded because REST's /issues
 # endpoint returns them too.
+#
+# The read routes through _issue_gh (issue #127): this is a per-tick LIST scan
+# run by the poller for every watched repo, so — like pick_oldest_candidate — its
+# volume belongs on the App's rate limit, not maintainer's personal one. App identity
+# does not change which epics it returns; it decides whose quota pays. Without App
+# wiring, or on a non-origin remote, _issue_gh is a pass-through to bare gh.
 epic_list_open() {
   local repo="$1"
   local labels_csv="${2:-}"
   local owner_repo="${3:-}"
+  local remote="${4:-}"
   local want
   # `epic` is a FIXED name, not configurable (docs/epic-orchestration.md §6),
   # so it is a literal here — only the run labels come from the watchlist.
   want="$(_labels_query_csv "$labels_csv" "epic")"
   (
     cd "$repo" || exit 1
-    gh api "$(_rest_issues_path "$owner_repo" "labels=${want}&state=open&sort=created&direction=asc&per_page=100")" \
+    _issue_gh --remote "$remote" -- api "$(_rest_issues_path "$owner_repo" "labels=${want}&state=open&sort=created&direction=asc&per_page=100")" \
       --jq '.[] | select(.pull_request == null) | .number' \
       2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ) || true

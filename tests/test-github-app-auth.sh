@@ -17,6 +17,16 @@
 #    no-op pass-through still works when App mode is OFF.
 # 6. gha_git_push_header emits "Authorization: Bearer ghs_…" and refuses to
 #    return anything when App mode is OFF.
+# 7. The heavy LIST reads (pick_oldest_candidate, issue_assignees, epic_list_open,
+#    scan_clean's label query) route through the App when App mode is on, so their
+#    volume spends the App's rate limit, not maintainer's personal quota (issue #127).
+#    A PATH `gh` shim records GH_TOKEN presence per call: TEST 8 proves the reads
+#    carry the token, that N reads mint ONCE (cache holds under volume), and that
+#    the per-issue count_open_blockers probe stays bare (scope boundary). TEST 9
+#    proves the fallbacks: App env absent => bare gh + no mint; a non-origin remote
+#    bypasses the App even with App env set; and a repo the App cannot read fails
+#    soft (empty result, rc 0, diagnostic to RUN_ISSUES_GH_ERR) instead of a silent
+#    "no candidates".
 #
 # How it stays network-free
 # -------------------------
@@ -315,6 +325,163 @@ esac
     exit 1
   fi
 ) || FAIL=1
+
+# ---------- TEST 8: heavy LIST reads route through the App (issue #127) -------
+# The pickup / assignee / epic / clean-scan reads must run through gha_with_token
+# when App mode is on, so their volume spends the App's rate limit rather than
+# maintainer's personal quota. We source the read helpers, put a `gh` shim on PATH that
+# records whether GH_TOKEN was set per call, and assert the routed reads carry the
+# token while the token cache is hit exactly once across many reads.
+echo "--- TEST 8: pickup/assignee/epic/clean reads route via App ---"
+
+# issue.sh / epic.sh set `set -euo pipefail`; sourcing them turns on -e for the
+# rest of this file. Restore the test's own mode (no -e) so a benign non-zero in a
+# helper below does not abort the run.
+# shellcheck source=lib/issue.sh
+. "$HERE/../lib/issue.sh"
+# shellcheck source=lib/epic.sh
+. "$HERE/../lib/epic.sh"
+set +e
+
+# App mode ON with a cold cache.
+export RUN_ISSUES_GITHUB_APP_ID="123456"
+export RUN_ISSUES_GITHUB_APP_INSTALLATION_ID="98765"
+export RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$PEM"
+gha_clear_cache
+
+# PATH shim `gh`: logs "<yes|no>\t<arg1> <arg2>" per call (token presence + path)
+# and emits just enough output for each read helper to complete. It is a real
+# executable, not a function, so `GH_TOKEN=… gh …` (how gha_with_token injects the
+# token) is observed exactly as the real gh would see it.
+SHIMBIN="$WORK/shimbin"; mkdir -p "$SHIMBIN"
+GH_CALL_LOG="$WORK/gh-calls.log"; : > "$GH_CALL_LOG"
+GH_DENY_LIST="$WORK/gh-deny"; : > "$GH_DENY_LIST"   # non-empty => list read fails (mixed-access)
+cat > "$SHIMBIN/gh" <<SH
+#!/usr/bin/env bash
+if [ -n "\${GH_TOKEN:-}" ]; then tok=yes; else tok=no; fi
+printf '%s\t%s %s\n' "\$tok" "\$1" "\$2" >> "$GH_CALL_LOG"
+case "\$*" in
+  *dependencies/blocked_by*) echo "0" ;;
+  "api user"*) echo "maintainer" ;;
+  *"issue view"*assignees*) echo "maintainer" ;;
+  *labels=epic*) echo "100" ;;
+  *labels=auto-clean*) : ;;
+  *labels=auto-run*)
+    # Simulate a repo the App identity cannot read (private repo, no App access):
+    # the list call fails, which must degrade to "no candidate", not crash.
+    if [ -s "$GH_DENY_LIST" ]; then echo "gh: 404 Not Found" >&2; exit 1; fi
+    echo "10" ;;
+  *) : ;;
+esac
+SH
+chmod +x "$SHIMBIN/gh"
+export PATH="$SHIMBIN:$PATH"
+
+REPO8="$WORK/repo8"; mkdir -p "$REPO8"
+# shellcheck disable=SC2034
+THIS_HOST="apphost"
+# shellcheck disable=SC2034
+RUN_ISSUES_CLEAN_LABEL="auto-clean"
+
+# Extract scan_clean from poller.sh and source it (same idiom as test-scan-clean).
+POLLER8="$HERE/../poller.sh"
+FN8=$(awk '/^scan_clean\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$POLLER8")
+eval "$FN8"
+
+# 8a: N App-routed reads in ONE process => exactly ONE token mint (cache holds).
+MINTS_BEFORE=$(cat "$HIT_COUNTER")
+pick_oldest_candidate "$REPO8" "auto-run" "o/r" "origin" >/dev/null 2>&1
+issue_assignees "$REPO8" 10 "o/r" "origin" >/dev/null 2>&1
+epic_list_open "$REPO8" "auto-run" "o/r" "origin" >/dev/null 2>&1
+MINTS_AFTER=$(cat "$HIT_COUNTER")
+DELTA=$((MINTS_AFTER - MINTS_BEFORE))
+[ "$DELTA" = "1" ] && ok "8a: N App reads => exactly one token mint (cache reused)" || \
+  fail "8a: expected 1 mint across N reads, got $DELTA (token cache is not holding under volume)"
+
+# Helper: run a read, then report the token flag + path of the FIRST gh call.
+first_flag() { head -1 "$GH_CALL_LOG" | cut -f1; }
+first_path() { head -1 "$GH_CALL_LOG" | cut -f2-; }
+
+# 8b: pickup list read routed (yes); the count_open_blockers probe stays bare (no).
+: > "$GH_CALL_LOG"
+pick_oldest_candidate "$REPO8" "auto-run" "o/r" "origin" >/dev/null 2>&1
+[ "$(first_flag)" = "yes" ] && case "$(first_path)" in *"labels=auto-run"*) ok "8b: pickup list read carried GH_TOKEN" ;; *) fail "8b: first call was not the pickup list ($(first_path))" ;; esac || fail "8b: pickup list read did NOT carry GH_TOKEN"
+BLOCKER_LINE=$(grep 'dependencies/blocked_by' "$GH_CALL_LOG" | head -1)
+case "$BLOCKER_LINE" in
+  "no	"*) ok "8c: count_open_blockers probe stayed on bare gh (scope boundary held)" ;;
+  *) fail "8c: count_open_blockers unexpectedly routed or missing ($BLOCKER_LINE)" ;;
+esac
+
+# 8d: issue_assignees routed.
+: > "$GH_CALL_LOG"
+issue_assignees "$REPO8" 10 "o/r" "origin" >/dev/null 2>&1
+[ "$(first_flag)" = "yes" ] && ok "8d: issue_assignees read carried GH_TOKEN" || fail "8d: issue_assignees did NOT route via App"
+
+# 8e: epic_list_open routed.
+: > "$GH_CALL_LOG"
+epic_list_open "$REPO8" "auto-run" "o/r" "origin" >/dev/null 2>&1
+[ "$(first_flag)" = "yes" ] && case "$(first_path)" in *"labels=epic"*) ok "8e: epic_list_open read carried GH_TOKEN" ;; *) fail "8e: epic_list_open path unexpected ($(first_path))" ;; esac || fail "8e: epic_list_open did NOT route via App"
+
+# 8f: scan_clean label read routed. Needs one LOCAL run-dir so phase 2 fires.
+mkdir -p "$REPO8/.claude/run-issues/run-1"
+printf '{"host":"%s","remote":"origin","issue_number":"60"}\n' "$THIS_HOST" \
+  > "$REPO8/.claude/run-issues/run-1/run.json"
+: > "$GH_CALL_LOG"
+scan_clean "$REPO8" "origin" "o/r" >/dev/null 2>&1
+LABEL_LINE=$(grep 'labels=auto-clean' "$GH_CALL_LOG" | head -1)
+case "$LABEL_LINE" in
+  "yes	"*) ok "8f: scan_clean label read carried GH_TOKEN" ;;
+  *) fail "8f: scan_clean label read did NOT route via App ($LABEL_LINE)" ;;
+esac
+
+# ---------- TEST 9: fallbacks — App off, non-origin, mixed-access -------------
+echo "--- TEST 9: bare-gh fallbacks (issue #127) ---"
+
+# 9a: App env ABSENT => bare gh (no token), no mint, no error. Bit-for-bit the
+# pre-#127 behaviour. Unset GH_TOKEN/GITHUB_TOKEN too so a stray token in the
+# runner env cannot mask a regression.
+( unset RUN_ISSUES_GITHUB_APP_ID GH_TOKEN GITHUB_TOKEN
+  : > "$GH_CALL_LOG"
+  M0=$(cat "$HIT_COUNTER")
+  pick_oldest_candidate "$REPO8" "auto-run" "o/r" "origin" >/dev/null 2>&1
+  M1=$(cat "$HIT_COUNTER")
+  flag=$(head -1 "$GH_CALL_LOG" | cut -f1)
+  if [ "$flag" = "no" ] && [ "$M0" = "$M1" ]; then
+    echo "ok:   9a: App off => bare gh, no token, no mint"
+  else
+    echo "FAIL: 9a: App off leaked a token or minted (flag=$flag mints $M0->$M1)"; exit 1
+  fi
+) || FAIL=1
+
+# 9b: non-origin remote => bare gh even with App env SET (per-org App scope).
+: > "$GH_CALL_LOG"
+MB=$(cat "$HIT_COUNTER")
+( unset GH_TOKEN GITHUB_TOKEN
+  pick_oldest_candidate "$REPO8" "auto-run" "customer-d-oy/rahti" "customer-d" >/dev/null 2>&1
+)
+MA=$(cat "$HIT_COUNTER")
+flag9b=$(head -1 "$GH_CALL_LOG" | cut -f1)
+if [ "$flag9b" = "no" ] && [ "$MB" = "$MA" ]; then
+  ok "9b: non-origin remote bypasses App (bare gh, no mint) despite App env set"
+else
+  fail "9b: non-origin remote routed via App (flag=$flag9b mints $MB->$MA)"
+fi
+
+# 9c: mixed-access — the App cannot read the repo, so the list read fails. Must
+# degrade to "no candidate" (rc 0, empty) and surface the error to RUN_ISSUES_GH_ERR
+# rather than crash or silently hide it. This is the silent "no candidates" trap
+# the spec calls out as the case that MUST be tested.
+printf 'x' > "$GH_DENY_LIST"   # arm the list-read failure
+GH_ERR9="$WORK/gh-err.log"; : > "$GH_ERR9"
+OUT9=$(RUN_ISSUES_GH_ERR="$GH_ERR9" pick_oldest_candidate "$REPO8" "auto-run" "o/r" "origin"); RC9=$?
+if [ "$RC9" = "0" ] && [ -z "$OUT9" ]; then
+  ok "9c: unreadable-by-App repo => empty result, rc 0 (fail-soft, no crash)"
+else
+  fail "9c: mixed-access did not fail soft (rc=$RC9 out='$OUT9')"
+fi
+[ -s "$GH_ERR9" ] && ok "9d: the failed App read left a diagnostic in RUN_ISSUES_GH_ERR (not silent)" || \
+  fail "9d: mixed-access failure was silent (RUN_ISSUES_GH_ERR empty)"
+: > "$GH_DENY_LIST"   # disarm
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "github-app-auth: all passed" || echo "github-app-auth: FAILURES"

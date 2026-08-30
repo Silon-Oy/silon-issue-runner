@@ -790,11 +790,11 @@ phase_a() {
   # the sole assignee". A racing runner on another account still shows up as an
   # extra login and loses the race.
   local before_assignees
-  before_assignees=$(issue_assignees "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" || true)
+  before_assignees=$(issue_assignees "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" || true)
   claim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
   state_event "$RUN_DIR" "claim_attempted"
   sleep 5
-  if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$before_assignees"; then
+  if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$before_assignees" "$REMOTE_NAME"; then
     log "claim race lost after verification — unclaiming and exiting"
     unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
     state_finalize "$RUN_DIR" "lost_race" "claim_lost"
