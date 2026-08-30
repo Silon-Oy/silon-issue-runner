@@ -1285,15 +1285,31 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   takautuva tiivistäminen** on eri asia kuin kasvun pysäytys — se poistuu run-dirien
   siivouksen myötä (#65 scope-out). Sisaravaus: pollerilokien rotaatio (`RUN_ISSUES_LOG_MAX_BYTES`,
   §7; `lib/log-rotate.sh`, §6) tukkii saman rajattoman kasvun `.runs.log`ista (mitattu 190 MB).
+  **Kasvun lähde on nyt tukittu kahdesti: #65 tukki kirjoitukset, #130 haut.** #65 vaimensi
+  toistuvan `SKIP_CLOSED`-kolmikon **kirjoittamisen** state.jsonliin, mutta päätös
+  `SKIP_CLOSED` vaatii silti **haun ennen luokittelua**, joten `gh pr view` tapahtui yhä joka
+  tikillä (mitattu 798 hakua/h Studiolla, ~kaikki jo suljettujen PR:ien uudelleentarkistusta —
+  sama `O(historialliset run-dirit)`-vuoto kuin #124 `scan_clean` ja #125 status-detailit).
+  **#130 siirsi lopullisuustarkistuksen haun eteen:** `scan_candidates` (`pr-watch.sh`) ei enää
+  emittoi valmista ajoa, jonka viimeisin kirjattu päätös on `SKIP_CLOSED` (luettu **paikallisesta**
+  tilasta samalla `pr_last_decision`illa, ei uudella gh-kutsulla), joten `watch_one` ei koskaan hae
+  sitä. Suodatin on **vain `completed`-haarassa** — #45:n `blocked/ci_repair_failed`-uudelleenarmaus
+  ohitetaan tarkoituksella, jotta CI:n vihertyessä PR palaa käsittelyyn. Vain `SKIP_CLOSED` on
+  lopullinen (suljettu PR ei aukene itsestään); `SKIP_NO_LABEL` ei suodatu, koska puuttuva
+  `auto-merge`-label voi ilmestyä milloin tahansa. Paluutie väärälle `SKIP_CLOSED`-merkinnälle on
+  **nimetty ajo** (`pr-watch.sh <repo> #<PR>` menee suoraan `watch_one`iin, ohi suodattimen).
+  Fail-closed: lukukelvoton/puuttuva state.jsonl ⇒ tyhjä päätös ≠ `SKIP_CLOSED` ⇒ ajo emittoidaan
+  kuten ennen. Vartija `tests/test-pr-watch-scan-cost.sh` (gh-shim-laskuri: `SKIP_CLOSED`-ajo ⇒ nolla
+  hakua, avoin PR + `SKIP_NO_LABEL` + `ci_repair_failed` emittoituvat, fail-closed emittoi).
   **#131:n täydennys tähän sääntöön:** haun epäonnistuminen (`SKIP_UNKNOWN`, §6
   `lib/pr-watch-lib.sh`) **ei koskaan päädy `state.jsonl`in historiaan** — `watch_one` käsittelee
   sen aina-lokitettuna ohituksena mutta jättää `pr_classified`-rivin kirjaamatta (emit_events=0).
   Muuten tyhjän/osittaisen payloadin tuottama tuntematon tila opettaisi `pr_last_decision`in
   hännästä luettavaan historiaan väärän päätöksen, ja rate-limit-episodin aikainen kirjaus jäisi
-  pysyvästi kummittelemaan (ja mahdollisen #130-skannaussuodatuksen kautta pudottaisi PR:n
-  ajosta). Vanhoja rate-limit-episodin aikana kirjattuja vääriä `SKIP_CLOSED`-rivejä ei korjata
-  takautuvasti: `pr_last_decision` lukee hännästä, joten ensimmäinen onnistunut luokittelu korjaa
-  historian itsestään.
+  pysyvästi kummittelemaan (ja #130:n skannaussuodattimen kautta pudottaisi PR:n ajosta
+  pysyvästi). Vanhoja rate-limit-episodin aikana kirjattuja vääriä `SKIP_CLOSED`-rivejä ei
+  korjata takautuvasti: `pr_last_decision` lukee hännästä, joten ensimmäinen onnistunut
+  luokittelu korjaa historian itsestään.
 - **"maintainer" on kovakoodattu prompteihin ja komentoihin.** Nimi esiintyy seitsemässä tiedostossa
   (`prompts/`, `commands/`, `agents/`). Parametrisointi `{{HUMAN}}`-muuttujaksi kattaisi vain
   `prompts/`-hakemiston, koska `render_prompt` ei koske `commands/`- eikä `agents/`-tiedostoihin
