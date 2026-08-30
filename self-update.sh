@@ -26,6 +26,12 @@
 # NEXT tick. The review gate is therefore the PR review, not this install
 # moment. See README section 7.10.
 #
+# Archive phase (issue #128): after the install, the tick moves terminal, aged,
+# PR-closed run-dirs into each watched repo's .claude/run-issues-archive/, so the
+# hot paths (scan_clean, status.sh) stop paying O(run-dirs) for finished work.
+# This lives here — not in the poller's quota-critical tick — precisely because
+# it is already hourly and idle-ported. See lib/archive.sh.
+#
 # Config channel is poller.env (LaunchAgent environmentlessness, CLAUDE.md §7).
 # Kill switch: RUN_ISSUES_SELF_UPDATE=0 skips the tick. There is NO host gate —
 # opt-in is the operator bootstrapping the agent. self-update NEVER calls
@@ -64,9 +70,12 @@ new and removed agents, commands and skills are linked and pruned. Intended to
 run from a LaunchAgent (StartInterval 3600), not by hand.
 
 Environment:
-  RUN_ISSUES_SELF_UPDATE   0 disables the tick (kill switch). Default 1.
-  RUN_ISSUES_LOG_DIR       log directory. Default $HOME/Library/Logs.
-  RUN_ISSUES_LOG_MAX_BYTES rotation threshold. Default 10485760 (0 disables).
+  RUN_ISSUES_SELF_UPDATE       0 disables the tick (kill switch). Default 1.
+  RUN_ISSUES_ARCHIVE_AFTER_DAYS age at which a terminal, PR-closed run-dir is
+                               moved to .claude/run-issues-archive/. Default 30;
+                               0 or below disables archiving.
+  RUN_ISSUES_LOG_DIR           log directory. Default $HOME/Library/Logs.
+  RUN_ISSUES_LOG_MAX_BYTES     rotation threshold. Default 10485760 (0 disables).
 
 Exit codes:
   0  tick complete, or cleanly skipped (idle / kill-switch / pull guard)
@@ -96,6 +105,11 @@ done
 . "${RUN_ISSUES_HOME}/lib/log-rotate.sh"
 # shellcheck source=lib/version.sh
 . "${RUN_ISSUES_HOME}/lib/version.sh"
+# archive_sweep_repo (issue #128): move terminal, aged, PR-closed run-dirs out of
+# the hot active directory. self-update is its home (decision 5) — an hourly,
+# already idle-ported tick, NOT the poller's quota-critical path.
+# shellcheck source=lib/archive.sh
+. "${RUN_ISSUES_HOME}/lib/archive.sh"
 set +e
 
 # --- Machine configuration (poller.env) --------------------------------------
@@ -257,6 +271,34 @@ run_install() {
 }
 
 run_install
+
+# --- Archive phase (issue #128) ----------------------------------------------
+# Move terminal, aged, PR-closed run-dirs into each watched repo's archive so
+# they stop costing gh calls and reads. Reuses the same watchlist resolution as
+# the idle port. Reached only on an idle tick (has_live_run returned early), so
+# file moves never compete with a running orchestrator. Best-effort: a failure
+# per repo is logged, never fatal.
+archive_all_repos() {
+  local watchlist archived total=0
+  watchlist=$(poller_resolve_watchlist "${RUN_ISSUES_WATCHLIST:-}" \
+    "${HOME}/.config/run-issues/watchlist.json" \
+    "${HOME}/dotfiles/machine-studio/run-issues-watchlist.json") || return 0
+  [ -f "$watchlist" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -e . "$watchlist" >/dev/null 2>&1 || return 0
+  local days="${RUN_ISSUES_ARCHIVE_AFTER_DAYS:-30}"
+  local repo_path
+  while IFS= read -r repo_path; do
+    [ -n "$repo_path" ] || continue
+    [ -d "$repo_path" ] || continue
+    archived=$(archive_sweep_repo "$repo_path" "$days") || archived=0
+    total=$(( total + archived ))
+  done < <(jq -r '.repos[]?.path // empty' "$watchlist")
+  [ "$total" -gt 0 ] && log "archived $total run-dir(s) past ${days}d"
+  return 0
+}
+
+archive_all_repos
 
 log "tick done"
 [ "$INSTALL_FAILED" -eq 1 ] && exit 2

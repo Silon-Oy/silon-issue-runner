@@ -675,6 +675,7 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 |---|---|
 | `action-token.sh` | Ohjaamon toimintokanavan jaettu CSRF-token (#77): `action_token_ensure` luo idempotentisti 256-bittisen tokenin tiedostoon (mode 0600), `status-render.sh` ja `action-server.sh` konvergoivat samaan arvoon (create-if-absent-hardlink-kilpailu). Bearer-salaisuus — ei koskaan `status.json`iin, audit-lokiin eikä situation-kommenttiin. Puhtaita funktiomääritelmiä |
 | `action-service.py` | **Ainoa Python-tiedosto.** Ohjaamon toimintopalvelun HTTP + auth -ydin (#77): `ThreadingHTTPServer`, `tailscale whois` fail-closed socket-peer-IP:stä (ei koskaan forwardattu header), kolmikerroksinen CSRF (Origin-valkolista + pakotettu preflight-header + jaettu token), audit-loki (avaa–append–sulje + kokorotaatio), ja `execve` `action-dispatch.sh`iin — **ei koskaan koske gh:hun/labeleihin/orkestraattoriin itse**. Python 3.9 stdlib |
+| `archive.sh` | Run-dirien arkistointipolitiikka (#128): terminaalitilaisten (`completed`/`merged`), ikääntyneiden ja PR:ttä vailla olevien ajohakemistojen siirto aktiivisesta `run-issues/`istä repo-kohtaiseen `run-issues-archive/`iin — poistaa run-dirien rajattoman kasvun, joka juurruttti kolme O(n)-kuormaa (`scan_clean`in gh-kutsut, `status.sh --github`in detail-luvut, 345 MB `state.jsonl`). `archive_is_candidate` (puhdas predikaatti: terminaalitila + ikä > raja + ei avointa PR:ää, **vain paikallisesta tilasta, ei gh-kutsua**, fail-closed lukukelvottomalle run.jsonille), `archive_run_dir` (atominen `mv` samalla levyllä; törmäys ⇒ ei ylikirjoiteta; `mv`-virhe ⇒ ei kaadu, seuraava tikki yrittää) ja `archive_sweep_repo` (repon aktiivihakemiston pyyhkäisy; `RUN_ISSUES_ARCHIVE_AFTER_DAYS` oletus 30, `≤0` poistaa käytöstä). PR-suoja on paikallinen: `merged` = PR kiinni ⇒ arkistoitava, `completed` + non-null `pr_url` ⇒ suojattu (pr-watch tarvitsee run-dirin `state.jsonl`in kunnes PR sulkeutuu). Ajetaan `self-update`-tikistä (idle-portitettu), ei pollerista (#128 päätös 5). Sourcaa `_iso_to_epoch`in `status-read.sh`istä. Puhtaita funktioita (paitsi `mv`). Vartija `tests/test-run-dir-archive.sh` |
 | `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi) |
 | `env-bootstrap.sh` | Pakettimanagerin tunnistus S7b:n fail-fast-asennusporttiin |
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |
@@ -858,11 +859,18 @@ vartioitu `git pull --ff-only` + `install.sh`, ylläpitäjän submodule-koneella
 (pull ohitetaan aina, §4/§11). Ei host-porttia — opt-in on agentin bootstrap. Sourceaa saman
 `poller.env`in kuin pollerit. Ohjaa oman stdout/stderrinsä `run-issues-self-update.{stdout,stderr}.log`iin
 ja rotatoi kolme lokiaan `RUN_ISSUES_LOG_MAX_BYTES`illa (ennen `exec`-uudelleenohjausta, §6
-`lib/log-rotate.sh`).
+`lib/log-rotate.sh`). **Asennuksen jälkeen ajaa arkistointivaiheen (#128):** iteroi watchlistin
+repot ja kutsuu `archive_sweep_repo`n (`lib/archive.sh`) kullekin — terminaalitilaisten,
+ikääntyneiden ja PR:ttä vailla olevien run-dirien siirto `run-issues-archive/`iin
+(`RUN_ISSUES_ARCHIVE_AFTER_DAYS`). Vaihe on idle-portin **takana** (elävä ajo ⇒ koko tikki
+ohitetaan, joten tiedostosiirrot eivät kilpaile ajavan orkestraattorin kanssa) ja best-effort
+(repon virhe lokitetaan, ei kaada tikkiä). Poller ei aja tätä — kiintiö- ja aikakriittinen polku
+(#128 päätös 5).
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_SELF_UPDATE` | `1` | `0` = ohita tikki (kill-switch). Luetaan `poller.env`istä |
+| `RUN_ISSUES_ARCHIVE_AFTER_DAYS` | `30` | Ikäraja (vrk), jonka ylittävä terminaalitilainen + PR:tön run-dir siirretään `.claude/run-issues-archive/`iin arkistointivaiheessa (#128, `lib/archive.sh`). `0` tai alle poistaa arkistoinnin käytöstä (kill-switch samalla perusteella kuin muut portit — uusi vaihe ei saa olla syy siihen, ettei tikki toimi). Luetaan `poller.env`istä |
 | `RUN_ISSUES_SELF_UPDATE_INSTALL` | *(pakettijuuren `install.sh`)* | **Testien injektiopiste** asennusvaiheen kutsulle, `RUN_EPIC_ORCHESTRATE`-mallin mukaan. Ei käyttäjäkonfiguraatio |
 | `RUN_ISSUES_HOME` | *(scriptin oma `SCRIPT_DIR`)* | Pakettijuuri, johon git-operaatiot, versiorivi ja asennusvaihe kohdistuvat. Testien injektiopiste, luetaan vain ympäristöstä |
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Idle-portin lukema watchlist (sama resolvointi kuin pollerilla). Elävä ajo (`run.json` `initialized`, host == tämä kone) jossain watchlistin repossa ⇒ koko tikki ohitetaan |
@@ -1281,10 +1289,15 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   `pr_last_decision`illa (`lib/pr-watch-lib.sh`) **vain hännästä** — mikä tekee edelleen sitovaksi
   koodisäännön, jota `status.sh`kin noudattaa: **`state.jsonl`iä ei lueta kokonaan missään
   koodipolussa; vain `tail -n N` on sallittu** (`scan_stalled` lukee hännän, `status.sh` samoin
-  `RUN_ISSUES_STATUS_TAIL_LINES` rivin verran). Jäljellä: **jo levyllä olevien 345 MB:n
-  takautuva tiivistäminen** on eri asia kuin kasvun pysäytys — se poistuu run-dirien
-  siivouksen myötä (#65 scope-out). Sisaravaus: pollerilokien rotaatio (`RUN_ISSUES_LOG_MAX_BYTES`,
-  §7; `lib/log-rotate.sh`, §6) tukkii saman rajattoman kasvun `.runs.log`ista (mitattu 190 MB).
+  `RUN_ISSUES_STATUS_TAIL_LINES` rivin verran). **Run-dirien arkistointi (#128) siirtää
+  takautuvan massan pois kuumilta poluilta:** terminaalitilaiset run-dirit — ja niiden
+  `state.jsonl` — siirretään `run-issues-archive/`iin (`lib/archive.sh`, self-update-tikki), jota
+  skannaajat ja `status.sh` eivät lue ajoina. 345 MB ei enää maksa gh-kutsuja eikä luentaa. **Itse
+  tiivistäminen** (jo levyllä olevan `state.jsonl`-massan kutistaminen) on yhä oma erillinen
+  päätöksensä (#128 scope-out), mutta se **ei ole enää odottamassa olematonta run-dirien
+  siivousmekanismia** — mekanismi on nyt olemassa. Sisaravaus: pollerilokien rotaatio
+  (`RUN_ISSUES_LOG_MAX_BYTES`, §7; `lib/log-rotate.sh`, §6) tukkii saman rajattoman kasvun
+  `.runs.log`ista (mitattu 190 MB).
   **Kasvun lähde on nyt tukittu kahdesti: #65 tukki kirjoitukset, #130 haut.** #65 vaimensi
   toistuvan `SKIP_CLOSED`-kolmikon **kirjoittamisen** state.jsonliin, mutta päätös
   `SKIP_CLOSED` vaatii silti **haun ennen luokittelua**, joten `gh pr view` tapahtui yhä joka
