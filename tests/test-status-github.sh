@@ -513,6 +513,27 @@ run_status --json --github --cache-ttl 0 > /dev/null 2>&1
 check "stale cache (--cache-ttl 0) refetches both repos (2)" "$(pr_list_calls)" "2"
 
 # ---------------------------------------------------------------------------
+# 3b) Boundary: --cache-ttl 0 refetches even when the cache entry was written the
+#     SAME second (age == 0). This is the exact coincidence that made this test
+#     flaky (issue #147): status.sh's owner cache used inclusive `-le` (age<=TTL,
+#     so age==0 is a HIT at TTL 0) while the detail carry-forward used exclusive
+#     `< $ttl`. Two TTL comparisons, two answers at the boundary. With both
+#     exclusive, TTL 0 disables the owner cache regardless of whether the clock
+#     ticked between the write and the read — same semantics as DETAIL_TTL=0 on
+#     the carry-forward path. Rebuild a fresh cache, stamp every entry to the
+#     current second, then assert TTL 0 still refetches both repos. Under the old
+#     `-le` this was a same-second cache HIT (0 refetches); under `-lt` it is a
+#     deterministic MISS.
+: > "$CALLS"
+run_status --json --github --no-cache > /dev/null 2>&1   # rebuild a fresh cache
+NOW_SEC="$(date -u +%s)"
+SAME_SEC="$(jq -c --argjson now "$NOW_SEC" 'with_entries(.value.fetched_epoch = $now)' "$CACHE" 2>/dev/null || true)"
+[ -n "$SAME_SEC" ] && printf '%s' "$SAME_SEC" > "$CACHE"
+: > "$CALLS"
+run_status --json --github --cache-ttl 0 > /dev/null 2>&1
+check "boundary: --cache-ttl 0 refetches a same-second entry (age==0 is a MISS)" "$(pr_list_calls)" "2"
+
+# ---------------------------------------------------------------------------
 # 4) --no-cache also refetches.
 # ---------------------------------------------------------------------------
 : > "$CALLS"

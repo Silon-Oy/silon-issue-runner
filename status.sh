@@ -533,7 +533,11 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
         if [ -n "$c_epoch" ] \
            && printf '%s' "$cached" | jq -e 'has("issue_details")' >/dev/null 2>&1; then
           age=$((NOW_EPOCH - c_epoch))
-          if [ "$age" -ge 0 ] && [ "$age" -le "$CACHE_TTL" ]; then
+          # Strict `-lt` (not `-le`) so CACHE_TTL=0 disables the owner cache, matching
+          # DETAIL_TTL=0's exclusive `< $ttl` on the carry-forward path below (issue
+          # #147). With `-le`, age==0 was a hit and `--cache-ttl 0` served a same-second
+          # entry from cache — the asymmetry that made test-status-github.sh flaky.
+          if [ "$age" -ge 0 ] && [ "$age" -lt "$CACHE_TTL" ]; then
             prs="$(printf '%s' "$cached" | jq -c '.prs // []' 2>/dev/null || echo '[]')"
             issues="$(printf '%s' "$cached" | jq -c '.issues // []' 2>/dev/null || echo '[]')"
             # Epics are cached fully RESOLVED (sub_issues already fetched), so a
