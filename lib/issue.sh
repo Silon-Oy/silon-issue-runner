@@ -117,6 +117,33 @@ _rest_issue_path() {
   fi
 }
 
+# _rest_pulls_path <owner/repo> <query-string>
+# The pull-request LIST REST path, same {owner}/{repo} placeholder rule as
+# _rest_issues_path. Separate from the issues path because `repos/…/issues`
+# returns PRs too but without `head.ref`/`state` in the shape a PR gate needs,
+# and filtering them out of an issue list would cost the same call anyway.
+_rest_pulls_path() {
+  local owner_repo="${1:-}" qs="${2:-}"
+  if [ -n "$owner_repo" ]; then
+    printf 'repos/%s/pulls?%s' "$owner_repo" "$qs"
+  else
+    printf 'repos/{owner}/{repo}/pulls?%s' "$qs"
+  fi
+}
+
+# _rest_pull_path <owner/repo> <pr-number>
+# The single-PR REST path, same {owner}/{repo} placeholder rule as
+# _rest_pulls_path. Used as the targeted rescue when a paginated PR list was
+# truncated and absence from it therefore proves nothing.
+_rest_pull_path() {
+  local owner_repo="${1:-}" n="${2:-}"
+  if [ -n "$owner_repo" ]; then
+    printf 'repos/%s/pulls/%s' "$owner_repo" "$n"
+  else
+    printf 'repos/{owner}/{repo}/pulls/%s' "$n"
+  fi
+}
+
 # _labels_query_csv <labels-csv> [<extra-label>...]
 # Comma-joins the configured run labels with any extra required labels for the
 # REST `labels=` parameter. REST ANDs them, exactly like the separate
