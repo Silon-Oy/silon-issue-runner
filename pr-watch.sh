@@ -104,19 +104,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # is a pass-through when App mode is off, so wrapping every gh call here is
 # regression-free for repos that don't configure the App.
 #
-# The watcher SHOULD use the same env file (~/.config/run-issues/env) as the
-# orchestrator: it's a LaunchAgent that does not inherit the interactive shell,
-# so we source the machine-local env if present — mirroring orchestrate.sh's
-# source_machine_env. (We do not factor this into a shared helper yet because
-# orchestrate.sh's version logs via its own `log` and we want the watcher's
-# behaviour identical without coupling the two.)
+# The watcher uses the same env file (~/.config/run-issues/env) as the
+# orchestrator: it's a LaunchAgent that does not inherit the interactive shell.
+#
+# Issue #144 factored this into lib/machine-env.sh, which the orchestrator also
+# uses. The comment that used to stand here justified the duplication by the two
+# copies' different logging — but the duplication is what let the precedence bug
+# exist in two places at once, and _machine_env_log resolves the logging
+# difference by discovering the caller's `log` (the lib/run-terminate.sh pattern).
+# The rule the shared helper enforces: inside RUN_ISSUES_*/PR_WATCH_* the
+# caller's already-set value WINS over the file; secrets keep file-wins.
+# shellcheck source=lib/machine-env.sh
+. "$SCRIPT_DIR/lib/machine-env.sh"
 RUN_ISSUES_ENV_FILE="${RUN_ISSUES_ENV_FILE:-$HOME/.config/run-issues/env}"
-if [ -f "$RUN_ISSUES_ENV_FILE" ]; then
-  set +eu
-  # shellcheck disable=SC1090
-  . "$RUN_ISSUES_ENV_FILE"
-  set -eu
-fi
+source_machine_env
 # shellcheck source=lib/github-app-auth.sh
 . "$SCRIPT_DIR/lib/github-app-auth.sh"
 

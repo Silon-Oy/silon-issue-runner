@@ -250,6 +250,12 @@ source "$SCRIPT_DIR/lib/labels.sh"
 # Runner-version visibility (issue #32): read by _post_situation_to_issue so a
 # hand-off report names the code version that produced it, and by --version.
 source "$SCRIPT_DIR/lib/version.sh"
+# shellcheck source=lib/machine-env.sh
+# source_machine_env with CALLER PRECEDENCE (issue #144). Shared with pr-watch.sh
+# so the precedence rule exists once; the copy that used to live here silently
+# overwrote a caller's RUN_ISSUES_* choice, which let the test suite run the real
+# claude CLI against its own stub.
+source "$SCRIPT_DIR/lib/machine-env.sh"
 # shellcheck source=lib/github-app-auth.sh
 # Sourced AFTER source_machine_env (below) populates env vars. We require the
 # file to exist; the helper guards every side effect on gha_enabled, so loading
@@ -374,32 +380,11 @@ ensure_node_runtime
 # do not fail) on laxer permissions. When the file is absent the behaviour is
 # unchanged from before (one log line, no secrets injected) — no regression.
 RUN_ISSUES_ENV_FILE="${RUN_ISSUES_ENV_FILE:-$HOME/.config/run-issues/env}"
-source_machine_env() {
-  local f="$RUN_ISSUES_ENV_FILE"
-  if [ ! -f "$f" ]; then
-    log "no machine-local env file at $f — proceeding without it (no secrets injected)"
-    return 0
-  fi
-  local perm=""
-  if [ "$(uname -s)" = "Darwin" ]; then
-    perm=$(stat -f '%Lp' "$f" 2>/dev/null || echo "")
-  else
-    perm=$(stat -c '%a' "$f" 2>/dev/null || echo "")
-  fi
-  case "$perm" in
-    600|400|"") : ;;
-    *) log "WARNING: env file $f has permissions $perm — recommend 'chmod 600 $f' (it holds secrets)" ;;
-  esac
-  log "sourcing machine-local env file: $f"
-  # The env file is plain shell that exports variables; it is not written for
-  # `set -euo pipefail`, so relax while sourcing and restore afterwards (mirrors
-  # the nvm source above). Exported vars are inherited by the claude child and
-  # the bootstrap install.
-  set +eu
-  # shellcheck disable=SC1090
-  . "$f"
-  set -eu
-}
+# lib/machine-env.sh owns the sourcing and the precedence rule: inside the
+# package's own RUN_ISSUES_*/PR_WATCH_* namespaces the caller's already-set value
+# WINS over the file; everything else (secrets) keeps file-wins. Running this once
+# at top level, before the MODE dispatch, covers start / --resume / --restart /
+# --continue uniformly.
 source_machine_env
 
 # ---------- S0: preflight dependency gate (issue #7) ----------
