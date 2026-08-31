@@ -71,13 +71,16 @@ liittämistä, ja automaatio luo vain omat labelinsa. Kolme kallista sekaannusta
 
 ## Milloin issue lähtee ajoon
 
-Poiminta on **yksi GitHub-haku**. Issue lähtee ajoon täsmälleen kun **kaikki kuusi** pätevät:
+Poiminta on **yksi REST-listaus GitHubista** ja sen päälle paikallinen suodatus (#133:
+suodatettu `gh issue list` kulkee hakuyhteyden kautta, joka voi olla estetty muun API:n
+vastatessa). Issue lähtee ajoon täsmälleen kun **kaikki kuusi** pätevät:
 
 1. Issue on **avoin**.
 2. Issuella **ei ole `auto-claimed`-labelia** — se on automaation oma varausmerkintä käynnissä
    olevalle tai siivoamattomalle ajolle. **Käsin assignattu issue lähtee ajoon normaalisti**:
    assignaatio ei estä poimintaa.
-3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa (`-is:blocked`).
+3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa ("Mark as blocked by").
+   Graafi luetaan suoraan riippuvuusrajapinnasta ehdokas kerrallaan, vanhimmasta alkaen.
 4. Issuella **ei ole** labelia `waiting`, `wip`, `epic` eikä `auto-clean`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: yksi label, `auto-run`).
 6. Se on vanhin ehdot täyttävä issue — yksi issue per tikki per remote.
@@ -86,9 +89,9 @@ Viides kohta yllättää useimmin: **poimintalabelit yhdistyvät JA-ehdolla, eiv
 Jos poimintalabeleita on kaksi, issue tarvitsee molemmat.
 
 > **Ansa:** `auto-clean` on aina poissuljettu (kohta 4). Jos listaat sen poimintalabeliksi,
-> haku sisältää sekä `label:"auto-clean"` että `-label:auto-clean` → **nolla osumaa, ei
-> virhettä, ei lokiriviä.** Repo jää pysyvästi tyhjäksi ajoista. Älä koskaan käytä
-> `auto-clean`ia poimintalabelina.
+> listaus pyytää palvelimelta `auto-clean`-issuet ja paikallinen suodatin pudottaa ne kaikki →
+> **nolla ehdokasta, ei virhettä, ei lokiriviä.** Repo jää pysyvästi tyhjäksi ajoista. Älä
+> koskaan käytä `auto-clean`ia poimintalabelina.
 
 ## Varaus on `auto-claimed`-label, assignaatio on kirjanpitoa
 

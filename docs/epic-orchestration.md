@@ -212,6 +212,15 @@ Suodattimet siis ovat: avoin, ei `auto-claimed`-varausta (#99: ei enää `no:ass
 assignaatio ei ole varaus), ei `blocked_by`-estetty, ei `waiting`/`wip`/`epic`/`auto-clean`-labelia,
 ja kaikki konfiguroidut labelit (tyypillisesti `auto-run`) läsnä.
 
+> **Päivitys (#133): sama suodatinjoukko, eri kanava.** Poiminta ei ole enää GitHub-haku vaan
+> REST-listaus (`gh api repos/…/issues?labels=…&state=open&sort=created&direction=asc`), jonka
+> päälle poissulkuehdot (`auto-claimed`/`waiting`/`wip`/`epic`/`auto-clean` + PR:t) suodatetaan
+> paikallisesti jq:lla ja esto koetetaan `count_open_blockers`illa vanhimmasta alkaen. Syy:
+> `--label`-suodatettu `gh issue list` kulkee GraphQL-hakuyhteyden kautta, joka oli estettynä 27
+> tuntia 2026-08-28/29 muun API:n vastatessa normaalisti. Alla olevat kvalifikaattorimuodot
+> (`-label:epic` jne.) kuvaavat siis mekanismia, joka on korvattu — **ehto itsessään on ennallaan**.
+> Ks. CLAUDE.md §7.2.
+
 ### 2.2 Löydös (historiallinen): epic poimittiin tavallisena issuena — korjattu #81:ssä
 
 > **Historiallinen.** Tämä koko alaluku on **nykytila-analyysi kirjoitushetkeltä (#80)** ja
@@ -254,7 +263,9 @@ haitallinen. Tämä oli §6:n ensimmäinen ja tärkein muutoskohta, ja **#81 tot
 Se on symmetrinen olemassa olevien `-label:waiting -label:wip` -suodattimien kanssa, halpa (ei
 lisä-API-kutsua), ja käyttää GitHubin natiivia hakua.
 
-**Varaus — hakuindeksin viive.** Kuten `-is:blocked`, myös `-label:epic` nojaa GitHubin
+**Varaus — hakuindeksin viive.** *(Poistunut #133:ssa: poiminnan poissulut eivät enää nojaa
+hakuindeksiin lainkaan — alla oleva harkinta on historiallinen.)* Kuten `-is:blocked`, myös
+`-label:epic` nojaa GitHubin
 *eventually consistent* -hakuindeksiin. Tuntematon negatiivinen label-kvalifikaattori **ei
 kaada hakua** vaan täsmää kaikkeen (mitattu #28:n yhteydessä: `-is:totallynotreal` palautti
 kaikki avoimet). `-label:epic` on kuitenkin *tunnettu* labelisuodatin heti kun `epic`-label on
@@ -554,8 +565,11 @@ Alla erottelu: mikä **riittää sellaisenaan** ja mihin tarvitaan **muutos**.
   hakumerkkijonoon. **#99 konvergoi kahden haun duplikaation:** `poller.sh` delegoi nyt tälle
   funktiolle eikä toista hakua, joten "pidä kaksi hakua synkassa" -huoli poistui rakenteellisesti
   (edellä ehdotettu jaetuksi vakioksi nostaminen toteutui delegointina). Vartija:
-  `tests/test-issue-pick.sh` pinnaa hakumerkkijonon (`-label:epic` + `-label:auto-claimed`) ja
-  varmistaa ettei `poller.sh`:ssa ole enää omaa `gh issue list --search` -poimintaa.
+  `tests/test-issue-pick.sh` varmistaa ettei `poller.sh`:ssa ole enää omaa poimintaa.
+  **#133 siirsi kyselyn REST:iin:** `epic`- ja `auto-claimed`-poissulku ei ole enää
+  hakukvalifikaattori vaan paikallinen jq-jäsenyystesti (joka epäonnistuu umpeen, toisin kuin
+  `-label:`), joten testi ei enää pinnaa hakumerkkijonoa vaan ajaa oikean suodattimen
+  fixture-JSONia vasten ja todistaa jokaisen poissulkuehdon erikseen.
 
 **M2 — (Päätös B) Autoritatiivinen epic-portti claimia ennen.** — **TOTEUTETTU (#81):**
 S2c EpicCheck -portti, `lib/issue.sh:is_epic`, exit 12, `blocked/is_epic_not_runnable`

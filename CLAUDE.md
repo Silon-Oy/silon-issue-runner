@@ -214,9 +214,10 @@ S4 Worktree → S5 DBClone → S6 CycleReview
 
 - **S1 PickIssue** vaatii **nimetyn issuenumeron** (#99). Orkestraattori ei enää poimi: poll-tila
   poistettiin (`poll`-argumentti ⇒ exit 1, koodi 2 poistui käytöstä), samoin
-  `RUN_ISSUES_LABELS_CSV`. Koko paketissa on enää **yksi** poimintahaku — pollerin polku, joka
-  delegoi `lib/issue.sh:pick_oldest_candidate`ille (ent. `pick_oldest_unassigned`), joten haku ja
+  `RUN_ISSUES_LABELS_CSV`. Koko paketissa on enää **yksi** poimintakysely — pollerin polku, joka
+  delegoi `lib/issue.sh:pick_oldest_candidate`ille (ent. `pick_oldest_unassigned`), joten kysely ja
   sen suodattimet elävät yhdessä paikassa (sama konvergointi kuin #91:ssä epicin lapsijoukolle).
+  Kysely on **REST-listaus**, ei GitHub-haku (#133, §7.2).
 
 - **S3 Claim** assignoi `@me`:n **ja** lisää `auto-claimed`-varauslabelin (#99). Varaus siirtyi
   assignaatiosta erilliseen, **vain automaation kirjoittamaan** labeliin, koska `claim_issue`
