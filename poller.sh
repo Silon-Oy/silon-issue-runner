@@ -653,6 +653,268 @@ scan_clean() {
   return 0
 }
 
+# _finished_log <message> — scan_finished's per-decision trace. Issue #107 AC7:
+# every gate decision must be CHECKABLE from the log rather than inferred from a
+# missing line, because "nothing was reconciled" and "the gate blocked it" look
+# identical otherwise. Writes to $LOG (the tick log an operator actually reads)
+# when the poller set one, and to stderr otherwise — the tests source the
+# extracted function with no $LOG.
+_finished_log() {
+  local msg
+  msg="$(date -u +%FT%TZ) scan_finished: $1"
+  if [ -n "${LOG:-}" ]; then
+    printf '%s\n' "$msg" >> "$LOG"
+  else
+    printf '%s\n' "$msg" >&2
+  fi
+}
+
+# scan_finished <repo-path> [<remote>] [<owner/repo>] — prints
+# "<issue-number> <run-dir>" lines for THIS HOST's runs whose issue is
+# CONFIRMED closed on GitHub and which clear every safety gate (issue #107).
+#
+# WHY THIS EXISTS. pr-watch.sh ties teardown to the merge ACT, not the merge
+# STATE: it runs cleanup only in the branch where the watcher itself performed
+# the merge (P9). Every other route to a merge — the other machine's watcher,
+# GitHub's web UI, a hand-run `gh pr merge`, a repo starved by the rotation
+# cursor (#47) — leaves the run-dir, worktree and branch behind, and since #65
+# leaves them behind SILENTLY (a repeated SKIP_CLOSED writes no event). A run
+# that never got a PR at all is not even in the watcher's scan, which requires a
+# non-empty pr_url. Measured on Studio 2026-08-24: 331 runs, 314 classified
+# `cleanup`, 309 worktrees still on disk totalling 166.9 GB.
+#
+# The class was already correct — #96 and #103 made the situation READABLE. What
+# was missing is an actuator wired to the diagnosis. This is that actuator, and
+# it deliberately owns no teardown logic: it decides WHICH runs are finished and
+# delegates the HOW to cleanup-run.sh, exactly as scan_clean delegates to
+# auto-clean.sh.
+#
+# NOT auto-clean. Reconciliation is routine maintenance, not an event: it posts
+# no comment, writes no label, and NEVER closes an issue — it reacts to a close,
+# so causing one would make the signal self-fulfilling. 300+ comments would be
+# worse than the problem they announce.
+#
+# GATES (all mandatory, all fail-closed — a gate that cannot be evaluated skips
+# the run rather than tearing it down):
+#   G1 live run        — status == "initialized" is an ACTIVE run. Covers "issue
+#                        closed by hand while the run is still working".
+#   G2 foreign host    — run.json.host != THIS_HOST. The system's clearest
+#                        safety boundary; never crossed.
+#   G3 issue not closed— open, or state unreadable.
+#   G4 open PR         — the run's PR is still OPEN. The worktree is the PR
+#                        watcher's tool; an issue can be closed by hand before
+#                        its PR merges.
+#   G5 unpushed work   — commits on the feature branch that never reached the
+#                        remote. `git branch -D` is destructive, so this is the
+#                        life insurance: measured 2026-08-24 no closed-issue run
+#                        had any, i.e. the gate is a no-op today and a guarantee
+#                        tomorrow.
+#
+# NETWORK DISCIPLINE (the same two-phase shape as scan_clean, and for the same
+# reason — #124/#125/#133 all came from per-item reads):
+#   Phase 1  local only. No candidates => not a single API call.
+#   Phase 2a ONE paginated REST list of the repo's OPEN issues. Absence from a
+#            COMPLETE enumeration of open issues is proof of closure; absence
+#            from a TRUNCATED one is not, so uncovered candidates fall back to a
+#            targeted per-issue read (same rescue as scan_clean's).
+#   Phase 2b ONE paginated REST list of OPEN PRs — skipped entirely unless a
+#            confirmed-closed candidate actually carries a PR.
+#   Phase 3  local git only (G5).
+scan_finished() {
+  local repo_path="$1"
+  local want_remote="${2:-}"
+  local owner_repo="${3:-}"
+  local runs_dir="$repo_path/.claude/run-issues"
+  [ -d "$runs_dir" ] || return 0
+
+  local cand
+  cand=$(mktemp)
+
+  # ---- Phase 1: local candidates (host, remote, liveness). No network. ----
+  local rj host rem status inum pr_url pr_num branch
+  shopt -s nullglob
+  for rj in "$runs_dir"/*/run.json; do
+    host=$(jq -r '.host // ""' "$rj" 2>/dev/null || echo "")
+    # G2. An empty host is a pre-host-field run.json; scan_clean treats it as
+    # local and so do we, but ONLY because the run-dir is physically here.
+    if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
+      continue
+    fi
+    if [ -n "$want_remote" ]; then
+      rem=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
+      [ "$rem" = "$want_remote" ] || continue
+    fi
+    inum=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$inum" ] || continue
+    status=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
+    # G1. A live run is always `initialized` (restart/continue reset it), so any
+    # other status is a finalised run. An unreadable status is not "finalised".
+    if [ -z "$status" ] || [ "$status" = "initialized" ]; then
+      _finished_log "skip run=$(basename "$(dirname "$rj")") reason=live_run status=${status:-unreadable}"
+      continue
+    fi
+    pr_url=$(jq -r '.pr_url // ""' "$rj" 2>/dev/null || echo "")
+    pr_num=""
+    case "$pr_url" in
+      */pull/*) pr_num="${pr_url##*/pull/}"; pr_num="${pr_num%%/*}" ;;
+    esac
+    case "$pr_num" in ''|*[!0-9]*) pr_num="" ;; esac
+    branch=$(jq -r '.branch // ""' "$rj" 2>/dev/null || echo "")
+    printf '%s\t%s\t%s\t%s\n' "$inum" "$(dirname "$rj")" "$pr_num" "$branch" >> "$cand"
+  done
+
+  if [ ! -s "$cand" ]; then
+    rm -f "$cand"
+    return 0
+  fi
+
+  # ---- Phase 2a: ONE list of OPEN issues; absence from a complete list is ----
+  # ---- proof of closure, absence from a truncated one is not.            ----
+  local limit="${RUN_ISSUES_FINISHED_SCAN_LIMIT:-500}"
+  local open_issues page rows chunk got truncated
+  open_issues=$(mktemp)
+  truncated=0
+  page=1
+  rows=0
+  : > "$open_issues"
+  while [ "$rows" -lt "$limit" ]; do
+    chunk=$(
+      cd "$repo_path"
+      _issue_gh --remote "$want_remote" -- api "$(_rest_issues_path "$owner_repo" "state=open&per_page=100&page=${page}")" \
+        --jq '.[] | select(.pull_request == null) | .number' \
+        2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
+    ) || { rm -f "$cand" "$open_issues"; return 0; }   # read failed => fail-closed, whole repo
+    [ -n "$chunk" ] || break
+    printf '%s\n' "$chunk" >> "$open_issues"
+    got=$(printf '%s\n' "$chunk" | grep -c .) || got=0
+    rows=$((rows + got))
+    [ "$got" -lt 100 ] && break
+    page=$((page + 1))
+  done
+  if [ "$rows" -ge "$limit" ] 2>/dev/null; then
+    truncated=1
+    printf '%s scan_finished: WARNING %s carries >= %s open issues — list truncated, falling back to per-issue reads\n' \
+      "$(date -u +%FT%TZ)" "${owner_repo:-$repo_path}" "$limit" >&2
+  fi
+
+  local closed
+  closed=$(mktemp)
+  local line rd state
+  while IFS=$'\t' read -r inum rd pr_num branch; do
+    [ -n "$inum" ] || continue
+    if grep -qx -- "$inum" "$open_issues"; then
+      _finished_log "skip run=$(basename "$rd") reason=issue_open issue=$inum"
+      continue
+    fi
+    if [ "$truncated" -eq 1 ]; then
+      # Absence is not proof while the list is truncated — ask about this one.
+      state=$(
+        cd "$repo_path"
+        _issue_gh --remote "$want_remote" -- api "$(_rest_issue_path "$owner_repo" "$inum")" \
+          --jq '.state // ""' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || echo ""
+      )
+      if [ "$state" != "closed" ]; then
+        _finished_log "skip run=$(basename "$rd") reason=issue_state_unconfirmed issue=$inum state=${state:-unreadable}"
+        continue
+      fi
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$inum" "$rd" "$pr_num" "$branch" >> "$closed"
+  done < "$cand"
+
+  if [ ! -s "$closed" ]; then
+    rm -f "$cand" "$open_issues" "$closed"
+    return 0
+  fi
+
+  # ---- Phase 2b: ONE list of OPEN PRs — only if a candidate carries one. ----
+  local open_prs need_prs
+  open_prs=$(mktemp)
+  : > "$open_prs"
+  need_prs=0
+  while IFS=$'\t' read -r inum rd pr_num branch; do
+    [ -n "$pr_num" ] && { need_prs=1; break; }
+  done < "$closed"
+
+  local pr_truncated=0
+  if [ "$need_prs" -eq 1 ]; then
+    page=1
+    rows=0
+    while [ "$rows" -lt "$limit" ]; do
+      chunk=$(
+        cd "$repo_path"
+        _issue_gh --remote "$want_remote" -- api "$(_rest_pulls_path "$owner_repo" "state=open&per_page=100&page=${page}")" \
+          --jq '.[].number' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
+      ) || { rm -f "$cand" "$open_issues" "$closed" "$open_prs"; return 0; }  # fail-closed
+      [ -n "$chunk" ] || break
+      printf '%s\n' "$chunk" >> "$open_prs"
+      got=$(printf '%s\n' "$chunk" | grep -c .) || got=0
+      rows=$((rows + got))
+      [ "$got" -lt 100 ] && break
+      page=$((page + 1))
+    done
+    [ "$rows" -ge "$limit" ] 2>/dev/null && pr_truncated=1
+  fi
+
+  # ---- Phase 3: G4 (open PR) and G5 (unpushed work). Local git only for G5. --
+  local unpushed upstream pr_state
+  while IFS=$'\t' read -r inum rd pr_num branch; do
+    if [ -n "$pr_num" ]; then
+      if grep -qx -- "$pr_num" "$open_prs"; then
+        _finished_log "skip run=$(basename "$rd") reason=pr_open issue=$inum pr=$pr_num"
+        continue
+      fi
+      if [ "$pr_truncated" -eq 1 ]; then
+        # Absence is not proof while the list is truncated — ask about this one.
+        # Symmetric with the issue-side rescue above: truncation must cost extra
+        # CALLS, never extra SKIPS, or a busy repo would stop reconciling
+        # entirely and the gap would be invisible.
+        pr_state=$(
+          cd "$repo_path"
+          _issue_gh --remote "$want_remote" -- api "$(_rest_pull_path "$owner_repo" "$pr_num")" \
+            --jq '.state // ""' 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}" || echo ""
+        )
+        if [ "$pr_state" != "closed" ]; then
+          _finished_log "skip run=$(basename "$rd") reason=pr_state_unconfirmed issue=$inum pr=$pr_num state=${pr_state:-unreadable}"
+          continue
+        fi
+      fi
+    fi
+
+    # G5. `--set-upstream` on the orchestrator's push (S10) means a pushed
+    # branch always has an upstream configured. No upstream => never pushed =>
+    # every commit on it is unpushed. With an upstream, compare against the
+    # remote-tracking ref; if that ref is gone the branch was pushed and then
+    # deleted on merge, which is the normal end state, not unpushed work.
+    if [ -n "$branch" ] && git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then
+      upstream=$(git -C "$repo_path" rev-parse --abbrev-ref --symbolic-full-name "$branch@{upstream}" 2>/dev/null || echo "")
+      if [ -z "$upstream" ]; then
+        _finished_log "skip run=$(basename "$rd") reason=branch_never_pushed issue=$inum branch=$branch"
+        continue
+      fi
+      if git -C "$repo_path" show-ref --verify --quiet "refs/remotes/$upstream"; then
+        unpushed=$(git -C "$repo_path" rev-list --count "$upstream..$branch" 2>/dev/null || echo "")
+        case "$unpushed" in
+          ''|*[!0-9]*)
+            _finished_log "skip run=$(basename "$rd") reason=unpushed_check_failed issue=$inum branch=$branch"
+            continue
+            ;;
+        esac
+        if [ "$unpushed" -gt 0 ]; then
+          _finished_log "skip run=$(basename "$rd") reason=unpushed_commits issue=$inum branch=$branch n=$unpushed"
+          continue
+        fi
+      fi
+    fi
+
+    _finished_log "reconcile run=$(basename "$rd") issue=$inum pr=${pr_num:-none} status=closed_issue"
+    printf '%s %s\n' "$inum" "$rd"
+  done < "$closed"
+
+  rm -f "$cand" "$open_issues" "$closed" "$open_prs"
+  # Return 0 regardless (see scan_clean): callers capture this under `set -e`.
+  return 0
+}
+
 # ----- Tick-start version banner (issue #32) -------------------------------
 # Log which runner version is actually executing, every tick. A pinned dotfiles
 # submodule (CLAUDE.md §3) advances only on an explicit bump, and nothing used
@@ -825,6 +1087,38 @@ while IFS= read -r repo_json; do
       tmux new-session -d -s "$CL_SESSION" \
         "'$AUTO_CLEAN' --repo '$CLEAN_REPO' --issue '$CLEAN_ISSUE' --remote '$REMOTE' 2>&1 | tee -a '$RUNS_LOG'"
     done < <(scan_clean "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
+
+    # ----- Reconcile finished runs (issue #107) -----------------------------
+    # Sibling of the clean pass above, but a different verb: auto-clean is a
+    # human declaring an issue done (it closes the issue and comments);
+    # reconciliation only tears down what a close already made dead. It runs
+    # after scan_clean so an issue carrying auto-clean is handled by the
+    # explicit channel first and never torn down twice in one tick — the
+    # per-issue lock would serialise them anyway, but the ordering keeps the
+    # human's verb authoritative.
+    while IFS= read -r finished_line; do
+      [ -n "$finished_line" ] || continue
+      FIN_ISSUE="${finished_line%% *}"
+      FIN_DIR="${finished_line#* }"
+      if EXISTING=$(_running_session_name "run-issues-finished-" "$REMOTE" "$REPO_SLUG" "$FIN_ISSUE"); then
+        echo "$(date -u +%FT%TZ) poller: reconcile session $EXISTING already running" >> "$LOG"
+        continue
+      fi
+      FIN_SUFFIX=$(session_suffix "$REMOTE" "$FIN_ISSUE" "$REPO_SLUG")
+      FIN_SESSION="run-issues-finished-${FIN_SUFFIX}"
+      ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
+      if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
+        echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring reconcile of issue $FIN_ISSUE (remote=$REMOTE)" >> "$LOG"
+        break
+      fi
+      echo "$(date -u +%FT%TZ) poller: reconciling $FIN_SESSION for run=$FIN_DIR issue=$FIN_ISSUE remote=$REMOTE" >> "$LOG"
+      # cleanup-run.sh, NOT auto-clean.sh: no issue close, no comment, no label.
+      # --force because a reconciled run is by definition `completed` in the
+      # common case, which cleanup-run.sh's own local gate would otherwise skip
+      # — scan_finished has already confirmed remotely that nothing is open.
+      tmux new-session -d -s "$FIN_SESSION" \
+        "'$CLEANUP' --repo '$REPO_PATH' --issue '$FIN_ISSUE' --remote '$REMOTE' --force --yes 2>&1 | tee -a '$RUNS_LOG'"
+    done < <(scan_finished "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
     # ----- Restart timed-out runs FIRST (before picking new issues) ----------
     while IFS= read -r restart_line; do

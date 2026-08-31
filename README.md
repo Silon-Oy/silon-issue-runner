@@ -442,9 +442,21 @@ ilman että orkestraattoriajojen rinnakkaisuus kasvaa. `poller.sh` säilyttää 
 sellaisenaan. Ks. CLAUDE.md §7.
 
 **Tikin sisäinen järjestys** (`poller.sh`, oletusväli 300 s eli 5 min): jumiutuneiden ajojen
-liveness-pyyhkäisy koko watchlistiin → `auto-clean`-siivoukset → aikakatkaistujen ajojen
-`--restart` → vastattujen tarkennusten `--continue` → **vasta viimeisenä** uuden issuen
-poiminta. Keskeneräinen työ menee siis aina uuden edelle.
+liveness-pyyhkäisy koko watchlistiin → `auto-clean`-siivoukset → **valmiiden ajojen sovitus**
+→ aikakatkaistujen ajojen `--restart` → vastattujen tarkennusten `--continue` → **vasta
+viimeisenä** uuden issuen poiminta. Keskeneräinen työ menee siis aina uuden edelle.
+
+**Valmiiden ajojen sovitus (`scan_finished`).** Poller purkaa **oman koneensa** ajon, kun sen
+issue on GitHubissa suljettu — ilman että sinun tarvitsee lisätä `auto-clean`-labelia. Se on eri
+verbi kuin `auto-clean`: sovitus **ei sulje issueta, ei kommentoi eikä lisää labeleita**, vaan
+purkaa pelkät jäänteet (worktree, haara, run-dir) — se reagoi sulkemiseen eikä aiheuta sitä.
+Tarpeen syy: PR-vahti siivoaa vain silloin kun se **itse** mergesi PR:n, joten käsin mergetty PR
+(tai toisen koneen mergeämä, tai PR:ttä vaille jäänyt ajo) jätti jäänteet ikuisesti ja hiljaa —
+mitattuna 309 worktreetä ja 166,9 GB. Purku tapahtuu vain kun **kaikki viisi** porttia sallivat:
+ajo ei ole käynnissä, se on tämän koneen, issue on varmistetusti kiinni, PR ei ole auki, eikä
+haaralla ole pushaamattomia committeja. Yksikin epävarmuus (verkkovirhe, lukukelvoton tila)
+estää purun — portit ovat fail-closed. Jokainen päätös, myös ohitus syineen, kirjataan pollerin
+lokiin.
 
 ### 6.3 Labelit
 

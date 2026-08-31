@@ -688,6 +688,7 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 | `issue.test.sh` | `verify_claim`in yksikkötestit (S2/S3-kilpajuoksu) |
 | `epic.sh` | Epic-tason auto-run-automaatio (#81): `epic_list_open` (avoimet epicit hakuna; **lukukysely reititetty `_issue_gh`:n kautta App-kiintiöön, `remote` 4. arg, #127**) ja `epic_process_one` (pollerin `scan_epics`-vaiheen entry) — ajolabelien idempotentti propagointi epicin avoimille alaissueille, `needs-human`-lapsen kertaluonteinen eskalaatio epiciin (per-child marker, #65-henki) ja valmiuden näkyväksi teko (yhteenvetokommentti + `epic-complete`-label, ei sulkua). Propagoinnin **yksi jaettu primitiivi** `_epic_propagate_child` (AC4, #82): sekä `epic_process_one` että julkinen `propagate_run_labels` (lapsijoukon resolvointi + propagointi, `/run-epic`in kirjoituspolku) kutsuvat sitä — ei kahta label-propagointitoteutusta. `_epic_parse_child_line` säilyttää `list_epic_children`in tyhjän label-sarakkeen (tab on IFS-whitespace ⇒ `IFS=$'\t' read` romahduttaisi sen) ja palauttaa `REPLY_REPO`n (lapsen `owner/repo`, #92) ⇒ propagointi/eskalaatio/valmius kohdistuvat lapsen omaan repoon; `_epic_child_ref`/`_epic_attn_marker` nimeävät cross-repo-lapsen `owner/repo#N`-muodossa ja repo-tarkennetulla markerilla (saman repon lapsi säilyttää vanhan `child=<N>`-muodon, taaksepäin yhteensopiva). Puhtaita funktioita, sourcaa omat riippuvuutensa (`issue.sh`/`labels.sh`); best-effort (aina rc 0). Vartijat `tests/test-epic.sh`, `tests/test-run-epic.sh` |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
+| *(issue.sh, REST-polut)* | `_rest_issues_path`/`_rest_issue_path` ja niiden PR-sisaret `_rest_pulls_path`/`_rest_pull_path` (#107) rakentavat listaus- ja yksittäispolut samalla `{owner}/{repo}`-placeholder-säännöllä. PR-polut ovat erilliset, koska `repos/…/issues` palauttaa PR:t mutta ei siinä muodossa jota PR-portti tarvitsee |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `poller-config.sh` | Pollerien host-portti ja watchlistin resolvointi puhtaina funktioina. Erillinen lib siksi, että molemmat pollerit tarvitsevat saman päätöksen ja se on testattava **sourcaamalla** — poller itse exittaa source-hetkellä vieraalla koneella |
 | `log-rotate.sh` | Pollerien koon perusteella laukeava lokirotaatio (#65): `rotate_log_if_big` siirtää lokitiedoston `.1`:ksi rajan ylittyessä, yksi sukupolvi. Erillinen lib eikä `poller-config.sh`, jotta sen puhtausväite säilyy — tämä tekee levykirjoituksen (`mv`). Sourcetaan **ennen** pollerin `exec`-uudelleenohjausta, koska jo avatun fd:n tiedoston siirto olisi no-op |
@@ -745,6 +746,7 @@ idle-portin ja asennuskutsun; `tests/test-readme.sh` johtaa README-koodit otsiko
 | `RUN_ISSUES_PICK_BLOCKED_PROBES` | `20` | Montako poimintaehdokasta enintään koetetaan `count_open_blockers`illa ennen kuin tikki luovuttaa (#133). `-is:blocked`illa ei ole REST-vastinetta, joten esto tarkistetaan ehdokas kerrallaan vanhimmasta alkaen ja pysähdytään ensimmäiseen vapaaseen. Tavallinen hinta on **yksi** koetus (riippuvuusketjussa vanhin lapsi on se ajettava); katto estää kokonaan estetyn backlogin kävelemisen joka tikillä. Katon täyttyminen = "ei ehdokasta", seuraava tikki yrittää uudelleen |
 | `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` = poista perääntyminen käytöstä (#126). Hätävara samalla perusteella kuin `RUN_ISSUES_SKIP_PREFLIGHT`: uusi portti ei saa koskaan olla syy siihen, ettei ajo käynnisty toimivalla koneella. Luetaan kummassakin pollerissa, `pr-watch.sh`:ssa ja `status.sh`:ssa |
 | `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | **Vain `poller.sh`:n `scan_clean`.** Montako riviä siivouslabelin repo-laajuinen listaus hakee (#124). Ylittyessään lista ei enää todista poissaoloa, joten kattamattomat paikalliset issuet luetaan yksitellen ja lokiin tulee WARNING. Nosto on halpa; oletus riittää kunnes labeloituja issueita on ≥200 |
+| `RUN_ISSUES_FINISHED_SCAN_LIMIT` | `500` | **Vain `poller.sh`:n `scan_finished`.** Montako riviä avoimien issueiden ja avoimien PR:ien repo-laajuiset listaukset hakevat (#107). Sama katkaisusemantiikka kuin `RUN_ISSUES_CLEAN_SCAN_LIMIT`illa, mutta **päinvastaisesta syystä**: `scan_clean` kysyy harvinaista labelia, tämä kysyy *avoimien* joukkoa ja käyttää poissaoloa **sulkeutumisen todisteena** — katkaistu lista ei todista mitään, joten kattamattomat ehdokkaat luetaan yksitellen (`_rest_issue_path`/`_rest_pull_path`) ja lokiin tulee WARNING. Katkaisu saa maksaa **kutsuja, ei ohituksia** |
 | `PR_WATCH_GLOBAL_MAX` | *(watchlistin `pr_watch_max_concurrent`, tai sen puuttuessa `global_max_concurrent`)* | **Vain `pr-watch-poller.sh`.** PR-vahdin oma rinnakkaisuuskatto (#47). PR-skannaus on sekuntien työ, joten se voi käydä selvästi korkeammalla katolla kuin kymmenien minuuttien orkestraattoriajot ilman että `poller.sh`:n rinnakkaisuus kasvaa. Ympäristömuuttuja voittaa watchlist-avaimen |
 
 Watchlistin resolvointijärjestys ilman overridea: `$HOME/.config/run-issues/watchlist.json` →
@@ -1282,6 +1284,29 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   käynnistämät näyttivät `ps`-listauksessa identtisiltä (sama binääri, sama malli, sama
   promptialku) — ne erotti vain komentorivillä oleva repo-polku, ja sokea `pkill` kaatoi eläviä
   ajoja.
+- **Merge-havainto oli kytketty merge-tekoon, ei merge-tilaan — korjattu `scan_finished`illä (#107).**
+  `pr-watch.sh` ajaa purun (P9) vain siinä haarassa, jossa vahti **itse** mergesi. Jokainen muu
+  reitti mergeen — toisen koneen vahti, GitHubin web-UI, käsin ajettu `gh pr merge`,
+  rotaatiokursorin (#47) nälkiinnyttämä repo — jätti artefaktit ikuisesti, ja #65:n jälkeen
+  **hiljaa** (toistuva `SKIP_CLOSED` ei kirjoita tapahtumaa). PR:ttä vailla jäänyt ajo ei ollut
+  edes vahdin skannauksessa (`scan_candidates` vaatii ei-tyhjän `pr_url`in). Mitattu Studiolla
+  2026-08-24: 331 ajoa, 314 luokassa `cleanup`, **309 worktreetä levyllä = 166,9 GB**.
+  **Korjaus** on pollerin uusi `scan_finished`-vaihe (`scan_clean`in sisar, ajetaan heti sen
+  jälkeen): se päättää **mitkä** ajot ovat valmiita ja delegoi **miten** `cleanup-run.sh
+  --force --yes`:lle — ei riviäkään uutta purkulogiikkaa, ei `auto-clean`-polkua. **Sovitus ei
+  kommentoi, ei labeloi eikä koskaan sulje issueta** (#107 päätös 4–5: se reagoi sulkemiseen,
+  joten sen aiheuttaminen tekisi signaalista itsensä toteuttavan; 300+ kommentin ryöppy olisi
+  haitallisempi kuin ongelma jonka se ilmoittaa). Viisi fail-closed-porttia: elävä ajo
+  (`status == "initialized"` tai lukukelvoton), vieras host, issue ei varmistetusti kiinni,
+  avoin PR, ja **pushaamattomat commitit haaralla** (`git branch -D` on tuhoava; `--set-upstream`
+  S10:ssä tekee "onko pushattu" paikallisesti ratkaistavaksi: ei upstreamia ⇒ ei koskaan
+  pushattu ⇒ ohita; upstream olemassa mutta tracking-ref poissa ⇒ pushattu ja poistettu mergessä
+  ⇒ normaali lopputila). Kustannusinvariantti kuten #124:ssä: **yksi** avoimien issueiden listaus
+  + **yksi** avoimien PR:ien listaus per repo, jälkimmäinen vain jos jollain ehdokkaalla on PR;
+  ei ehdokkaita ⇒ ei yhtään kutsua. Vartija `tests/test-scan-finished.sh` assertoi sekä portit
+  että kutsumäärät (portit voisivat pysyä vihreinä kustannuksen palatessa lineaariseksi).
+  **Jäljellä:** takautuva 166,9 GB:n purku on erillinen valvottu kertaoperaatio (#107 scope-out),
+  ja läppärin artefaktit jäävät — host-invarianttia ei ylitetä.
 - **`install.sh --uninstall` puuttuu.** Paketin omistamien symlinkkien poisto on tehtävä
   käsin. Omistajuuspredikaatti (symlinkin kohde paketin juuren sisällä) riittäisi sellaisenaan
   toteutukseen.
