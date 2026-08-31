@@ -421,7 +421,7 @@ Poimintalabelit tulevat konfiguraatiosta kolmessa portaassa: watchlistin repokoh
 `labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. **Mikään
 labelin nimi ei ole kovakoodattu poimintaan** — `auto-run` on pelkkä konventio. Poiminta on
 **pollerin** tehtävä: orkestraattori ei enää poimi (ei `poll`-tilaa, ei `RUN_ISSUES_LABELS_CSV`ää),
-joten koko paketissa on yksi poimintahaku.
+joten koko paketissa on yksi poimintakysely.
 
 **Nimetty ajo ohittaa poimintaehdot.** `/run-issues #N` ja `orchestrate.sh <repo> <N>` eivät
 tee hakua lainkaan, joten labelit ja avoimuus eivät estä niitä. Claim tarkistetaan silti:
