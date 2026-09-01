@@ -309,7 +309,12 @@ kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
 # C. action-server.sh — config resolution, host gate, structural invariants
 # ===========================================================================
 # Host gate: a non-matching host no-ops (exit 0) with no output — like the pollers.
+# RUN_ISSUES_POLLER_ENV_FILE points at nothing here for the same reason as in the
+# unset case below: poller.env is SOURCED, so a real one on this machine that
+# sets RUN_ISSUES_ACTION_HOSTS would overwrite the value under test and let the
+# gate through.
 out="$(RUN_ISSUES_ACTION_HOSTS='no-such-host-xyz' RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
+       RUN_ISSUES_POLLER_ENV_FILE="$FX/no-such-poller.env" \
        RUN_ISSUES_LOG_DIR="$FX/gate-logs-foreign" \
        bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
 check "foreign host no-ops (exit 0)" "$rc" "0"

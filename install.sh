@@ -42,11 +42,25 @@ PKG_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/preflight.sh
 . "$PKG_ROOT/lib/preflight.sh"
 
+# poller_host_unset_message — the host gate's own wording, so the line printed
+# here at install time and the line a poller prints at run time are literally
+# the same function and not two drifting paraphrases. Safe to source: this file
+# is pure (no writes, no exits), which is why the host-gate wording lives there
+# and not in lib/host-gate-notice.sh, which appends to a log. An installer
+# prints; it does not log.
+# shellcheck source=lib/poller-config.sh
+. "$PKG_ROOT/lib/poller-config.sh"
+
 # Every filesystem location is derived from $HOME (or an explicit override) so
 # that the test suite can run against a throwaway home on the very machine
 # whose live $HOME/.claude the pollers use.
 CLAUDE_HOME="${RUN_ISSUES_CLAUDE_HOME:-$HOME/.claude}"
 LAUNCH_AGENTS_DIR="${RUN_ISSUES_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+
+# The machine's poller configuration. Read only — the installer reports on this
+# file, it never creates or edits it (guessing a hostname is precisely the
+# package-to-one-machine coupling issue #152 removed).
+POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-$HOME/.config/run-issues/poller.env}"
 
 # Directories whose contents this package owns file by file.
 LINKED_DIRS="agents commands"
@@ -89,6 +103,8 @@ Options:
 Environment:
   RUN_ISSUES_CLAUDE_HOME         default: $HOME/.claude
   RUN_ISSUES_LAUNCH_AGENTS_DIR   default: $HOME/Library/LaunchAgents
+  RUN_ISSUES_POLLER_ENV_FILE     default: $HOME/.config/run-issues/poller.env
+                                 (read only, for the advisory host-gate report)
 
 Exit codes:
   0  success (or --dry-run completed)
@@ -537,6 +553,91 @@ report_preflight() {
   fi
 }
 
+# poller_env_values <file> — echo the three host-gate-relevant settings the
+# machine's poller.env produces, one KEY=VALUE line each.
+#
+# The file is SOURCED, not grepped, because that is how every run-time reader
+# consumes it: a poller.env may set a variable conditionally or derive it from
+# another, and a grep would answer a question about the text rather than about
+# the configuration.
+#
+# The three names are unset first, because a LaunchAgent — the only production
+# mode — is handed no environment at all. A value that exists only in the shell
+# running the installer would otherwise report an all-clear for a machine that
+# will still fail the gate at the next tick.
+#
+# The subshell's own stdout is discarded and the answer is written to fd 3, so
+# a poller.env that echoes cannot inject a KEY=VALUE line into the reply.
+poller_env_values() {
+  local file="$1"
+  (
+    exec 3>&1 >/dev/null 2>/dev/null
+    set +eu
+    unset RUN_ISSUES_POLLER_HOSTS RUN_ISSUES_ACTION_HOSTS RUN_ISSUES_ACTION_BASE
+    if [ -f "$file" ]; then
+      # shellcheck disable=SC1090
+      . "$file"
+    fi
+    printf 'POLLER_HOSTS=%s\n' "${RUN_ISSUES_POLLER_HOSTS:-}" >&3
+    printf 'ACTION_HOSTS=%s\n' "${RUN_ISSUES_ACTION_HOSTS:-}" >&3
+    printf 'ACTION_BASE=%s\n' "${RUN_ISSUES_ACTION_BASE:-}" >&3
+  )
+}
+
+# report_host_gate — advisory, read-only report on the host gate (issue #170).
+#
+# The gate is fail-closed and has no default (#152), so a machine whose
+# poller.env does not set RUN_ISSUES_POLLER_HOSTS runs nothing. Issue #160 put
+# that line where it can be read, but it is still only produced AT RUN TIME —
+# at a moment when nobody is watching, and the discovery path stays "the
+# automation has done nothing" -> suspicion -> opening a log. Installing is the
+# one moment a human is present and reading output, so the same line is offered
+# here too. This ADDS an earlier observation point; it replaces nothing.
+#
+# Advisory on purpose, never a refusal: poller.env is machine configuration and
+# may legitimately be written after the install, so this must not touch the
+# exit code. (Contrast the plist gate, which does refuse — a program path that
+# does not resolve cannot fix itself without a new install.)
+#
+# It also stays out of ownership and planning entirely: it only reads, and its
+# result feeds neither PLAN, REFUSALS nor CONFLICTS. Called from main() beside
+# report_preflight for that reason.
+report_host_gate() {
+  local host poller_hosts="" action_hosts="" action_base="" key value
+  host="$(hostname -s 2>/dev/null || echo unknown)"
+
+  while IFS='=' read -r key value; do
+    case "$key" in
+      POLLER_HOSTS) poller_hosts="$value" ;;
+      ACTION_HOSTS) action_hosts="$value" ;;
+      ACTION_BASE)  action_base="$value" ;;
+    esac
+  done < <(poller_env_values "$POLLER_ENV_FILE")
+
+  log "host gate (advisory — poller.env is machine configuration and may be written after this install):"
+  if [ ! -f "$POLLER_ENV_FILE" ]; then
+    log "  note: $POLLER_ENV_FILE does not exist yet"
+  fi
+
+  if [ -n "$poller_hosts" ]; then
+    log "  ok: RUN_ISSUES_POLLER_HOSTS=$poller_hosts (this host: $host)"
+  else
+    log "  $(poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$host")"
+  fi
+
+  # The action service is opt-in: without RUN_ISSUES_ACTION_BASE an unset
+  # RUN_ISSUES_ACTION_HOSTS is the correct state, not an error. Warning
+  # unconditionally would put a line about Ohjaamo in front of every machine
+  # that does not use it.
+  if [ -z "$action_base" ]; then
+    log "  ok: RUN_ISSUES_ACTION_HOSTS not needed — RUN_ISSUES_ACTION_BASE is unset, so the Ohjaamo action service is off"
+  elif [ -n "$action_hosts" ]; then
+    log "  ok: RUN_ISSUES_ACTION_HOSTS=$action_hosts (this host: $host)"
+  else
+    log "  $(poller_host_unset_message RUN_ISSUES_ACTION_HOSTS "$POLLER_ENV_FILE" "$host")"
+  fi
+}
+
 print_refusals() {
   local r
   [ "${#REFUSALS[@]}" -gt 0 ] || return 0
@@ -585,6 +686,7 @@ main() {
 
   parse_args "$@"
   report_preflight
+  report_host_gate
 
   for d in $LINKED_DIRS; do
     plan_link_dir "$d" files
