@@ -760,6 +760,7 @@ Claude Codessa, kohderepon juuressa:
 |---|---|---|
 | `/run-issues` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/run-issues.md`](commands/run-issues.md) |
 | `/run-epic` | `[#N] [--dry-run] [--start-now] [--stop]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan. `--stop` keskeyttää epicin (6.5). Ohje: [`commands/run-epic.md`](commands/run-epic.md) |
+| `/new-issue` | `<kuvaus tehtävästä>` | Kirjoittaa kuvauksesta yhden ajon kokoisen issuen, joka täyttää kaikki poimintaehdot: paketin oma runko ja tämän koneen poimintalabelit (6.2). Luonnos vahvistetaan ennen kirjoitusta; epicin kokoinen kuvaus vain ehdotetaan eskaloitavaksi. Ei aja mitään. Ohje: [`commands/new-issue.md`](commands/new-issue.md) |
 | `/new-epic` | `<kuvaus kokonaisuudesta>` | Pilkkoo kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää sub-issueiksi, merkitsee `blocked_by`-riippuvuudet ja labeloi vain epicin ajoon (6.5). Ei aja mitään. Ohje: [`commands/new-epic.md`](commands/new-epic.md) |
 | `/pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/pr-watch.md`](commands/pr-watch.md) |
 | `/cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/cleanup-run.md`](commands/cleanup-run.md) |
