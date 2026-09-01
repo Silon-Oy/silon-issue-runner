@@ -89,8 +89,13 @@ POLLER_PICK_LABELS_DEFAULT='auto-run'
 # two labels as `auto-run,backend`.
 _poller_trim_csv() {
   local csv="${1-}" out="" part
+  # read -a rather than an unquoted `for part in $csv`: the latter also runs
+  # pathname expansion, so a label containing a glob character would be
+  # silently rewritten into whatever happens to sit in the caller's cwd.
   local IFS=','
-  for part in $csv; do
+  local -a parts=()
+  read -r -a parts <<<"$csv"
+  for part in ${parts+"${parts[@]}"}; do
     # Trim with parameter expansion rather than sed: this file promises to be
     # free of external commands (see the header), and a per-element subshell
     # would run once per label on every poller tick.

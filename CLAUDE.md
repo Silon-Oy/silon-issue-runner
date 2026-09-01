@@ -334,7 +334,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 | `issue.test.sh`, `render-prompt.test.sh` | Yksikkötestit (`verify_claim`, `render_prompt`) |
 
-**Jaetut primitiivit — älä monista.** Kolme kohtaa, joissa kahden toteutuksen ajautuminen on
+**Jaetut primitiivit — älä monista.** Neljä kohtaa, joissa kahden toteutuksen ajautuminen on
 aiemmin ollut oikea vika: poimintakysely (`pick_oldest_candidate`), epicin lapsijoukko
 (`list_epic_children` — **myös näkymä kutsuu tätä**, joten näkymä ja ajo eivät voi olla eri
 mieltä), ajon lopetus (`run_terminate`) ja poimintalabelien resolvointi (`poller_pick_labels` —
