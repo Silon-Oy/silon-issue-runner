@@ -3,7 +3,7 @@
 # the runs that need a human.
 #
 # status.sh makes the situation FINDABLE (one JSON document over every watchlist
-# repo), but nothing makes it NOTICED: customer-a-report issue #92 waited 71 days in
+# repo), but nothing makes it NOTICED: one repo's issue #92 waited 71 days in
 # awaiting_clarification while the bot's question sat on GitHub — a dashboard you
 # have to remember to open fails the same way. This script is the push: it reads
 # the JSON status.sh emits (stdin or --from-file <path>) and mails a Finnish

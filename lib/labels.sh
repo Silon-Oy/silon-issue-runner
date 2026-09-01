@@ -18,7 +18,7 @@
 # propagate_pr_labels call on this fleet failed for exactly this reason. The
 # failures were invisible because label management is best-effort and the
 # callers discarded stderr — so `auto-merge` silently never reached any PR and
-# the issue → PR → auto-merge chain stalled on its last step (customer-c-erp#40).
+# the issue → PR → auto-merge chain stalled on its last step.
 # Hence the second rule here: these helpers never swallow the diagnostic. They
 # stay non-fatal, but they say why on stderr so the caller can log it.
 #

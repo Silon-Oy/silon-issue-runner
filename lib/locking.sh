@@ -8,15 +8,15 @@
 # `acquired_at` file with an ISO-8601 timestamp.
 #
 # Multi-remote namespacing: the same clone can poll multiple GitHub orgs at
-# once (issue #53). `Silon-Oy/...#5` and `customer-d-oy/...#5` are different
+# once (issue #53). `Example-Org/...#5` and `partner-org/...#5` are different
 # issues with the same number, so the lock name must include the remote
 # whenever it is not the legacy `origin` — otherwise they would collide on
 # the same lock. Origin keeps the legacy `issue-<N>.lock` shape so existing
 # locks are not orphaned by the upgrade.
 #
 # Repo namespacing (issue #67): the lock root is a single flat, GLOBAL
-# namespace, so the remote alone was not enough — `customer-a-report#42` and
-# `flow#42` both hashed to `issue-42.lock`. Every caller that owns a run now
+# namespace, so the remote alone was not enough — `report#42` and
+# `app#42` both hashed to `issue-42.lock`. Every caller that owns a run now
 # passes the run's repo slug as the third argument, which makes the lock name
 # `<repo-slug>-issue-<N>.lock`. During the transition window an in-flight run
 # started by the previous version still holds an unqualified `issue-<N>.lock`;

@@ -277,12 +277,12 @@ status_github_not_open_object() {
 #
 # Making an epic's run VISIBLE means knowing which issues belong to it. The
 # canonical epic form is an `epic`-labelled issue + GitHub's native sub-issues
-# (model: customer-c-erp #2); a body task-list (`- [ ] … #N`) is the fallback for
-# legacy epics (model: customer-c-erp #101). The result is a NEW top-level list
-# `epics[]` — runs[] is NOT touched (scope-out). The status page renders an epic
-# lane per epic inside its repo group; blocker/queue ordering is derived on the
-# render side from the sub-issue LIST ORDER (dependency order), so this side keeps
-# the spec's exact sub_issue shape: { number, state }.
+# (modelled on a real epic with 14 native sub-issues); a body task-list
+# (`- [ ] … #N`) is the fallback for legacy epics. The result is a NEW top-level
+# list `epics[]` — runs[] is NOT touched (scope-out). The status page renders an
+# epic lane per epic inside its repo group; blocker/queue ordering is derived on
+# the render side from the sub-issue LIST ORDER (dependency order), so this side
+# keeps the spec's exact sub_issue shape: { number, state }.
 # ---------------------------------------------------------------------------
 
 # status_github_fetch_epics <owner/repo> — the open `epic`-labelled issues for a

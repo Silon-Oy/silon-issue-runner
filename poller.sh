@@ -541,7 +541,7 @@ scan_blocked_answered() {
 # a truncated list would read as "nothing to clean" exactly when there is
 # something to clean. The ceiling is real rather than theoretical because the
 # label is never removed after a successful clean, so it accumulates on closed
-# issues (measured 2026-08-29: customer-a-report 100, claude-issue-runner 29).
+# issues (measured 2026-08-29: a production repo 100, claude-issue-runner 29).
 # bash 3.2 has no associative arrays, so both the unique set and the label map
 # are temp files.
 scan_clean() {
@@ -596,8 +596,9 @@ scan_clean() {
   #
   # Pagination is explicit and BOUNDED rather than `gh api --paginate`: the
   # label is never removed after a successful clean, so it accumulates on closed
-  # issues (measured 2026-08-29: customer-a-report 100), and an unbounded walk would
-  # grow without limit for a signal whose live set is nearly always empty.
+  # issues (measured 2026-08-29: a production repo carried 100 of them), and an
+  # unbounded walk would grow without limit for a signal whose live set is
+  # nearly always empty.
   page=1
   rows=0
   : > "$labelled"

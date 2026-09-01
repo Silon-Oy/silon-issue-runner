@@ -662,7 +662,7 @@ phase_a() {
   # Snapshot issue payload — used now for branch name and later (incl. resume).
   # Run-id is namespaced by repo AND remote so the same issue number in two
   # repos / two orgs gets distinct run-dirs, branches, locks and tmux sessions
-  # (e.g. `<ts>-silon-oy-flow-issue-5` vs `<ts>-silon-oy-customer-a-report-issue-5`).
+  # (e.g. `<ts>-example-org-app-issue-5` vs `<ts>-example-org-report-issue-5`).
   # One label feeds all of them so the four derivations cannot drift apart.
   local id_label
   id_label=$(remote_label "$REMOTE_NAME" "$ISSUE_NUM" "$REPO_SLUG")
