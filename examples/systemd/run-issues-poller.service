@@ -1,6 +1,5 @@
 [Unit]
 Description=claude-issue-runner: run-issues-poller
-Documentation=https://github.com/Silon-Oy/claude-issue-runner
 
 [Service]
 Type=oneshot

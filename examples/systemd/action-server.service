@@ -1,6 +1,5 @@
 [Unit]
 Description=claude-issue-runner: action server (Ohjaamo)
-Documentation=https://github.com/Silon-Oy/claude-issue-runner
 # Tailscale must be up first: action-server.sh refuses to bind (exit 3) when
 # `tailscale ip -4` yields nothing, rather than falling back to a wildcard.
 After=network-online.target tailscaled.service
