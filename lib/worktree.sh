@@ -9,7 +9,7 @@
 # "origin"). It is used to resolve the base ref and, in refresh_origin, which
 # remote to fetch. Passing "origin" explicitly is identical to the legacy
 # behaviour; non-origin remotes route fetch + base resolution to the right
-# org so a single clone can branch off `customer-d/main` as well as `origin/main`.
+# org so a single clone can branch off `partner/main` as well as `origin/main`.
 
 set -euo pipefail
 

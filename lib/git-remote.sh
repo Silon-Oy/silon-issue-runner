@@ -4,7 +4,7 @@
 # One local clone can poll multiple GitHub orgs at once when a repo entry in
 # the watchlist lists more than one git remote in its `remotes` array. The
 # orchestrator and poller must then namespace per-run identity by the remote so
-# `Silon-Oy/...#5` and `customer-d-oy/...#5` do not collide on the same lock / tmux
+# `Silon-Oy/...#5` and `partner-org/...#5` do not collide on the same lock / tmux
 # session / branch / run-dir, and must route every gh call to the issue's own
 # org via `gh --repo owner/repo`.
 #

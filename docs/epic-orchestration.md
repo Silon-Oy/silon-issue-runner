@@ -104,9 +104,9 @@ Ennen natiivien sub-issueiden vakiintumista epicit linkitettiin **rungon task-li
 - [ ] Alaissue B → #102
 ```
 
-Repoissa esiintyy molempia muotoja (esim. customer-c-erp #2 natiivi 14 lapsella; customer-c-erp #101
-task-lista). **Päätös: natiivit sub-issuet ovat kanoniset, task-lista luetaan vain
-fallbackina.**
+Repoissa esiintyy molempia muotoja (havaittu samassa repossa: yksi epic 14 natiivilla
+lapsella, toinen task-listalla). **Päätös: natiivit sub-issuet ovat kanoniset, task-lista
+luetaan vain fallbackina.**
 
 **Fallbackin lukusäännöt:**
 

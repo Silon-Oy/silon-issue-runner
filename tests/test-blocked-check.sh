@@ -142,14 +142,14 @@ set -e
 # it explicitly instead of relying on gh's {owner}/{repo} cwd substitution.
 : > "$PATHLOG"
 set +e
-out=$(count_open_blockers "$REPO" 6 "customer-d-oy/rahti"); rc=$?
+out=$(count_open_blockers "$REPO" 6 "partner-org/app"); rc=$?
 set -e
 [ "$rc" = "0" ]  || fail "owner/repo: expected rc 0, got $rc"
 [ "$out" = "1" ] || fail "owner/repo: expected count 1, got [$out]"
-if grep -qF 'repos/customer-d-oy/rahti/issues/6/dependencies/blocked_by' "$PATHLOG"; then
+if grep -qF 'repos/partner-org/app/issues/6/dependencies/blocked_by' "$PATHLOG"; then
   pass "non-origin owner/repo targets explicit dependency path"
 else
-  fail "owner/repo: path did not target customer-d-oy/rahti explicitly: $(cat "$PATHLOG")"
+  fail "owner/repo: path did not target partner-org/app explicitly: $(cat "$PATHLOG")"
 fi
 
 # --- 7. origin (no owner/repo) → {owner}/{repo} placeholder path ----------

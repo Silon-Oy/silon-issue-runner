@@ -59,7 +59,7 @@ cat > "$FXA" <<'JSON'
   "host": "host-a",
   "totals": { "degraded": false },
   "runs": [
-    {"run_id":"r92","repo_slug":"customer-a-report","issue_number":92,"issue_url":"https://github.com/Silon-Oy/customer-a-report/issues/92","pr_url":null,"pr_number":null,"age_seconds":6134400,"class":"attention","class_reason":"awaiting_clarification","current_state":"S6_CycleReview"},
+    {"run_id":"r92","repo_slug":"bar","issue_number":92,"issue_url":"https://github.com/Silon-Oy/bar/issues/92","pr_url":null,"pr_number":null,"age_seconds":6134400,"class":"attention","class_reason":"awaiting_clarification","current_state":"S6_CycleReview"},
     {"run_id":"rb1","repo_slug":"foo","issue_number":10,"issue_url":"https://github.com/Silon-Oy/foo/issues/10","pr_url":null,"pr_number":null,"age_seconds":1036800,"class":"attention","class_reason":"blocked","current_state":"S5_DBClone"},
     {"run_id":"rs1","repo_slug":"baz","issue_number":20,"issue_url":"https://github.com/Silon-Oy/baz/issues/20","pr_url":null,"pr_number":null,"age_seconds":200000,"class":"stalled","class_reason":"orphaned","current_state":"S8_Implementer"},
     {"run_id":"rc1","repo_slug":"baz","issue_number":21,"issue_url":null,"pr_url":null,"pr_number":null,"age_seconds":50,"class":"cleanup","class_reason":"pr_not_open","current_state":null}
@@ -140,7 +140,7 @@ cat > "$FXB" <<'JSON'
   "host": "host-a",
   "totals": { "degraded": false },
   "runs": [
-    {"run_id":"r92","repo_slug":"customer-a-report","issue_number":92,"issue_url":"https://github.com/Silon-Oy/customer-a-report/issues/92","pr_url":null,"pr_number":null,"age_seconds":6220800,"class":"attention","class_reason":"awaiting_clarification","current_state":"S6_CycleReview"},
+    {"run_id":"r92","repo_slug":"bar","issue_number":92,"issue_url":"https://github.com/Silon-Oy/bar/issues/92","pr_url":null,"pr_number":null,"age_seconds":6220800,"class":"attention","class_reason":"awaiting_clarification","current_state":"S6_CycleReview"},
     {"run_id":"rb1","repo_slug":"foo","issue_number":10,"issue_url":"https://github.com/Silon-Oy/foo/issues/10","pr_url":null,"pr_number":null,"age_seconds":1123200,"class":"attention","class_reason":"blocked","current_state":"S5_DBClone"},
     {"run_id":"rb2","repo_slug":"foo","issue_number":11,"issue_url":"https://github.com/Silon-Oy/foo/issues/11","pr_url":null,"pr_number":null,"age_seconds":900000,"class":"attention","class_reason":"blocked","current_state":"S4_Worktree"},
     {"run_id":"rs1","repo_slug":"baz","issue_number":20,"issue_url":"https://github.com/Silon-Oy/baz/issues/20","pr_url":null,"pr_number":null,"age_seconds":260000,"class":"stalled","class_reason":"orphaned","current_state":"S8_Implementer"}

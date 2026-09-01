@@ -113,7 +113,7 @@ grep -qF 'api --method POST repos/acme/widgets/issues/42/labels' "$GH_LOG" \
 grep -qF 'labels[]=auto-merge' "$GH_LOG" \
   || { echo "FAIL (a): auto-merge not in the label payload"; cat "$GH_LOG"; FAIL=1; }
 # The scope-fragile path must not come back: `gh pr edit` needs read:project
-# and silently no-op'd on 16 production runs (customer-c-erp#40).
+# and silently no-op'd on 16 production runs.
 grep -qE 'pr edit|issue edit' "$GH_LOG" \
   && { echo "FAIL (a): used gh pr/issue edit instead of the REST endpoint"; cat "$GH_LOG"; FAIL=1; }
 grep -q '"event":"pr_labels_propagated"' "$RD/state.jsonl" \

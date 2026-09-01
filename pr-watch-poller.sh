@@ -318,8 +318,8 @@ for (( i=0; i<N; i++ )); do
         SESSION="pr-watch-${REPO_TAG}-${REMOTE_TAG}"
       fi
 
-      # `=` forces an exact tmux target match; without it e.g. `pr-watch-customer-c`
-      # prefix-matches `pr-watch-customer-c_erp` and one repo blocks the other.
+      # `=` forces an exact tmux target match; without it e.g. `pr-watch-acme`
+      # prefix-matches `pr-watch-acme_erp` and one repo blocks the other.
       if tmux has-session -t "=$SESSION" 2>/dev/null; then
         echo "$(date -u +%FT%TZ) pr-watch-poller: session $SESSION already running" >> "$LOG"
         continue

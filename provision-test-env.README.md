@@ -63,7 +63,7 @@ case "$mode" in
     echo "provisioning $db" >&2                       # diagnostiikka -> stderr
     PGPASSWORD="$pass" psql -h "$host" -p "$port" -U "$user" -d postgres \
       -c "DROP DATABASE IF EXISTS \"$db\";" -c "CREATE DATABASE \"$db\";" >&2
-    DATABASE_URL_TEST="$url" pnpm --filter @customer-a/api prisma migrate deploy >&2
+    DATABASE_URL_TEST="$url" pnpm --filter @example/api prisma migrate deploy >&2
     echo "DATABASE_URL_TEST=$url"                      # KEY=VALUE -> stdout
     ;;
   cleanup)
@@ -73,7 +73,7 @@ case "$mode" in
 esac
 ```
 
-> Tämä on **esimerkki**, ei osa dotfiles-repoa. Kohderepo (esim. `customer-a-report`) omistaa
+> Tämä on **esimerkki**, ei osa dotfiles-repoa. Kohderepo (esim. `example-report`) omistaa
 > oman skriptinsä; orkestraattori pysyy geneerisenä eikä sisällä DB-/Prisma-spesifistä
 > logiikkaa.
 
