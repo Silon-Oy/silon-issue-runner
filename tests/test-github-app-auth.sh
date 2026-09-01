@@ -19,7 +19,7 @@
 #    return anything when App mode is OFF.
 # 7. The heavy LIST reads (pick_oldest_candidate, issue_assignees, epic_list_open,
 #    scan_clean's label query) route through the App when App mode is on, so their
-#    volume spends the App's rate limit, not maintainer's personal quota (issue #127).
+#    volume spends the App's rate limit, not a personal quota (issue #127).
 #    A PATH `gh` shim records GH_TOKEN presence per call: TEST 8 proves the reads
 #    carry the token, that N reads mint ONCE (cache holds under volume), and that
 #    the per-issue count_open_blockers probe stays bare (scope boundary). TEST 9
@@ -329,7 +329,7 @@ esac
 # ---------- TEST 8: heavy LIST reads route through the App (issue #127) -------
 # The pickup / assignee / epic / clean-scan reads must run through gha_with_token
 # when App mode is on, so their volume spends the App's rate limit rather than
-# maintainer's personal quota. We source the read helpers, put a `gh` shim on PATH that
+# a personal quota. We source the read helpers, put a `gh` shim on PATH that
 # records whether GH_TOKEN was set per call, and assert the routed reads carry the
 # token while the token cache is hit exactly once across many reads.
 echo "--- TEST 8: pickup/assignee/epic/clean reads route via App ---"

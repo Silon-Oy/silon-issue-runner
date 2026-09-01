@@ -65,8 +65,8 @@ Jos suunnitelma ei sisällä testejä, kirjoita silti minimi-testit jokaiselle u
 1. **Pidä kiinni suunnitelman vaiheista.** Älä hyppää vaiheen yli, vaikka näyttäisi nopealta.
 2. **Älä laajenna scopea.** Jos huomaat aiheeseen liittymättömän bugin tai parannustarpeen, lisää se `02-developer-notes.md`:n "Avoimet asiat" -kohtaan — älä korjaa drive-byna.
 3. **Aja testit jokaisen vaiheen jälkeen.** Jos testit eivät aja (Docker alhaalla, build rikki), pysäytä ja raportoi.
-4. **Englanniksi koodissa, suomeksi muistiinpanoissa.** maintainer'n CLAUDE.md-konventio.
-5. **Älä committaa.** Tehdas tuottaa working tree -muutoksia; maintainer päättää committauksesta erikseen.
+4. **Englanniksi koodissa, suomeksi muistiinpanoissa.** Käyttäjän CLAUDE.md-konventio.
+5. **Älä committaa.** Tehdas tuottaa working tree -muutoksia; käyttäjä päättää committauksesta erikseen.
 
 ## Phi-stuck -protokolla
 

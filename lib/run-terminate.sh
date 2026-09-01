@@ -183,7 +183,7 @@ run_terminate() {
     # Write the comment body to a temp file (heredoc inside $(...) has fragile
     # parser interactions with bash's case-statement-aware tokenizer; the temp
     # file is simpler and verifiable). Both flavours mirror
-    # _post_situation_to_issue's headline + meta-list shape so an maintainer scanning
+    # _post_situation_to_issue's headline + meta-list shape so a human scanning
     # issues sees the same skeleton across all hand-off paths — the branch below
     # differs only in the marker, the headline verb and the follow-up sentence.
     local body_file

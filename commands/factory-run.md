@@ -98,7 +98,7 @@ Kasvata `round = round + 1`. Päivitä `run.json` (`review_rounds: round`).
 3. Siirrä speksi: `mv <spec_path> specs/done/<slug>.md`
 4. Tulosta yhteenveto käyttäjälle:
    - Slug, status, review-kierrokset, scope-violations
-   - Run-kansion polku (jotta maintainer voi katsoa)
+   - Run-kansion polku (jotta käyttäjä voi katsoa)
    - Vinkki: "Diffi ei ole committed — tarkista `git diff` ja committaa kun haluat."
 
 ## Virheidenkäsittely
@@ -109,6 +109,6 @@ Kasvata `round = round + 1`. Päivitä `run.json` (`review_rounds: round`).
 
 ## Tärkeää
 
-- **Älä committaa** missään vaiheessa. Tehdas tuottaa working tree -muutoksia, maintainer päättää committauksesta.
+- **Älä committaa** missään vaiheessa. Tehdas tuottaa working tree -muutoksia, käyttäjä päättää committauksesta.
 - **Vain paikallinen ajo.** Ei pilveä, ei verkkokutsuja muualle kuin agenttien luonnollisiin työkaluihin.
 - **Maksimi 3 must-fix -kierrosta**, sen jälkeen `status: blocked` (ei automaattista jatkoyritystä).

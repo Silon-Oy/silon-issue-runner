@@ -125,7 +125,7 @@ fi
 # ---- Case 4: scripts/ is a directory symlink WITH a working run-issues ----
 # This is the shape produced by dotfiles (directory symlink) plus the package
 # mounted as a submodule. It must stay a no-op: retargeting the symlink here
-# would break maintainer's working install.
+# would break the maintainer's working install.
 OTHER_PKG="$WORK/other-pkg"
 mkdir -p "$OTHER_PKG/run-issues"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$OTHER_PKG/run-issues/orchestrate.sh"

@@ -2,7 +2,7 @@
 # lib/worktree.sh — manage per-run git worktrees in the TARGET repo.
 #
 # Worktrees live under <repo-root>/.claude/worktrees/<run-id>/. They are
-# intentionally kept after the run so maintainer can inspect what happened —
+# intentionally kept after the run so a human can inspect what happened —
 # only the rollback path (cleanup_worktree) removes them.
 #
 # Multi-remote: every function takes an optional <remote> argument (default

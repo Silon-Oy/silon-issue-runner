@@ -53,7 +53,7 @@ Listaa kaikki uudet tai muuttuvat julkiset rajapinnat (funktiot, REST-endpointit
 ## 5. Testisuunnitelma
 - **Yksikkötestit:** mitä testataan, missä tiedostossa
 - **Integraatio/E2E:** tarvitaanko, mitä polkuja
-- **Manuaalinen verifikaatio:** mitä maintainer'n pitäisi katsoa selaimesta tai logista
+- **Manuaalinen verifikaatio:** mitä käyttäjän pitäisi katsoa selaimesta tai logista
 
 ## 6. Riskit ja epävarmuudet
 Listaa 2–5 kohtaa mitä voi mennä pieleen tai mitä speksissä on epäselvää. Jokaiselle ehdotus mitigaatiosta.

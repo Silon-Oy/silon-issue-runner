@@ -113,7 +113,7 @@ fi
 reset_path
 
 # ── Test 6: human pre-assigned THEMSELVES (== @me account) → passes ──
-# The bot and maintainer share an account, so a human who assigned themselves looks
+# The bot and the human share an account, so a human who assigned themselves looks
 # identical to @me. before={me}, after={me} → before ∪ {me} == after → pass.
 install_gh_stub "maintainer"
 if verify_claim "$TMP" 6 "" "maintainer"; then

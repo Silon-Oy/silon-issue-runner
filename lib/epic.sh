@@ -78,7 +78,7 @@ _epic_log() {
 #
 # The read routes through _issue_gh (issue #127): this is a per-tick LIST scan
 # run by the poller for every watched repo, so — like pick_oldest_candidate — its
-# volume belongs on the App's rate limit, not maintainer's personal one. App identity
+# volume belongs on the App's rate limit, not the maintainer's personal one. App identity
 # does not change which epics it returns; it decides whose quota pays. Without App
 # wiring, or on a non-origin remote, _issue_gh is a pass-through to bare gh.
 epic_list_open() {

@@ -39,7 +39,7 @@ echo "PR_WATCH_EXIT=$RC"
 | 3 | Lock race hävitty | Joku toinen ajo omistaa issuen. Lopeta hiljaa. |
 | 4 | Ei vielä mergettävissä (label puuttuu, CI kesken/punainen, dirty res OFF) | Raportoiva — kerro miksi (lue `state.jsonl` viimeinen `pr_classified`/`pr_watch_skipped`). |
 | 5 | Merge epäonnistui | Tulosta `gh pr merge`-virhe. |
-| 6 | Konflikti — ihminen tarvitaan | AI ei kyennyt ratkaisemaan konfliktia kestävästi tai CI jäi punaiseksi rebasen jälkeen. PR:ään on jätetty kommentti; rebase on abortattu (haara ennallaan) tai jätetty tarkasteltavaksi. PR:ää ei mergetty. Ohjaa maintainer ratkaisemaan. |
+| 6 | Konflikti — ihminen tarvitaan | AI ei kyennyt ratkaisemaan konfliktia kestävästi tai CI jäi punaiseksi rebasen jälkeen. PR:ään on jätetty kommentti; rebase on abortattu (haara ennallaan) tai jätetty tarkasteltavaksi. PR:ää ei mergetty. Ohjaa käyttäjä ratkaisemaan. |
 | 7 | Post-merge-migraatio epäonnistui | PR on jo mergetty mainiin; migraatio kaatui. Tutki `.claude/post-merge-migrate.sh`-loki. |
 | 1 | Käyttövirhe | Tulosta usage. |
 

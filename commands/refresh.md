@@ -64,7 +64,7 @@ echo "NON_GITIGNORE_DIRTY=[$NON_GITIGNORE_DIRTY]"
 ```
 
 Jos tuloste on **ei-tyhjä** → työpuussa on muita committaamattomia muutoksia kuin
-`.gitignore`. Aja `git -C "$REPO_ROOT" status -sb`, näytä sen tuloste maintainerlle ja **STOP**
+`.gitignore`. Aja `git -C "$REPO_ROOT" status -sb`, näytä sen tuloste käyttäjälle ja **STOP**
 ("Työpuu likainen — committaa tai stashaa ensin, en pullaa muutosten päälle"). Älä etene
 PHASE 2:een. (Pelkkä `.gitignore`-muutos ei pysäytä — se kannetaan ff-pullin läpi ja
 PHASE 3b täydentää sen.)
@@ -238,7 +238,7 @@ Huoltosäännöt:
 
 - **`.claude/refresh-dev.log`** — runtime-loki, **aina** ignorattava.
 - **`.claude/refresh.json`** — henkilökohtainen konfig. Ignoroi vain jos se on olemassa,
-  **ei trackattu** ja ei jo ignorattu. Jos tiedosto on jo committattu (trackattu), maintainer on
+  **ei trackattu** ja ei jo ignorattu. Jos tiedosto on jo committattu (trackattu), käyttäjä on
   tietoisesti valinnut versioida sen → **älä taistele sitä vastaan**, jätä rauhaan.
 
 Idempotentti — lisää rivi vain jos `git check-ignore` ei jo kata sitä, joten vakiotilassa
@@ -702,7 +702,7 @@ Repo-juuren `.claude/refresh.json` ohjaa tätä komentoa. Kentät:
 - **`buildHints`** *(array)* — ohjeet PHASE 3:n päätöspuulle. Jokainen objekti:
   - `whenChanged` *(string, glob)* — tiedostopolku/glob, jonka muutos diffissä laukaisee.
   - `run` *(string)* — ajettava komento.
-  - `note` *(string, valinnainen)* — lisähuomio maintainerlle (esim. milloin harkita migraatiota).
+  - `note` *(string, valinnainen)* — lisähuomio käyttäjälle (esim. milloin harkita migraatiota).
 - **`prismaGenerate`** *(string, valinnainen)* — komento, jolla generoitu ORM-client
   rakennetaan uudelleen, esim. `"npm run prisma:generate"`. PHASE 3d käyttää tätä kun se
   havaitsee clientin olevan skeemaa vanhempi. Ilman kenttää komento päätellään
