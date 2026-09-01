@@ -242,7 +242,41 @@ Kaksi tukirakennetta: run-dirien arkistointi (`lib/archive.sh`) siirtää termin
 run-dirit pois kuumilta poluilta, ja lokirotaatio (`lib/log-rotate.sh`) tukkii saman rajattoman
 kasvun `.runs.log`ista (mitattu 190 MB).
 
-### 5.5 Lokikohina vaimennetaan tarkoituksella
+### 5.5 Testien on tehtävä kahdella koneella sama asia
+
+`orchestrate.sh` ja `pr-watch.sh` sourceavat koneen env-tiedoston prosessin sisällä. Tiedosto
+on käsin kirjoitettua shelliä täynnä `export FOO=bar` -rivejä, ja **`export` voittaa
+komentoetuliitteen** — joten sourceaus ylikirjoitti kutsujan tietoisen valinnan. Testit
+stubbaavat agentin `RUN_ISSUES_CLAUDE_CMD`illa, joten koneella jonka env-tiedosto exporttaa
+oikean CLI:n `tests/run-all.sh` **käynnisti oikeita, laskutettavia 3600 s agenttiajoja**
+väliaikaisrepoa vasten (mitattu 2026-08-31). Mikään tuloste ei kertonut siitä.
+
+Korjaus on `lib/machine-env.sh`:n **nimiavaruussääntö, ei poikkeuslista:** `RUN_ISSUES_*` ja
+`PR_WATCH_*` ⇒ kutsujan jo asettama arvo voittaa tiedoston (asetettu tyhjäksi = asetettu);
+kaikki muu (salaisuudet, joita kukaan ei aseta käsin) säilyttää `tiedosto voittaa` -semantiikan.
+**Poikkeuslista olisi väärä muoto** — se jättäisi seuraavan lisätyn muuttujan kattamatta, mikä
+on täsmälleen se tapa jolla tämä vika säilyi.
+
+### 5.6 Havainto sidotaan tilaan, ei tekoon
+
+`pr-watch.sh` ajoi purun vain siinä haarassa, jossa vahti **itse** mergesi. Jokainen muu reitti
+mergeen — toisen koneen vahti, web-UI, käsin ajettu `gh pr merge`, rotaatiokursorin
+nälkiinnyttämä repo — jätti artefaktit ikuisesti, ja §5.5:n vaimennuksen jälkeen **hiljaa**.
+Mitattu Studiolla: 331 ajoa, 314 luokassa `cleanup`, **309 worktreetä levyllä = 166,9 GB**.
+
+Pollerin `scan_finished` päättää nyt **mitkä** ajot ovat valmiita ja delegoi **miten**
+`cleanup-run.sh`ille. Kaksi sääntöä, jotka on helppo rikkoa vahingossa:
+
+- **Sovitus ei kommentoi, ei labeloi eikä koskaan sulje issueta.** Se reagoi sulkemiseen, joten
+  sen aiheuttaminen tekisi signaalista itsensä toteuttavan — ja 300+ kommentin ryöppy olisi
+  haitallisempi kuin ongelma jonka se ilmoittaa.
+- **Viisi fail-closed-porttia:** elävä ajo, vieras host, issue ei varmistetusti kiinni, avoin PR,
+  ja **pushaamattomat commitit haaralla** (`git branch -D` on tuhoava; S10:n `--set-upstream`
+  tekee "onko pushattu" paikallisesti ratkaistavaksi).
+
+Takautuva 166,9 GB:n purku on erillinen valvottu kertaoperaatio.
+
+### 5.7 Lokikohina vaimennetaan tarkoituksella
 
 Yksi rivi per ohitettu tikki, ei per kutsu. Alkuperäinen häiriö kirjoitti **1754 identtistä
 riviä** eikä yksikään niistä ollut signaali. Sama periaate: `SKIP_CLOSED`in ensimmäinen
@@ -287,6 +321,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `log-rotate.sh` | Kokoon perustuva lokirotaatio. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
+| `machine-env.sh` | Koneen env-tiedoston sourceaus **kutsujan etuoikeudella** (§5.5). Jaettu `orchestrate.sh`:n ja `pr-watch.sh`:n kesken, jotta sääntö on yhdessä paikassa |
 | `poller-config.sh` | Host-portti ja watchlistin resolvointi **puhtaina funktioina**. Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa |
 | `pr-watch-lib.sh` | PR:n luokittelu ja merge-päätös irrotettuna testattavaksi |
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
@@ -318,9 +353,16 @@ voittaa ympäristömuuttujan**. Poikkeuksia kaksi, molemmat rakenteellisia: `RUN
 Saman `poller.env`in lukevat kaikki LaunchAgentit: molemmat pollerit, `status-render.sh`,
 `self-update.sh` ja `action-server.sh`. Yksi konekohtainen tiedosto konfiguroi kaikki.
 
-**Pollerit eivät lue `$HOME/.config/run-issues/env`-tiedostoa.** Se sisältää salaisuudet, jotka
-`orchestrate.sh` ja `pr-watch.sh` sourceavat itse. Poller ei tarvitse niistä yhtäkään ja
-lokittaa runsaasti ⇒ salaisuudet pidetään sen prosessin ulkopuolella.
+**Kaksi env-tiedostoa, vastakkaiset etuoikeudet.** Tämä on helppo sekoittaa, ja sekoittaminen
+maksoi kerran oikeita agenttiajoja (§5.5):
+
+| Tiedosto | Kuka lukee | Etuoikeus |
+|---|---|---|
+| `poller.env` | LaunchAgentit | **Tiedosto voittaa** ympäristömuuttujan — se on koneen ainoa konfigurointikanava |
+| `env` (salaisuudet) | `orchestrate.sh`, `pr-watch.sh` | **Kutsuja voittaa** `RUN_ISSUES_*`- ja `PR_WATCH_*`-nimiavaruudessa; muualla tiedosto voittaa (`lib/machine-env.sh`) |
+
+**Pollerit eivät lue `env`-tiedostoa lainkaan.** Se sisältää salaisuudet, poller ei tarvitse
+niistä yhtäkään ja lokittaa runsaasti ⇒ salaisuudet pidetään sen prosessin ulkopuolella.
 `tests/test-poller-config.sh` vartioi tätä.
 
 **Watchlist:** `RUN_ISSUES_WATCHLIST` asetettuna on **ainoa** ehdokas — osumaton override on
