@@ -13,7 +13,8 @@
 #   2. --dry-run writes nothing and never contacts the target (the target path
 #      does not even exist and the run still succeeds)
 #   3. --dry-run against a real target leaves it without a single ref
-#   4. the BUILT-IN denylist refuses a real forbidden name -> exit 3
+#   4. an empty or missing denylist is a refusal (exit 3), never a green light,
+#      and the BUILT-IN denylist refuses a real forbidden name -> exit 3
 #   5. the leak gate reports matches as tiedosto:rivi and refuses -> exit 3,
 #      while the same term inside publish-release.sh is NOT a match (the
 #      maintainer tool is excluded from both the release and the scan)
@@ -130,6 +131,21 @@ rc=$?
 [ "$rc" = "0" ] && ok "--dry-run against a real target -> exit 0" || bad "--dry-run exited $rc"
 if [ -z "$(target_refs)" ]; then ok "--dry-run wrote no ref into the target"
 else bad "--dry-run wrote refs into the target: $(target_refs)"; fi
+
+# ---- Case 3b: an unusable denylist is a refusal, not a green light ----
+# An empty list does not mean "nothing is forbidden", it means the gate could not
+# run. Fail-open here would defeat the whole script.
+printf '# pelkkiä kommentteja\n\n' > "$WORK/empty-denylist.txt"
+RUN_ISSUES_PUBLISH_DENYLIST_FILE="$WORK/empty-denylist.txt" run_pub --target "$TARGET" --yes
+rc=$?
+[ "$rc" = "3" ] && ok "empty denylist -> exit 3 (fail-closed)" \
+  || bad "empty denylist exited $rc, expected 3 — the gate failed OPEN"
+RUN_ISSUES_PUBLISH_DENYLIST_FILE="$WORK/no-such-denylist.txt" run_pub --target "$TARGET" --yes
+rc=$?
+[ "$rc" = "3" ] && ok "missing denylist file -> exit 3 (fail-closed)" \
+  || bad "missing denylist file exited $rc, expected 3"
+if [ -z "$(target_refs)" ]; then ok "denylist refusals wrote nothing into the target"
+else bad "denylist refusal wrote refs: $(target_refs)"; fi
 
 # ---- Case 4: the BUILT-IN denylist refuses a real name ----
 # Assembled at runtime (see header) — never written literally in this file.
