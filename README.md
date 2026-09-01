@@ -324,7 +324,7 @@ skriptin `# Env:`-otsikkokommentti.
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | Konfiguraatiotiedoston polku |
-| `RUN_ISSUES_POLLER_HOSTS` | *(sisäänrakennettu legacy-lista)* | Glob-kuviot, joita verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0 |
+| `RUN_ISSUES_POLLER_HOSTS` | *(ei oletusta — pakollinen)* | Glob-kuviot, joita verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0. Asettamatta poller ei aja millään koneella, ja kertoo siitä yhdellä rivillä |
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku; asetettuna ainoa ehdokas |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Pollerien lokihakemisto |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee siivouksen |
@@ -786,6 +786,7 @@ Kaksi asiaa kannattaa muistaa ajaessa käsin:
   tapahtui. Väärällä koneella ajettu siivous ei löydä mitään ja raportoi sen.
 - **Pollerit ovat konelukittuja.** Ne vertaavat konenimeä muuttujaan
   `RUN_ISSUES_POLLER_HOSTS` ja exittaavat hiljaa nollalla, jos osumaa ei tule (osio 8).
+  Muuttujalla ei ole oletusarvoa: asettamatta poller ei aja missään.
 
 ### 6.9 Skill: `claude-issue-runner`
 
@@ -1229,6 +1230,22 @@ osumaa ei tule. Väärällä koneella se ei siis kerro mitään — se vain ei t
 hiljainen `exit 0` seuraa puuttuvasta `tmux`ista, puuttuvasta watchlististä ja viallisesta
 watchlist-JSONista.
 
+**Muuttujalla ei ole oletusarvoa, ja asettamatta jättäminen on eri asia kuin osumattomuus.**
+Asettamatta poller ei aja millään koneella (fail-closed kuten muutkin portit), mutta se ei
+vaikene: se kirjoittaa yhden rivin, joka nimeää muuttujan, `poller.env`-polun ja tämän koneen
+nimen. Rivi menee **sekä stderriin että pollerin omaan lokiin** (`run-issues-poller.log`,
+`pr-watch-poller.log`, `run-issues-action.stderr.log`) — pelkkä stderr ei riitä, koska portti
+ajetaan ennen kuin skripti on avannut lokinsa, eivätkä plistit kanna `StandardErrorPath`-avainta
+(osio 8), joten LaunchAgent-ajossa rivi katoaisi. Lokiin se kirjoitetaan **kerran**: tikki toistuu
+viiden minuutin välein, ja toisto vaietaan vertaamalla lokin viimeiseen riviin.
+
+Osumaton *asetettu* lista sen sijaan pysyy hiljaa eikä luo levylle mitään — se on vieras kone,
+ja hiljaisuus on koko portin tarkoitus. Sama koskee `RUN_ISSUES_ACTION_HOSTS`:ia.
+
+Käytännön seuraus: kone, jonka **ei** kuulu ajaa pollereita, kannattaa silti asettaa —
+anna sille sen koneen nimi, jonka kuuluu ajaa. Silloin se on tietoinen no-op eikä
+konfiguroimaton, eikä sen lokiin tule riviä.
+
 ### "maintainer" esiintyy prompteissa ja komennoissa
 
 Ihmisroolin nimi on kirjoitettu suoraan useaan promptiin, slash-komentoon ja
@@ -1242,13 +1259,12 @@ vaihtoehto. Ks. [`CLAUDE.md`](CLAUDE.md) §13.
 
 ### Legacy-jäänteitä, joihin törmää
 
-- `lib/poller-config.sh` sisältää sisäänrakennetun oletuslistan konenimistä
-  (`POLLER_HOSTS_LEGACY_DEFAULT`). Aseta oma `RUN_ISSUES_POLLER_HOSTS` `poller.env`iin, niin
-  lista ei koske sinua.
 - Watchlistillä on toissijainen fallback vanhaan `~/dotfiles`-puuhun. Se ei laukea, jos
   ensisijainen polku osuu.
 
-Molemmat on kirjattu tietoisiksi shimmeiksi: [`CLAUDE.md`](CLAUDE.md) §13.
+Se on kirjattu tietoiseksi shimmiksi: [`CLAUDE.md`](CLAUDE.md) §13. Host-portin
+sisäänrakennettu konenimilista (`POLLER_HOSTS_LEGACY_DEFAULT`) oli toinen, ja se on
+poistettu (#152): `RUN_ISSUES_POLLER_HOSTS` on nyt pakollinen konfiguraatio.
 
 ---
 

@@ -39,6 +39,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/rate-limit.sh
 . "${RUN_ISSUES_HOME}/lib/rate-limit.sh"
 
+# host_gate_notice (issue #152 follow-up). See poller.sh: the gate below runs
+# before any log path is opened and must still be able to report itself.
+# shellcheck source=lib/host-gate-notice.sh
+. "${RUN_ISSUES_HOME}/lib/host-gate-notice.sh"
+
 # Machine configuration; the pollers' only channel under launchd, which hands
 # an agent no environment of its own. Sourced, so the FILE WINS over an
 # inherited environment variable. Deliberately not ~/.config/run-issues/env:
@@ -51,13 +56,23 @@ if [ -f "$POLLER_ENV_FILE" ]; then
   set -eu
 fi
 
+# Resolved above the gate, created below it — see poller.sh.
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+
 # Host gate. Bail out silently on a machine that was never configured to run
 # the pollers, before any path is created — an unknown host must not so much as
-# make a log directory.
+# make a log directory. No default list (#152); see poller.sh for why an unset
+# variable is loud, a non-matching one is not, and why the loud branch reports
+# through host_gate_notice instead of a bare `>&2`.
 HOST=$(hostname -s)
-poller_host_allowed "$HOST" "${RUN_ISSUES_POLLER_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+if [ -z "${RUN_ISSUES_POLLER_HOSTS:-}" ]; then
+  host_gate_notice \
+    "$(poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$HOST")" \
+    "${LOG_DIR}/pr-watch-poller.log"
+  exit 0
+fi
+poller_host_allowed "$HOST" "$RUN_ISSUES_POLLER_HOSTS" || exit 0
 
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/pr-watch-poller.log"
 RUNS_LOG="${LOG_DIR}/pr-watch-poller.runs.log"

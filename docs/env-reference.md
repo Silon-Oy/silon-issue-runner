@@ -38,7 +38,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | Konekohtaisen konfiguraation tiedosto |
-| `RUN_ISSUES_POLLER_HOSTS` | *(sisäänrakennettu legacy-lista, ks. §12)* | Pilkuin/välilyönnein eroteltuja glob-kuvioita, verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0 luomatta mitään |
+| `RUN_ISSUES_POLLER_HOSTS` | *(ei oletusta — pakollinen)* | Pilkuin/välilyönnein eroteltuja glob-kuvioita, verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0 luomatta mitään. **Asettamatta poller ei aja millään koneella** ja kirjoittaa yhden rivin — sekä stderriin että omaan lokiinsa, koska LaunchAgent-ajossa stderr ei mene mihinkään — joka nimeää muuttujan ja `poller.env`-polun (#152) |
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku. Asetettuna se on **ainoa** ehdokas — osumaton override on virhe, ei fallback |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Kaikkien neljän lokitiedoston hakemisto per poller (`.log`, `.runs.log`, `.stdout.log`, `.stderr.log`) |
 | `RUN_ISSUES_LOG_MAX_BYTES` | `10485760` (10 MB) | Lokirotaation raja (#65). Tikin alussa, ennen ensimmäistä kirjoitusta ja **ennen** `exec`-uudelleenohjausta, molemmat pollerit rotatoivat jokaisen neljästä lokistaan (`mv` → `.1`, yksi sukupolvi) jos koko ylittää rajan. `0` = rotaatio pois päältä. `mv` samalla levyllä on atominen, joten rinnakkainen lukija näkee aina ehjän vanhan tai uuden tiedoston |
@@ -237,7 +237,7 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
-| `RUN_ISSUES_ACTION_HOSTS` | *(legacy-lista, kuten pollerit)* | Host-portti, sama muoto ja semantiikka kuin `RUN_ISSUES_POLLER_HOSTS`. Ei osumaa ⇒ palvelu exittaa 0 luomatta mitään |
+| `RUN_ISSUES_ACTION_HOSTS` | *(ei oletusta — pakollinen)* | Host-portti, sama muoto ja semantiikka kuin `RUN_ISSUES_POLLER_HOSTS`, myös oletuksen puuttuminen. Ei osumaa ⇒ palvelu exittaa 0 luomatta mitään; asettamatta sama, lisäksi yksi selittävä rivi |
 | `RUN_ISSUES_ACTION_BIND` | `tailscale ip -4` ensimmäinen | Bind-osoite. **Ei koskaan wildcard**: jos tyhjä eikä Tailscale-osoitetta ratkea ⇒ exit 3 (launchd yrittää uudelleen — boot-ennen-tailnetiä-toipuminen). Testit asettavat `127.0.0.1` |
 | `RUN_ISSUES_ACTION_PORT` | `8081` | Kuunneltava portti (8080 on Caddyn) |
 | `RUN_ISSUES_ACTION_ALLOWED_USERS` | *(tämän noden oma tailnet-omistaja)* | Sallittujen LoginName-lista (CSV). Oletus resolvoidaan `tailscale status --json`illa. **Luottamusraja on tailnet-käyttäjä, ei laite** — myös puhelin/läppäri läpäisee (haluttu). Tyhjä ⇒ fail-closed exit 4 |
