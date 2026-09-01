@@ -174,6 +174,9 @@ skriptejä):
 
 - `/run-issues` — aja orkestraattori **nimetylle** issuelle (`#N`); issuenumero on pakollinen,
   automaattinen poiminta on pollerin tehtävä.
+- `/new-issue` — kirjoittaa vapaamuotoisesta kuvauksesta yhden ajon kokoisen issuen, joka
+  täyttää kaikki poimintaehdot: paketin oma runko ja tämän koneen poimintalabelit. Luonnos
+  vahvistetaan ennen kirjoitusta. Ei aja mitään.
 - `/new-epic` — pilkkoo vapaamuotoisen kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää
   ne sub-issueiksi, merkitsee riippuvuudet ja labeloi **vain epicin** ajoon. Ei aja mitään.
 - `/run-epic` — validoi epicin rakenne ja propagoi ajolabelit sen alaissueille; `--stop` keskeyttää.
