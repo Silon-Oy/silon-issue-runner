@@ -105,8 +105,8 @@ Ennen natiivien sub-issueiden vakiintumista epicit linkitettiin **rungon task-li
 ```
 
 Repoissa esiintyy molempia muotoja (havaittu samassa repossa: yksi epic 14 natiivilla
-lapsella, toinen task-listalla). **Päätös: natiivit sub-issuet ovat kanoniset, task-lista luetaan vain
-fallbackina.**
+lapsella, toinen task-listalla). **Päätös: natiivit sub-issuet ovat kanoniset, task-lista
+luetaan vain fallbackina.**
 
 **Fallbackin lukusäännöt:**
 

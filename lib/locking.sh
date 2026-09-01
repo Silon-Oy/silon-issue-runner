@@ -8,7 +8,7 @@
 # `acquired_at` file with an ISO-8601 timestamp.
 #
 # Multi-remote namespacing: the same clone can poll multiple GitHub orgs at
-# once (issue #53). `Example-Org/...#5` and `partner-org/...#5` are different
+# once (issue #53). `Silon-Oy/...#5` and `partner-org/...#5` are different
 # issues with the same number, so the lock name must include the remote
 # whenever it is not the legacy `origin` — otherwise they would collide on
 # the same lock. Origin keeps the legacy `issue-<N>.lock` shape so existing
