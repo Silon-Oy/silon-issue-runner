@@ -66,7 +66,7 @@ ilman sitä osuu helposti väärään Node-versioon.
 ### 2. Runner asennettuna
 
 ```bash
-git clone git@github.com:Silon-Oy/claude-issue-runner.git ~/projektit/claude-issue-runner
+git clone <paketin repo-URL> ~/projektit/claude-issue-runner
 ~/projektit/claude-issue-runner/install.sh
 ```
 

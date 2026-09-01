@@ -2,7 +2,7 @@
 name: claude-issue-runner
 description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean or auto-merge label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /run-issues, /run-epic, /pr-watch or /cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
-version: 2.1.0
+version: 2.2.0
 ---
 
 # claude-issue-runner — järjestelmän käyttöohje
@@ -11,8 +11,7 @@ Tämä paketti vie GitHub-issuen valmiiseen pull requestiin ilman ihmistä silmu
 poimii labeloidun issuen noin viiden minuutin välein ja avaa siitä PR:n, ja PR-vahti odottaa
 CI:n ja mergeää. Päätökset tehdään **kohderepossa**, jossa paketin oma dokumentaatio ei ole
 ladattuna — tämä skill tuo ne mukaan. Koodi ja täysi dokumentaatio ovat hakemistossa
-`$HOME/.claude/scripts/run-issues` (`README.md` ihmiselle, `CLAUDE.md` agentille); lähderepo on
-`Silon-Oy/claude-issue-runner`.
+`$HOME/.claude/scripts/run-issues` (`README.md` ihmiselle, `CLAUDE.md` agentille).
 
 Jokainen poimintaehto **epäonnistuu hiljaa**: issue jää poimimatta eikä mistään näy miksi.
 Ei virhettä, ei lokiriviä. Siksi konventiot pitää tietää etukäteen, ei jälkikäteen.
@@ -199,7 +198,7 @@ Tämä skill kattaa **päätöskriittisen ytimen**: mikä saa issuen ajoon, mit�
 ja mitä teet kun jokin pysähtyy. Se **ei** kata tilakonetta, `lib/`-rakennetta, exit-koodien
 avaruuksia, asennusta, turvamallia, LaunchAgent-konfiguraatiota, statussivua eikä PR-vahdin
 sisuskaluja — ne ovat paketin anatomiaa hakemistossa `$HOME/.claude/scripts/run-issues`
-(`README.md` ihmiselle, `CLAUDE.md` agentille), lähderepo `Silon-Oy/claude-issue-runner`.
+(`README.md` ihmiselle, `CLAUDE.md` agentille).
 
 Paketin `commands/`-hakemiston factory- ja refresh-komennot sekä `agents/`-hakemiston neljä
 määrittelyä kuuluvat erilliseen agenttitehtaaseen eivätkä tähän järjestelmään; tämän runnerin

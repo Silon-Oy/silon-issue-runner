@@ -126,9 +126,11 @@ for sh in orchestrate.sh run-epic.sh pr-watch.sh status.sh stop-run.sh cleanup-r
 done
 
 # ---- Case 6: the skill says where the code and full documentation live ----
-# Without these two pointers the skill is a dead end: a reader who needs the
-# state machine, the exit codes or the security model has nowhere to go.
-for ptr in '$HOME/.claude/scripts/run-issues' 'Silon-Oy/claude-issue-runner'; do
+# Without this pointer the skill is a dead end: a reader who needs the state
+# machine, the exit codes or the security model has nowhere to go. The pointer
+# is deliberately a local install path, not a repository URL: the package must
+# stay readable when it is installed outside the organisation that hosts it.
+for ptr in '$HOME/.claude/scripts/run-issues'; do
   if grep -qF -- "$ptr" "$SKILL"; then
     echo "PASS: skill points at '$ptr'"
   else
