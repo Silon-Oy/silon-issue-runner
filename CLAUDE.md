@@ -323,7 +323,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `log-rotate.sh` | Kokoon perustuva lokirotaatio. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `machine-env.sh` | Koneen env-tiedoston sourceaus **kutsujan etuoikeudella** (§5.5). Jaettu `orchestrate.sh`:n ja `pr-watch.sh`:n kesken, jotta sääntö on yhdessä paikassa |
-| `poller-config.sh` | Host-portti ja watchlistin resolvointi **puhtaina funktioina**. Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa |
+| `poller-config.sh` | Host-portti, watchlistin resolvointi ja repon poimintalabelit. Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa. Kirjoittaa levylle ei koskaan; ainoa ulkoinen komento on watchlistin `jq`-luku |
 | `pr-watch-lib.sh` | PR:n luokittelu ja merge-päätös irrotettuna testattavaksi |
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
 | `rate-limit.sh` | Rate-limitin **tekstuaalinen** tunnistus ja jaettu perääntyminen (§5.1) |
@@ -335,10 +335,11 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 | `issue.test.sh`, `render-prompt.test.sh` | Yksikkötestit (`verify_claim`, `render_prompt`) |
 
-**Jaetut primitiivit — älä monista.** Kolme kohtaa, joissa kahden toteutuksen ajautuminen on
+**Jaetut primitiivit — älä monista.** Neljä kohtaa, joissa kahden toteutuksen ajautuminen on
 aiemmin ollut oikea vika: poimintakysely (`pick_oldest_candidate`), epicin lapsijoukko
 (`list_epic_children` — **myös näkymä kutsuu tätä**, joten näkymä ja ajo eivät voi olla eri
-mieltä) ja ajon lopetus (`run_terminate`).
+mieltä), ajon lopetus (`run_terminate`) ja poimintalabelien resolvointi (`poller_pick_labels` —
+`/new-epic` labeloi sillä, jottei se voi kirjoittaa epicille labelia jota poller ei poimi).
 
 ## 8. Ympäristömuuttujat
 

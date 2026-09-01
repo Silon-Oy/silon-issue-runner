@@ -174,6 +174,8 @@ skriptejä):
 
 - `/run-issues` — aja orkestraattori **nimetylle** issuelle (`#N`); issuenumero on pakollinen,
   automaattinen poiminta on pollerin tehtävä.
+- `/new-epic` — pilkkoo vapaamuotoisen kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää
+  ne sub-issueiksi, merkitsee riippuvuudet ja labeloi **vain epicin** ajoon. Ei aja mitään.
 - `/run-epic` — validoi epicin rakenne ja propagoi ajolabelit sen alaissueille; `--stop` keskeyttää.
 - `/pr-watch` — aja PR-vahti yhdelle PR:lle tai skannaa tämän koneen valmiit ajot.
 - `/cleanup-run` — siivoa keskenjääneen ajon jäänteet.

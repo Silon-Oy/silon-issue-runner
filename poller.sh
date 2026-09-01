@@ -149,7 +149,10 @@ if ! jq -e . "$WATCHLIST" >/dev/null 2>&1; then
 fi
 
 GLOBAL_MAX=$(jq -r '.global_max_concurrent // 2' "$WATCHLIST")
-DEFAULT_LABELS=$(jq -r '(.default_labels // ["auto-run"]) | join(",")' "$WATCHLIST")
+# The raw watchlist-wide default. The fallback chain that turns it (and the per
+# repo `labels`) into the pickup label set lives in poller_pick_labels, so the
+# built-in `auto-run` default is not spelled out a second time here.
+DEFAULT_LABELS=$(jq -r '(.default_labels // []) | map(select(type == "string" and length > 0)) | join(",")' "$WATCHLIST")
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
 RUN_ISSUES_MAX_CLARIFICATIONS="${RUN_ISSUES_MAX_CLARIFICATIONS:-3}"
 RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
@@ -1051,15 +1054,17 @@ while IFS= read -r repo_json; do
   [ -n "$repo_json" ] || continue
 
   REPO_PATH=$(jq -r '.path // empty' <<<"$repo_json")
-  REPO_LABELS=$(jq -r '(.labels // []) | join(",")' <<<"$repo_json")
+  REPO_LABELS=$(jq -r '(.labels // []) | map(select(type == "string" and length > 0)) | join(",")' <<<"$repo_json")
 
   if [ -z "$REPO_PATH" ] || [ ! -d "$REPO_PATH/.git" ]; then
     echo "$(date -u +%FT%TZ) poller: skip invalid repo entry: $repo_json" >> "$LOG"
     continue
   fi
 
-  LABELS_CSV="$REPO_LABELS"
-  [ -z "$LABELS_CSV" ] && LABELS_CSV="$DEFAULT_LABELS"
+  # Pickup labels for this repo: entry `labels`, else `default_labels`, else the
+  # built-in default. Shared with /new-epic via lib/poller-config.sh so the
+  # command cannot label a new epic with a set this poller would never pick up.
+  LABELS_CSV=$(poller_pick_labels "$REPO_LABELS" "$DEFAULT_LABELS")
 
   # remotes array (default ["origin"]) — newline-separated for the inner loop.
   # A bad/empty array (missing field, non-array, empty) is treated as ["origin"]

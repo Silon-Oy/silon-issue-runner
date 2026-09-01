@@ -573,6 +573,12 @@ GitHubin natiivilla **sub-issue**-toiminnolla (vanhoissa epiceissä rungon task-
 `- [ ] Otsikko #123` toimii varamuotona). Ajojärjestys tulee alaissueiden keskinäisistä
 `blocked_by`-riippuvuuksista aivan kuten yllä.
 
+Rakenteen voi koota käsin GitHubin UI:ssa tai komennolla **`/new-epic <kuvaus kokonaisuudesta>`**,
+joka pilkkoo kuvauksen epiciksi ja alaissueiksi, linkittää lapset sub-issueiksi, merkitsee
+riippuvuudet ja labeloi **vain epicin** ajoon — tuossa järjestyksessä, koska ajolabeli ennen
+riippuvuuksia päästäisi ketjun ajoon väärässä järjestyksessä. Komento ei aja mitään: sen jälkeen
+ketjun käynnistää poller tai `/run-epic`.
+
 - **Epic ei koskaan itse aja.** `epic`-label pitää epicin poiminnan ulkopuolella (sama tapa kuin
   `waiting`/`wip`), ja lukon jälkeinen S2c-portti varmistaa saman autoritatiivisesti — epicin
   "toteutus" on sen alaissueiden toteutus, ei epicin runko.
@@ -747,6 +753,7 @@ Claude Codessa, kohderepon juuressa:
 |---|---|---|
 | `/run-issues` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/run-issues.md`](commands/run-issues.md) |
 | `/run-epic` | `[#N] [--dry-run] [--start-now] [--stop]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan. `--stop` keskeyttää epicin (6.5). Ohje: [`commands/run-epic.md`](commands/run-epic.md) |
+| `/new-epic` | `<kuvaus kokonaisuudesta>` | Pilkkoo kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää sub-issueiksi, merkitsee `blocked_by`-riippuvuudet ja labeloi vain epicin ajoon (6.5). Ei aja mitään. Ohje: [`commands/new-epic.md`](commands/new-epic.md) |
 | `/pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/pr-watch.md`](commands/pr-watch.md) |
 | `/cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/cleanup-run.md`](commands/cleanup-run.md) |
 | `/refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/refresh.md`](commands/refresh.md) |
