@@ -13,13 +13,26 @@
 
 set -euo pipefail
 
-# Hosts the pollers ran on before the gate became configurable. This is a
-# back-compat shim, not machine configuration: it exists so that the machine
-# currently running the auto-run setup keeps working without setting a single
-# new environment variable. It disappears once that machine sets
-# RUN_ISSUES_POLLER_HOSTS in its poller.env (CLAUDE.md, section 12).
-# shellcheck disable=SC2034  # read by the sourcing pollers, not by this file
-POLLER_HOSTS_LEGACY_DEFAULT='*host-a*,*host-a*'
+# poller_host_unset_message <var-name> <env-file> <host> — echo the single line
+# a caller prints before it exits when <var-name> is unset. Pure: it builds the
+# text, the caller decides where the text goes.
+#
+# The host gate has no default. It used to carry a built-in list of the machine
+# names the pollers happened to run on (issue #152 removed it), which made the
+# package know one particular machine and, worse, made a MISCONFIGURED machine
+# indistinguishable from a foreign one: both exited 0 in silence. The two are
+# now separate. An unset variable is an operator error and says so; a set
+# variable that matches nothing is a foreign machine and stays silent, because
+# that no-op is the whole point of the gate.
+#
+# The line names the variable AND the file it belongs in, because those two
+# facts are what the reader is missing — the gate runs before the poller has
+# opened any log of its own, so this is all they get.
+poller_host_unset_message() {
+  local var="${1-}" env_file="${2-}" host="${3-}"
+  printf '%s is not set: the host gate is fail-closed, so nothing runs here. Set it in %s to a comma-separated list of hostname globs, e.g. %s="%s" (this host).\n' \
+    "$var" "$env_file" "$var" "$host"
+}
 
 # poller_host_allowed <host> <patterns> — return 0 when <host> matches any
 # pattern in <patterns>, else 1. Prints nothing.

@@ -41,6 +41,12 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/rate-limit.sh
 . "${RUN_ISSUES_HOME}/lib/rate-limit.sh"
 
+# host_gate_notice (issue #152 follow-up). Sourced here because the host gate
+# below runs before any log path is opened and still has to be able to report a
+# missing host list. Defines one function; no top-level work.
+# shellcheck source=lib/host-gate-notice.sh
+. "${RUN_ISSUES_HOME}/lib/host-gate-notice.sh"
+
 # Machine configuration. launchd hands an agent no environment of its own and
 # the login files hold nothing run-issues-specific, so this file is the only
 # channel through which a machine can configure its pollers. It is sourced, so
@@ -58,15 +64,37 @@ if [ -f "$POLLER_ENV_FILE" ]; then
   set -eu
 fi
 
+# Resolved above the gate, created below it. Reading a variable makes nothing,
+# so the foreign-machine branch still leaves no trace on disk — but the unset
+# branch needs the path to report itself into.
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+
 # Host gate. Bail out silently on a machine that was never configured to run
 # the pollers, so that deploying the LaunchAgent somewhere else does nothing.
 # This runs BEFORE any path is created: an unknown host must not so much as
 # make a log directory.
+#
+# There is no default host list (#152). Unset and "set but matching nothing"
+# are different failures and are reported differently: the first is an operator
+# error on THIS machine and says so, the second is a foreign machine, where
+# silence is the feature. Both exit 0 — a non-zero exit here would only make
+# launchd retry a decision that will not change until a human edits poller.env.
+#
+# The unset branch reports through host_gate_notice rather than a bare `>&2`,
+# because under a LaunchAgent stderr is not connected yet at this point: the
+# redirect below is what connects it, and it deliberately comes after the gate.
+# The notice therefore also appends to the poller's own log, which is where the
+# question "why has nothing run?" gets asked.
 HOST=$(hostname -s)
 THIS_HOST="$HOST"
-poller_host_allowed "$HOST" "${RUN_ISSUES_POLLER_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+if [ -z "${RUN_ISSUES_POLLER_HOSTS:-}" ]; then
+  host_gate_notice \
+    "$(poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$HOST")" \
+    "${LOG_DIR}/run-issues-poller.log"
+  exit 0
+fi
+poller_host_allowed "$HOST" "$RUN_ISSUES_POLLER_HOSTS" || exit 0
 
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/run-issues-poller.log"
 RUNS_LOG="${LOG_DIR}/run-issues-poller.runs.log"
@@ -543,7 +571,7 @@ scan_blocked_answered() {
 # a truncated list would read as "nothing to clean" exactly when there is
 # something to clean. The ceiling is real rather than theoretical because the
 # label is never removed after a successful clean, so it accumulates on closed
-# issues (measured 2026-08-29: customer-a-report 100, claude-issue-runner 29).
+# issues (measured 2026-08-29: a production repo 100, claude-issue-runner 29).
 # bash 3.2 has no associative arrays, so both the unique set and the label map
 # are temp files.
 scan_clean() {
@@ -598,8 +626,9 @@ scan_clean() {
   #
   # Pagination is explicit and BOUNDED rather than `gh api --paginate`: the
   # label is never removed after a successful clean, so it accumulates on closed
-  # issues (measured 2026-08-29: customer-a-report 100), and an unbounded walk would
-  # grow without limit for a signal whose live set is nearly always empty.
+  # issues (measured 2026-08-29: a production repo carried 100 of them), and an
+  # unbounded walk would grow without limit for a signal whose live set is
+  # nearly always empty.
   page=1
   rows=0
   : > "$labelled"

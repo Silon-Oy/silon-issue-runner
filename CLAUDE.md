@@ -315,6 +315,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |
 | `github-app-auth.sh` | Opt-in GitHub App -identiteetti. Kattaa kirjoitukset **ja** raskaimmat luvut |
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
+| `host-gate-notice.sh` | Host-portin "muuttuja puuttuu" -rivin toimitus: stderr **ja** skriptin oma loki, kerran. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
 | `issue.sh` | GitHub-issue-operaatiot. Sisältää paketin **ainoan** poimintakyselyn (`pick_oldest_candidate`) ja lapsijoukon **ainoan** resolvoinnin (`list_epic_children`) |
@@ -364,6 +365,25 @@ maksoi kerran oikeita agenttiajoja (§5.5):
 **Pollerit eivät lue `env`-tiedostoa lainkaan.** Se sisältää salaisuudet, poller ei tarvitse
 niistä yhtäkään ja lokittaa runsaasti ⇒ salaisuudet pidetään sen prosessin ulkopuolella.
 `tests/test-poller-config.sh` vartioi tätä.
+
+**Host-portilla ei ole oletusta, ja asettamatta jättäminen on eri vika kuin osumattomuus.**
+Sisäänrakennettu konenimilista (`POLLER_HOSTS_LEGACY_DEFAULT`) poistui #152:ssa: se oli ainoa
+kohta, jossa paketti tunsi yhden koneen nimen, ja se teki **väärin konfiguroidusta koneesta
+erottamattoman vieraasta** — molemmat exittasivat 0 hiljaa. Nyt asettamaton
+`RUN_ISSUES_POLLER_HOSTS` / `RUN_ISSUES_ACTION_HOSTS` estää ajon **ja** kirjoittaa yhden rivin
+(muuttuja + `poller.env`-polku + konenimi); asetettu mutta osumaton lista pysyy hiljaa eikä
+luo levylle mitään, koska se on vieras kone ja hiljaisuus on portin tarkoitus. Molemmat
+exittaavat **0**: `action-server.sh`:n `KeepAlive.SuccessfulExit=false` crash-looppaisi mistä
+tahansa muusta.
+
+**Rivi ei voi mennä pelkkään stderriin, koska portti on stderrin kytkemistä ylempänä.** Portti
+ajetaan tarkoituksella ennen kuin skripti avaa lokinsa (vieras kone ei saa luoda edes
+lokihakemistoa), ja §10:n mukaan plisteissä ei ole `StandardErrorPath`-avainta — LaunchAgent-ajossa,
+**ainoassa tuotantotilassa**, rivi meni siis suljettuun kahvaan ja näkyi vain käsin ajettaessa.
+`lib/host-gate-notice.sh` kirjoittaa sen molempiin: stderriin (käsiajo) ja skriptin omaan lokiin
+(tuotanto). Lokiin **kerran** — 300 s tikkiväli tuottaisi 288 identtistä riviä/vrk, mikä on §5.7:n
+kohina — ja vaimennus vertaa lokin viimeiseen riviin, joten se ei tarvitse omaa tilatiedostoa
+(§5.3) eikä rivissä saa olla aikaleimaa.
 
 **Watchlist:** `RUN_ISSUES_WATCHLIST` asetettuna on **ainoa** ehdokas — osumaton override on
 virhe, ei fallback. Ilman overridea: `$HOME/.config/run-issues/watchlist.json` →
@@ -485,10 +505,6 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
 
 **Legacy-shimit** (poistettavissa vasta kun ehto täyttyy):
 
-- `POLLER_HOSTS_LEGACY_DEFAULT` — sisäänrakennettu konenimilista. Tietoinen poikkeus §1:n
-  lupaukseen: ilman sitä auto-run-kone pysähtyisi mergehetkellä, mikä oli epicin nimenomainen
-  ei-tavoite. Poistuu kun kone asettaa `RUN_ISSUES_POLLER_HOSTS`:n `poller.env`iinsä.
-  `tests/test-poller-config.sh` pinnaa listan, jotta muutos on päätös eikä vahinko.
 - **Dotfiles-fallback watchlistille** — kulkee yhden nimetyn muuttujan (`LEGACY_DOTFILES_DIR`)
   kautta, jotta "riippuuko tämä yhä vanhasta rakenteesta?" on yhden rivin kysymys.
 

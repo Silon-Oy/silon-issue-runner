@@ -68,6 +68,8 @@ fi
 . "${RUN_ISSUES_HOME}/lib/poller-config.sh"
 # shellcheck source=lib/log-rotate.sh
 . "${RUN_ISSUES_HOME}/lib/log-rotate.sh"
+# shellcheck source=lib/host-gate-notice.sh
+. "${RUN_ISSUES_HOME}/lib/host-gate-notice.sh"
 # shellcheck source=lib/preflight.sh
 . "${RUN_ISSUES_HOME}/lib/preflight.sh"
 # shellcheck source=lib/action-token.sh
@@ -79,12 +81,26 @@ fi
 # abort the daemon before it can bind or exec.
 set +e
 
+# Resolved above the gate, created below it — see poller.sh.
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+
 # ---- host gate (before any path is created) ----
+# Inherits the pollers' rule (#152): no default list, an unset variable earns
+# one explanatory line, a non-matching one stays silent. Both exit 0, which
+# matters more here than in a poller — KeepAlive.SuccessfulExit=false restarts
+# on any non-zero exit, so reporting a config error with one would crash-loop.
+# The line goes through host_gate_notice for the same reason it does there: the
+# exec redirect that connects stderr is below this gate, not above it.
 HOST="$(hostname -s 2>/dev/null || echo unknown)"
-poller_host_allowed "$HOST" "${RUN_ISSUES_ACTION_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+if [ -z "${RUN_ISSUES_ACTION_HOSTS:-}" ]; then
+  host_gate_notice \
+    "$(poller_host_unset_message RUN_ISSUES_ACTION_HOSTS "$POLLER_ENV_FILE" "$HOST")" \
+    "${LOG_DIR}/run-issues-action.stderr.log"
+  exit 0
+fi
+poller_host_allowed "$HOST" "$RUN_ISSUES_ACTION_HOSTS" || exit 0
 
 # ---- log rotation + own log paths (like the pollers) ----
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 RUN_ISSUES_LOG_MAX_BYTES="${RUN_ISSUES_LOG_MAX_BYTES:-10485760}"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 rotate_log_if_big "$LOG_DIR/run-issues-action.stdout.log"  "$RUN_ISSUES_LOG_MAX_BYTES"

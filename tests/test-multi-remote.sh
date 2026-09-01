@@ -49,26 +49,26 @@ assert_parse() {
   fi
 }
 
-assert_parse "git@github.com:Silon-Oy/customer-d-map-api.git"   "Silon-Oy/customer-d-map-api"   "ssh scp+.git"
-assert_parse "git@github.com:Silon-Oy/customer-d-map-api"       "Silon-Oy/customer-d-map-api"   "ssh scp no .git"
-assert_parse "https://github.com/Silon-Oy/customer-d-map-api.git" "Silon-Oy/customer-d-map-api" "https+.git"
-assert_parse "https://github.com/Silon-Oy/customer-d-map-api"     "Silon-Oy/customer-d-map-api" "https no .git"
-assert_parse "ssh://git@github.com/customer-d-oy/customer-d-map-api.git" "customer-d-oy/customer-d-map-api" "ssh://"
-assert_parse "https://github.com/customer-d-oy/customer-d-map-api/"   "customer-d-oy/customer-d-map-api"   "trailing slash"
+assert_parse "git@github.com:Silon-Oy/map-api.git"   "Silon-Oy/map-api"   "ssh scp+.git"
+assert_parse "git@github.com:Silon-Oy/map-api"       "Silon-Oy/map-api"   "ssh scp no .git"
+assert_parse "https://github.com/Silon-Oy/map-api.git" "Silon-Oy/map-api" "https+.git"
+assert_parse "https://github.com/Silon-Oy/map-api"     "Silon-Oy/map-api" "https no .git"
+assert_parse "ssh://git@github.com/partner-org/map-api.git" "partner-org/map-api" "ssh://"
+assert_parse "https://github.com/partner-org/map-api/"   "partner-org/map-api"   "trailing slash"
 
 # non-github + malformed
-assert_parse "https://gitlab.com/Silon-Oy/customer-d-map-api.git" ""                       "non-github (gitlab)"
+assert_parse "https://gitlab.com/Silon-Oy/map-api.git" ""                       "non-github (gitlab)"
 assert_parse ""                                            ""                          "empty input"
-assert_parse "https://github.com/Silon-Oy/customer-d-map-api/extra/path" "" "extra path segments rejected"
+assert_parse "https://github.com/Silon-Oy/map-api/extra/path" "" "extra path segments rejected"
 assert_parse "git@github.com:owner-only" ""                                            "missing repo half"
 
 # ===========================================================================
 # (b) resolve_remote_to_owner_repo against a real local clone
 # ===========================================================================
 ORIGIN_BARE="$WORK/origin.git"
-customer-d_BARE="$WORK/customer-d.git"
+PARTNER_BARE="$WORK/partner.git"
 git init -q --bare "$ORIGIN_BARE"
-git init -q --bare "$customer-d_BARE"
+git init -q --bare "$PARTNER_BARE"
 
 CLONE="$WORK/clone"
 git init -q "$CLONE"
@@ -82,18 +82,18 @@ git init -q "$CLONE"
   git branch -M main
   # Use scp-like SSH URL for origin (most common GitHub clone shape) and an
   # https URL for the secondary remote so both code paths get exercised.
-  git remote add origin "git@github.com:Silon-Oy/customer-d-map-api.git"
+  git remote add origin "git@github.com:Silon-Oy/map-api.git"
   # The clone never actually pushes to these URLs in this test; the parse
   # function reads URL strings, not network.
-  git remote add customer-d "https://github.com/customer-d-oy/customer-d-map-api.git"
+  git remote add partner "https://github.com/partner-org/map-api.git"
 )
 
 GOT_ORIGIN=$(resolve_remote_to_owner_repo "$CLONE" "origin")
-[ "$GOT_ORIGIN" = "Silon-Oy/customer-d-map-api" ] \
-  || { echo "FAIL (b) origin -> '$GOT_ORIGIN' (want Silon-Oy/customer-d-map-api)"; FAIL=1; }
-GOT_customer-d=$(resolve_remote_to_owner_repo "$CLONE" "customer-d")
-[ "$GOT_customer-d" = "customer-d-oy/customer-d-map-api" ] \
-  || { echo "FAIL (b) customer-d -> '$GOT_customer-d' (want customer-d-oy/customer-d-map-api)"; FAIL=1; }
+[ "$GOT_ORIGIN" = "Silon-Oy/map-api" ] \
+  || { echo "FAIL (b) origin -> '$GOT_ORIGIN' (want Silon-Oy/map-api)"; FAIL=1; }
+GOT_PARTNER=$(resolve_remote_to_owner_repo "$CLONE" "partner")
+[ "$GOT_PARTNER" = "partner-org/map-api" ] \
+  || { echo "FAIL (b) partner -> '$GOT_PARTNER' (want partner-org/map-api)"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (b) resolve_remote_to_owner_repo reads URL from clone"
 
 # Missing remote -> rc=1, empty stdout.
@@ -118,10 +118,10 @@ set -e
 [ "$(session_suffix '' 5)" = "5" ] \
   || { echo "FAIL (c) session_suffix '' 5"; FAIL=1; }
 # non-origin -> namespaced
-[ "$(remote_label customer-d 5)" = "customer-d-issue-5" ] \
-  || { echo "FAIL (c) remote_label customer-d 5"; FAIL=1; }
-[ "$(session_suffix customer-d 5)" = "customer-d-issue-5" ] \
-  || { echo "FAIL (c) session_suffix customer-d 5"; FAIL=1; }
+[ "$(remote_label partner 5)" = "partner-issue-5" ] \
+  || { echo "FAIL (c) remote_label partner 5"; FAIL=1; }
+[ "$(session_suffix partner 5)" = "partner-issue-5" ] \
+  || { echo "FAIL (c) session_suffix partner 5"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (c) remote_label + session_suffix legacy/namespaced split"
 
 # ===========================================================================
@@ -137,11 +137,11 @@ ORIGIN_LOCK="$RUN_ISSUES_LOCK_ROOT/issue-5.lock"
 [ -d "$ORIGIN_LOCK" ] \
   || { echo "FAIL (d) origin lock dir not created at $ORIGIN_LOCK"; FAIL=1; }
 
-# customer-d lock for the same issue 5 — should succeed, distinct path
-lock_issue 5 customer-d || { echo "FAIL (d) lock_issue 5 customer-d — collided with origin"; FAIL=1; }
-customer-d_LOCK="$RUN_ISSUES_LOCK_ROOT/customer-d-issue-5.lock"
-[ -d "$customer-d_LOCK" ] \
-  || { echo "FAIL (d) customer-d lock dir not created at $customer-d_LOCK"; FAIL=1; }
+# partner lock for the same issue 5 — should succeed, distinct path
+lock_issue 5 partner || { echo "FAIL (d) lock_issue 5 partner — collided with origin"; FAIL=1; }
+PARTNER_LOCK="$RUN_ISSUES_LOCK_ROOT/partner-issue-5.lock"
+[ -d "$PARTNER_LOCK" ] \
+  || { echo "FAIL (d) partner lock dir not created at $PARTNER_LOCK"; FAIL=1; }
 
 # Trying to re-lock origin (no remote arg = default origin) must fail
 set +e
@@ -155,11 +155,11 @@ set -e
 unlock_issue 5 origin
 [ ! -d "$ORIGIN_LOCK" ] \
   || { echo "FAIL (d) origin lock not removed by unlock"; FAIL=1; }
-[ -d "$customer-d_LOCK" ] \
-  || { echo "FAIL (d) customer-d lock removed by origin unlock — namespaces leak"; FAIL=1; }
-unlock_issue 5 customer-d
-[ ! -d "$customer-d_LOCK" ] \
-  || { echo "FAIL (d) customer-d lock not removed by unlock"; FAIL=1; }
+[ -d "$PARTNER_LOCK" ] \
+  || { echo "FAIL (d) partner lock removed by origin unlock — namespaces leak"; FAIL=1; }
+unlock_issue 5 partner
+[ ! -d "$PARTNER_LOCK" ] \
+  || { echo "FAIL (d) partner lock not removed by unlock"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (d) namespaced locks coexist + independent unlock"
 
 # ===========================================================================
@@ -169,17 +169,17 @@ unlock_issue 5 customer-d
 . "$STATE_LIB"
 set +e  # state.sh re-enables -e
 
-# Re-acquire a customer-d lock for issue 77 + create a matching non-completed run.
-lock_issue 77 customer-d || { echo "FAIL (e) could not acquire customer-d lock 77"; FAIL=1; }
-WL="$RUN_ISSUES_LOCK_ROOT/customer-d-issue-77.lock"
-[ -d "$WL" ] || { echo "FAIL (e) customer-d lock dir 77 not created"; FAIL=1; }
+# Re-acquire a partner lock for issue 77 + create a matching non-completed run.
+lock_issue 77 partner || { echo "FAIL (e) could not acquire partner lock 77"; FAIL=1; }
+WL="$RUN_ISSUES_LOCK_ROOT/partner-issue-77.lock"
+[ -d "$WL" ] || { echo "FAIL (e) partner lock dir 77 not created"; FAIL=1; }
 
 REPO_E="$WORK/repo-e"
 mkdir -p "$REPO_E/.git"
-RID_E="20260601-1200-customer-d-issue-77"
+RID_E="20260601-1200-partner-issue-77"
 RD_E="$REPO_E/.claude/run-issues/$RID_E"
 state_init "$RD_E" "$RID_E" "$REPO_E" 77
-state_set "$RD_E" "remote" "customer-d"
+state_set "$RD_E" "remote" "partner"
 state_finalize "$RD_E" "blocked"
 
 # Stub gh so cleanup's `gh issue edit` is a no-op.
@@ -192,14 +192,14 @@ SH
 chmod +x "$BIN/gh"
 PATH="$BIN:$PATH" \
   RUN_ISSUES_LOCK_ROOT="$RUN_ISSUES_LOCK_ROOT" \
-  bash "$CLEANUP" --repo "$REPO_E" --issue 77 --remote customer-d --yes >/dev/null 2>&1
+  bash "$CLEANUP" --repo "$REPO_E" --issue 77 --remote partner --yes >/dev/null 2>&1
 RC_CLEAN=$?
 [ "$RC_CLEAN" = "0" ] || { echo "FAIL (e) cleanup-run.sh exited rc=$RC_CLEAN"; FAIL=1; }
 if [ -d "$WL" ]; then
-  echo "FAIL (e) customer-d-issue-77.lock still present after cleanup-run.sh"
+  echo "FAIL (e) partner-issue-77.lock still present after cleanup-run.sh"
   FAIL=1
 else
-  echo "PASS (e) cleanup-run.sh removes non-origin lock customer-d-issue-77.lock"
+  echo "PASS (e) cleanup-run.sh removes non-origin lock partner-issue-77.lock"
 fi
 
 echo "----------------------------------------"

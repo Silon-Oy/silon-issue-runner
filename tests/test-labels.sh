@@ -141,9 +141,9 @@ labels_ensure "acme/widgets" "waiting" >/dev/null 2>&1
 ok "labels_ensure: real failure still propagates"
 
 # === 5. pure URL parsers ===================================================
-[ "$(labels_owner_repo_from_url 'https://github.com/Silon-Oy/customer-c-erp/pull/42')" = "Silon-Oy/customer-c-erp" ] \
+[ "$(labels_owner_repo_from_url 'https://github.com/Silon-Oy/example-erp/pull/42')" = "Silon-Oy/example-erp" ] \
   || fail "owner/repo from PR URL"
-[ "$(labels_number_from_url 'https://github.com/Silon-Oy/customer-c-erp/pull/42')" = "42" ] \
+[ "$(labels_number_from_url 'https://github.com/Silon-Oy/example-erp/pull/42')" = "42" ] \
   || fail "number from PR URL"
 [ "$(labels_owner_repo_from_url 'https://github.com/o/r/issues/7')" = "o/r" ] \
   || fail "owner/repo from issue URL"

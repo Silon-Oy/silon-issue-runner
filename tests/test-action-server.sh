@@ -310,9 +310,38 @@ kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
 # ===========================================================================
 # Host gate: a non-matching host no-ops (exit 0) with no output — like the pollers.
 out="$(RUN_ISSUES_ACTION_HOSTS='no-such-host-xyz' RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
+       RUN_ISSUES_LOG_DIR="$FX/gate-logs-foreign" \
        bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
 check "foreign host no-ops (exit 0)" "$rc" "0"
 check "foreign host prints nothing" "$out" ""
+[ ! -d "$FX/gate-logs-foreign" ] && ok "foreign host creates no log directory" \
+                                 || bad "foreign host created $FX/gate-logs-foreign"
+
+# Unset is NOT the same as non-matching (#152 removed the built-in default).
+# The service still exits 0 — KeepAlive.SuccessfulExit=false would crash-loop on
+# anything else — but says once why it bound nothing. RUN_ISSUES_POLLER_ENV_FILE
+# points at nothing so a real poller.env on this machine cannot decide the case,
+# and RUN_ISSUES_LOG_DIR keeps the notice out of the real ~/Library/Logs.
+GATE_LOGS="$FX/gate-logs"
+out="$(env -u RUN_ISSUES_ACTION_HOSTS RUN_ISSUES_POLLER_ENV_FILE="$FX/no-such-poller.env" \
+       RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" RUN_ISSUES_LOG_DIR="$GATE_LOGS" \
+       bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
+check "unset host list no-ops (exit 0)" "$rc" "0"
+if [ "$(printf '%s' "$out" | grep -c .)" = "1" ] \
+   && printf '%s' "$out" | grep -q 'RUN_ISSUES_ACTION_HOSTS' \
+   && printf '%s' "$out" | grep -qF "$FX/no-such-poller.env"; then
+  ok "unset host list explains itself in one line naming the variable and the file"
+else
+  bad "unset host list output: $out"
+fi
+
+# The daemon's plist carries no StandardErrorPath either, so the line has to
+# survive somewhere on disk — the same log the service would use once running.
+if [ -s "$GATE_LOGS/run-issues-action.stderr.log" ]; then
+  ok "unset host list records the notice in the service's own log"
+else
+  bad "unset host list left no notice in $GATE_LOGS/run-issues-action.stderr.log"
+fi
 
 # --check with an allowed host + shims resolves config and exits 0.
 out="$(RUN_ISSUES_ACTION_HOSTS='*' RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \

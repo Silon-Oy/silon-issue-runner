@@ -140,7 +140,7 @@ pr_state_of() {
 
 # ---------- 1. lock ----------
 # Acquire the per-issue lock BEFORE any teardown. The lock is namespaced by repo
-# AND remote so customer-d#5, Silon-Oy#5 and another repo's #5 hold distinct locks and
+# AND remote so two orgs' #5 and another repo's #5 hold distinct locks and
 # never block each other.
 if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"; then
   log "lock held for issue #$ISSUE_NUM (remote=$REMOTE_NAME) — a run is in progress; will retry later"

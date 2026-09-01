@@ -11,8 +11,9 @@
 # Cases:
 #   1. Both pollers and the lib parse
 #   2. poller_host_allowed: matching, non-matching, wildcard, empty, sloppy list
-#   3. The legacy default is evaluated against this machine without crashing
-#   4. The legacy default's contents (the non-regression invariant)
+#   3. The host gate has no built-in default anywhere (#152)
+#   4. An unset host list runs nothing, explains itself in one line, and puts
+#      that line somewhere launchd cannot swallow — without repeating it
 #   5. poller_resolve_watchlist: precedence, and no fallback for an override
 #   6. Path hygiene: no absolute user paths, no tilde expansion in code
 #   7. The dotfiles tree appears only as a named fallback
@@ -86,29 +87,125 @@ else
   bad "case2 a file in the working directory changed the host decision"
 fi
 
-# ---- Case 3: the legacy default is evaluated on this machine ----
-# Deliberately does not assert the outcome: the suite must behave the same on
-# every machine. What matters is that the call completes with a clean 0/1.
-poller_host_allowed "$(hostname -s)" "$POLLER_HOSTS_LEGACY_DEFAULT"
-rc=$?
-if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
-  ok "case3 legacy default evaluates cleanly on this host (rc=$rc)"
+# ---- Case 3: the gate has no built-in default ----
+# The package used to ship a list of the machine names the pollers happened to
+# run on, so that one particular machine kept working without configuration
+# (issue #152 removed it). A default is the one thing that could quietly bring
+# back both problems it caused: the package knowing a machine by name, and a
+# misconfigured machine being indistinguishable from a foreign one. A grep,
+# not a variable read, because the point is that no such name exists any more.
+for f in "$ROOT/poller.sh" "$ROOT/pr-watch-poller.sh" "$ROOT/action-server.sh" "$LIB"; do
+  if hits=$(grep -nE 'host-a|host-a|POLLER_HOSTS_LEGACY_DEFAULT' "$f" 2>/dev/null); then
+    bad "case3 $(basename "$f") still carries a built-in host default:"
+    printf '%s\n' "$hits" | sed 's/^/      /'
+  else
+    ok "case3 $(basename "$f") carries no built-in host default"
+  fi
+done
+
+# The three gates must read their variable with no `:-` fallback of any kind.
+for f in "$ROOT/poller.sh" "$ROOT/pr-watch-poller.sh" "$ROOT/action-server.sh"; do
+  if hits=$(grep -nE 'poller_host_allowed .*(POLLER|ACTION)_HOSTS:-[^}]' "$f" 2>/dev/null); then
+    bad "case3 $(basename "$f") gives the host gate a default value:"
+    printf '%s\n' "$hits" | sed 's/^/      /'
+  else
+    ok "case3 $(basename "$f") passes the host list through with no default"
+  fi
+done
+
+# ---- Case 4: an unset host list is fail-closed AND says so ----
+# This replaces the old assertion that pinned the built-in list's contents.
+# What matters now is the behaviour that took its place: with the variable
+# unset the poller runs nothing on any machine, and — unlike the old silent
+# exit 0 — it prints exactly one line naming both the variable and the file it
+# belongs in. A silent no-op made a wrong configuration invisible, which is the
+# failure this case exists to catch.
+#
+# Runs the pollers for real (from an empty environment, HOME redirected under
+# $WORK) because the message is assembled at the call site, not in the lib.
+run_gate() {  # <script> <home> [VAR=value ...] — echoes stderr, returns its rc
+  local script="$1" home="$2"; shift 2
+  case "$home" in
+    "$WORK"/*) ;;
+    *) bad "SAFETY: refused to run $script with HOME=$home outside $WORK"; return 99 ;;
+  esac
+  env -i PATH="$PATH" HOME="$home" TMPDIR="$WORK/tmp" \
+    RUN_ISSUES_LOCK_ROOT="$WORK/locks" "$@" \
+    bash "$ROOT/$script" 2>&1 >/dev/null
+}
+
+mkdir -p "$WORK/tmp"
+for script in poller.sh pr-watch-poller.sh; do
+  GHOME="$WORK/gate-home-${script%.sh}"; mkdir -p "$GHOME"
+  err=$(run_gate "$script" "$GHOME" RUN_ISSUES_LOG_DIR="$WORK/gate-logs-$script"); rc=$?
+
+  [ "$rc" -eq 0 ] && ok "case4 $script exits 0 with RUN_ISSUES_POLLER_HOSTS unset" \
+                  || bad "case4 $script exited $rc with RUN_ISSUES_POLLER_HOSTS unset"
+
+  # Fail-closed: no default of `*`, so the tick itself never ran. The poller
+  # writes its four log files only after the gate, so the log directory holding
+  # nothing but the notice is what "nothing ran" looks like from out here.
+  if [ -z "$(find "$GHOME" -mindepth 1 2>/dev/null)" ]; then
+    ok "case4 $script wrote nothing into the home"
+  else
+    bad "case4 $script wrote into the home: $(find "$GHOME" -mindepth 1)"
+  fi
+
+  lines=$(printf '%s' "$err" | grep -c .)
+  [ "$lines" -eq 1 ] && ok "case4 $script explains itself in exactly one line" \
+                     || bad "case4 $script printed $lines lines, expected 1: $err"
+
+  case "$err" in
+    *RUN_ISSUES_POLLER_HOSTS*) ok "case4 $script names the variable" ;;
+    *)                         bad "case4 $script does not name the variable: $err" ;;
+  esac
+  case "$err" in
+    *"$GHOME/.config/run-issues/poller.env"*) ok "case4 $script names the poller.env path" ;;
+    *) bad "case4 $script does not name the poller.env path: $err" ;;
+  esac
+
+  # Stderr is not where the line can be read in production: the plists carry no
+  # StandardErrorPath key and the redirect that opens one is BELOW the gate, so
+  # under launchd this branch reported into a closed fd. The line must therefore
+  # also reach the poller's own log — the file a human opens to ask why nothing
+  # has run.
+  notice_log="$WORK/gate-logs-$script/${script%.sh}.log"
+  case "$script" in poller.sh) notice_log="$WORK/gate-logs-$script/run-issues-poller.log" ;; esac
+  if [ -s "$notice_log" ]; then
+    ok "case4 $script records the notice in its own log, not only on stderr"
+  else
+    bad "case4 $script left no notice in $notice_log (launchd would swallow stderr)"
+  fi
+  logged=$(grep -c . "$notice_log" 2>/dev/null || echo 0)
+  [ "$logged" -eq 1 ] && ok "case4 $script logs the notice exactly once" \
+                      || bad "case4 $script logged $logged lines, expected 1"
+
+  # And it must not repeat. Both pollers tick every 300s, so an unconditional
+  # append is 288 identical lines a day into the file being read — the noise
+  # failure CLAUDE.md section 5.7 exists to prevent.
+  run_gate "$script" "$GHOME" RUN_ISSUES_LOG_DIR="$WORK/gate-logs-$script" >/dev/null 2>&1
+  logged=$(grep -c . "$notice_log" 2>/dev/null || echo 0)
+  [ "$logged" -eq 1 ] && ok "case4 $script does not repeat the notice on the next tick" \
+                      || bad "case4 $script logged $logged lines after a second tick, expected 1"
+done
+
+# The other direction, and the reason the two cases must stay distinct: a host
+# list that IS set but matches nothing is a foreign machine, and a foreign
+# machine must still be silent. Otherwise every laptop with the package
+# installed would start reporting a configuration error it does not have.
+GHOME="$WORK/gate-home-foreign"; mkdir -p "$GHOME"
+err=$(run_gate poller.sh "$GHOME" RUN_ISSUES_POLLER_HOSTS="definitely-not-a-host-$$" \
+      RUN_ISSUES_LOG_DIR="$WORK/gate-logs-foreign"); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$err" ]; then
+  ok "case4 a set-but-non-matching list is still a silent no-op"
 else
-  bad "case3 legacy default evaluation returned $rc"
+  bad "case4 a foreign host was not silent (rc=$rc, stderr='$err')"
 fi
 
-# ---- Case 4: the legacy default's contents ----
-# This is the non-regression invariant for the machine that runs the auto-run
-# setup today: it must keep working without setting RUN_ISSUES_POLLER_HOSTS.
-# Changing this value is a deliberate decision, never an accident.
-case "$POLLER_HOSTS_LEGACY_DEFAULT" in
-  *'*host-a*'*) ok "case4 legacy default still covers the current auto-run host" ;;
-  *)                bad "case4 legacy default no longer covers the current auto-run host" ;;
-esac
-case "$POLLER_HOSTS_LEGACY_DEFAULT" in
-  *maintainers-host-a*) bad "case4 the dead maintainers-host-a glob is back" ;;
-  *)                   ok "case4 no dead patterns in the legacy default" ;;
-esac
+# Silent means silent on disk too: the notice belongs to the misconfigured
+# machine, never to the foreign one, so this branch must still create nothing.
+[ ! -d "$WORK/gate-logs-foreign" ] && ok "case4 a foreign host creates no log directory" \
+                                   || bad "case4 a foreign host created $WORK/gate-logs-foreign"
 
 # ---- Case 5: poller_resolve_watchlist ----
 EXPL="$WORK/explicit.json"
