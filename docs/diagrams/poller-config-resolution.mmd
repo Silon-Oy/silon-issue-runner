@@ -10,7 +10,8 @@ flowchart TB
     S2["2. RUN_ISSUES_HOME = env tai SCRIPT_DIR<br/>(vain ymparistosta — testien injektiopiste)"]
     S3["3. source lib/poller-config.sh<br/>(vartioimaton — puuttuva lib = kaatuminen, ei hiljainen degradaatio)"]
     S4["4. source RUN_ISSUES_POLLER_ENV_FILE<br/>oletus $HOME/.config/run-issues/poller.env<br/>TIEDOSTO VOITTAA ymparistomuuttujan"]
-    S5{"5. poller_host_allowed HOST<br/>RUN_ISSUES_POLLER_HOSTS<br/>tai POLLER_HOSTS_LEGACY_DEFAULT"}
+    S5{"5. host-portti: RUN_ISSUES_POLLER_HOSTS<br/>ei oletusta (#152)"}
+    UNSET["exit 0 + YKSI rivi stderriin:<br/>muuttuja + poller.env-polku + konenimi"]
     NOOP["exit 0 — mitaan ei kirjoiteta,<br/>ei edes lokihakemistoa"]
     S6["6. LOG_DIR = RUN_ISSUES_LOG_DIR tai $HOME/Library/Logs<br/>mkdir -p; ei-TTY: exec >> stdout.log 2>> stderr.log"]
     S7{"7. poller_resolve_watchlist"}
@@ -26,7 +27,8 @@ flowchart TB
     CHILD["orchestrate.sh / pr-watch.sh<br/>sourceavat salaisuudet ITSE"]
 
     START --> S1 --> S2 --> S3 --> S4 --> S5
-    S5 -->|"ei tasmaa"| NOOP
+    S5 -->|"asettamatta = konfiguraatiovirhe"| UNSET
+    S5 -->|"asetettu, ei tasmaa = vieras kone"| NOOP
     S5 -->|"tasmaa"| S6 --> S7
     S7 --> WLE
     S7 --> WLC
@@ -45,4 +47,4 @@ flowchart TB
     classDef stop fill:#ffe0e0,stroke:#c00
     class WLL legacy
     class S2,S3,S4,S6,S8,CHILD safe
-    class NOOP,WLMISS,SECRET stop
+    class UNSET,NOOP,WLMISS,SECRET stop

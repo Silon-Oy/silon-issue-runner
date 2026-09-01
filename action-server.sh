@@ -80,8 +80,16 @@ fi
 set +e
 
 # ---- host gate (before any path is created) ----
+# Inherits the pollers' rule (#152): no default list, an unset variable earns
+# one explanatory line, a non-matching one stays silent. Both exit 0, which
+# matters more here than in a poller — KeepAlive.SuccessfulExit=false restarts
+# on any non-zero exit, so reporting a config error with one would crash-loop.
 HOST="$(hostname -s 2>/dev/null || echo unknown)"
-poller_host_allowed "$HOST" "${RUN_ISSUES_ACTION_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+if [ -z "${RUN_ISSUES_ACTION_HOSTS:-}" ]; then
+  poller_host_unset_message RUN_ISSUES_ACTION_HOSTS "$POLLER_ENV_FILE" "$HOST" >&2
+  exit 0
+fi
+poller_host_allowed "$HOST" "$RUN_ISSUES_ACTION_HOSTS" || exit 0
 
 # ---- log rotation + own log paths (like the pollers) ----
 LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"

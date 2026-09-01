@@ -365,6 +365,15 @@ maksoi kerran oikeita agenttiajoja (§5.5):
 niistä yhtäkään ja lokittaa runsaasti ⇒ salaisuudet pidetään sen prosessin ulkopuolella.
 `tests/test-poller-config.sh` vartioi tätä.
 
+**Host-portilla ei ole oletusta, ja asettamatta jättäminen on eri vika kuin osumattomuus.**
+Sisäänrakennettu konenimilista (`POLLER_HOSTS_LEGACY_DEFAULT`) poistui #152:ssa: se oli ainoa
+kohta, jossa paketti tunsi yhden koneen nimen, ja se teki **väärin konfiguroidusta koneesta
+erottamattoman vieraasta** — molemmat exittasivat 0 hiljaa. Nyt asettamaton
+`RUN_ISSUES_POLLER_HOSTS` / `RUN_ISSUES_ACTION_HOSTS` estää ajon **ja** kirjoittaa yhden rivin
+stderriin (muuttuja + `poller.env`-polku + konenimi); asetettu mutta osumaton lista pysyy
+hiljaa, koska se on vieras kone ja hiljaisuus on portin tarkoitus. Molemmat exittaavat **0**:
+`action-server.sh`:n `KeepAlive.SuccessfulExit=false` crash-looppaisi mistä tahansa muusta.
+
 **Watchlist:** `RUN_ISSUES_WATCHLIST` asetettuna on **ainoa** ehdokas — osumaton override on
 virhe, ei fallback. Ilman overridea: `$HOME/.config/run-issues/watchlist.json` →
 `$HOME/dotfiles/machine-studio/…` (legacy, §13).
@@ -482,10 +491,6 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
 
 **Legacy-shimit** (poistettavissa vasta kun ehto täyttyy):
 
-- `POLLER_HOSTS_LEGACY_DEFAULT` — sisäänrakennettu konenimilista. Tietoinen poikkeus §1:n
-  lupaukseen: ilman sitä auto-run-kone pysähtyisi mergehetkellä, mikä oli epicin nimenomainen
-  ei-tavoite. Poistuu kun kone asettaa `RUN_ISSUES_POLLER_HOSTS`:n `poller.env`iinsä.
-  `tests/test-poller-config.sh` pinnaa listan, jotta muutos on päätös eikä vahinko.
 - **Dotfiles-fallback watchlistille** — kulkee yhden nimetyn muuttujan (`LEGACY_DOTFILES_DIR`)
   kautta, jotta "riippuuko tämä yhä vanhasta rakenteesta?" on yhden rivin kysymys.
 

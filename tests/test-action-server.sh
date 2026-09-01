@@ -314,6 +314,22 @@ out="$(RUN_ISSUES_ACTION_HOSTS='no-such-host-xyz' RUN_ISSUES_TAILSCALE_BIN="$TS_
 check "foreign host no-ops (exit 0)" "$rc" "0"
 check "foreign host prints nothing" "$out" ""
 
+# Unset is NOT the same as non-matching (#152 removed the built-in default).
+# The service still exits 0 — KeepAlive.SuccessfulExit=false would crash-loop on
+# anything else — but says once why it bound nothing. RUN_ISSUES_POLLER_ENV_FILE
+# points at nothing so a real poller.env on this machine cannot decide the case.
+out="$(env -u RUN_ISSUES_ACTION_HOSTS RUN_ISSUES_POLLER_ENV_FILE="$FX/no-such-poller.env" \
+       RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
+       bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
+check "unset host list no-ops (exit 0)" "$rc" "0"
+if [ "$(printf '%s' "$out" | grep -c .)" = "1" ] \
+   && printf '%s' "$out" | grep -q 'RUN_ISSUES_ACTION_HOSTS' \
+   && printf '%s' "$out" | grep -qF "$FX/no-such-poller.env"; then
+  ok "unset host list explains itself in one line naming the variable and the file"
+else
+  bad "unset host list output: $out"
+fi
+
 # --check with an allowed host + shims resolves config and exits 0.
 out="$(RUN_ISSUES_ACTION_HOSTS='*' RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
        RUN_ISSUES_ACTION_BIND=127.0.0.1 RUN_ISSUES_ACTION_ALLOWED_USERS='maintainer@example' \

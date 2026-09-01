@@ -62,9 +62,20 @@ fi
 # the pollers, so that deploying the LaunchAgent somewhere else does nothing.
 # This runs BEFORE any path is created: an unknown host must not so much as
 # make a log directory.
+#
+# There is no default host list (#152). Unset and "set but matching nothing"
+# are different failures and are reported differently: the first is an operator
+# error on THIS machine and gets one line on stderr naming the variable and the
+# file; the second is a foreign machine, where silence is the feature. Both exit
+# 0 — a non-zero exit here would only make launchd retry a decision that will
+# not change until a human edits poller.env.
 HOST=$(hostname -s)
 THIS_HOST="$HOST"
-poller_host_allowed "$HOST" "${RUN_ISSUES_POLLER_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+if [ -z "${RUN_ISSUES_POLLER_HOSTS:-}" ]; then
+  poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$HOST" >&2
+  exit 0
+fi
+poller_host_allowed "$HOST" "$RUN_ISSUES_POLLER_HOSTS" || exit 0
 
 LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 mkdir -p "$LOG_DIR"

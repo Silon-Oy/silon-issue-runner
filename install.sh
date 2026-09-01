@@ -455,9 +455,9 @@ print_launchagent_instructions() {
     log "  launchctl bootstrap gui/$uid $path"
   done
   log ""
-  log "The pollers are host-gated: unless this machine matches the built-in"
-  log "default host list, set RUN_ISSUES_POLLER_HOSTS in"
-  log "$HOME/.config/run-issues/poller.env or they will no-op on every tick."
+  log "The pollers are host-gated and the gate has no default: set"
+  log "RUN_ISSUES_POLLER_HOSTS in $HOME/.config/run-issues/poller.env"
+  log "to a glob matching \`hostname -s\`, or they will no-op on every tick."
 }
 
 print_plan() {

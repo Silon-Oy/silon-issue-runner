@@ -53,9 +53,14 @@ fi
 
 # Host gate. Bail out silently on a machine that was never configured to run
 # the pollers, before any path is created — an unknown host must not so much as
-# make a log directory.
+# make a log directory. No default list (#152); see poller.sh for why an unset
+# variable is loud and a non-matching one is not.
 HOST=$(hostname -s)
-poller_host_allowed "$HOST" "${RUN_ISSUES_POLLER_HOSTS:-$POLLER_HOSTS_LEGACY_DEFAULT}" || exit 0
+if [ -z "${RUN_ISSUES_POLLER_HOSTS:-}" ]; then
+  poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$HOST" >&2
+  exit 0
+fi
+poller_host_allowed "$HOST" "$RUN_ISSUES_POLLER_HOSTS" || exit 0
 
 LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 mkdir -p "$LOG_DIR"
