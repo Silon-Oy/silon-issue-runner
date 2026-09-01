@@ -302,7 +302,7 @@ fi
 
 # ---- Case 9: a foreign skills directory symlink is a conflict, not a refusal ----
 # On the maintainer's machine ~/.claude/skills is a directory symlink -> dotfiles
-# (agents/commands were split per-file, skills was not, see CLAUDE.md §12). A
+# (agents/commands were split per-file, skills was not, see CLAUDE.md §13). A
 # refusal there would abort the WHOLE install, taking agents/commands with it
 # over an optional extra. So skills must degrade to a CONFLICT (exit 4) while the
 # core links still install.
