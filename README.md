@@ -934,10 +934,13 @@ historia. Julkaisucommitin identiteetti on kiinteä ja neutraali (`release
 **Skriptin tärkein osa on vuotoportti, ei julkaisu.** Se skannaa julkaistavan puun kiellettyjen
 merkkijonojen listaa vasten (asiakas-, henkilö- ja konenimet, domainit) ja **kieltäytyy**, jos
 yksikin osuu — osumat raportoidaan `tiedosto:rivi`-muodossa. Kertaluontoinen siivous vanhenee heti
-kun nimi palaa puuhun; portti tekee siitä pysyvän. Osuma etsitään **sanarajalta** ja kirjainkoosta
-riippumatta: tavallinen sana ei siis osu vain siksi, että kielletty nimi sattuu olemaan sen
-osajono. Lista on skriptin oma vakio, ei konfiguraatiotiedosto: sen ylläpito on hyväksyttyä
-toistoa.
+kun nimi palaa puuhun; portti tekee siitä pysyvän. Osuma etsitään **sanan alusta** ja kirjainkoosta
+riippumatta. Sanaraja vaaditaan vain termin *edeltä*, ei perästä, ja tämä epäsymmetria on
+tarkoituksellinen: edeltävä raja karsii väärät osumat (`polling`, `pakollinen`), kun taas perässä
+vaadittu raja päästäisi läpi juuri sen luokan vuotoja, jonka portti on olemassa estämään — suomi
+taivuttaa päätteellä (`Nimen`, `Nimelle`) ja tunnisteet ketjuttavat (`nimi_lock`, `wp_nimi`).
+Listalle riittää siis nimen perusmuoto. Lista on skriptin oma vakio, ei konfiguraatiotiedosto: sen
+ylläpito on hyväksyttyä toistoa.
 
 Portteja on neljä ja kaikki ovat fail-closed, plan-then-apply -järjestyksessä kuten
 [`install.sh`](install.sh)ssa — **yksikin kieltäytyminen ⇒ nolla kirjoitusta**:

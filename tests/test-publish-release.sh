@@ -18,7 +18,10 @@
 #   5. the leak gate reports matches as tiedosto:rivi and refuses -> exit 3,
 #      while the same term inside publish-release.sh is NOT a match (the
 #      maintainer tool is excluded from both the release and the scan)
-#   6. word boundaries: a term that only appears as a substring is not a match
+#   6. boundaries are required BEFORE a term and not after: a mid-word
+#      occurrence is not a match, but a suffixed or identifier-embedded one is
+#      (an inflected name, a name inside an identifier) — that asymmetry is
+#      the gate's whole reach
 #   7. dirty working tree -> exit 2
 #   8. HEAD != origin/main -> exit 2
 #   9. missing LICENSE template -> exit 4
@@ -176,16 +179,30 @@ if [ -z "$(target_refs)" ]; then ok "leak refusal wrote nothing into the target"
 else bad "leak refusal still wrote refs: $(target_refs)"; fi
 rm -f "$SRC/leak.md"; sync "remove the planted term"
 
-# ---- Case 6: word boundaries ----
-# "zapcorporation" contains "zapcorp" but is a different word; a substring match
-# would make the gate refuse trees that leak nothing.
-printf 'zapcorporation on eri sana\n' > "$SRC/boundary.md"
-sync "plant a substring-only occurrence"
+# ---- Case 6: the boundary is required before the term, not after ----
+# "kvazapcorp" embeds the term mid-word; a substring match would make the gate
+# refuse trees that leak nothing (a common word containing a short name).
+printf 'kvazapcorp on eri sana\n' > "$SRC/boundary.md"
+sync "plant a mid-word occurrence"
 RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --dry-run
 rc=$?
-[ "$rc" = "0" ] && ok "substring-only occurrence is not a match (word boundaries)" \
-  || bad "substring-only occurrence refused (exit $rc) — boundary check is wrong"
-rm -f "$SRC/boundary.md"; sync "remove the substring fixture"
+[ "$rc" = "0" ] && ok "mid-word occurrence is not a match (leading boundary required)" \
+  || bad "mid-word occurrence refused (exit $rc) — boundary check is wrong"
+rm -f "$SRC/boundary.md"
+
+# ...but a word that only ENDS differently is the leak this gate exists to catch:
+# Finnish inflects by suffix and identifiers concatenate, so a trailing boundary
+# would let an inflected name, a compound and an identifier form through.
+for form in 'zapcorpin taivutettu muoto' 'zapcorpqxname yhdyssana' 'qxname_lock tunnisteessa' 'wp_qxname tunnisteessa'; do
+  printf '%s\n' "$form" > "$SRC/suffix.md"
+  sync "plant a suffixed form"
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --dry-run
+  rc=$?
+  [ "$rc" = "3" ] && ok "suffixed/embedded form is a match: '$form'" \
+    || bad "suffixed/embedded form passed the gate (exit $rc): '$form'"
+  rm -f "$SRC/suffix.md"
+done
+sync "remove the boundary fixtures"
 
 # ---- Case 7: dirty working tree ----
 printf 'kesken\n' > "$SRC/wip.txt"
