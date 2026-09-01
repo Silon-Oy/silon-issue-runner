@@ -90,8 +90,9 @@
 # and re-enters Phase B. Budget is RUN_ISSUES_MAX_RETRIES (default 1).
 #
 # --continue <run-dir> resumes an awaiting_clarification run after the issue
-# author has replied: it re-takes the lock, increments clarification_round, re-runs S6
-# cycle-review with the reply as context, and falls through the review gate.
+# author has replied: it re-takes the lock, increments clarification_round,
+# re-runs S6 cycle-review with the reply as context, and falls through the
+# review gate.
 # Loop cap is RUN_ISSUES_MAX_CLARIFICATIONS (default 3).
 
 set -euo pipefail
@@ -992,7 +993,8 @@ review_gate() {
         # waiting label, and post an answerable marker. On a re-review that is
         # STILL unclear (IS_CONTINUE=1) the round was already incremented in
         # continue_load_state, so this posts a NEW marker (newer ts, higher
-        # round) — the issue author answers again, the poller continues again, up to the cap.
+        # round) — the issue author answers again, the poller continues again,
+        # up to the cap.
         _finalize_awaiting_clarification
         exit 11
       fi
@@ -1494,8 +1496,8 @@ _remove_waiting_label() {
 # Finalizes the run as awaiting_clarification, records the round + timestamp,
 # attaches the waiting label, and posts an answerable situation comment (marker
 # + reply prompt). The poller's scan_answered restarts via --continue once the
-# issue author replies. Used by both the first NEEDS_CLARIFICATION (review_gate, IS_CONTINUE=0)
-# and a re-review that is still unclear (IS_CONTINUE=1).
+# issue author replies. Used by both the first NEEDS_CLARIFICATION (review_gate,
+# IS_CONTINUE=0) and a re-review that is still unclear (IS_CONTINUE=1).
 _finalize_awaiting_clarification() {
   local cr_out="$RUN_DIR/01-cycle-review.out"
   local round

@@ -155,15 +155,16 @@ LIB_ISSUE="${RUN_ISSUES_HOME}/lib/issue.sh"
 # gha_with_token / gha_enabled live in lib/github-app-auth.sh. Sourcing this
 # DEFINES the App-identity wrapper so pick_oldest_candidate, epic_list_open and
 # scan_clean's label read route their per-tick LIST reads through the App's rate
-# limit instead of the maintainer's personal one (issue #127) — the whole reason the runner
-# gets its own quota. It is a benign no-op without App config: gha_enabled reads
-# the RUN_ISSUES_GITHUB_APP_* env vars at CALL time (not source time, so this
-# reads no secret), and returns 1 unless they are set AND the private key is
-# readable, in which case gha_with_token passes straight through to bare gh —
-# bit-for-bit the pre-#127 behaviour. The App identity vars reach the poller via
-# poller.env (identity config, NOT the key itself — the .pem stays a 0600 file
-# referenced by path; see examples/run-issues-poller.env.example). Function-only,
-# no top-level work; safe to source.
+# limit instead of the maintainer's personal one (issue #127) — the whole reason
+# the runner gets its own quota. It is a benign no-op without App config:
+# gha_enabled reads the RUN_ISSUES_GITHUB_APP_* env vars at CALL time (not
+# source time, so this reads no secret), and returns 1 unless they are set AND
+# the private key is readable, in which case gha_with_token passes straight
+# through to bare gh — bit-for-bit the pre-#127 behaviour. The App identity vars
+# reach the poller via poller.env (identity config, NOT the key itself — the
+# .pem stays a 0600 file referenced by path; see
+# examples/run-issues-poller.env.example). Function-only, no top-level work;
+# safe to source.
 LIB_GHA="${RUN_ISSUES_HOME}/lib/github-app-auth.sh"
 # shellcheck source=lib/github-app-auth.sh
 . "$LIB_GHA"
@@ -517,8 +518,9 @@ scan_blocked_answered() {
 #   Phase 2 — ONE REST label query for the whole repo, then intersect against
 #             phase 1 locally (issue #124, moved to REST by issue #133). The query
 #             routes through _issue_gh (issue #127): a per-tick per-repo LIST read
-#             whose volume belongs on the App's rate limit, not the maintainer's personal
-#             one. Identity does not change the label set it returns.
+#             whose volume belongs on the App's rate limit, not the
+#             maintainer's personal one. Identity does not change the label
+#             set it returns.
 #
 # Phase 2 used to be one `gh issue view` PER unique local issue. That made the
 # cost O(historical run-dirs) rather than O(work): measured at 337 GraphQL calls
