@@ -199,14 +199,14 @@ count_action() {
 #
 #   skills           — each entry is a <name>/SKILL.md subdirectory, linked at
 #                      directory level. A foreign directory at the target is a
-#                      CONFLICT, not a refusal: the skill is extra guidance
-#                      whose absence breaks nothing, and on the maintainer's
-#                      machine $HOME/.claude/skills is itself a directory symlink
-#                      (-> dotfiles, agents/commands were split per-file but
-#                      skills was not, see #5). Refusing there would abort the
-#                      whole install — including agents/commands — over an
-#                      optional extra. So skills degrades to a conflict line and
-#                      lets the core install proceed.
+#                      CONFLICT, not a refusal: the skill is extra guidance whose
+#                      absence breaks nothing, while $HOME/.claude/skills may
+#                      legitimately be a whole-directory symlink owned by another
+#                      source (a dotfiles tree that has not been split into
+#                      per-entry links). Refusing there would abort the whole
+#                      install — including agents/commands — over an optional
+#                      extra. So skills degrades to a conflict line and lets the
+#                      core install proceed.
 #
 # The ownership predicate (is_pkg_owned_link) and the name-based prune are
 # identical for both modes: a directory symlink into the package is owned just

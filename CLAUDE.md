@@ -509,12 +509,6 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
 - **Dotfiles-fallback watchlistille** — kulkee yhden nimetyn muuttujan (`LEGACY_DOTFILES_DIR`)
   kautta, jotta "riippuuko tämä yhä vanhasta rakenteesta?" on yhden rivin kysymys.
 
-**Odottaa dotfiles-repon puolen työtä (#5):**
-
-- `~/.claude/skills` on ylläpitäjän koneella hakemistosymlinkki ⇒ `install.sh` tulostaa
-  conflict-rivin ja exit 4:n, ja `skills/claude-issue-runner` jää asentumatta. **Ei bugi vaan
-  odotettu välitila** (agents/commands on jo jaettu per tiedosto).
-
 **Aidot puutteet:**
 
 - `install.sh --uninstall` puuttuu. Omistajuuspredikaatti riittäisi sellaisenaan toteutukseen.

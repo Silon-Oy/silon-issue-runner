@@ -133,9 +133,9 @@ puoliasennusta. Korjaus on siirtää vieras tiedosto pois tieltä ja ajaa asennu
 
 Yksi erikoistapaus kannattaa tunnistaa: jos `~/.claude/agents` on **kokonainen
 hakemistosymlinkki** (dotfiles-asetelma, jossa koko hakemisto tulee muualta), asentaja
-kieltäytyy aina. Tämä on paketin alkuperäisen ylläpitäjän ympäristön tapaus, ja sen korjaus
-kuuluu kyseiseen dotfiles-repoon. **Puhtaalla koneella** hakemistot ovat tavallisia
-hakemistoja tai puuttuvat, jolloin asennus menee läpi normaalisti.
+kieltäytyy aina. Korjaus kuuluu kyseiseen dotfiles-repoon: hakemisto korvataan tavallisella
+hakemistolla, jossa on per-tiedosto-symlinkit. **Puhtaalla koneella** hakemistot ovat
+tavallisia hakemistoja tai puuttuvat, jolloin asennus menee läpi normaalisti.
 
 Kaksi rajoitetta:
 
@@ -826,9 +826,10 @@ dokumentissa ja `CLAUDE.md`:ssä.
 Sisällön ajantasaisuutta vartioivat `tests/test-skill-labels.sh` (labelisanasto molempiin
 suuntiin) ja `tests/test-skill-surface.sh` (komento- ja skriptipinta molempiin suuntiin).
 
-Ylläpitäjän koneella, jolla `$HOME/.claude/skills` on hakemistosymlinkki dotfilesiin, skill ei
-asennu automaattisesti: `install.sh` tulostaa siitä `CONFLICT`-rivin ja exit-koodin 4, mutta
-linkittää agentit ja komennot normaalisti (ks. [`CLAUDE.md`](CLAUDE.md) §3 ja §13).
+Jos `$HOME/.claude/skills` on koneella kokonainen hakemistosymlinkki (jonkin toisen lähteen
+omistama hakemisto), skill ei asennu automaattisesti: `install.sh` tulostaa siitä
+`CONFLICT`-rivin ja exit-koodin 4, mutta linkittää agentit ja komennot normaalisti. Miksi
+kieltäytymisen sijaan conflict: [`CLAUDE.md`](CLAUDE.md) §3.
 
 ### 6.10 Kokonaistilan katsominen (`status.sh`)
 
