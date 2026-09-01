@@ -29,7 +29,7 @@ PASS=0
 FAIL=0
 
 # setup_repo <workdir> — sets globals REPO / BIN / CALL_LOG: a clone with origin +
-# customer-d remotes (real github URLs, never dialled) and a gh mock that records every
+# partner remotes (real github URLs, never dialled) and a gh mock that records every
 # call and serves a green, labelled, mergeable PR + a successful merge.
 setup_repo() {
   local work="$1"
@@ -38,8 +38,8 @@ setup_repo() {
   (
     cd "$REPO" || exit 1
     git config user.email t@t.t; git config user.name t
-    git remote add origin "git@github.com:Silon-Oy/rahti.git"
-    git remote add customer-d  "https://github.com/customer-d-oy/rahti.git"
+    git remote add origin "git@github.com:Silon-Oy/app.git"
+    git remote add partner  "https://github.com/partner-org/app.git"
   )
   BIN="$work/bin"; mkdir -p "$BIN"
   CALL_LOG="$work/gh-calls.log"; : > "$CALL_LOG"
@@ -90,22 +90,22 @@ ok() { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
 no() { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n' "$1"; }
 
 # ===========================================================================
-# 1a. Recorded .remote + .owner_repo -> gh routed via --repo customer-d-oy/rahti
+# 1a. Recorded .remote + .owner_repo -> gh routed via --repo partner-org/app
 # ===========================================================================
 (
   WORK=$(mktemp -d -t prwatch-mr.XXXXXX); trap 'rm -rf "$WORK"' EXIT
   setup_repo "$WORK"
-  make_run "$REPO" "20260806-1200-customer-d-issue-77" 77 501 customer-d "customer-d-oy/rahti" foreign
+  make_run "$REPO" "20260806-1200-partner-issue-77" 77 501 partner "partner-org/app" foreign
   PATH="$BIN:$PATH" RUN_ISSUES_LOCK_ROOT="$WORK/locks" PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0 \
     "$PRWATCH" "$REPO" 501 >/dev/null 2>&1
-  grep -q '^gh pr view .*--repo customer-d-oy/rahti'  "$CALL_LOG" || exit 11
-  grep -q '^gh pr merge .*--repo customer-d-oy/rahti' "$CALL_LOG" || exit 12
+  grep -q '^gh pr view .*--repo partner-org/app'  "$CALL_LOG" || exit 11
+  grep -q '^gh pr merge .*--repo partner-org/app' "$CALL_LOG" || exit 12
   exit 0
 )
 case $? in
-  0)  ok "recorded owner_repo -> gh pr view/merge routed via --repo customer-d-oy/rahti" ;;
-  11) no "gh pr view was not routed via --repo customer-d-oy/rahti" ;;
-  12) no "gh pr merge was not routed via --repo customer-d-oy/rahti" ;;
+  0)  ok "recorded owner_repo -> gh pr view/merge routed via --repo partner-org/app" ;;
+  11) no "gh pr view was not routed via --repo partner-org/app" ;;
+  12) no "gh pr merge was not routed via --repo partner-org/app" ;;
   *)  no "recorded-owner_repo case crashed" ;;
 esac
 
@@ -115,14 +115,14 @@ esac
 (
   WORK=$(mktemp -d -t prwatch-mr.XXXXXX); trap 'rm -rf "$WORK"' EXIT
   setup_repo "$WORK"
-  make_run "$REPO" "20260806-1201-customer-d-issue-77" 77 502 customer-d "-" foreign
+  make_run "$REPO" "20260806-1201-partner-issue-77" 77 502 partner "-" foreign
   PATH="$BIN:$PATH" RUN_ISSUES_LOCK_ROOT="$WORK/locks" PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0 \
     "$PRWATCH" "$REPO" 502 >/dev/null 2>&1
-  grep -q '^gh pr merge .*--repo customer-d-oy/rahti' "$CALL_LOG" || exit 11
+  grep -q '^gh pr merge .*--repo partner-org/app' "$CALL_LOG" || exit 11
   exit 0
 )
 case $? in
-  0)  ok "absent owner_repo -> resolved from clone, gh routed via --repo customer-d-oy/rahti" ;;
+  0)  ok "absent owner_repo -> resolved from clone, gh routed via --repo partner-org/app" ;;
   *)  no "absent-owner_repo fallback did not route gh via --repo" ;;
 esac
 
@@ -155,14 +155,14 @@ esac
   WORK=$(mktemp -d -t prwatch-mr.XXXXXX); trap 'rm -rf "$WORK"' EXIT
   setup_repo "$WORK"
   make_run "$REPO" "20260806-1300-issue-78"        78 601 "-"    "-"              self  # origin run
-  make_run "$REPO" "20260806-1301-customer-d-issue-79"  79 602 customer-d  "customer-d-oy/rahti" self  # customer-d run
+  make_run "$REPO" "20260806-1301-partner-issue-79"  79 602 partner  "partner-org/app" self  # partner run
 
   OUT=$(PATH="$BIN:$PATH" RUN_ISSUES_LOCK_ROOT="$WORK/locks" PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0 \
-        "$PRWATCH" --remote customer-d "$REPO" scan 2>&1)
-  # Only the customer-d PR (#602) is examined; #601 (origin) is filtered out.
+        "$PRWATCH" --remote partner "$REPO" scan 2>&1)
+  # Only the partner PR (#602) is examined; #601 (origin) is filtered out.
   echo "$OUT" | grep -q 'processing PR #602' || exit 11
   echo "$OUT" | grep -q 'processing PR #601' && exit 12
-  echo "$OUT" | grep -q "remote=customer-d candidates=1" || exit 13
+  echo "$OUT" | grep -q "remote=partner candidates=1" || exit 13
 
   # The complementary origin scan sees only #601.
   OUT2=$(PATH="$BIN:$PATH" RUN_ISSUES_LOCK_ROOT="$WORK/locks" PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0 \
@@ -174,11 +174,11 @@ esac
 )
 case $? in
   0)  ok "scan --remote filters runs by recorded remote + logs per-remote candidate count" ;;
-  11) no "scan --remote customer-d did not process the customer-d PR #602" ;;
-  12) no "scan --remote customer-d leaked the origin PR #601" ;;
-  13) no "scan --remote customer-d did not log 'remote=customer-d candidates=1'" ;;
+  11) no "scan --remote partner did not process the partner PR #602" ;;
+  12) no "scan --remote partner leaked the origin PR #601" ;;
+  13) no "scan --remote partner did not log 'remote=partner candidates=1'" ;;
   14) no "scan --remote origin did not process the origin PR #601" ;;
-  15) no "scan --remote origin leaked the customer-d PR #602" ;;
+  15) no "scan --remote origin leaked the partner PR #602" ;;
   16) no "scan --remote origin did not log 'remote=origin candidates=1'" ;;
   *)  no "scan-filter case crashed" ;;
 esac

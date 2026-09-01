@@ -1,5 +1,5 @@
 %% Topic: Configurable base branch (run-issues.json base_branch) data flow
-%% Task: customer-b-customer-b auto-run PRs target the twenty branch, not main
+%% Task: a target repo's auto-run PRs target the twenty branch, not main
 flowchart TD
     cfg["repo/.claude/run-issues.json<br/>{ base_branch: twenty }"]
     env["env RUN_ISSUES_BASE_BRANCH<br/>(override, optional)"]

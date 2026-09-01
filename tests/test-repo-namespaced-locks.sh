@@ -54,7 +54,7 @@ eq() {  # eq <got> <want> <tag>
 # shellcheck source=../lib/git-remote.sh
 . "$GR_LIB"
 
-eq "$(slugify_repo_component 'Silon-Oy/customer-a-report')" "silon-oy-customer-a-report" \
+eq "$(slugify_repo_component 'Silon-Oy/data-report')" "silon-oy-data-report" \
   "(a) owner/repo -> slug (slash + case folded)"
 # tmux rejects '.' and ':' in session names, and repo names carry dots in
 # practice — the whitelist must fold them, not pass them through.
@@ -79,14 +79,14 @@ git init -q "$CLONE"
   git add f.txt
   git commit -qm init
   git branch -M main
-  git remote add origin "git@github.com:Silon-Oy/customer-d-map-api.git"
-  git remote add customer-d "https://github.com/customer-d-oy/customer-d-map-api.git"
+  git remote add origin "git@github.com:Silon-Oy/map-api.git"
+  git remote add partner "https://github.com/partner-org/map-api.git"
 )
-eq "$(repo_slug "$CLONE" origin)" "silon-oy-customer-d-map-api" \
+eq "$(repo_slug "$CLONE" origin)" "silon-oy-map-api" \
   "(a) repo_slug prefers owner/repo from the remote URL"
 # The owner half is what keeps two orgs' same-named repos apart — the remote
 # name alone cannot, because both are usually called 'origin' in their clone.
-eq "$(repo_slug "$CLONE" customer-d)" "customer-d-oy-customer-d-map-api" \
+eq "$(repo_slug "$CLONE" partner)" "partner-org-map-api" \
   "(a) repo_slug is per-remote (different owner -> different slug)"
 
 NOREMOTE="$WORK/Plain.Repo"
@@ -98,21 +98,21 @@ eq "$(repo_slug '')" "" "(a) empty repo root -> empty slug (legacy naming)"
 # ===========================================================================
 # (b) remote_label / session_suffix
 # ===========================================================================
-eq "$(remote_label origin 42 silon-oy-flow)" "silon-oy-flow-issue-42" \
+eq "$(remote_label origin 42 silon-oy-app)" "silon-oy-app-issue-42" \
   "(b) remote_label origin + slug"
-eq "$(remote_label customer-d 42 customer-d-oy-map)" "customer-d-oy-map-customer-d-issue-42" \
+eq "$(remote_label partner 42 partner-org-map)" "partner-org-map-partner-issue-42" \
   "(b) remote_label non-origin + slug"
-eq "$(session_suffix origin 42 silon-oy-flow)" "silon-oy-flow-42" \
+eq "$(session_suffix origin 42 silon-oy-app)" "silon-oy-app-42" \
   "(b) session_suffix origin + slug"
-eq "$(session_suffix customer-d 42 customer-d-oy-map)" "customer-d-oy-map-customer-d-issue-42" \
+eq "$(session_suffix partner 42 partner-org-map)" "partner-org-map-partner-issue-42" \
   "(b) session_suffix non-origin + slug"
 # Legacy shapes: reproduced EXACTLY when no slug is passed. This is not just
 # back-compat cosmetics — the poller and the lock guard use these to address
 # runs started by the previous version.
 eq "$(remote_label origin 42)" "issue-42" "(b) legacy remote_label origin"
-eq "$(remote_label customer-d 42)" "customer-d-issue-42" "(b) legacy remote_label non-origin"
+eq "$(remote_label partner 42)" "partner-issue-42" "(b) legacy remote_label non-origin"
 eq "$(session_suffix origin 42)" "42" "(b) legacy session_suffix origin"
-eq "$(session_suffix customer-d 42)" "customer-d-issue-42" "(b) legacy session_suffix non-origin"
+eq "$(session_suffix partner 42)" "partner-issue-42" "(b) legacy session_suffix non-origin"
 
 # The core acceptance property, at the naming layer.
 A_LABEL=$(remote_label origin 42 repo-a)

@@ -457,7 +457,7 @@ echo "--- TEST 9: bare-gh fallbacks (issue #127) ---"
 : > "$GH_CALL_LOG"
 MB=$(cat "$HIT_COUNTER")
 ( unset GH_TOKEN GITHUB_TOKEN
-  pick_oldest_candidate "$REPO8" "auto-run" "customer-d-oy/rahti" "customer-d" >/dev/null 2>&1
+  pick_oldest_candidate "$REPO8" "auto-run" "partner-org/app" "partner" >/dev/null 2>&1
 )
 MA=$(cat "$HIT_COUNTER")
 flag9b=$(head -1 "$GH_CALL_LOG" | cut -f1)

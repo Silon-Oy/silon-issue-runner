@@ -204,7 +204,7 @@ mk_run 15 completed  test-host  115 "auto-run/issue-15" >/dev/null
 mk_run 16 completed  test-host  116 "auto-run/issue-16" >/dev/null
 # 17 — closed issue, blocked run, NO PR at all → SELECT. This is the run the PR
 # watcher can never see (scan_candidates requires a pr_url) and the measured
-# case in #107 (customer-a-report#287).
+# case in #107 (a production repo's #287).
 mk_run 17 blocked    test-host  -   -                   >/dev/null
 
 printf '13\n' > "$OPEN_ISSUES"     # only issue 13 is still open

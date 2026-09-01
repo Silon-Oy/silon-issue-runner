@@ -181,8 +181,8 @@ ok "multi-label CSV reaches labels="
 # would be mangled into the path and every non-origin repo would silently stop
 # being polled.
 : > "$ARGV"
-pick_oldest_candidate "$REPO" "a,b" "customer-d-oy/rahti" >/dev/null
-grep -q "repos/customer-d-oy/rahti/issues?" "$ARGV" \
+pick_oldest_candidate "$REPO" "a,b" "partner-org/app" >/dev/null
+grep -q "repos/partner-org/app/issues?" "$ARGV" \
   || fail "owner/repo mangled — IFF=',' leaked out of the label loop"
 ok "owner/repo survives the IFS=',' label split"
 

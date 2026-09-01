@@ -79,7 +79,7 @@ BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
 # Lue haaran upstream-remote configista, fallback origin. `git config --get
 # branch.<name>.remote` palauttaa pelkän remoten nimen, joten remote-nimen sisältämä
 # `/` ei riko sitä (toisin kuin @{upstream}-parsinta). Multi-remote-repossa, jonka
-# haara trackaa muuta kuin originia (esim. customer-d/main), tämä fetchaa ja pullaa oikeasta
+# haara trackaa muuta kuin originia (esim. partner/main), tämä fetchaa ja pullaa oikeasta
 # remotesta eikä pysähdy toisen (hylätyn) remoten hajaantumiseen. Haara jolla ei ole
 # upstreamia käyttää originia kuten ennen.
 REMOTE=$(git -C "$REPO_ROOT" config --get "branch.$BRANCH.remote" || echo origin)
@@ -790,7 +790,7 @@ varmista että kukin pätee yhä:
    (skenaario 7). Jos `apply` failaa (esim. dev-kanta alhaalla always-apply-tilassa) →
    komento pysähtyy PHASE 3c:ssä eikä käynnistä dev-serveriä.
 11. **Upstream ei ole `origin` → pull oikeasta remotesta.** Repossa jonka haara trackaa
-   muuta kuin `origin`ia (esim. `customer-d/main`), PHASE 2 lukee remoten
+   muuta kuin `origin`ia (esim. `partner/main`), PHASE 2 lukee remoten
    `branch.<name>.remote`-configista ja fetchaa + laskee `BEHIND`in + pullaa **siitä**
    remotesta eikä pysähdy toisen (hylätyn) remoten hajaantumiseen. Repoissa joissa upstream
    on `origin` — eli valtaosassa — käytös on ennallaan (fallback osuu). Haara jolla ei ole
