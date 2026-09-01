@@ -1,8 +1,8 @@
 # Ajokone Fly.io Spritessä — ikkunamalli
 
 > **Tila:** todennettu käytännössä 27.8.2026 pystyttämällä `claude-issue-runner`-niminen
-> Sprite ajamaan `Silon-Oy/customer-a-report`ia. Kaikki tämän dokumentin komennot on ajettu
-> oikeaa Spriteä vasten, ei suunniteltu paperilla.
+> Sprite ajamaan kohderepoa. Kaikki tämän dokumentin komennot on ajettu oikeaa Spriteä
+> vasten, ei suunniteltu paperilla.
 
 Sprite on ~8 CPU / 8 GB / 100 GB Firecracker-VM, joka **nukahtaa noin 30 sekunnin
 käyttämättömyyden jälkeen** ja maksaa nukkuvana käytännössä nolla. Se sopii ajokoneeksi
@@ -98,7 +98,7 @@ export RUN_ISSUES_LOG_DIR="$HOME/.local/state/run-issues/logs"
 # Vain jos kohderepo tarvitsee Postgresin:
 export PGHOST="127.0.0.1"
 export PGPORT="5433"
-export PGUSER="customer-a"
+export PGUSER="<db-user>"
 export PGPASSWORD="<salasana>"
 ```
 
@@ -110,7 +110,7 @@ se, joka erottaa tämän koneen muista ajokoneista:
   "default_labels": ["auto-run-ilkka"],
   "global_max_concurrent": 1,
   "repos": [
-    { "path": "/home/sprite/projektit/customer-a-report",
+    { "path": "/home/sprite/projektit/myrepo",
       "labels": ["auto-run-ilkka"], "remotes": ["origin"] }
   ]
 }
@@ -137,9 +137,9 @@ sudo sed -i 's/^port = 5432/port = 5433/' /etc/postgresql/18/main/postgresql.con
 sudo pg_ctlcluster 18 main start
 
 sudo -u postgres psql -p 5433 -c \
-  "CREATE ROLE customer-a LOGIN SUPERUSER CREATEDB PASSWORD '<salasana>';"
+  "CREATE ROLE <db-user> LOGIN SUPERUSER CREATEDB PASSWORD '<salasana>';"
 
-PGPASSWORD='<salasana>' psql -h 127.0.0.1 -p 5433 -U customer-a -d postgres -c 'select 1'
+PGPASSWORD='<salasana>' psql -h 127.0.0.1 -p 5433 -U <db-user> -d postgres -c 'select 1'
 ```
 
 Asennus tulostaa `invoke-rc.d: policy-rc.d denied execution of start` — se on odotettua
@@ -173,10 +173,10 @@ siis kaikki, mitä Compose-pohjaisen repon savutesti tarvitsee. Vartija kuuluu
 `wake-run.sh`:ään Postgres-vartijan rinnalle (ks. osio 5): jos `docker info` ei vastaa,
 käynnistä `sudo dockerd` taustalle ja odota enintään 30 s ennen kuin drain alkaa.
 
-Kohderepon hookin ei silti kannata **olettaa** Dockeria: `customer-a-report`in
+Kohderepon hookin ei silti kannata **olettaa** Dockeria: kestävästi kirjoitettu
 `.claude/provision-test-env.sh` yrittää **TCP:tä ensin** ja `docker exec`-yhteyttä vasta
-varamekanismina (PR #368), joten se toimii natiivilla Postgresilla myös koneella, jolla
-daemon on jäänyt käynnistämättä. Jos hook osaa vain `docker exec`in, lisää sille TCP-polku
+varamekanismina, joten se toimii natiivilla Postgresilla myös koneella, jolla daemon on
+jäänyt käynnistämättä. Jos hook osaa vain `docker exec`in, lisää sille TCP-polku
 tai Docker-vartija (daemon ei vastaa → skip, ei rc≠0) — **CI on silti laatuportti**, ja
 `pr-watch` mergeää vasta kun CI on vihreä, joten menetys on palautesyklin nopeus eikä
 lopputuloksen oikeellisuus.
@@ -185,7 +185,7 @@ lopputuloksen oikeellisuus.
 
 Playwrightin selaimet ovat imagessa valmiina, mutta **headless Chromium kaatuu jokaisella
 spektillä** Spriten hiekkalaatikossa. Todennettu 27.8.2026 ajossa `20260827-072017`
-(`customer-a-report`in issue #353): implementer erotti ympäristövian omasta virheestään
+(kohderepon issue): implementer erotti ympäristövian omasta virheestään
 toistamalla kaatumisen **koskemattomalla spektillä**, eli vika ei ollut sen kirjoittamissa
 testeissä.
 
@@ -286,8 +286,8 @@ docker info >/dev/null   # kova virhe, jos daemon ei noussut — syy on /tmp/doc
 # Label per repo: drain-queue.sh kieltäytyy tyhjästä RUN_ISSUES_LABELS_CSV:stä (ks. alla),
 # ja eri repoilla voi olla eri poimintalabel. Epäonnistunut drain ei saa ohittaa seuraavaa.
 rc=0
-RUN_ISSUES_LABELS_CSV=auto-run-ilkka "$HOME/bin/drain-queue.sh" "$HOME/projektit/customer-a-report" || rc=$?
-RUN_ISSUES_LABELS_CSV=auto-run       "$HOME/bin/drain-queue.sh" "$HOME/projektit/putkiwelho"   || rc=$?
+RUN_ISSUES_LABELS_CSV=auto-run-ilkka "$HOME/bin/drain-queue.sh" "$HOME/projektit/myrepo" || rc=$?
+RUN_ISSUES_LABELS_CSV=auto-run       "$HOME/bin/drain-queue.sh" "$HOME/projektit/myapp"  || rc=$?
 exit "$rc"
 ```
 
@@ -384,14 +384,14 @@ päästä-päähän-ajo yllä olevalla komennolla. Vasta sen jälkeen automaatti
 ```bash
 # 1. Poimintahaku toimii ja työnjako pitää
 sprite exec -s claude-issue-runner -- bash -lc '
-  cd ~/projektit/customer-a-report
+  cd ~/projektit/myrepo
   source ~/.claude/scripts/run-issues/lib/issue.sh
-  echo "ilkka   -> [$(pick_oldest_candidate "$PWD" "auto-run-ilkka" "Silon-Oy/customer-a-report")]"
-  echo "auto-run -> [$(pick_oldest_candidate "$PWD" "auto-run" "Silon-Oy/customer-a-report")]"'
+  echo "ilkka   -> [$(pick_oldest_candidate "$PWD" "auto-run-ilkka" "Silon-Oy/myrepo")]"
+  echo "auto-run -> [$(pick_oldest_candidate "$PWD" "auto-run" "Silon-Oy/myrepo")]"'
 
 # 2. Preflight nimeää puuttuvat riippuvuudet
 sprite exec -s claude-issue-runner -- bash -lc \
-  'cd ~/projektit/customer-a-report && ~/.claude/scripts/run-issues/orchestrate.sh'
+  'cd ~/projektit/myrepo && ~/.claude/scripts/run-issues/orchestrate.sh'
 
 # 3. Claude-CLI vastaa sillä komennolla, jonka env nimeää
 sprite exec -s claude-issue-runner -- bash -lc \
