@@ -24,10 +24,11 @@ ennen PR:n avaamista.
 2. **Tarkista nopeat asiat:**
    - Onko committeissa salaisuuksia tai konekohtaisia polkuja?
    - Onko mukana `console.log`/`var_dump`-tasoisia debug-jälkiä?
-   - Onko CLAUDE.md:tä rikottu (esim. jQuery lisätty ilman pyyntöä, MUI:ta projektissa
-     joka käyttää Tailwindia, jne.)?
+   - Rikkooko muutos kohderepon omaa `CLAUDE.md`:tä? Lue se worktreesta
+     (`{{WORKTREE_PATH}}/CLAUDE.md`, jos sellainen on) ja tarkista vain siinä
+     kirjatut säännöt. Älä oleta sääntöjä, joita repo ei itse kirjaa.
    - Jos issue käsitteli skeemamuutosta: onko migraatio mukana?
-   - Jos issue käsitteli ENV-muuttujaa: onko `.env.example` päivitetty?
+   - Jos issue käsitteli ENV-muuttujaa ja repossa on `.env.example`: onko se päivitetty?
 3. **Jos löydät pienen korjattavan**, korjaa se yhdellä committilla
    (`POST_COMMIT_SYNC=1 git commit -am "fix: ..."`). **Älä laajenna scopea.**
 4. **Jos löydät ison ongelman**, älä yritä korjata sitä — kirjaa se PR-kuvaukseen ja
