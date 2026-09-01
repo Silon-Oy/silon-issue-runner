@@ -173,9 +173,9 @@ siis kaikki, mitä Compose-pohjaisen repon savutesti tarvitsee. Vartija kuuluu
 `wake-run.sh`:ään Postgres-vartijan rinnalle (ks. osio 5): jos `docker info` ei vastaa,
 käynnistä `sudo dockerd` taustalle ja odota enintään 30 s ennen kuin drain alkaa.
 
-Kohderepon hookin ei silti kannata **olettaa** Dockeria: kestävä
+Kohderepon hookin ei silti kannata **olettaa** Dockeria: kestävästi kirjoitettu
 `.claude/provision-test-env.sh` yrittää **TCP:tä ensin** ja `docker exec`-yhteyttä vasta
-varamekanismina, jolloin se toimii natiivilla Postgresilla myös koneella, jolla daemon on
+varamekanismina, joten se toimii natiivilla Postgresilla myös koneella, jolla daemon on
 jäänyt käynnistämättä. Jos hook osaa vain `docker exec`in, lisää sille TCP-polku
 tai Docker-vartija (daemon ei vastaa → skip, ei rc≠0) — **CI on silti laatuportti**, ja
 `pr-watch` mergeää vasta kun CI on vihreä, joten menetys on palautesyklin nopeus eikä
