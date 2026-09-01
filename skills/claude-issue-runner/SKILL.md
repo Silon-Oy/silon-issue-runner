@@ -179,6 +179,9 @@ skriptejä):
   vahvistetaan ennen kirjoitusta. Ei aja mitään.
 - `/new-epic` — pilkkoo vapaamuotoisen kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää
   ne sub-issueiksi, merkitsee riippuvuudet ja labeloi **vain epicin** ajoon. Ei aja mitään.
+- `/report-problem` — triagee kuvatun ongelman repon koodista ja lokeista ja päätyy yhteen
+  kolmesta: korjausohje **ilman issueta** (käyttövirhe tai konfiguraatio), issue `/new-issue`n
+  kautta, tai kokonaisuus `/new-epic`in kautta. Tarkistaa duplikaatit; ei korjaa eikä aja mitään.
 - `/run-epic` — validoi epicin rakenne ja propagoi ajolabelit sen alaissueille; `--stop` keskeyttää.
 - `/pr-watch` — aja PR-vahti yhdelle PR:lle tai skannaa tämän koneen valmiit ajot.
 - `/cleanup-run` — siivoa keskenjääneen ajon jäänteet.
