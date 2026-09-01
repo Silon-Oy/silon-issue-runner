@@ -1,6 +1,6 @@
 ---
 argument-hint: "<ongelma omin sanoin>"
-description: Triagee kuvatun ongelman repon koodista ja lokeista, kysyy puuttuvat toistoaskeleet ja tarkistaa duplikaatit — päätyy joko korjausohjeeseen ilman issueta, tai delegoi issuen /new-issuelle ja kokonaisuuden /new-epicille.
+description: Triagee kuvattu ongelma repon koodista ja lokeista, kysy puuttuvat toistoaskeleet ja tarkista duplikaatit — päädy joko korjausohjeeseen ilman issueta, tai delegoi issue /new-issuelle ja kokonaisuus /new-epicille.
 ---
 
 # /report-problem
