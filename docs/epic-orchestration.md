@@ -219,7 +219,7 @@ ja kaikki konfiguroidut labelit (tyypillisesti `auto-run`) läsnä.
 > `--label`-suodatettu `gh issue list` kulkee GraphQL-hakuyhteyden kautta, joka oli estettynä 27
 > tuntia 2026-08-28/29 muun API:n vastatessa normaalisti. Alla olevat kvalifikaattorimuodot
 > (`-label:epic` jne.) kuvaavat siis mekanismia, joka on korvattu — **ehto itsessään on ennallaan**.
-> Ks. CLAUDE.md §7.2.
+> Ks. CLAUDE.md §5.2.
 
 ### 2.2 Löydös (historiallinen): epic poimittiin tavallisena issuena — korjattu #81:ssä
 
@@ -624,10 +624,10 @@ ohut skripti; keskeytys `--stop` tuli #90:ssä.
 
 **M8 — Dokumentaatio.** — **TOTEUTETTU (#82) + statuspäivitys (#93) + keskeytys (#90):**
 - `README.md`: alaluku "Epicit — usean issuen ketjun ajaminen `auto-run`illa" ihmiselle (#82).
-- `CLAUDE.md`: epic-koneisto kuvattu §4:ssä ja §6:ssa; viittaus tähän dokumenttiin.
-- Uudet exit-koodit (12 orkestraattori; `run-epic.sh`-avaruus) ja labelit CLAUDE.md §4/§5:ssä.
+- `CLAUDE.md`: epic-koneisto kuvattu §4:ssä ja §7:ssä; viittaus tähän dokumenttiin.
+- Uudet exit-koodit (12 orkestraattori; `run-epic.sh`-avaruus) ja labelit CLAUDE.md §4/§6:ssa.
 - **#93:** dokumentin statuspäivitys — suunnitelmasta toteutustilan kuvaukseksi.
-- **#90:** `--stop` dokumentoitu README §6.5:ssä, `commands/run-epic.md`:ssä ja CLAUDE.md §5:n
+- **#90:** `--stop` dokumentoitu README §6.5:ssä, `commands/run-epic.md`:ssä ja CLAUDE.md §6:n
   `run-epic.sh`-exit-koodeissa; §4.3 ja päätös H merkitty ratkaistuiksi.
 
 ### 6.3 Muutosten kokoluokka
@@ -658,7 +658,7 @@ minimimuutos, ja se toteutui suunnitellusti (#81 M1–M5 + M7, #82 M6).
 **Kaikki kymmenen on ratkaistu koodissa** (#81, #82, #90). Ratkaisusarake nimeää kunkin
 toteutuskohdan tiedosto/funktio-tasolla. Suositus-sarake on
 säilytetty osoittamaan, että toteutus seurasi (tai poikkesi) alkuperäisestä suosituksesta —
-perustelut ovat laatikoissa yllä. Ristiriitatilanteessa **koodi (ja CLAUDE.md §12) voittaa**.
+perustelut ovat laatikoissa yllä. Ristiriitatilanteessa **koodi (ja CLAUDE.md §13) voittaa**.
 
 | # | Kysymys | Alkuperäinen suositus | Ratkaisu (toteutuskohta / avoin) |
 |---|---|---|---|

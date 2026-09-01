@@ -32,10 +32,10 @@
 # This lives here — not in the poller's quota-critical tick — precisely because
 # it is already hourly and idle-ported. See lib/archive.sh.
 #
-# Config channel is poller.env (LaunchAgent environmentlessness, CLAUDE.md §7).
+# Config channel is poller.env (LaunchAgent environmentlessness, CLAUDE.md §8).
 # Kill switch: RUN_ISSUES_SELF_UPDATE=0 skips the tick. There is NO host gate —
 # opt-in is the operator bootstrapping the agent. self-update NEVER calls
-# launchctl (same reasons as the installer, CLAUDE.md §11): if the install links
+# launchctl (same reasons as the installer, CLAUDE.md §10): if the install links
 # a new plist it logs a NOTE naming the manual `launchctl bootstrap`.
 #
 # Exit codes (own space — not the orchestrator's, not the installer's):

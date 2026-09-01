@@ -4,8 +4,13 @@ Itsenäisesti asennettava paketti `/run-issues`-orkestraattorille: GitHub-issues
 pull requestiin ilman ihmistä silmukassa, sekä PR-vahti, joka vie PR:n merge-tilaan asti.
 
 Tämä README on **ihmiselle**: asennus, turvamalli ja perustelut sille miksi järjestelmä
-käyttäytyy kuten käyttäytyy. [`CLAUDE.md`](CLAUDE.md) on **agentille**: täysi tekninen
-referenssi. Jos sama fakta on molemmissa, `CLAUDE.md` on lähde.
+käyttäytyy kuten käyttäytyy. [`CLAUDE.md`](CLAUDE.md) on **agentille**: invariantit ja mitatut
+rajoitteet, ei täyttä referenssiä.
+
+**Lähdejärjestys, kun sama fakta on kahdessa paikassa:** koodi ja skriptin otsikkokommentti
+ovat lähde. Tämä README on exit-koodien vartioitu peilaus (`tests/test-readme.sh` johtaa ne
+skripteistä) ja `docs/env-reference.md` ympäristömuuttujien peilaus. `CLAUDE.md` on lähde vain
+sille, mitä koodista ei voi lukea: invariantit, mitatut rajoitteet ja tietoiset ei-päätökset.
 
 **Lue [turvamalli](#7-turvamalli) ennen kuin ajat `install.sh`:n.** Paketti ajaa Claude Codea
 ilman lupakyselyjä ja suorittaa kohderepon omaa shell-koodia. Se on suostumuskysymys, ei
@@ -135,7 +140,7 @@ hakemistoja tai puuttuvat, jolloin asennus menee läpi normaalisti.
 Kaksi rajoitetta:
 
 - `--with-launchagents` **ei kutsu `launchctl`ia** — se deployaa plist-tiedostot ja tulostaa
-  `launchctl`-komennot, jotka ajat itse. Perustelu: `CLAUDE.md` §11.
+  `launchctl`-komennot, jotka ajat itse. Perustelu: `CLAUDE.md` §10.
 - `install.sh --uninstall` **puuttuu**. Paketin omistamat symlinkit poistetaan toistaiseksi
   käsin.
 
@@ -297,8 +302,9 @@ Ympäristömuuttuja voittaa aina tiedoston. Puuttuva tiedosto on no-op.
 ## 5. Ympäristömuuttujat (asennus- ja konfigurointiaika)
 
 Alla vain ne muuttujat, jotka ihminen tosiasiassa asettaa ennen ensimmäistä ajoa. **Täysi
-lista kaikista muuttujista on [`CLAUDE.md`](CLAUDE.md) §7:ssä** — sitä ei toisteta tässä,
-jotta kaksi listaa ei ajaudu erilleen.
+lista kaikista muuttujista on [`docs/env-reference.md`](docs/env-reference.md):ssä** — sitä ei
+toisteta tässä, jotta kaksi listaa ei ajaudu erilleen. Lähde on koodin `${VAR:-oletus}` ja
+skriptin `# Env:`-otsikkokommentti.
 
 ### Orkestraattori
 
@@ -395,8 +401,8 @@ GraphQL-hakuyhteyden kautta, ja **se yhteys voi olla estetty vaikka muu API vast
 normaalisti** — näin kävi 27 tunnin ajan 2026-08-28/29, jolloin poiminta ei voinut ajaa
 lainkaan (#133). REST-listaus ei koske hakuyhteyteen. Sivuhyöty: poissulkuehdot ovat nyt
 paikallisia jäsenyystestejä, jotka epäonnistuvat **umpeen** — vanha `-label:x` epäonnistui
-auki, eli kirjoitusvirhe vuoti poissuljettuja issueita poimintaan. Tekniset yksityiskohdat:
-CLAUDE.md §7.2.
+auki, eli kirjoitusvirhe vuoti poissuljettuja issueita poimintaan. Mittaus ja
+kontrollikoe: CLAUDE.md §5.2.
 
 Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
 
@@ -439,7 +445,7 @@ auto-merge-PR jää nälkiintymään. Sillä on myös oma, korkeampi rinnakkaisu
 valinnainen `pr_watch_max_concurrent` (oletus = `global_max_concurrent`) tai ympäristömuuttuja
 `PR_WATCH_GLOBAL_MAX`. PR-skannaus on sekuntien työ, joten se voi käydä korkeammalla katolla
 ilman että orkestraattoriajojen rinnakkaisuus kasvaa. `poller.sh` säilyttää entisen semantiikan
-sellaisenaan. Ks. CLAUDE.md §7.
+sellaisenaan. Ks. [`docs/env-reference.md`](docs/env-reference.md).
 
 **Tikin sisäinen järjestys** (`poller.sh`, oletusväli 300 s eli 5 min): jumiutuneiden ajojen
 liveness-pyyhkäisy koko watchlistiin → `auto-clean`-siivoukset → **valmiiden ajojen sovitus**
@@ -753,7 +759,7 @@ automaatio (poller) kutsuu skriptejä suoraan.
 
 **`/factory-run`-rajoite:** ohje kehottaa alustamaan `.factory/`-hakemiston skriptillä
 `templates/factory-init.sh`, jota **ei ole tässä repossa**. Alustus on toistaiseksi tehtävä
-käsin. Ks. [`CLAUDE.md`](CLAUDE.md) §12.
+käsin. Ks. [`CLAUDE.md`](CLAUDE.md) §13.
 
 ### 6.8 Skriptit ja apuvälineet
 
@@ -804,7 +810,7 @@ suuntiin) ja `tests/test-skill-surface.sh` (komento- ja skriptipinta molempiin s
 
 Ylläpitäjän koneella, jolla `$HOME/.claude/skills` on hakemistosymlinkki dotfilesiin, skill ei
 asennu automaattisesti: `install.sh` tulostaa siitä `CONFLICT`-rivin ja exit-koodin 4, mutta
-linkittää agentit ja komennot normaalisti (ks. [`CLAUDE.md`](CLAUDE.md) §3 ja §12).
+linkittää agentit ja komennot normaalisti (ks. [`CLAUDE.md`](CLAUDE.md) §3 ja §13).
 
 ### 6.10 Kokonaistilan katsominen (`status.sh`)
 
@@ -841,7 +847,7 @@ GitHubissa. `--github` täyttää jokaisen ajon `github`-aliobjektin hakemalla a
 PR-vahdin omista funktioista, joten näkymä ja vahti eivät ole eri mieltä PR:n vihreydestä.
 Rikastus on **fail-soft**: yhden repon verkkovirhe vie sen `enrichment.repos_failed`-listaan,
 sen ajot jäävät `github: null`, muut repot rikastuvat ja exit-koodi on ennallaan. Ilman lippua
-käytös on bitilleen kuin ennen (`github: null` joka ajossa). Tekninen referenssi: CLAUDE.md §8.
+käytös on bitilleen kuin ennen (`github: null` joka ajossa). Tekninen referenssi: CLAUDE.md §9.
 
 **Selainpohjainen web-esitys.** [`status-render.sh`](status-render.sh) on JSONin ensimmäinen
 kuluttaja: se kirjoittaa `index.html`in ja `status.json`in atomisesti hakemistoon
@@ -872,7 +878,7 @@ ajossa oleva alaissue korostettuna, jonossa olevat riippuvuusjärjestyksessä es
 ("jonossa · estäjä #N") ja suljetut alaissueet yliviivattuina kuittausriveinä niin kauan kuin
 epic on auki. Alaissueen ajo näkyy vain kerran — kaistalla, ei irtorivinä. Ilman `--github`iä
 `epics[]` on tyhjä ja näkymä on entisellään. Epic- ja alaissue-otsikot ovat samaa
-tailnet-rajattua otsikkopolkua kuin #78. Skeema ja tekninen referenssi: CLAUDE.md §5 / §6.
+tailnet-rajattua otsikkopolkua kuin #78. Skeema ja tekninen referenssi: [`docs/design-history.md`](docs/design-history.md).
 
 **Runnerin versiotila (#105).** `status.sh` emittoi top-level-objektin `runner`, joka tekee ajossa
 olevan runner-version tilan luettavaksi Ohjaamosta. Se on **paikallista git-tietoa** — saatavilla
@@ -900,7 +906,7 @@ Sivu näyttää versiotilan yläosassa **vain kun se ei ole `up_to_date`**, suom
 on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsestään. Erottelu on
 olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka
 johti kerran väärään "5 vuorokautta jäljessä" -diagnoosiin ja aikeeseen tehdä käsin checkout elävän ajon
-alta (#32). Skeema ja tekninen referenssi: CLAUDE.md §6.
+alta (#32). Skeema ja tekninen referenssi: [`docs/design-history.md`](docs/design-history.md).
 
 ---
 
@@ -1232,7 +1238,7 @@ markerin aikaleimalla, ei nimellä.
 Parametrisointia ei tehty tietoisesti: promptien sijoitusmekanismi kattaa vain
 [`prompts/`](prompts)-hakemiston, kun taas `commands/`- ja `agents/`-tiedostot lukee Claude
 Code suoraan levyltä. Puoliksi parametrisoitu järjestelmä olisi huonompi kuin kumpikaan puhdas
-vaihtoehto. Ks. [`CLAUDE.md`](CLAUDE.md) §12.
+vaihtoehto. Ks. [`CLAUDE.md`](CLAUDE.md) §13.
 
 ### Legacy-jäänteitä, joihin törmää
 
@@ -1242,7 +1248,7 @@ vaihtoehto. Ks. [`CLAUDE.md`](CLAUDE.md) §12.
 - Watchlistillä on toissijainen fallback vanhaan `~/dotfiles`-puuhun. Se ei laukea, jos
   ensisijainen polku osuu.
 
-Molemmat on kirjattu tietoisiksi shimmeiksi: [`CLAUDE.md`](CLAUDE.md) §12.
+Molemmat on kirjattu tietoisiksi shimmeiksi: [`CLAUDE.md`](CLAUDE.md) §13.
 
 ---
 
@@ -1422,6 +1428,41 @@ lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla
 ohitetaan aina). Idle-portti ohittaa koko tikin, jos koneella on elävä ajo. Kill-switch:
 `RUN_ISSUES_SELF_UPDATE=0`.
 
+### Ohjaamon toimintopalvelu (`action-server.sh`)
+
+Kääre omistaa elinkaaren ja delegoi socketin `lib/action-service.py`:lle `exec`illä, joten
+**Pythonin exit-koodi on prosessin exit-koodi** — siksi koodit jakautuvat siihen, mitä kääre
+päättää ennen `exec`iä (1/2) ja mitä palvelu päättää (0/3/4).
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Puhdas exit — host-portti no-op, `--check` OK, tai palvelu pysähtyi SIGTERMiin |
+| 1 | Käyttövirhe (tuntematon lippu) |
+| 2 | Puuttuva pakollinen riippuvuus (`python3` / `jq` / Tailscale-CLI) — ennen `exec`iä |
+| 3 | Bind epäonnistui — ei Tailscale-osoitetta johon sitoa (ei koskaan wildcard), tai portti varattu. launchd `KeepAlive` yrittää uudelleen — tämä on boot-ennen-tailnetiä-toipuminen |
+| 4 | Konfiguraatio kieltäytyy — ei sallittua identiteettiä, tokenia eikä originia (fail-closed) |
+
+### Ohjaamon toiminnon delegointi (`action-dispatch.sh`)
+
+Ohut kuori: jokainen neljästä toiminnosta delegoi olemassa olevalle skriptille tai labelille
+eikä toteuta purku-, merge- tai restart-logiikkaa itse.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Delegoitu komento onnistui |
+| 1 | Käyttövirhe (tuntematon toiminto / puuttuva tai virheellinen selektori) |
+| 2 | Delegoitu komento **epäonnistui** — sen tuloste on stdout/stderrissä sellaisenaan (turvamalli §7.9: näytä virhe, älä yritä itse) |
+| 3 | Delegoitava puuttuu (skripti ei suoritettavissa, tmux puuttuu restartista) |
+
+### Kooste (`status-digest.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Lähetetty, tai ei lähetystarvetta (muuttumaton tilanne ilman `--force`) |
+| 1 | Käyttö- tai syötevirhe |
+| 2 | Tuntematon `schema_version` — ei lähetystä |
+| 3 | Lähetys epäonnistui; runko on silti stdoutissa |
+
 ### Mistä lokit löytyvät
 
 - **Pollerit:** `$RUN_ISSUES_LOG_DIR` (oletus `$HOME/Library/Logs`), neljä tiedostoa per
@@ -1495,8 +1536,11 @@ testit voi ajaa samalla koneella jolla poller pyörii.
 
 ## 11. Viittaukset
 
-- [`CLAUDE.md`](CLAUDE.md) — agentin tekninen referenssi. §7 = kaikki ympäristömuuttujat,
-  §12 = tunnetut avoimet asiat.
+- [`CLAUDE.md`](CLAUDE.md) — agentin konteksti: invariantit, mitatut rajoitteet ja tietoiset
+  ei-päätökset. §5 = mitatut rajoitteet, §13 = tunnetut avoimet asiat.
+- [`docs/env-reference.md`](docs/env-reference.md) — kaikki ympäristömuuttujat.
+- [`docs/design-history.md`](docs/design-history.md) — issue-kohtainen suunnitteluhistoria
+  2026-09-01 asti (historiallinen, ei ylläpidetty).
 - [`db-clone/README.md`](db-clone/README.md) — tietokannan kloonaus (S5).
 - [`provision-test-env.README.md`](provision-test-env.README.md) — testiympäristön
   provisiointihook (S7c).

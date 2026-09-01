@@ -448,7 +448,7 @@ print_launchagent_instructions() {
   log ""
   log "LaunchAgent plists are in place. Loading them is left to you on purpose:"
   log "launchd identifies an agent by its Label, not its filename, so a running"
-  log "agent with the same label must be booted out first (CLAUDE.md, §11)."
+  log "agent with the same label must be booted out first (CLAUDE.md, §10)."
   for entry in "${LAUNCH_LABELS[@]}"; do
     IFS="$TAB" read -r label path <<<"$entry"
     log "  launchctl bootout   gui/$uid/$label   # only if that label is loaded"
