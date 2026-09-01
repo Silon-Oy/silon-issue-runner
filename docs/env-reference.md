@@ -269,11 +269,24 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 |---|---|---|
 | `RUN_ISSUES_CLAUDE_HOME` | `$HOME/.claude` | Kohdehakemisto, johon agentit ja komennot linkitetään |
 | `RUN_ISSUES_LAUNCH_AGENTS_DIR` | `$HOME/Library/LaunchAgents` | Plistien kohdehakemisto (`--with-launchagents`) |
+| `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | **Vain luku.** Asennin sourceaa koneen `poller.env`in aliprosessissa ja tulostaa neuvoa-antavan host-porttiraportin (#170). Se ei luo eikä muokkaa tiedostoa — konenimen arvaaminen on juuri se kytkös yhteen koneeseen, jonka #152 poisti |
 
-Molemmat ovat olemassa yhtä syytä varten: **testit eivät saa koskea oikeaan
+Kaksi ensimmäistä ovat olemassa yhtä syytä varten: **testit eivät saa koskea oikeaan
 `~/.claude`-hakemistoon**, koska sitä ajaa poller samalla koneella. Jokainen asentajan polku
 johdetaan `$HOME`:sta tai näistä overrideista — tildelaajennusta ei käytetä missään, jotta
 `HOME=$(mktemp -d)` todella pitää.
+
+**Host-porttiraportti on neuvoa-antava, ei portti.** Fail-closed host-portilla ei ole oletusta
+(#152), joten kone jonka `poller.env` ei aseta `RUN_ISSUES_POLLER_HOSTS`:ia ei aja mitään — mutta
+sen kertova rivi syntyy vasta ajossa, hetkellä jolloin kukaan ei katso. Asennus on ainoa hetki
+jolloin ihminen on paikalla, joten asennin tulostaa **saman rivin** (kirjaimellisesti sama
+`poller_host_unset_message`) jo silloin. Kolme sääntöä: se **ei muuta exit-koodia** (`poller.env`
+saa perustellusti syntyä vasta asennuksen jälkeen — vrt. plist-portti, joka kieltäytyy, koska
+rikkinäinen ohjelmapolku ei korjaudu itsestään), se **ei syötä `PLAN`iin, `REFUSALS`iin eikä
+`CONFLICTS`iin**, ja `RUN_ISSUES_ACTION_HOSTS`:ista varoitetaan **vain jos**
+`RUN_ISSUES_ACTION_BASE` on asetettu (toimintapalvelu on opt-in). Tiedosto sourcetaan
+aliprosessissa nimet ensin unsetattuina, koska LaunchAgent — ainoa tuotantotila — ei peri
+ympäristöä: asentavan shellin muuttuja olisi väärä puhtaan paperin lupaus.
 
 ### GitHub App (opt-in, ks. §8)
 

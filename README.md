@@ -348,8 +348,15 @@ skriptin `# Env:`-otsikkokommentti.
 |---|---|---|
 | `RUN_ISSUES_CLAUDE_HOME` | `$HOME/.claude` | Kohdehakemisto agenteille ja komennoille |
 | `RUN_ISSUES_LAUNCH_AGENTS_DIR` | `$HOME/Library/LaunchAgents` | Plistien kohdehakemisto |
+| `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | **Vain luku:** asennin raportoi tästä tiedostosta host-portin tilan, mutta ei koskaan luo eikä muokkaa sitä |
 
-Asentimen kaksi muuttujaa ovat olemassa yhtä syytä varten: **testit eivät saa koskea oikeaan
+Asennin tulostaa lopuksi neuvoa-antavan **host-porttiraportin**: jos `poller.env` ei aseta
+`RUN_ISSUES_POLLER_HOSTS`:ia, pollerit eivät aja tällä koneella mitään, ja asennin sanoo sen
+samalla rivillä jonka poller itse tulostaisi ajossa. Kyse on varoituksesta, ei kieltäytymisestä —
+exit-koodi ei muutu, koska `poller.env` saa syntyä vasta asennuksen jälkeen.
+`RUN_ISSUES_ACTION_HOSTS`:ista varoitetaan vain jos `RUN_ISSUES_ACTION_BASE` on asetettu.
+
+Ensimmäiset kaksi muuttujaa ovat olemassa yhtä syytä varten: **testit eivät saa koskea oikeaan
 `~/.claude`-hakemistoon**, koska sitä käyttää samalla koneella ajava poller. Siksi jokainen
 asentajan polku johdetaan `$HOME`:sta tai näistä overrideista, eikä tildelaajennusta käytetä
 missään.
