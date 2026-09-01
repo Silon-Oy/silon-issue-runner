@@ -12,7 +12,7 @@
 # fallback. Probed empirically against Silon-Oy/dotfiles issue #4 with
 # gh — createdAt = "2026-05-20T11:45:39Z".
 #
-# A human reply is detected by TIMESTAMP, not by author: the bot and maintainer
+# A human reply is detected by TIMESTAMP, not by author: the bot and the human
 # share the same GitHub account, so the only durable discriminator is "a
 # comment created after the marker that does NOT itself contain run-issues:".
 #
@@ -53,13 +53,13 @@ jq -n \
       # A (bot): contains run-issues: AND is after the marker -> NOT an answer.
       { author: {login: "maintainer"}, createdAt: "2026-05-21T10:00:01Z",
         body: "<!-- run-issues:noise --> bottikommentti" },
-      # B (maintainer): plain reply but BEFORE the marker -> NOT an answer.
+      # B (human): plain reply but BEFORE the marker -> NOT an answer.
       { author: {login: "maintainer"}, createdAt: "2026-05-21T09:59:00Z",
         body: "vanha kommentti ennen markeria" },
-      # C (maintainer): plain reply after the marker -> IS an answer (until D wins).
+      # C (human): plain reply after the marker -> IS an answer (until D wins).
       { author: {login: "maintainer"}, createdAt: "2026-05-21T10:05:00Z",
         body: $replyC },
-      # D (maintainer): newest plain reply after the marker -> WINS.
+      # D (human): newest plain reply after the marker -> WINS.
       { author: {login: "maintainer"}, createdAt: "2026-05-21T10:10:00Z",
         body: $replyD }
     ]

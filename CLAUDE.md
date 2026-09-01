@@ -479,7 +479,7 @@ bash tests/test-<nimi>.sh    # yksittäinen
 - Plain bash, ei framework. `set -uo pipefail` — **ei `-e`**: testin pitää kerätä kaikki
   virheet, ei kaatua ensimmäiseen.
 - Puuttuva esiehto (ei `jq`:ta, ei tietokantaa, väärä host) ⇒ `SKIP: <syy>` ja **exit 0**.
-  Paketin on oltava testattavissa ilman maintainern ympäristöä.
+  Paketin on oltava testattavissa ilman ylläpitäjän ympäristöä.
 - `run-all.sh` poimii globilla — uusi testi tulee ajoon nimeämällä.
 
 Testipaketti ajaa ilman dotfiles-kontekstia ja on samalla rakenteen regressiosuoja: jokainen
@@ -494,11 +494,14 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
   haaralla on merge-commit, eikä haaran muoto muutu itsestään — ilman varapolkua yksi
   rebase-kyvytön PR jumittaisi koko riippuvuusjonon. `PR_WATCH_MERGE_STRATEGY` rajattiin ulos
   cycle reviewssä ei-minimaalisena.
-- **"maintainer" on kovakoodattu seitsemään tiedostoon** (`prompts/`, `commands/`, `agents/`).
-  Parametrisointi kattaisi vain `prompts/`, koska `render_prompt` ei koske komentoihin eikä
-  agentteihin — Claude Code lukee ne suoraan levyltä. Puoliksi parametrisoitu olisi huonompi
-  kuin kumpikaan puhdas vaihtoehto (#9). Toiminnallista vaikutusta ei ole: bot ja ihminen
-  erotellaan markerin aikaleimalla, ei nimellä.
+- **Ihmiseen viitataan roolilla — ei nimellä eikä `{{HUMAN}}`-muuttujalla.** #153 poisti
+  kovakoodatun nimen 33 tiedostosta ja korvasi sen kontekstin mukaisella roolilla ("issuen
+  kirjoittaja", "käyttäjä", "ylläpitäjä", "ihminen"). Parametrisointi jäi silti tekemättä:
+  se kattaisi vain `prompts/`, koska `render_prompt` ei koske komentoihin eikä agentteihin —
+  Claude Code lukee ne suoraan levyltä. Roolisana toimii kaikissa kolmessa ilman mekanismia,
+  joten puoliksi parametrisoitu olisi yhä huonompi kuin kumpikaan puhdas vaihtoehto (#9).
+  Toiminnallista vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei
+  nimellä.
 
 **Legacy-shimit** (poistettavissa vasta kun ehto täyttyy):
 

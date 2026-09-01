@@ -5,7 +5,7 @@
 # ---------------
 # /run-issues posts issue comments, opens PRs, applies labels and pushes commits
 # through `gh` and `git`. By default those operations inherit `gh auth`'s
-# identity, which is maintainer's personal account (`maintainer`) — automation output
+# identity, which is the maintainer's personal account — automation output
 # becomes indistinguishable from human output in issues and PR history.
 #
 # A dedicated bot user would solve the readability problem but consume a paid

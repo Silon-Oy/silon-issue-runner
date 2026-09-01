@@ -20,10 +20,11 @@
 # the App) AND the heavy LIST reads (pick_oldest_candidate, issue_assignees,
 # epic_list_open — issue #127). Identity does not change what a read RETURNS, but
 # it decides WHOSE rate limit pays for it. The whole automation used to share
-# maintainer's personal quota, so a busy pickup loop could exhaust it and stall human
-# work (and vice versa); routing the pickup / scan volume through the App gives
-# the runner its own 15k/h budget. That is why the reads follow the writes onto
-# the App path even though attribution is irrelevant for a read (issue #127).
+# the maintainer's personal quota, so a busy pickup loop could exhaust it and
+# stall human work (and vice versa); routing the pickup / scan volume through
+# the App gives the runner its own 15k/h budget. That is why the reads follow
+# the writes onto the App path even though attribution is irrelevant for a
+# read (issue #127).
 #
 # claim_issue / verify_claim / unclaim_issue DELIBERATELY stay on the personal
 # identity: GitHub Apps cannot be issue assignees, so the race-arbitration logic
@@ -170,12 +171,12 @@ _labels_query_csv() {
 # Prints the issue number of the oldest runnable candidate, or nothing.
 #
 # The list read routes through _issue_gh (issue #127): with App mode on and an
-# origin (or empty) <remote> it spends the App's rate limit, not maintainer's personal
-# one — the pickup search is the package's single hottest read, so its volume is
-# exactly what must move off the shared personal quota. Without App wiring, or on
-# a non-origin remote, _issue_gh is a pass-through to bare gh (unchanged). The
-# per-candidate count_open_blockers probe stays on the personal identity (a
-# low-volume per-issue read, not the per_page=100 list).
+# origin (or empty) <remote> it spends the App's rate limit, not the
+# maintainer's personal one — the pickup search is the package's single hottest
+# read, so its volume is exactly what must move off the shared personal quota.
+# Without App wiring, or on a non-origin remote, _issue_gh is a pass-through to
+# bare gh (unchanged). The per-candidate count_open_blockers probe stays on the
+# personal identity (a low-volume per-issue read, not the per_page=100 list).
 #
 # WHY THIS IS REST AND NOT `gh issue list` (issue #133). `gh issue list` routes
 # any FILTERED query through GitHub's GraphQL `search` connection, which carries
@@ -282,7 +283,7 @@ pick_oldest_candidate() {
 # Routes through _issue_gh (issue #127): App identity does not change the assignee
 # list it reads (assignees are the same data under either credential), but it puts
 # this read on the App's rate limit. verify_claim runs this on every claim, so its
-# volume belongs to the App, not maintainer's personal quota. The `me` login verify_claim
+# volume belongs to the App, not a personal quota. The `me` login verify_claim
 # compares against still comes from bare `gh api user`, so the personal identity
 # remains the anchor of the sole-assignee check. Pass-through to bare gh without
 # App wiring or on a non-origin remote.
@@ -861,7 +862,7 @@ parse_marker() {
 # that is NOT itself a run-issues bot comment (body does not contain the
 # "run-issues:" token). Empty output means "no human reply yet".
 #
-# The bot and maintainer share the same GitHub account, so author is NOT a usable
+# The bot and the human share the same GitHub account, so author is NOT a usable
 # discriminator — the marker timestamp is the only durable boundary. The reply
 # body is capped to keep the downstream cycle-review prompt bounded.
 detect_answer() {

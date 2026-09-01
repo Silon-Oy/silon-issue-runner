@@ -1,18 +1,18 @@
 %% Author: GoodReason cycle (Architect design, verified against implementation)
 %% Created: 2026-05-21
 %% Topic: run-issues clarification answer-and-continue loop (α2)
-%% Task: NEEDS_CLARIFICATION → maintainer replies on the issue → Studio continues from S6
+%% Task: NEEDS_CLARIFICATION → the issue author replies → Studio continues from S6
 %%
 %% Companion to run-issues-state-machine.mmd. This sequence view shows the
 %% cross-machine flow: the run + worktree + lock live on Studio (host gate),
-%% but maintainer can reply from anywhere; the Studio poller is the only trigger.
-%% Bot and human share the same GitHub account (maintainer), so the reply is
+%% but the human can reply from anywhere; the Studio poller is the only trigger.
+%% Bot and human share the same GitHub account, so the reply is
 %% detected by timestamp vs. an embedded marker, not by comment author.
 sequenceDiagram
     autonumber
     participant Orch as orchestrate.sh (Studio)
     participant GH as GitHub Issue
-    participant maintainer
+    participant Human as Issue author
     participant Poller as poller.sh (Studio)
 
     Note over Orch: S6 run_cycle_review → NEEDS_CLARIFICATION
@@ -21,7 +21,7 @@ sequenceDiagram
     Orch->>GH: add label "waiting"
     Orch--xOrch: release lock + exit 11<br/>(GitHub assignee + waiting label kept)
 
-    maintainer->>GH: reply comment<br/>(createdAt > T, no run-issues: token)
+    Human->>GH: reply comment<br/>(createdAt > T, no run-issues: token)
 
     loop every 5 min (host gate: only this machine's runs)
         Poller->>Poller: scan_answered: local awaiting_clarification run?<br/>(host == hostname -s, round < MAX)

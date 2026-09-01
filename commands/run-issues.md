@@ -8,7 +8,7 @@ description: Aja /run-issues-orkestraattori nimetylle issuelle (`#N`). Issuenume
 Geneerinen issue-pohjainen kehitysworkflow. Orkestraattori on **kaksivaiheinen tilakone**:
 
 1. **Vaihe A** (S1..S6): pick → claim → worktree → db-clone → cycle-review.
-2. **Review gate**: interaktiivisessa tilassa orkestraattori exittaa exit-koodilla **10** ja kirjoittaa `awaiting_review`-tapahtuman state.jsonl:ään. Tämä komento esittää cycle-review-tulokset maintainerlle ja kysyy lupaa jatkaa.
+2. **Review gate**: interaktiivisessa tilassa orkestraattori exittaa exit-koodilla **10** ja kirjoittaa `awaiting_review`-tapahtuman state.jsonl:ään. Tämä komento esittää cycle-review-tulokset käyttäjälle ja kysyy lupaa jatkaa.
 3. **Vaihe B** (S8..S12): implementer → evolution → push → PR. Käynnistetään `--resume`-kutsulla decisionin perusteella.
 
 Tämä rakenne toimii sekä silloin kun Claude Coden Bash-työkalu ajaa orkestraattorin etualalla että silloin kun se siirtää sen taustalle — review-gate ei nojaa stdin-lukuun.
@@ -65,12 +65,12 @@ echo "---"
 tail -5 "$RUN_DIR/state.jsonl"
 ```
 
-c) Esitä maintainerlle **tiivis** yhteenveto cycle-reviewn päätöksestä (CYCLE_REVIEW_DECISION + 2–4 keskeistä havaintoa). Kysy AskUserQuestion-työkalulla:
+c) Esitä käyttäjälle **tiivis** yhteenveto cycle-reviewn päätöksestä (CYCLE_REVIEW_DECISION + 2–4 keskeistä havaintoa). Kysy AskUserQuestion-työkalulla:
 
 - **"Kyllä, jatka"** → vaihe B PROCEED-päätöksellä (kohta 4 alla)
 - **"Peruuta"** → vaihe B CANCEL-päätöksellä (kohta 4 alla; siivoaa assignaation, jättää worktreen)
 
-Jos cycle-review-päätös on `BLOCKER` tai `NEEDS_CLARIFICATION`, nosta se esiin — maintainer näkee suoraan että jatkaminen on riskialtista.
+Jos cycle-review-päätös on `BLOCKER` tai `NEEDS_CLARIFICATION`, nosta se esiin — käyttäjä näkee suoraan että jatkaminen on riskialtista.
 
 ## 4. Aja vaihe B (PROCEED) tai peruutus (CANCEL)
 
@@ -89,4 +89,4 @@ Exit-koodit kohdan 2 taulukon mukaan. PROCEED-onnistumisessa PR-URL löytyy `run
 - **Auto-tila (Studion poller)** asettaa `RUN_ISSUES_AUTO=1` ja `RUN_ISSUES_REVIEW_GATE=auto`, jolloin S7 ei exittaa 10:llä vaan päättää itse PROCEED/BLOCKER cycle-reviewn output-rivin perusteella. Slash-komentoa ei silloin tarvita.
 - **Automaattinen poiminta on pollerin tehtävä.** Tämä komento ajaa vain nimetyn issuen; ilman numeroa se ei kutsu orkestraattoria. `orchestrate.sh <repo> poll` on käyttövirhe (exit 1).
 - **Lukko ja assignaatio** pysyvät paikoillaan exit-koodilla 10 — vaihe B saa saman issuen omakseen.
-- **Worktree** jätetään aina paikoilleen forensiseksi artefaktiksi; maintainer poistaa sen manuaalisesti tai Phase 2 -PR-valvoja hoitaa siivouksen mergeyksen jälkeen.
+- **Worktree** jätetään aina paikoilleen forensiseksi artefaktiksi; käyttäjä poistaa sen manuaalisesti tai Phase 2 -PR-valvoja hoitaa siivouksen mergeyksen jälkeen.

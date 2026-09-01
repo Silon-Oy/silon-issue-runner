@@ -62,7 +62,7 @@ flowchart TB
     %% poller.sh also continues awaiting_clarification runs: scan_answered reads
     %% each local run.json (status=awaiting_clarification, round<MAX, host gate),
     %% then for those runs only calls gh (lib/issue.sh: parse_marker/detect_answer)
-    %% to find maintainer's reply, and launches orchestrate.sh --continue <run-dir> in a
+    %% to find the human reply, and launches orchestrate.sh --continue <run-dir> in a
     %% run-issues-continue-<suffix> tmux session (same repo-namespaced suffix).
     POLL -. "--continue answered runs<br/>(scan_answered)" .-> ORCH
     POLL -. reads run.json .-> L_STATE

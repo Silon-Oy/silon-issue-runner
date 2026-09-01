@@ -41,11 +41,11 @@ Repo: `{{REPO_ROOT}}`
 {{REPO_CLAUDE_MD}}
 ```
 
-## maintainer vastasi aiempaan tarkennuspyyntöön
+## Issuen kirjoittaja vastasi aiempaan tarkennuspyyntöön
 
 {{CLARIFICATION_CONTEXT}}
 
-Jos yllä on maintainern vastaus, tämä on uudelleenarvioitu cycle-review: aiempi arviosi
+Jos yllä on vastaus tarkennuspyyntöön, tämä on uudelleenarvioitu cycle-review: aiempi arviosi
 oli NEEDS_CLARIFICATION. Lue vastaus, päivitä Σ/β/τ/φ/χ sen valossa, päätä uudelleen.
 Vastaus poistaa epäselvyyden → PROCEED. Tuo uuden esteen → BLOCKER. Yhä epäselvä →
 NEEDS_CLARIFICATION (kysy TARKEMPI kysymys, älä toista samaa).
@@ -82,8 +82,8 @@ CYCLE_REVIEW_DECISION: NEEDS_CLARIFICATION
 
 - **PROCEED** = issue on tarpeeksi tarkka, Implementer voi aloittaa heti.
 - **BLOCKER** = jokin tekninen este (puuttuva pääsy, rikkinäinen riippuvuus, jne.) joka
-  vaatii maintainern manuaalisen toimenpiteen ennen jatkamista.
-- **NEEDS_CLARIFICATION** = issue-speksissä on liian iso epäselvyys; pyydä maintainera
+  vaatii ihmisen manuaalisen toimenpiteen ennen jatkamista.
+- **NEEDS_CLARIFICATION** = issue-speksissä on liian iso epäselvyys; pyydä issuen kirjoittajaa
   täydentämään issuella ennen toteutusta.
 
 Älä laita tähän mitään muuta tekstiä. Orkestraattori parsii vain tämän rivin.

@@ -74,7 +74,7 @@
 #  11   awaiting clarification — cycle review returned NEEDS_CLARIFICATION; the
 #       run is finalized as awaiting_clarification with the waiting label and an
 #       answerable situation comment. Poller's scan_answered restarts it via
-#       --continue once maintainer replies.
+#       --continue once the issue author replies.
 #  12   issue carries the epic label — refused between the lock and the claim
 #       (S2c, issue #81), before the issue is assigned to us. An epic collects
 #       runnable sub-issues but is never itself runnable; the pickup search's
@@ -89,9 +89,10 @@
 # (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). It skips pick/claim
 # and re-enters Phase B. Budget is RUN_ISSUES_MAX_RETRIES (default 1).
 #
-# --continue <run-dir> resumes an awaiting_clarification run after maintainer has
-# replied: it re-takes the lock, increments clarification_round, re-runs S6
-# cycle-review with the reply as context, and falls through the review gate.
+# --continue <run-dir> resumes an awaiting_clarification run after the issue
+# author has replied: it re-takes the lock, increments clarification_round,
+# re-runs S6 cycle-review with the reply as context, and falls through the
+# review gate.
 # Loop cap is RUN_ISSUES_MAX_CLARIFICATIONS (default 3).
 
 set -euo pipefail
@@ -494,7 +495,7 @@ CURRENT_STATE=""
 RESTART_CONTEXT=""
 # CLARIFICATION_CONTEXT is rendered into the cycle-review prompt. Empty on a
 # normal first pass (the prompt section collapses); the --continue path fills
-# it with the prior clarification headline + maintainer's reply.
+# it with the prior clarification headline + the issue author's reply.
 CLARIFICATION_CONTEXT=""
 # IS_CONTINUE distinguishes a first NEEDS_CLARIFICATION (exit 11, post marker)
 # from a re-evaluation after a reply (still NEEDS_CLARIFICATION -> new marker,
@@ -936,7 +937,7 @@ EOF
 # run_cycle_review — S6. Renders and runs the cycle-review prompt, parses the
 # decision into CR_DECISION, and records it. Reads the optional global
 # CLARIFICATION_CONTEXT: phase_a leaves it empty (the prompt section collapses);
-# the --continue path fills it with the prior headline + maintainer's reply so the
+# the --continue path fills it with the prior headline + the reply so the
 # review is re-evaluated in light of the answer. This is the single cycle-review
 # code path — there is no second one.
 run_cycle_review() {
@@ -992,7 +993,8 @@ review_gate() {
         # waiting label, and post an answerable marker. On a re-review that is
         # STILL unclear (IS_CONTINUE=1) the round was already incremented in
         # continue_load_state, so this posts a NEW marker (newer ts, higher
-        # round) — maintainer answers again, the poller continues again, up to the cap.
+        # round) — the issue author answers again, the poller continues again,
+        # up to the cap.
         _finalize_awaiting_clarification
         exit 11
       fi
@@ -1212,10 +1214,10 @@ restart_load_state() {
 }
 
 # ===========================================================================
-# Continue: resume an awaiting_clarification run after maintainer has replied
+# Continue: resume an awaiting_clarification run after the issue author replied
 # ===========================================================================
 # continue_load_state — validates an awaiting_clarification run, takes the lock,
-# checks the loop cap, validates the worktree, fetches maintainer's reply, increments
+# checks the loop cap, validates the worktree, fetches the reply, increments
 # clarification_round, builds CLARIFICATION_CONTEXT, and re-opens the run so the
 # main flow can re-run S6 cycle-review. Cap exhaustion or a corrupt worktree
 # hand to a human (exit 0). A missing reply (race: poller saw it, it's gone now)
@@ -1290,7 +1292,7 @@ continue_load_state() {
     exit 0
   fi
 
-  # Fetch the freshest issue payload and locate maintainer's reply via the marker.
+  # Fetch the freshest issue payload and locate the human reply via the marker.
   local issue_json="$RUN_DIR/issue.json"
   fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
 
@@ -1339,13 +1341,13 @@ continue_load_state() {
   esac
 
   # Build the clarification context fed into the re-run cycle-review prompt.
-  # render_prompt substitutes in a single pass, so any {{...}} inside maintainer's
+  # render_prompt substitutes in a single pass, so any {{...}} inside the
   # reply passes through verbatim (no placeholder injection).
   CLARIFICATION_CONTEXT="Aiempi tarkennuspyyntö (kierros $((new_round - 1))): cycle review palautti NEEDS_CLARIFICATION."$'\n\n'
-  CLARIFICATION_CONTEXT+="maintainern vastaus:"$'\n'"$answer"
+  CLARIFICATION_CONTEXT+="Issuen kirjoittajan vastaus:"$'\n'"$answer"
 
   load_repo_timeout "$REPO_ROOT"
-  log "continue: round=$new_round — re-running cycle review with maintainer's reply as context"
+  log "continue: round=$new_round — re-running cycle review with the reply as context"
 }
 
 # Byte budget for an artifact embedded in a situation comment. GitHub caps a
@@ -1360,7 +1362,7 @@ RUN_ISSUES_SITUATION_ARTIFACT_MAX="${RUN_ISSUES_SITUATION_ARTIFACT_MAX:-60000}"
 # run.json status; the caller finalizes first.
 #
 #   <kind>          slug for logging/event (e.g. cycle_review_clarification)
-#   <headline>      1–3 Finnish sentences: WHAT happened + WHAT maintainer should do
+#   <headline>      1–3 Finnish sentences: WHAT happened + WHAT the human should do
 #   <artifact-file> optional absolute path to attach
 #   <awaitable>     answerability flavour; default "0" (not answerable). Any
 #                   answerable flavour embeds a marker (build_marker) so a human
@@ -1479,7 +1481,7 @@ _log_label_err() {
 
 # _add_waiting_label / _remove_waiting_label — best-effort label management for
 # the awaiting_clarification state. The `waiting` label keeps pick_oldest_candidate
-# and the poller from re-picking the issue while it waits for maintainer's reply (both
+# and the poller from re-picking the issue while it waits for a reply (both
 # exclude -label:waiting). Failures are non-fatal.
 _add_waiting_label() {
   ( cd "$REPO_ROOT" && labels_ensure "$OWNER_REPO" waiting FBCA04 \
@@ -1493,9 +1495,9 @@ _remove_waiting_label() {
 # _finalize_awaiting_clarification — shared NEEDS_CLARIFICATION terminal path.
 # Finalizes the run as awaiting_clarification, records the round + timestamp,
 # attaches the waiting label, and posts an answerable situation comment (marker
-# + reply prompt). The poller's scan_answered restarts via --continue once maintainer
-# replies. Used by both the first NEEDS_CLARIFICATION (review_gate, IS_CONTINUE=0)
-# and a re-review that is still unclear (IS_CONTINUE=1).
+# + reply prompt). The poller's scan_answered restarts via --continue once the
+# issue author replies. Used by both the first NEEDS_CLARIFICATION (review_gate,
+# IS_CONTINUE=0) and a re-review that is still unclear (IS_CONTINUE=1).
 _finalize_awaiting_clarification() {
   local cr_out="$RUN_DIR/01-cycle-review.out"
   local round
@@ -2144,7 +2146,7 @@ case "$MODE" in
     ;;
   continue)
     continue_load_state  # exits 0/1/3 on cap/usage/lock/worktree/no-reply
-    run_cycle_review     # re-run S6 with maintainer's reply as context
+    run_cycle_review     # re-run S6 with the reply as context
     review_gate          # PROCEED -> phase_b; NEEDS_CLARIFICATION -> exit 11; BLOCKER -> human
     phase_b
     ;;

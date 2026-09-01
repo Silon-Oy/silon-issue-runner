@@ -186,7 +186,7 @@ stateDiagram-v2
     %% NEEDS_CLARIFICATION parks the run as status=awaiting_clarification (rc=11):
     %% lock released, GitHub assignee + waiting label kept. The situation comment
     %% embeds an awaiting-answer marker (ts). poller.sh's scan_answered (host gate,
-    %% round < MAX_CLARIFICATIONS) detects maintainer's reply by timestamp (detect_answer:
+    %% round < MAX_CLARIFICATIONS) detects the human reply by timestamp (detect_answer:
     %% createdAt > marker ts AND body lacks the run-issues: token) and launches
     %% orchestrate.sh --continue <run-dir> in a run-issues-continue-<suffix> session
     %% (<suffix> carries the run's repo slug, issue #67).

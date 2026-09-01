@@ -15,7 +15,7 @@ sequenceDiagram
     U->>M: install.sh --with-launchagents
     M->>B: suunnittele $CLAUDE_HOME/scripts/run-issues
     B->>FS: [ -x bind/orchestrate.sh ]?
-    alt polku toimii jo (maintainern dotfiles+submodule)
+    alt polku toimii jo (dotfiles+submodule)
         B-->>M: plan_add skip + SCRIPTS_BINDING_TARGET = real
     else puhdas kone
         B-->>M: plan_add mkdir + link (EI VIELA KIRJOITETTU)

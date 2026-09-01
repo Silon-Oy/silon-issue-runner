@@ -231,10 +231,10 @@ kopioi siitä, älä kirjoita ulkomuistista. Kaavio:
 
 ### GitHub App -identiteetti (opt-in) — runnerille oma kiintiö
 
-Oletuksena koko automaatio ajaa maintainern henkilökohtaisella GitHub-tilillä. Se on ongelma
+Oletuksena koko automaatio ajaa ylläpitäjän henkilökohtaisella GitHub-tilillä. Se on ongelma
 kahdesta syystä:
 
-1. **Attribuutio.** Botin kommentit, labelit ja PR:t näyttävät GitHubissa maintainern tekemiltä —
+1. **Attribuutio.** Botin kommentit, labelit ja PR:t näyttävät GitHubissa ihmisen tekemiltä —
    ihmistä ja automaatiota ei voi erottaa historiasta.
 2. **Kiintiö.** GitHubin API-kiintiö on tilikohtainen. Automaatio jakaa saman kiintiön jokaisen
    interaktiivisen Claude-session ja `gh`-käytön kanssa: kun poller täyttää sen, myös käsityö
@@ -1246,16 +1246,20 @@ Käytännön seuraus: kone, jonka **ei** kuulu ajaa pollereita, kannattaa silti 
 anna sille sen koneen nimi, jonka kuuluu ajaa. Silloin se on tietoinen no-op eikä
 konfiguroimaton, eikä sen lokiin tule riviä.
 
-### "maintainer" esiintyy prompteissa ja komennoissa
+### Ihmiseen viitataan roolilla, ei nimellä
 
-Ihmisroolin nimi on kirjoitettu suoraan useaan promptiin, slash-komentoon ja
-agenttimäärittelyyn. Se on **kosmeettista eikä vaikuta toimintaan**: bot ja ihminen erotellaan
-markerin aikaleimalla, ei nimellä.
+Promptit, slash-komennot, agenttimäärittelyt ja koodikommentit puhuvat ihmisestä **roolilla** —
+"issuen kirjoittaja", "käyttäjä", "ylläpitäjä", "ihminen" — eivät nimellä. Nimi oli aiemmin
+kovakoodattu 33 tiedostoon, mikä sitoi paketin yhteen henkilöön (#153).
 
-Parametrisointia ei tehty tietoisesti: promptien sijoitusmekanismi kattaa vain
+Parametrisointia ei silti tehty: promptien sijoitusmekanismi kattaa vain
 [`prompts/`](prompts)-hakemiston, kun taas `commands/`- ja `agents/`-tiedostot lukee Claude
-Code suoraan levyltä. Puoliksi parametrisoitu järjestelmä olisi huonompi kuin kumpikaan puhdas
-vaihtoehto. Ks. [`CLAUDE.md`](CLAUDE.md) §13.
+Code suoraan levyltä. Roolisanamuoto toimii kaikissa kolmessa ilman mekanismia, joten
+puoliksi parametrisoitu `{{HUMAN}}` olisi ollut huonompi kuin kumpikaan puhdas vaihtoehto.
+Ks. [`CLAUDE.md`](CLAUDE.md) §13.
+
+Valinta on **kosmeettinen eikä vaikuta toimintaan**: bot ja ihminen erotellaan markerin
+aikaleimalla, ei nimellä.
 
 ### Legacy-jäänteitä, joihin törmää
 

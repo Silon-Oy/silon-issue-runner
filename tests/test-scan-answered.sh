@@ -57,7 +57,7 @@ mk_fixture() {  # <issue> <with-reply: yes|no>
   if [ "$reply" = "yes" ]; then
     jq -n --arg m "$marker" '{title:"t",body:"b",comments:[
       {author:{login:"maintainer"},createdAt:"2026-05-21T10:00:00Z",body:($m+"\n## ask")},
-      {author:{login:"maintainer"},createdAt:"2026-05-21T10:05:00Z",body:"maintainer vastasi"}
+      {author:{login:"maintainer"},createdAt:"2026-05-21T10:05:00Z",body:"Ihminen vastasi"}
     ]}' > "$FIXDIR/$n.json"
   else
     jq -n --arg m "$marker" '{title:"t",body:"b",comments:[

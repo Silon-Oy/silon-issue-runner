@@ -99,7 +99,7 @@ Tästä syystä:
 - **Älä committaa `.claude/db-clone.json`-tiedostoa julkiseen repoon** äläkä jaa
   sitä tahoille, joihin et luota. Pidä se `.gitignore`:ssä tai vain paikallisena.
 - **Kohtele tiedostoa kuin credentiaalia** — sen kirjoitusoikeudet kuuluvat vain
-  configin omistajalle (käytännössä maintainer kirjoittaa configit itse).
+  configin omistajalle (käytännössä ylläpitäjä kirjoittaa configit itse).
 - Riskitaso tässä ympäristössä on matala (yksityiset repot), mutta luotettu-status
   on silti syytä tiedostaa, jos workflow joskus laajenee jaettuihin repoihin.
 
