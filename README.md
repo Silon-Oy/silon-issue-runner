@@ -1232,9 +1232,19 @@ watchlist-JSONista.
 
 **Muuttujalla ei ole oletusarvoa, ja asettamatta jättäminen on eri asia kuin osumattomuus.**
 Asettamatta poller ei aja millään koneella (fail-closed kuten muutkin portit), mutta se ei
-vaikene: se kirjoittaa yhden rivin stderriin, joka nimeää muuttujan, `poller.env`-polun ja
-tämän koneen nimen. Osumaton *asetettu* lista sen sijaan pysyy hiljaa — se on vieras kone,
+vaikene: se kirjoittaa yhden rivin, joka nimeää muuttujan, `poller.env`-polun ja tämän koneen
+nimen. Rivi menee **sekä stderriin että pollerin omaan lokiin** (`run-issues-poller.log`,
+`pr-watch-poller.log`, `run-issues-action.stderr.log`) — pelkkä stderr ei riitä, koska portti
+ajetaan ennen kuin skripti on avannut lokinsa, eivätkä plistit kanna `StandardErrorPath`-avainta
+(osio 8), joten LaunchAgent-ajossa rivi katoaisi. Lokiin se kirjoitetaan **kerran**: tikki toistuu
+viiden minuutin välein, ja toisto vaietaan vertaamalla lokin viimeiseen riviin.
+
+Osumaton *asetettu* lista sen sijaan pysyy hiljaa eikä luo levylle mitään — se on vieras kone,
 ja hiljaisuus on koko portin tarkoitus. Sama koskee `RUN_ISSUES_ACTION_HOSTS`:ia.
+
+Käytännön seuraus: kone, jonka **ei** kuulu ajaa pollereita, kannattaa silti asettaa —
+anna sille sen koneen nimi, jonka kuuluu ajaa. Silloin se on tietoinen no-op eikä
+konfiguroimaton, eikä sen lokiin tule riviä.
 
 ### "maintainer" esiintyy prompteissa ja komennoissa
 

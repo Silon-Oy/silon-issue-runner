@@ -41,6 +41,12 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/rate-limit.sh
 . "${RUN_ISSUES_HOME}/lib/rate-limit.sh"
 
+# host_gate_notice (issue #152 follow-up). Sourced here because the host gate
+# below runs before any log path is opened and still has to be able to report a
+# missing host list. Defines one function; no top-level work.
+# shellcheck source=lib/host-gate-notice.sh
+. "${RUN_ISSUES_HOME}/lib/host-gate-notice.sh"
+
 # Machine configuration. launchd hands an agent no environment of its own and
 # the login files hold nothing run-issues-specific, so this file is the only
 # channel through which a machine can configure its pollers. It is sourced, so
@@ -58,6 +64,11 @@ if [ -f "$POLLER_ENV_FILE" ]; then
   set -eu
 fi
 
+# Resolved above the gate, created below it. Reading a variable makes nothing,
+# so the foreign-machine branch still leaves no trace on disk — but the unset
+# branch needs the path to report itself into.
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+
 # Host gate. Bail out silently on a machine that was never configured to run
 # the pollers, so that deploying the LaunchAgent somewhere else does nothing.
 # This runs BEFORE any path is created: an unknown host must not so much as
@@ -65,19 +76,25 @@ fi
 #
 # There is no default host list (#152). Unset and "set but matching nothing"
 # are different failures and are reported differently: the first is an operator
-# error on THIS machine and gets one line on stderr naming the variable and the
-# file; the second is a foreign machine, where silence is the feature. Both exit
-# 0 — a non-zero exit here would only make launchd retry a decision that will
-# not change until a human edits poller.env.
+# error on THIS machine and says so, the second is a foreign machine, where
+# silence is the feature. Both exit 0 — a non-zero exit here would only make
+# launchd retry a decision that will not change until a human edits poller.env.
+#
+# The unset branch reports through host_gate_notice rather than a bare `>&2`,
+# because under a LaunchAgent stderr is not connected yet at this point: the
+# redirect below is what connects it, and it deliberately comes after the gate.
+# The notice therefore also appends to the poller's own log, which is where the
+# question "why has nothing run?" gets asked.
 HOST=$(hostname -s)
 THIS_HOST="$HOST"
 if [ -z "${RUN_ISSUES_POLLER_HOSTS:-}" ]; then
-  poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$HOST" >&2
+  host_gate_notice \
+    "$(poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$HOST")" \
+    "${LOG_DIR}/run-issues-poller.log"
   exit 0
 fi
 poller_host_allowed "$HOST" "$RUN_ISSUES_POLLER_HOSTS" || exit 0
 
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/run-issues-poller.log"
 RUNS_LOG="${LOG_DIR}/run-issues-poller.runs.log"

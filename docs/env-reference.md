@@ -38,7 +38,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | Konekohtaisen konfiguraation tiedosto |
-| `RUN_ISSUES_POLLER_HOSTS` | *(ei oletusta — pakollinen)* | Pilkuin/välilyönnein eroteltuja glob-kuvioita, verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0 luomatta mitään. **Asettamatta poller ei aja millään koneella** ja kirjoittaa yhden rivin stderriin, joka nimeää muuttujan ja `poller.env`-polun (#152) |
+| `RUN_ISSUES_POLLER_HOSTS` | *(ei oletusta — pakollinen)* | Pilkuin/välilyönnein eroteltuja glob-kuvioita, verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0 luomatta mitään. **Asettamatta poller ei aja millään koneella** ja kirjoittaa yhden rivin — sekä stderriin että omaan lokiinsa, koska LaunchAgent-ajossa stderr ei mene mihinkään — joka nimeää muuttujan ja `poller.env`-polun (#152) |
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku. Asetettuna se on **ainoa** ehdokas — osumaton override on virhe, ei fallback |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Kaikkien neljän lokitiedoston hakemisto per poller (`.log`, `.runs.log`, `.stdout.log`, `.stderr.log`) |
 | `RUN_ISSUES_LOG_MAX_BYTES` | `10485760` (10 MB) | Lokirotaation raja (#65). Tikin alussa, ennen ensimmäistä kirjoitusta ja **ennen** `exec`-uudelleenohjausta, molemmat pollerit rotatoivat jokaisen neljästä lokistaan (`mv` → `.1`, yksi sukupolvi) jos koko ylittää rajan. `0` = rotaatio pois päältä. `mv` samalla levyllä on atominen, joten rinnakkainen lukija näkee aina ehjän vanhan tai uuden tiedoston |

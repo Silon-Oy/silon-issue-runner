@@ -12,7 +12,8 @@
 #   1. Both pollers and the lib parse
 #   2. poller_host_allowed: matching, non-matching, wildcard, empty, sloppy list
 #   3. The host gate has no built-in default anywhere (#152)
-#   4. An unset host list runs nothing and explains itself in one line
+#   4. An unset host list runs nothing, explains itself in one line, and puts
+#      that line somewhere launchd cannot swallow — without repeating it
 #   5. poller_resolve_watchlist: precedence, and no fallback for an override
 #   6. Path hygiene: no absolute user paths, no tilde expansion in code
 #   7. The dotfiles tree appears only as a named fallback
@@ -141,9 +142,9 @@ for script in poller.sh pr-watch-poller.sh; do
   [ "$rc" -eq 0 ] && ok "case4 $script exits 0 with RUN_ISSUES_POLLER_HOSTS unset" \
                   || bad "case4 $script exited $rc with RUN_ISSUES_POLLER_HOSTS unset"
 
-  # Fail-closed: no default of `*`, so nothing ran and nothing was created.
-  [ ! -d "$WORK/gate-logs-$script" ] && ok "case4 $script created no log directory" \
-                                     || bad "case4 $script ran anyway (log dir exists)"
+  # Fail-closed: no default of `*`, so the tick itself never ran. The poller
+  # writes its four log files only after the gate, so the log directory holding
+  # nothing but the notice is what "nothing ran" looks like from out here.
   if [ -z "$(find "$GHOME" -mindepth 1 2>/dev/null)" ]; then
     ok "case4 $script wrote nothing into the home"
   else
@@ -162,6 +163,30 @@ for script in poller.sh pr-watch-poller.sh; do
     *"$GHOME/.config/run-issues/poller.env"*) ok "case4 $script names the poller.env path" ;;
     *) bad "case4 $script does not name the poller.env path: $err" ;;
   esac
+
+  # Stderr is not where the line can be read in production: the plists carry no
+  # StandardErrorPath key and the redirect that opens one is BELOW the gate, so
+  # under launchd this branch reported into a closed fd. The line must therefore
+  # also reach the poller's own log — the file a human opens to ask why nothing
+  # has run.
+  notice_log="$WORK/gate-logs-$script/${script%.sh}.log"
+  case "$script" in poller.sh) notice_log="$WORK/gate-logs-$script/run-issues-poller.log" ;; esac
+  if [ -s "$notice_log" ]; then
+    ok "case4 $script records the notice in its own log, not only on stderr"
+  else
+    bad "case4 $script left no notice in $notice_log (launchd would swallow stderr)"
+  fi
+  logged=$(grep -c . "$notice_log" 2>/dev/null || echo 0)
+  [ "$logged" -eq 1 ] && ok "case4 $script logs the notice exactly once" \
+                      || bad "case4 $script logged $logged lines, expected 1"
+
+  # And it must not repeat. Both pollers tick every 300s, so an unconditional
+  # append is 288 identical lines a day into the file being read — the noise
+  # failure CLAUDE.md section 5.7 exists to prevent.
+  run_gate "$script" "$GHOME" RUN_ISSUES_LOG_DIR="$WORK/gate-logs-$script" >/dev/null 2>&1
+  logged=$(grep -c . "$notice_log" 2>/dev/null || echo 0)
+  [ "$logged" -eq 1 ] && ok "case4 $script does not repeat the notice on the next tick" \
+                      || bad "case4 $script logged $logged lines after a second tick, expected 1"
 done
 
 # The other direction, and the reason the two cases must stay distinct: a host
@@ -176,6 +201,11 @@ if [ "$rc" -eq 0 ] && [ -z "$err" ]; then
 else
   bad "case4 a foreign host was not silent (rc=$rc, stderr='$err')"
 fi
+
+# Silent means silent on disk too: the notice belongs to the misconfigured
+# machine, never to the foreign one, so this branch must still create nothing.
+[ ! -d "$WORK/gate-logs-foreign" ] && ok "case4 a foreign host creates no log directory" \
+                                   || bad "case4 a foreign host created $WORK/gate-logs-foreign"
 
 # ---- Case 5: poller_resolve_watchlist ----
 EXPL="$WORK/explicit.json"
