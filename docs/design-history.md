@@ -584,7 +584,7 @@ no-op, ei virhe.
   `stalled`-ajot `class_reason`in mukaan suomenkieliseksi `text/plain`-rungoksi (iät
   vuorokausina, linkit issueen/PR:ään) ja lähettää sen `gws`illä Gmailiin. `status.sh` tekee
   tilanteesta *löydettävän*, tämä *huomatun*: dashboard jota pitää muistaa avata epäonnistui,
-  kun customer-a-report #92 odotti 71 vrk `awaiting_clarification`-tilassa ilman että mikään työnsi
+  kun erään kohderepon issue #92 odotti 71 vrk `awaiting_clarification`-tilassa ilman että mikään työnsi
   tietoa. Nojaa **vain** paikalliseen JSONiin (`github: null` on laillinen), ei gh-rikastukseen.
   **Kolme opt-in-porrasta, kaikki hyvänlaatuisia no-oppeja:** (1) `gws` ei ole paketin
   riippuvuus — ilman sitä tai ilman vastaanottajaa runko tulostetaan stdoutiin (exit 0), sama
