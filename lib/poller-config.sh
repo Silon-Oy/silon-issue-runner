@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# lib/poller-config.sh — configuration resolution for poller.sh and
-# pr-watch-poller.sh: the host gate and the watchlist lookup.
+# lib/poller-config.sh — configuration resolution for poller.sh,
+# pr-watch-poller.sh and /new-epic: the host gate, the watchlist lookup and the
+# pickup labels a repo's issues must carry.
 #
 # Both pollers make the same two decisions before they do anything else, and
 # both must be able to make them on a machine that has no ~/dotfiles. Keeping
@@ -9,7 +10,10 @@
 # poller with awk — which is what the poller's own tests have to do, because a
 # poller exits at source time on a host that is not in the gate.
 #
-# Pure: no writes, no external commands, no exits.
+# Writes nothing, mutates nothing, never exits — that is the guarantee a poller
+# sourcing this at startup depends on. Everything here is also free of external
+# commands except poller_watchlist_pick_labels, which reads the watchlist with
+# jq; it is documented at its own definition.
 
 set -euo pipefail
 
@@ -71,4 +75,108 @@ poller_resolve_watchlist() {
     fi
   done
   return 1
+}
+
+# The label set an issue must carry when nothing configures one. It is a single
+# constant rather than a literal repeated in a jq filter and a shell fallback,
+# because those two used to be the two places the chain below lived.
+# shellcheck disable=SC2034  # read by the sourcing pollers, not by this file
+POLLER_PICK_LABELS_DEFAULT='auto-run'
+
+# _poller_trim_csv <csv> — echo <csv> with surrounding whitespace removed from
+# the whole string and from each element, and with empty elements dropped.
+# A watchlist is hand-edited JSON, so `auto-run, backend` must mean the same
+# two labels as `auto-run,backend`.
+_poller_trim_csv() {
+  local csv="${1-}" out="" part
+  local IFS=','
+  for part in $csv; do
+    # Trim with parameter expansion rather than sed: this file promises to be
+    # free of external commands (see the header), and a per-element subshell
+    # would run once per label on every poller tick.
+    part="${part#"${part%%[![:space:]]*}"}"
+    part="${part%"${part##*[![:space:]]}"}"
+    [ -n "$part" ] || continue
+    if [ -z "$out" ]; then out="$part"; else out="$out,$part"; fi
+  done
+  printf '%s' "$out"
+}
+
+# poller_pick_labels <repo-labels-csv> <default-labels-csv> — echo the pickup
+# label set for one repo, as the comma-separated list pick_oldest_candidate and
+# epic_list_open expect. Always prints something; never fails.
+#
+# The list is ANDed by the consumer (REST `labels=`): an issue must carry EVERY
+# label in it. Widening the list therefore narrows pickup, which is why the
+# fallback chain takes the FIRST non-empty candidate rather than merging them:
+# a repo entry's `labels` REPLACES `default_labels`, it does not add to it.
+#
+#   repo entry `labels` -> watchlist `default_labels` -> POLLER_PICK_LABELS_DEFAULT
+#
+# The last step is why this never returns empty: an empty label set would make
+# the pick query match every open issue in the repo.
+poller_pick_labels() {
+  local repo_csv default_csv
+  repo_csv="$(_poller_trim_csv "${1-}")"
+  default_csv="$(_poller_trim_csv "${2-}")"
+  if [ -n "$repo_csv" ]; then
+    printf '%s' "$repo_csv"
+  elif [ -n "$default_csv" ]; then
+    printf '%s' "$default_csv"
+  else
+    printf '%s' "$POLLER_PICK_LABELS_DEFAULT"
+  fi
+}
+
+# poller_watchlist_pick_labels <watchlist-path> <repo-path> — echo the pickup
+# labels a watchlist records for one repo checkout, and return 0 when the
+# watchlist actually covers that repo, 1 when it does not.
+#
+# The labels are printed in BOTH cases: rc 1 means "what you got is the built-in
+# default, say so out loud", never "no answer". A caller that swallows the rc
+# still gets a working label set; a caller that reports it (/new-epic) can tell
+# the human that nothing configured this, which is the difference between a
+# considered default and a label that will never be picked up.
+#
+# Not covered means any of: no path given, no watchlist, an unreadable or
+# unparseable watchlist, or no `.repos[]` entry whose `path` is this checkout.
+# They collapse into one rc AND one label set on purpose. In particular an
+# uncovered repo does NOT inherit the watchlist's `default_labels`: that key is
+# the default for the repos the watchlist lists, and applying it to a repo the
+# watchlist does not list would quietly impose one machine's convention on a
+# checkout no poller here will ever look at.
+#
+# Unlike the rest of this file this reads a file and shells out to jq. It still
+# writes nothing, mutates nothing and never exits: the guarantee that matters
+# for a poller sourcing this at startup is intact.
+poller_watchlist_pick_labels() {
+  local watchlist="${1-}" repo_path="${2-}"
+  local default_csv="" repo_csv="" found=""
+
+  if [ -n "$watchlist" ] && [ -f "$watchlist" ] && [ -n "$repo_path" ]; then
+    # One jq pass answers both questions, so a watchlist cannot be read as
+    # "covered" by one filter and "not covered" by the other. Trailing slashes
+    # are normalised on both sides: `/repo` and `/repo/` are one checkout.
+    found=$(jq -r --arg p "$repo_path" '
+      def norm: (. // "" | tostring) | sub("/+$"; "");
+      def csv:  (. // []) | map(select(type == "string" and length > 0)) | join(",");
+      ([ .repos[]? | select((.path | norm) == ($p | norm)) ]) as $m
+      | if ($m | length) == 0
+        then "0"
+        else "1\t" + ($m[0].labels | csv) + "\t" + (.default_labels | csv)
+        end
+    ' "$watchlist" 2>/dev/null) || found=""
+  fi
+
+  case "$found" in
+    1*)
+      repo_csv="${found#*$'\t'}"; default_csv="${repo_csv#*$'\t'}"; repo_csv="${repo_csv%%$'\t'*}"
+      poller_pick_labels "$repo_csv" "$default_csv"
+      return 0
+      ;;
+    *)
+      poller_pick_labels "" ""
+      return 1
+      ;;
+  esac
 }
