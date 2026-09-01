@@ -779,6 +779,7 @@ käytettävissä.
 | `poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin issue-automaatio |
 | `pr-watch-poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin PR-automaatio |
 | `install.sh` | `bash install.sh --dry-run` | Asennus (osio 3) |
+| `publish-release.sh` | `publish-release.sh --target <git-url> --customer <nimi> --dry-run` | Historiaton julkaisu asiakasrepoon: vuotoportti + vanhemmaton commit (ks. 6.11). `--repo`, `--yes` |
 
 Kaksi asiaa kannattaa muistaa ajaessa käsin:
 
@@ -908,6 +909,69 @@ on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsest
 olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka
 johti kerran väärään "5 vuorokautta jäljessä" -diagnoosiin ja aikeeseen tehdä käsin checkout elävän ajon
 alta (#32). Skeema ja tekninen referenssi: [`docs/design-history.md`](docs/design-history.md).
+
+### 6.11 Julkaisu asiakasrepoon (`publish-release.sh`)
+
+Kun paketti luovutetaan asiakasorganisaatiolle, joka ajaa sitä itse, luovutus tehdään **ilman
+git-historiaa**: commit-viestit sisältävät asiakkaiden nimiä, eikä historiaa voi siivota ilman
+`git filter-repo`-ajoa, joka kirjoittaisi kaikki sha:t uusiksi ja rikkoisi dotfiles-submodulen
+pinnin. `publish-release.sh` tuottaa siksi kohderepoon **yhden vanhemmattoman commitin** HEADin
+puusta.
+
+```bash
+publish-release.sh --target git@github.com:asiakas/paketti.git \
+                   --customer "Asiakas Oy" --dry-run   # katso mitä julkaistaisiin
+publish-release.sh --target git@github.com:asiakas/paketti.git \
+                   --customer "Asiakas Oy"             # julkaise (kysyy vahvistuksen)
+```
+
+Yksisuuntaisuus on **rakenteellinen sivutuote**: yhteistä esivanhempaa ei ole, joten asiakkaan
+kopiosta ei voi vahingossa tulla kaksisuuntaista synkkaa — mergepohjaa ei ole olemassa. Kohteen
+`main` pakotetaan (`--force`) uusimpaan julkaisuun, ja jokainen ajo jättää pysyvän
+`release/<UTC-aikaleima>`-tagin, joten kohteen historia on **julkaisujen jono**, ei upstreamin
+historia. Julkaisucommitin identiteetti on kiinteä ja neutraali (`release
+<release@example.invalid>`): commit-metadata luovutetaan siinä missä tiedostotkin.
+
+**Skriptin tärkein osa on vuotoportti, ei julkaisu.** Se skannaa julkaistavan puun kiellettyjen
+merkkijonojen listaa vasten (asiakas-, henkilö- ja konenimet, domainit) ja **kieltäytyy**, jos
+yksikin osuu — osumat raportoidaan `tiedosto:rivi`-muodossa. Kertaluontoinen siivous vanhenee heti
+kun nimi palaa puuhun; portti tekee siitä pysyvän. Osuma etsitään **sanan alusta** ja kirjainkoosta
+riippumatta. Sanaraja vaaditaan vain termin *edeltä*, ei perästä, ja tämä epäsymmetria on
+tarkoituksellinen: edeltävä raja karsii väärät osumat (`polling`, `pakollinen`), kun taas perässä
+vaadittu raja päästäisi läpi juuri sen luokan vuotoja, jonka portti on olemassa estämään — suomi
+taivuttaa päätteellä (`Nimen`, `Nimelle`) ja tunnisteet ketjuttavat (`nimi_lock`, `wp_nimi`).
+Listalle riittää siis nimen perusmuoto. Lista on skriptin oma vakio, ei konfiguraatiotiedosto: sen
+ylläpito on hyväksyttyä toistoa.
+
+Portteja on neljä ja kaikki ovat fail-closed, plan-then-apply -järjestyksessä kuten
+[`install.sh`](install.sh)ssa — **yksikin kieltäytyminen ⇒ nolla kirjoitusta**:
+
+| Portti | Vaatimus | Exit |
+|---|---|---|
+| Lähdepuu | git-repo, puhdas työpuu, `HEAD == origin/main` (paikallinen ref, ei fetchiä) | 2 |
+| Lisenssipohja | `LICENSE.customer-grant.template` on olemassa ja sisältää `{{CUSTOMER}}` | 4 |
+| Vuotoportti | yksikään kielletty merkkijono ei esiinny julkaistavassa puussa | 3 |
+| Denylist | lista on luettavissa ja epätyhjä — tyhjä lista = porttia ei voitu ajaa | 3 |
+
+Kolme asiaa, jotka on helppo ymmärtää väärin:
+
+- **`publish-release.sh` itse ei mene julkaisuun eikä skannaukseen.** Se on ylläpitäjän työkalu, ja
+  sen denylist on lista *muiden* asiakkaiden nimiä — asiakkaalle toimitettuna se olisi itsessään
+  vuoto. Ilman rajausta skannaus osuisi aina omaan listaansa.
+- **Skannaus kohdistuu upstreamin sisältöön, ei renderöityyn `LICENSE`-tiedostoon.** Asiakkaan oma
+  nimi on tyypillisesti itse listalla (hän on asiakas), joten renderöidyn lisenssin skannaus
+  kieltäytyisi jokaisesta julkaisusta. Portti estää upstream-vuodon, ei operaattorin tietoisesti
+  antamaa nimeä.
+- **Lisenssitekstiä ei generoida.** `LICENSE` renderöidään ylläpitäjän kirjoittamasta pohjasta
+  (`--customer` täyttää `{{CUSTOMER}}`-paikanpitäjän); pohjan puuttuminen on kieltäytyminen, ei
+  oletusarvo. Upstreamin puussa ei ole `LICENSE`-tiedostoa.
+
+Skripti **ei koske paikalliseen repoon**: lähdepuussa ajetaan vain lukevia git-komentoja, ja koko
+julkaisu rakennetaan `mktemp`-hakemistossa omana git-reponaan (siivotaan trapilla myös
+virhepolulla). `--dry-run` raportoi kohteen, tiedostomäärän ja portin tuloksen **ottamatta yhteyttä
+kohteeseen** — julkaisu on siis suunniteltavissa verkotta. Kohderepon on oltava olemassa ennen ajoa;
+skripti ei luo sitä eikä konfiguroi sen asetuksia. Ajastusta ei ole: julkaisu on tietoinen ihmisen
+toimenpide.
 
 ---
 
@@ -1434,6 +1498,21 @@ pollerin epic-skannaus. `--dry-run` tulostaa raportin kirjoittamatta; `--start-n
 ensimmäisen ajokelpoisen alaissueen heti. `--stop` **keskeyttää** epicin: se pysäyttää elävät
 lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla ajolabelit
 **ensin epiciltä, sitten avoimilta lapsilta** (järjestys estää pollerin re-propagoinnin).
+
+### Julkaisu asiakasrepoon (`publish-release.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Julkaistu, tai `--dry-run` tulosti suunnitelman, tai vahvistus peruttiin |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva `--target` tai `--customer`) |
+| 2 | Lähdepuu ei ole julkaistavissa: ei git-repo, likainen työpuu, puuttuva `origin/main` tai `HEAD != origin/main`. Mitään ei kirjoitettu |
+| 3 | Vuotoportti kieltäytyi: kielletty merkkijono löytyi (osumat `tiedosto:rivi`-muodossa) tai denylist oli tyhjä/lukukelvoton. Mitään ei kirjoitettu |
+| 4 | `LICENSE`-pohja puuttuu tai siitä puuttuu `{{CUSTOMER}}`-paikanpitäjä |
+| 5 | Julkaisu epäonnistui: kohteeseen ei saatu yhteyttä tai push torjuttiin. Paikallinen repo on silti muuttumaton |
+
+`publish-release.sh` luovuttaa paketin asiakasorganisaatiolle **ilman git-historiaa** (osio 6.11).
+Neljä fail-closed-porttia ajetaan ennen mitään kirjoitusta; tärkein niistä on vuotoportti, joka
+kieltäytyy jos julkaistavassa puussa esiintyy kielletty asiakas-, henkilö- tai konenimi.
 
 ### Self-update (`self-update.sh`)
 

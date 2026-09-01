@@ -263,6 +263,12 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 | `PR_WATCH_CI_MAX_POLLS` | `40` | CI-odotuksen kierrosten määrä |
 | `PR_WATCH_CI_POLL_SECS` | `15` | CI-odotuksen kierrosväli (40 × 15 s = 10 min) |
 
+### Julkaisu asiakasrepoon (`publish-release.sh`, #155)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_PUBLISH_DENYLIST_FILE` | *(skriptin sisäänrakennettu lista)* | **Testien injektiopiste** vuotoportin kiellettyjen merkkijonojen listalle (yksi termi per rivi, `#` = kommentti). Ei käyttäjäkonfiguraatio: tuotannossa lista on skriptin oma vakio, koska asiakasnimiä sisältävä konfiguraatiotiedosto olisi itsessään vuotopinta. Osoitettu mutta puuttuva tiedosto ⇒ exit 3 (fail-closed), samoin tyhjä lista |
+
 ### Asennin
 
 | Muuttuja | Oletus | Vaikutus |
