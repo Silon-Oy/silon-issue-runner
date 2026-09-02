@@ -16,8 +16,10 @@
 #   4. an empty or missing denylist is a refusal (exit 3), never a green light,
 #      and the BUILT-IN denylist refuses a real forbidden name -> exit 3
 #   5. the leak gate reports matches as tiedosto:rivi and refuses -> exit 3,
-#      while the same term inside publish-release.sh is NOT a match (the
-#      maintainer tool is excluded from both the release and the scan)
+#      while the same term inside an EXCLUDED file is NOT a match. Every entry
+#      on publish-release.sh's exclusion list is checked, not just the first:
+#      a file that enumerates forbidden names matches its own list by
+#      definition, so one unexcluded entry makes the gate refuse forever
 #   6. boundaries are required BEFORE a term and not after: a mid-word
 #      occurrence is not a match, but a suffixed or identifier-embedded one is
 #      (an inflected name, a name inside an identifier) — that asymmetry is
@@ -75,9 +77,26 @@ mkdir -p "$SRC/lib"
 printf 'Paketti.\n' > "$SRC/README.md"
 printf '#!/usr/bin/env bash\necho hei\n' > "$SRC/lib/thing.sh"
 printf 'Käyttöoikeus myönnetään: {{CUSTOMER}}\n' > "$SRC/LICENSE.customer-grant.template"
-# The maintainer tool carries a forbidden term on purpose (case 5): it must be
+# Every excluded file carries a forbidden term on purpose (case 5): each must be
 # excluded from BOTH the release and the scan, or the gate would refuse forever.
-printf '#!/usr/bin/env bash\n# denylist: zapcorp qxname\n' > "$SRC/publish-release.sh"
+# The list is read from publish-release.sh itself, so a new entry there without a
+# fixture here is a red test rather than an untested exclusion.
+EXCLUDED_PATHS=()
+while IFS= read -r line; do
+  EXCLUDED_PATHS+=("$line")
+done < <(sed -n '/^EXCLUDED_FROM_RELEASE=(/,/^)/p' "$PUB" \
+           | sed -n 's/^[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p')
+
+if [ "${#EXCLUDED_PATHS[@]}" -lt 2 ]; then
+  echo "FAIL: could not read EXCLUDED_FROM_RELEASE from publish-release.sh (got ${#EXCLUDED_PATHS[@]} entr(y|ies))"
+  echo "publish-release: FAILURES"
+  exit 1
+fi
+
+for _ex in "${EXCLUDED_PATHS[@]}"; do
+  mkdir -p "$SRC/$(dirname "$_ex")"
+  printf '#!/usr/bin/env bash\n# denylist: zapcorp qxname\n' > "$SRC/$_ex"
+done
 
 gitf init -q "$SRC"
 gitf -C "$SRC" symbolic-ref HEAD refs/heads/main
@@ -172,9 +191,11 @@ rc=$?
   || bad "leak gate did not refuse (exit $rc)"
 grep -q 'leak.md:2' "$WORK/err" && ok "match reported as tiedosto:rivi (leak.md:2)" \
   || bad "no tiedosto:rivi match for leak.md:2 in stderr"
-grep -q 'publish-release.sh:' "$WORK/err" \
-  && bad "the maintainer tool was scanned (it must be excluded)" \
-  || ok "publish-release.sh is excluded from the scan"
+for _ex in "${EXCLUDED_PATHS[@]}"; do
+  grep -qF -- "$_ex:" "$WORK/err" \
+    && bad "$_ex was scanned (every excluded file must be out of the scan)" \
+    || ok "$_ex is excluded from the scan"
+done
 if [ -z "$(target_refs)" ]; then ok "leak refusal wrote nothing into the target"
 else bad "leak refusal still wrote refs: $(target_refs)"; fi
 rm -f "$SRC/leak.md"; sync "remove the planted term"
@@ -261,9 +282,11 @@ PARENTS="$(git -C "$TARGET" rev-list --parents -n 1 main 2>/dev/null | wc -w | t
 TREE="$(git -C "$TARGET" ls-tree -r --name-only main 2>/dev/null)"
 printf '%s\n' "$TREE" | grep -qx 'LICENSE' && ok "release carries a rendered LICENSE" \
   || bad "release has no LICENSE"
-printf '%s\n' "$TREE" | grep -qx 'publish-release.sh' \
-  && bad "release still carries publish-release.sh" \
-  || ok "release excludes publish-release.sh"
+for _ex in "${EXCLUDED_PATHS[@]}"; do
+  printf '%s\n' "$TREE" | grep -qx "$_ex" \
+    && bad "release still carries $_ex" \
+    || ok "release excludes $_ex"
+done
 printf '%s\n' "$TREE" | grep -qx 'LICENSE.customer-grant.template' \
   && bad "release still carries the license template" \
   || ok "release excludes the license template"

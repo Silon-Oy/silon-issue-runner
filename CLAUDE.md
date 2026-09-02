@@ -27,14 +27,23 @@ pull requestiin ilman ihmistä silmukassa, sekä PR-vahti (`pr-watch.sh`), joka 
 merge-tilaan asti.
 
 Paketti irrotettiin dotfiles-reposta (#2), koska se on yleiskäyttöinen työkalu eikä yhden
-ihmisen ympäristökonfiguraatiota. Tässä repossa **ei ole henkilökohtaista konfiguraatiota**:
-ei watchlistiä (vain skeemaesimerkki `examples/`-hakemistossa), ei koneistokohtaisia
-env-tiedostoja, ei salaisuuksia. Poikkeus on kirjattu §13:een.
+ihmisen ympäristökonfiguraatiota. **Konfiguraatio on yhä kielletty, sisältö ei:** repossa ei
+ole watchlistiä (vain skeemaesimerkki `examples/`-hakemistossa), koneistokohtaisia
+env-tiedostoja eikä salaisuuksia (poikkeus §13) — mutta operaattorin omista ohjeista siirretty
+geneerinen *sisältö* kuuluu tänne, kun se läpäisee **omistajuuspredikaatin**:
+
+> Nimeääkö teksti yhtäkään henkilöä, konetta, organisaatiota, asiakasta, credentialia tai
+> paketin ulkopuolista polkua? Jos kyllä, se on konfiguraatiota eikä kuulu tänne.
+
+`principles/coding.md` on tämän ensimmäinen ja kanoninen tapaus: aina päällä oleva
+koodausstandardi yhtenä tekstinä, johon muut kanavat viittaavat sen sijaan että tiivistäisivät
+tai kopioisivat sitä. `tests/test-principles-neutrality.sh` vartioi predikaattia mekaanisesti
+(kielletty sanasto, nolla osumaa, fail-closed derivaatio).
 
 Osat: **orkestraattori** (`orchestrate.sh` + `lib/` + `prompts/`), **pollerit** (`poller.sh`,
 `pr-watch-poller.sh`), **PR-vahti** (`pr-watch.sh`), **apuvälineet** (`cleanup-run.sh`,
 `auto-clean.sh`, `stop-run.sh`, `status*.sh`, `run-epic.sh`, `self-update.sh`) ja
-**Claude-integraatio** (`agents/`, `commands/`, `skills/`, `prompts/`).
+**Claude-integraatio** (`agents/`, `commands/`, `skills/`, `prompts/`, `principles/`).
 
 ## 2. Repo-juuri on mount-piste
 
