@@ -83,6 +83,53 @@ Jäsennä suunnitelmat vaiheina tai prioriteetteina, ei kestona.
 Koodi, koodikommentit ja commit-viestit kirjoitetaan **englanniksi**; commit-viesteissä
 käytetään conventional commits -muotoa silloin kun se sopii projektiin.
 
+## Ihmiselle näkyvän tekstin kieli
+
+Koodin kieli (yllä) on **siirrettävä insinöörikonventio**: se pätee samana jokaisessa
+projektissa. Ihmiselle näkyvän tekstin kieli ei ole — se on projektin oma valinta, eikä sitä
+saa olettaa. Väärä oletus osuu joskus oikeaan, mutta osuma on sattuma eikä johdos.
+
+**Ennen kuin kirjoitat ihmiselle näkyvää tekstiä, tarkista projektin kielimäärittely.** Se asuu
+projektin juuren `CLAUDE.md`-tiedostossa. **Jos määrittelyä ei ole, kysy kielet ja kirjaa vastaus
+projektin `CLAUDE.md`:hen** ennen kuin jatkat — kysymys kuuluu siihen hetkeen, jossa ihminen on
+paikalla.
+
+### Määrittelyn muoto
+
+Otsikkorivi, jossa esiintyy sana `Languages`. Otsikon taso ja muu sanamuoto ovat vapaat, koska
+tunnistus lukee juuri tuon sanan. Otsikon alla **jokainen pinta nimetään erikseen**, sillä ne
+eroavat käytännössä usein toisistaan:
+
+```markdown
+## Languages
+
+- Code and comments: <language>
+- Commit messages: <language>
+- PR descriptions: <language>
+- Issue comments: <language>
+- Documentation: <language>
+- Plans: <language>
+```
+
+**Avaimet ovat englanniksi, arvot eivät ole mitään.** Lohko kirjoitetaan kohdeprojektin
+tiedostoon, joten sen omakin sanamuoto olettaisi projektille kielen, ellei se seuraisi
+edellisen luvun konventiota — avain on koodin kaltainen rakenne, ei ihmiselle kirjoitettua
+proosaa. Kulmasulkeet ovat paikanpitäjiä: **tämä sivu ei toimita yhtäkään konkreettista
+kieltä.** Kaksi ensimmäistä riviä on jo kiinnitetty edellisessä luvussa englantiin; loput
+ratkaisee projekti. Pintalista on tyhjentävä siinä mielessä, että kaikki muu ihmiselle näkyvä
+teksti seuraa lähintä nimettyä pintaa.
+
+### Kun määrittely puuttuu kesken automaattisen ajon
+
+Ajo **ei pysähdy**. Se käyttää edellisen luvun oletusta (koodi ja commit-viestit englanniksi)
+ja jättää PR-kuvaukseen yhden rivin huomautuksen puuttuvasta määrittelystä. Perustelu on
+portin sijainti: kielikysymys esitetään issuen kirjoitushetkellä, jossa ihminen on paikalla, ja
+ajonaikainen esto rankaisisi repoa aukosta, jonka toinen portti on suunniteltu sulkemaan.
+Kieli ei myöskään ole turvallisuuskysymys, joten fail-closed olisi tässä väärä oletusarvo.
+
+Issue-luontikomennot `/new-issue` ja `/new-epic` esittävät kysymyksen ja kirjaavat vastauksen
+tässä kuvatussa muodossa.
+
 ## Kehityspalvelimen portti worktreessä
 
 Kun työskentelet git-worktreessä, kehityspalvelimen oletusportti voi olla jo varattu.

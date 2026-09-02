@@ -107,6 +107,51 @@ ja labelit — sekä osion 1 watchlist-huomio, jos `COVERED=1`.
 > **Ei vahvistusta ⇒ nolla kirjoitusta.** Sama suunnittele–sovella-jako kuin `install.sh`:ssa ja
 > `run-epic.sh`:ssa. Jos käyttäjä haluaa muutoksia, korjaa suunnitelma ja kysy uudelleen.
 
+### 2.1 Kielimäärittely — kysy, jos projektin `CLAUDE.md` ei sitä anna
+
+Ketjun jokainen ajo kirjoittaa ihmiselle näkyvää tekstiä: PR-kuvauksia, issue-kommentteja,
+dokumentaatiota. **Runner ei väitä niiden kieltä** — sen määrittelee kohderepo itse. Kysymys
+kuuluu tähän hetkeen, koska tämä on ainoa kohta koko ketjussa, jossa ihminen on varmasti
+paikalla; epicin kohdalla yksi kysymys kattaa kaikki alaissueet.
+
+```bash
+LANG_DECL=1
+grep -qiE '^#{1,6}[^#]*languages' "$REPO_ROOT/CLAUDE.md" 2>/dev/null || LANG_DECL=0
+echo "LANGUAGE_DECLARATION=$LANG_DECL"
+```
+
+Tunnistuskuvio on sama kuin orkestraattorin `repo_declares_languages`illa, ja muoto on
+dokumentoitu kertaalleen: [`principles/coding.md`](../principles/coding.md), luku *Ihmiselle
+näkyvän tekstin kieli*. **Älä keksi tähän toista muotoa.**
+
+**`LANG_DECL=1` ⇒ älä kysy äläkä muokkaa mitään.** Jatka osioon 3.
+
+**`LANG_DECL=0` ⇒ kysy `AskUserQuestion`illa** ennen ensimmäistäkään kirjoitusta. Yksi kysymys,
+ei yhtä per pinta. Koodi, koodikommentit ja commit-viestit ovat jo englanniksi koodausstandardin
+nojalla, joten kysymys koskee **ihmiselle näkyviä pintoja** — PR-kuvaukset, issue-kommentit,
+dokumentaatio ja suunnitelmat. **Älä tarjoa mitään kieltä valmiiksi valittuna**; repon olemassa
+oleva teksti kelpaa havainnoksi, ei oletusarvoksi.
+
+Kokoa vastauksesta valmis lisäys ja **näytä se osion 2 suunnitelman yhteydessä** samassa
+vahvistuksessa kuin epic ja sen lapset:
+
+```markdown
+## Languages
+
+- Code and comments: English
+- Commit messages: English
+- PR descriptions: <vastaus>
+- Issue comments: <vastaus>
+- Documentation: <vastaus>
+- Plans: <vastaus>
+```
+
+Vahvistuksen jälkeen **lohko kirjoitetaan kohderepon `CLAUDE.md`:hen ennen osion 3 ensimmäistä
+kirjoitusta**, jotta ketju on määritelty jo silloin kun poller voi poimia sen. Komento **ei
+committaa**: muutos jää työpuuhun, kuten muukin sen tuotos.
+
+Sisarkomento [`/new-issue`](new-issue.md) tekee saman yhdelle issuelle osiossaan 4.1.
+
 ## 3. Kirjoita — järjestys on ehdoton
 
 Poller tikkaa minuuttien välein ja propagoi epicin ajolabelit sen avoimille lapsille. Jos
@@ -218,6 +263,7 @@ käsin:
 | Riippuvuudet | mitkä kirjautuivat ja mitkä eivät |
 | Labelit | lisättiinkö ja mitkä — vai jätettiinkö tarkoituksella lisäämättä (3.3) |
 | Watchlist | osion 1 huomio, jos `COVERED=1` |
+| Kielimäärittely | kirjattiinko se `CLAUDE.md`:hen (osio 2.1) — ja että muutos on committaamatta |
 
 Jokaisesta epäonnistuneesta kirjoituksesta kerrotaan **komento, jolla ihminen tekee sen käsin** —
 yllä olevat `gh api` -kutsut kelpaavat sellaisenaan. Lopuksi:
