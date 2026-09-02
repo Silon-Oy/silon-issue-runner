@@ -301,11 +301,11 @@ else
 fi
 
 # ---- Case 9: a foreign skills directory symlink is a conflict, not a refusal ----
-# On the maintainer's machine ~/.claude/skills is a directory symlink -> dotfiles
-# (agents/commands were split per-file, skills was not, see CLAUDE.md §13). A
-# refusal there would abort the WHOLE install, taking agents/commands with it
-# over an optional extra. So skills must degrade to a CONFLICT (exit 4) while the
-# core links still install.
+# ~/.claude/skills may be a whole-directory symlink owned by another source (a
+# dotfiles tree not split into per-entry links). A refusal there would abort the
+# WHOLE install, taking agents/commands with it over an optional extra. So skills
+# must degrade to a CONFLICT (exit 4) while the core links still install.
+# Rationale: CLAUDE.md §3.
 H9="$WORK/home9"
 mkdir -p "$H9/.claude" "$H9/foreign-skills"
 ln -s "$H9/foreign-skills" "$H9/.claude/skills"
