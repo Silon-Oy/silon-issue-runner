@@ -353,6 +353,41 @@ repo_declares_languages() {
   grep -qiE "$LANGUAGE_DECL_PATTERN" "$f"
 }
 
+# repo_loads_coding_standard <worktree-path> — 0 = the target repo's CLAUDE.md
+# pulls the coding standard into project memory, 1 = it does not.
+#
+# principles/coding.md reaches the orchestrated agent as a system prompt, but a
+# co-developer coding by hand in the target repo only ever loads what Claude Code
+# reads as project memory: the repo's own CLAUDE.md and its `@` imports. The
+# adoption procedure in README.md §5 therefore writes two things — a copy at
+# .claude/principles.md and one import line pointing at it — and this reader is
+# the machine half of exactly that shape. Documented shape and detected shape are
+# the same sentence on purpose, the same way repo_declares_languages above is the
+# machine half of the language block: two ideas of "what counts" is the
+# duplication CLAUDE.md §7 forbids.
+#
+# The existence check is part of the sentence, not a bonus: an import line whose
+# target was never committed loads nothing, so it must read the same as no import
+# at all.
+#
+# Deliberately NOT fail-closed, for the same reason as the language reader: the
+# adoption is a human's reviewed change in the target repo, and a run must not
+# stop because it has not been made yet. A missing CLAUDE.md is a missing import.
+CODING_STANDARD_IMPORT_PATH='.claude/principles.md'
+
+repo_loads_coding_standard() {
+  local wt="$1"
+  local f="$wt/CLAUDE.md"
+  [ -f "$f" ] || return 1
+  local target
+  while IFS= read -r target; do
+    target="${target#./}"
+    [ "$target" = "$CODING_STANDARD_IMPORT_PATH" ] || continue
+    [ -f "$wt/$target" ] && return 0
+  done < <(sed -n 's/^[[:space:]]*@\([^[:space:]][^[:space:]]*\).*$/\1/p' "$f")
+  return 1
+}
+
 # ---------- helpers ----------
 slugify_title() {
   printf '%s' "$1" \
@@ -2045,6 +2080,13 @@ PROVISION_ENV
     # human-visible surfaces. Never a blocker (see repo_declares_languages).
     if ! repo_declares_languages "$WORKTREE_PATH"; then
       echo "> **No language declaration** in this repository's \`CLAUDE.md\`, so this run fell back to the coding standard's default (code and commit messages in English) — declare the languages of the human-visible surfaces there; \`/new-issue\` and \`/new-epic\` ask for them."
+      echo
+    fi
+    # Same shape, same asymmetry: one advisory line when the repo's CLAUDE.md
+    # does not pull the coding standard into project memory, so a co-developer
+    # without the package installed never sees it (see repo_loads_coding_standard).
+    if ! repo_loads_coding_standard "$WORKTREE_PATH"; then
+      echo "> **Coding standard not loaded** into this repository's project memory: \`CLAUDE.md\` has no \`@$CODING_STANDARD_IMPORT_PATH\` import resolving to an existing file, so a co-developer without the runner installed never reads it — run the adoption procedure in the runner's \`README.md\` §5 (\"Koodausstandardi kohderepoon (\`.claude/principles.md\`)\")."
       echo
     fi
     echo "## Cycle review"

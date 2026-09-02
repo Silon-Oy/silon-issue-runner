@@ -362,6 +362,14 @@ Molemmat tiedostot ovat kohderepon versionhallinnassa, joten kanssakehittäjä s
 kloonatessaan — ilman asennusvaihetta ja ilman skill-porttia. Sama kopio kattaa myös orkestroidun
 agentin, joka työskentelee saman repon worktreessä.
 
+Käyttöönotto on ihmisen katselmoima muutos kohderepossa, joten runner ei tee sitä itse (ks.
+[§5:n levitysluku](#päivitysten-levitys-n-repoon)). Se tekee **puuttumisen näkyväksi**: jos
+kohderepon `CLAUDE.md`:ssä ei ole olemassa olevaan tiedostoon osoittavaa `@.claude/principles.md`
+-importtia, jokainen ajon avaama PR kantaa kuvauksessaan yhden rivin, joka viittaa tähän lukuun.
+Rivi on **huomautus, ei este** — ajo etenee normaalisti, eikä huomautus mene issue-kommenttiin
+eikä labeliin. Tunnistettu muoto on täsmälleen yllä dokumentoitu muoto; `tests/test-coding-standard-adoption.sh`
+vartioi sitä.
+
 #### Päivitysten levitys N repoon
 
 **Levityskoneistoa ei rakenneta — se on jo olemassa, ja se on tämä runner.** Kun
