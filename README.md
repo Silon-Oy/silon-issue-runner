@@ -971,9 +971,15 @@ Portteja on neljä ja kaikki ovat fail-closed, plan-then-apply -järjestyksessä
 
 Kolme asiaa, jotka on helppo ymmärtää väärin:
 
-- **`publish-release.sh` itse ei mene julkaisuun eikä skannaukseen.** Se on ylläpitäjän työkalu, ja
-  sen denylist on lista *muiden* asiakkaiden nimiä — asiakkaalle toimitettuna se olisi itsessään
-  vuoto. Ilman rajausta skannaus osuisi aina omaan listaansa.
+- **Nimiluettelon kantavat tiedostot eivät mene julkaisuun eivätkä skannaukseen.** Tiedosto, jonka
+  *tehtävä* on luetella kiellettyjä nimiä, osuu määritelmällisesti omaan listaansa: ilman rajausta
+  portti kieltäytyisi ikuisesti eikä nolla-osumatilaa saavuttaisi millään puun siivouksella. Sama
+  piirre tekee tiedostosta myös itsessään vuodon, jos se päätyy asiakkaalle. Rajattuja on kaksi:
+  `publish-release.sh` (ylläpitäjän työkalu, jonka denylist on lista *muiden* asiakkaiden nimiä) ja
+  `tests/test-principles-neutrality.sh` (`principles/coding.md`:n neutraaliusvartija, jonka
+  kielletty sanasto sisältää ylläpitäjän ja koneiden nimet hakukuvioina). Lista on skriptin
+  `EXCLUDED_FROM_RELEASE` ja se on eksplisiittinen, ei tiedostosta johdettu: johdettu rajaus tekisi
+  vuotoportista ohitettavan yhdellä kommenttirivillä.
 - **Skannaus kohdistuu upstreamin sisältöön, ei renderöityyn `LICENSE`-tiedostoon.** Asiakkaan oma
   nimi on tyypillisesti itse listalla (hän on asiakas), joten renderöidyn lisenssin skannaus
   kieltäytyisi jokaisesta julkaisusta. Portti estää upstream-vuodon, ei operaattorin tietoisesti
