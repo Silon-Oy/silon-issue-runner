@@ -13,7 +13,8 @@ seuraavaan vaiheeseen.
 
 Komento on repo-agnostinen: kaikki projektikohtainen tieto luetaan
 `$REPO_ROOT/.claude/refresh.json`-konfigista (skeema dokumentoitu tämän tiedoston
-lopussa). Jos konfigia ei ole, vaihe 0 päättelee järkevän fallbackin.
+lopussa). Jos konfigia ei ole, **PHASE 0b tutkii repon ja luo sen kerran** — komento ei
+jää arvaamaan porttia ajosta toiseen.
 
 ---
 
@@ -39,16 +40,141 @@ lopussa). Jos konfigia ei ole, vaihe 0 päättelee järkevän fallbackin.
      (jos kenttä on) `migrations`. Jos `CONFIG.migrations` on määritelty, aseta
      `MIGRATIONS_CONFIGURED=1` — se ratkaisee kumpi vaihe omistaa migraatiot (PHASE 3c
      omistaa, PHASE 3a ohitetaan).
-   - Jos `EI-KONFIGIA` → **FALLBACK-tila**:
-     - Lue `$REPO_ROOT/package.json` ja päättele `start`-komento `scripts`-lohkosta
-       järjestyksessä `dev` → `start` → `serve` (ensimmäinen löytyvä voittaa).
-     - Päättele package manager lockfilestä: `pnpm-lock.yaml` → `pnpm`,
-       `yarn.lock` → `yarn`, `package-lock.json` → `npm`. Esim. `pnpm dev`.
-     - Jos `package.json`:ssa ei ole yhtäkään noista skripteistä → raportoi
-       "Ei refresh.json-konfigia eikä tunnistettavaa dev-skriptiä" ja **STOP**.
-     - Fallback-tilassa ei ole `services`-tietoa → käytä detektiossa ja health-pollissa
-       parasta arvausta (yleinen dev-portti, esim. 5173/3000) ja **varoita raportissa**
-       että ajetaan ilman konfigia (savutesti 6).
+   - Jos `EI-KONFIGIA` → **etene PHASE 0b:hen** (tutkinta + luonti). Älä jatka PHASE 1:een
+     ilman konfigia: aiempi pysyvä FALLBACK-tila arvasi portin (5173/3000) identtisesti
+     joka ajolla, ja juuri portti on se kohta jossa arvaus maksaa eniten — väärä portti
+     tarkoittaa joko turhaa 45 s health-pollia tai väärää "jo käynnissä" -päätöstä
+     PHASE 4:ssä.
+
+**Konfigin olemassaolo ratkaistaan tässä, ennen kuin mikään muu vaihe ajaa.** Olemassa
+olevaa konfigia **ei koskaan ylikirjoiteta** — luonti on kertaluontoinen teko puuttuvalle
+tiedostolle, ja toinen ajo lukee sen tästä samasta kohdasta eikä palaa PHASE 0b:hen.
+
+---
+
+## PHASE 0b — Konfigin tutkinta ja luonti (vain jos konfig puuttuu)
+
+Puuttuva konfig ei voi rikkoa mitään olemassa olevaa, ja tiedosto on paikallinen
+(PHASE 3b gitignoroi sen) ⇒ **luonti tehdään**. Olemassa oleva konfig sen sijaan sisältää
+käsin viritettyä tietoa, jota tämä komento ei voi päätellä uudelleen ⇒ sitä vain
+**ehdotetaan** muutettavaksi (PHASE 3e). Luonti ja muutos ovat siis eri tekoja.
+
+### 1. Tutkinta — rajattu lista, ei ennustusta
+
+Tutki **vain nämä** lähteet, ja vain siltä osin kuin ne repossa oikeasti ovat. Älä päättele
+kenttää, jolle repo ei tarjoa katetta — puuttuva kenttä on parempi kuin arvattu.
+
+```bash
+cd "$REPO_ROOT"
+echo "--- package.json scripts"; cat package.json 2>/dev/null | sed -n '1,200p'
+echo "--- lockfiles"; ls -1 pnpm-lock.yaml yarn.lock package-lock.json bun.lock bun.lockb 2>/dev/null
+echo "--- workspaces"; ls -1 pnpm-workspace.yaml 2>/dev/null; ls -1d apps/*/package.json packages/*/package.json 2>/dev/null
+echo "--- dev-server config"; ls -1 vite.config.* next.config.* svelte.config.* astro.config.* nuxt.config.* webpack.config.* 2>/dev/null
+echo "--- compose"; ls -1 docker-compose*.yml compose*.yml 2>/dev/null
+echo "--- prisma"; ls -1 prisma/schema.prisma 2>/dev/null
+echo "--- env-esimerkki"; ls -1 .env.example .env.sample 2>/dev/null
+```
+
+| Lähde | Mitä siitä luetaan |
+|---|---|
+| `package.json` → `scripts` | `start`-komennon skripti järjestyksessä `dev` → `start` → `serve` (ensimmäinen löytyvä voittaa) |
+| Lockfile | Package manager: `pnpm-lock.yaml` → `pnpm`, `yarn.lock` → `yarn`, `package-lock.json` → `npm`, `bun.lock`/`bun.lockb` → `bun`. Yhdistettynä: esim. `pnpm dev` |
+| Dev-serverin konfigi (`vite.config.*`, `next.config.*`, vastaava) | **Portti** `server.port` / `--port`-lipusta. Jos porttia ei ole asetettu, käytä frameworkin dokumentoitua oletusta (Vite 5173, Next/Nuxt 3000, Astro 4321) — tämä on frameworkin oletus, ei arvaus |
+| `docker-compose*.yml` | Julkaistut portit (`ports: - "3001:3001"`) → omat palvelunsa, jos ne ovat *tämän* repon dev-palveluita |
+| `prisma/schema.prisma` + `package.json`:n migraatioskriptit | **Vain havainto raportille.** Ks. kohta 3 — luonti ei kirjoita `migrations`-kenttää |
+| Workspace-rakenne (`pnpm-workspace.yaml`, `workspaces`, `apps/*`, `packages/*`) | Monorepo ⇒ **useampi `services`-rivi**: jokainen erikseen käynnistyvä dev-palvelu omana palvelunaan |
+
+Lue portti lähteestä, älä muistista:
+
+```bash
+grep -rn "port" vite.config.* next.config.* 2>/dev/null | head -20
+grep -n -A3 "ports:" docker-compose*.yml compose*.yml 2>/dev/null | head -40
+grep -nE "PORT" .env.example 2>/dev/null | head
+```
+
+### 2. STOP, jos repo ei ole dev-server-repo
+
+Jos `start`ia **ei voi johtaa** (ei `package.json`:ia, tai siinä ei ole `dev`/`start`/`serve`
+-skriptiä eikä muuta tunnistettavaa dev-käynnistystä) → raportoi
+"Ei refresh.json-konfigia eikä tunnistettavaa dev-skriptiä — repo ei ole dev-server-repo"
+ja **STOP**. **Älä kirjoita tyhjää tai arvattua konfigia.** Tämä paketti itse on esimerkki
+reposta, johon `refresh.json` ei kuulu.
+
+### 3. Kokoa konfig — pakolliset kentät ja mitä jätetään pois
+
+Luodun konfigin on täytettävä **vähintään** `start` ja `services` (`name`, `port`,
+`portFallbackRange`, `healthPath`, `primaryUrl`) — eli täsmälleen ne, joita vanha
+FALLBACK-tila arvasi. Muut kentät **vain jos repo tarjoaa niille katteen**:
+
+- **`buildHints`** — vain löydetylle lockfilelle (esim. `pnpm-lock.yaml` → `pnpm install`).
+  Älä keksi hintejä tiedostoille, joita repossa ei ole.
+- **`processMatch`** — jätä pois (oletus = repo-juuri riittää).
+- **`prismaGenerate`** — jätä pois. PHASE 3d päättelee komennon `package.json`:sta, ja
+  skeemadokumentaatio ohjaa asettamaan tämän vain jos päättely osuu väärin.
+- **`migrations`** — **älä kirjoita luontivaiheessa.** Kentän *olemassaolo* siirtää
+  migraatioiden omistajuuden PHASE 3a:lta PHASE 3c:lle. Arvattu `apply`-komento kytkisi
+  siis hiljaa pois toimivan Prisma-autodetektion ja korvaisi sen arvauksella — juuri se
+  vika, jota tämä muutos muuten korjaa. Jos repossa on `prisma/schema.prisma`, PHASE 3a
+  hoitaa migraatiot ilman kenttää. Jos repolla on **muu** migraatiomekanismi (Drizzle,
+  Knex, Rails tms.), **mainitse se PHASE 6:n raportissa** käsin lisättäväksi — älä lisää itse.
+
+`portFallbackRange`: `10` palvelulle, joka auto-inkrementoi vapaaseen porttiin (Vite, Next);
+`0` palvelulle, jonka portti on kiinteä (proxyyn kovakoodattu API). `healthPath`: `"/"`
+jollei repo tarjoa varsinaista health-endpointia; jos tarjoaa (esim. reitti `/health`
+lähdekoodissa), käytä sitä. `primaryUrl: true` sille palvelulle, joka on käyttäjälle näkyvä
+sovellus-URL — täsmälleen yhdelle, ellei repo aidosti tarjoile kahta erillistä käyttöliittymää.
+
+### 4. Näytä sisältö ennen kirjoitusta
+
+**Tulosta koottu JSON käyttäjälle ja kerro mistä kukin arvo tuli** (esim. "portti 5173 ←
+`vite.config.ts: server.port`", "`start` ← `scripts.dev` + `pnpm-lock.yaml`). Pyydä
+hyväksyntä. Jos käyttäjä korjaa arvoja, kirjoita korjattu versio. Jos käyttäjä kieltäytyy →
+älä kirjoita mitään ja **STOP**.
+
+### 5. Kirjoita ja ignoroi samalla kertaa
+
+Kirjoita `$REPO_ROOT/.claude/refresh.json` — ja **aja PHASE 3b:n `ensure_ignored` heti
+kirjoituksen jälkeen**, samalla logiikalla, ei uudella mekanismilla. Syy on PHASE 1:
+juuri luotu konfig on trackaamaton tiedosto, ja PHASE 3b ajaa vasta PHASE 1:n **jälkeen** ⇒
+ilman tätä seuraava ajo pysähtyisi omaan tuotokseensa. Ignorattuna se ei näy
+`git status --porcelain`issa lainkaan, ja `.gitignore`-muutoksen PHASE 1 sietää.
+
+```bash
+# Trackattua konfigia ei kirjoiteta automaattisesti — ks. alla.
+if git -C "$REPO_ROOT" ls-files --error-unmatch .claude/refresh.json >/dev/null 2>&1; then
+  echo "TRACKED-MISSING"
+else
+  mkdir -p "$REPO_ROOT/.claude"
+  cat > "$REPO_ROOT/.claude/refresh.json" <<'JSON'
+  ... hyväksytty sisältö ...
+JSON
+
+  # Sama ensure_ignored kuin PHASE 3b:ssä — ei uutta mekanismia.
+  GITIGNORE="$REPO_ROOT/.gitignore"
+  entry=".claude/refresh.json"
+  if ! git -C "$REPO_ROOT" check-ignore -q "$entry" 2>/dev/null \
+     && ! { [ -f "$GITIGNORE" ] && grep -qxF "$entry" "$GITIGNORE"; }; then
+    printf '%s\n' "$entry" >> "$GITIGNORE"
+    echo "GI_ADDED_EARLY=$entry"
+  fi
+  echo "CONFIG_CREATED=1"
+fi
+```
+
+Myöhempi PHASE 3b on tämän jälkeen **no-op** tälle riville (`check-ignore` kattaa sen jo),
+joten sen idempotenssi säilyy.
+
+**Jos tuloste on `TRACKED-MISSING`** — tiedosto on gitissä trackattu mutta puuttuu
+työpuusta — **älä kirjoita**. Kirjoitus olisi commit-kelpoinen muutos trackattuun
+tiedostoon, joka likaisi työpuun ja pysäyttäisi seuraavan ajon PHASE 1:ssä. Näytä koottu
+sisältö, neuvo `git -C "$REPO_ROOT" restore .claude/refresh.json`, ja **STOP**.
+
+Kun konfig on luotu, käytä sitä **tässä samassa ajossa** CONFIGina ja etene PHASE 1:een.
+`MIGRATIONS_CONFIGURED` jää asettamatta (luonti ei kirjoita `migrations`-kenttää), joten
+PHASE 3a omistaa migraatiot kuten konfiguroimattomassa repossa.
+
+**Idempotenssi:** toinen ajo lukee konfigin PHASE 0:ssa eikä tule tänne lainkaan. Mitään ei
+luoda eikä ylikirjoiteta uudelleen.
 
 ---
 
@@ -129,7 +255,8 @@ Aja komennot repo-juuressa, esim. `(cd "$REPO_ROOT" && pnpm install)`.
 | `prisma/schema.prisma` | `pnpm db:generate` (regeneroi Prisma Client) — aseta `SCHEMA_CHANGED=1` |
 | vain `.ts` / `.tsx` (lähdekoodi) | ei buildia — dev-server (Vite/tsx watch) hoitaa hot-reloadin |
 
-Fallback-tilassa (ei CONFIG) käytä vain yllä olevia yleissääntöjä.
+Jos `CONFIG.buildHints` puuttuu tai on tyhjä (tyypillistä juuri luodulle konfigille) →
+käytä vain yllä olevia yleissääntöjä.
 
 > **Migraatioita ei sovelleta tässä vaiheessa.** Pull-diffissä näkyvä uusi
 > `prisma/migrations/<...>/`-kansio **ei** enää laukaise `migrate deploy`ta täällä — se on
@@ -456,6 +583,65 @@ Raportoi PHASE 6:ssa ajettiinko generate ja miksi (client vanhempi kuin skeema /
 
 ---
 
+## PHASE 3e — Konfigiehdotus pull-diffistä (vain jos pullattiin)
+
+Konfig kirjoitetaan kerran ja **ajautuu**: uusi palvelu, vaihtunut portti, vaihtunut
+pakettimanageri tai ilmestynyt `prisma/schema.prisma` jättää `refresh.json`:in vanhaksi
+hiljaa. Signaali on jo käsillä — PHASE 3:n lukema `BEFORE..AFTER`-diff kertoo myös milloin
+konfig on jäänyt jälkeen.
+
+**Tämä vaihe ei kirjoita mitään eikä ole STOP-ehto.** Se kerää tekstin PHASE 6:n raporttia
+varten; dev-server käynnistyy ja raportti valmistuu normaalisti riippumatta siitä
+löytyikö ehdotuksia. Ohita vaihe kokonaan, jos `BEHIND == 0` (ei diffiä) tai jos konfig
+**luotiin tässä ajossa** PHASE 0b:ssä (se on jo nykytilan mukainen).
+
+**Ehdotus johdetaan tämän ajon pullatuista commiteista, ei repon nykytilan ja konfigin
+vertailusta.** Ero on tarkoituksellinen: diffipohjainen ehdotus **vaimenee itsestään** —
+seuraavalla ajolla diff on eri eikä ehdotus toistu. Nykytilavertailu toistaisi saman rivin
+joka ajolla, kunnes se hyväksytään, mikä on juuri sitä lokikohinaa jota tässä paketissa
+vältetään. **Älä siksi rakenna tälle tilatiedostoa, muistia tai vaimennuslaskuria** —
+itsevaimeneva diffipohjaisuus on koko mekanismi.
+
+```bash
+CHANGED=$(git -C "$REPO_ROOT" diff --name-only "$BEFORE..$AFTER")
+printf '%s\n' "$CHANGED"
+```
+
+Laukaisevat signaalit — käy nämä läpi muuttuneesta tiedostolistasta:
+
+| Signaali diffissä | Ehdotettava muutos |
+|---|---|
+| Lockfile vaihtui (`pnpm-lock.yaml` ↔ `package-lock.json` ↔ `yarn.lock` ↔ `bun.lock*`; lisäys tai poisto) | `start`-kentän pakettimanageri ei enää vastaa repoa |
+| `package.json`:n `scripts.dev` muuttui eikä vastaa enää `CONFIG.start`ia | `start` osoittaa vanhaan skriptiin |
+| Uusi palvelu tai portti: `docker-compose*.yml`, dev-serverin konfigi (`vite.config.*`, `next.config.*`, …), `.env.example`:n PORT-muuttuja | uusi `services`-rivi tai muuttunut `port` |
+| `prisma/schema.prisma` ilmestyi **eikä** `CONFIG.migrations`-kenttää ole | migraatiotarve syntyi — PHASE 3a hoitaa Prisman, mutta muu ORM vaatii `migrations`-kentän |
+| Uusi workspace (`pnpm-workspace.yaml`, `workspaces`-lohko, uusi `apps/*/package.json` tai `packages/*/package.json`) | uusi erikseen käynnistyvä palvelu `services`-taulukkoon |
+
+Kun signaali osuu, **lue muuttunut tiedosto ja vertaa sitä konfigin nykyiseen arvoon** —
+älä raportoi pelkkää tiedostonimeä. Ehdotus ohitetaan, jos konfig on jo linjassa muutoksen
+kanssa (esim. portti muuttui arvoon, joka konfigissa jo on).
+
+Nimeä **commit joka signaalin laukaisi**:
+
+```bash
+git -C "$REPO_ROOT" log --oneline "$BEFORE..$AFTER" -- <polku> | head -3
+```
+
+Ehdotuksen on oltava **konkreettinen JSON-katkelma tai diff** — ei "harkitse konfigin
+päivittämistä" -tyylinen yleismaininta. Esimerkkimuoto:
+
+```
+Konfigiehdotus — laukaisi a1b2c3d "chore: switch to npm"
+  pnpm-lock.yaml poistui, package-lock.json ilmestyi ⇒ start-kentän manageri vanhentui
+  -  "start": "pnpm dev"
+  +  "start": "npm run dev"
+```
+
+**Ehdotusta ei kirjoiteta tiedostoon ilman käyttäjän lupaa.** Se elää raportissa
+(PHASE 6, kohta 4b). Jos käyttäjä hyväksyy sen, hän voi pyytää muutosta erikseen.
+
+---
+
 ## PHASE 4 — Dev-serverin detektio
 
 Tarkista kunkin CONFIG.services-palvelun osalta, kuunteleeko portti jo ja onko se
@@ -670,8 +856,17 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
 3. **Uudelleenkäynnistys**: jos PHASE 4b ajettiin, kerro että käynnissä ollut dev-server
    pysäytettiin ja käynnistettiin uudelleen vanhentuneen Prisma Clientin takia (vanha
    PID → uusi `DEV_PID`), ja että se ajaa nyt taustalla.
-4. **.gitignore-huolto**: jos `GI_ADDED` oli ei-tyhjä, kerro mitkä rivit lisättiin
-   `.gitignore`:en ja että ne kannattaa committaa.
+4. **.gitignore-huolto**: jos `GI_ADDED` (tai PHASE 0b:n `GI_ADDED_EARLY`) oli ei-tyhjä,
+   kerro mitkä rivit lisättiin `.gitignore`:en ja että ne kannattaa committaa.
+4b. **Konfigi**:
+   - **Luotiin (PHASE 0b)**: jos `CONFIG_CREATED=1`, kerro että `.claude/refresh.json`
+     luotiin, mistä lähteistä `start` ja `services` johdettiin, ja mitkä kentät jäivät
+     käsin asetettaviksi (erityisesti `migrations`, jos repolla on muu kuin Prisma-pohjainen
+     migraatiomekanismi).
+   - **Ehdotukset (PHASE 3e)**: jos pull-diffistä löytyi konfigia koskettavia muutoksia,
+     listaa kukin ehdotus omana kohtanaan: laukaissut commit, mikä muuttui, ja konkreettinen
+     JSON-katkelma tai diff. Sano eksplisiittisesti, että **mitään ei kirjoitettu** — ehdotus
+     odottaa hyväksyntää. Jos ehdotuksia ei ole, älä mainitse osiota lainkaan.
 5. **Dev-URL(t)**: primary ensin (esim. `http://localhost:5173`), sitten muut.
 6. **Taustaprosessi**: `DEV_PID` ja lokipolku `.claude/refresh-dev.log`.
 7. **Muistutus**: dev-server jää taustalle — pysäytä `kill <DEV_PID>` kun et tarvitse.
@@ -680,7 +875,20 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
 
 ## refresh.json — skeemadokumentaatio
 
-Repo-juuren `.claude/refresh.json` ohjaa tätä komentoa. Kentät:
+Repo-juuren `.claude/refresh.json` ohjaa tätä komentoa. Tiedosto joko on olemassa tai
+PHASE 0b luo sen kerran — mutta **luonti ei täytä kaikkia kenttiä**, koska osa niistä
+sisältää tietoa, jota repo ei kerro:
+
+| Kenttä | Täyttääkö PHASE 0b |
+|---|---|
+| `start` | **Kyllä** — pakollinen; ilman sitä luonti ei tapahdu vaan komento pysähtyy |
+| `services` (`name`, `port`, `portFallbackRange`, `healthPath`, `primaryUrl`) | **Kyllä** — pakollinen |
+| `buildHints` | Vain löydetylle lockfilelle; muuten tyhjä ja käsin täydennettävä |
+| `processMatch` | Ei — jätetään pois, oletus (repo-juuri) riittää |
+| `prismaGenerate` | Ei — PHASE 3d päättelee komennon; aseta vain jos päättely osuu väärin |
+| `migrations` | **Ei koskaan** — kentän olemassaolo siirtäisi omistajuuden PHASE 3a:lta 3c:lle, ja arvattu `apply` kytkisi hiljaa pois toimivan autodetektion. Muun kuin Prisman käyttäjä lisää tämän käsin |
+
+Kentät:
 
 - **`start`** *(string, pakollinen)* — dev-serverin käynnistyskomento, esim. `"pnpm dev"`.
   Ajetaan repo-juuressa, taustalle.
@@ -754,9 +962,13 @@ varmista että kukin pätee yhä:
 5. **Free + puhdas + ajan tasalla → käynnistä + poll + raportti.** Puhtaalla, ajan
    tasalla olevalla repolla ja vapailla porteilla komento ohittaa buildit, käynnistää
    dev-serverin taustalle, pollaa health-endpointit terveeksi ja raportoi PID:n + URL:t.
-6. **Ei konfigia → fallback + varoitus.** Ilman `.claude/refresh.json`:ia komento
-   päättelee `start`-komennon `package.json`:n skripteistä (dev→start→serve) ja
-   lockfilestä, ja **varoittaa** raportissa että ajetaan ilman konfigia.
+6. **Ei konfigia → tutkinta + luonti, ei pysyvää arvausta.** Ilman
+   `.claude/refresh.json`:ia komento ei jatka arvatulla portilla vaan haarautuu
+   PHASE 0b:hen: tutkii rajatun lähdelistan (`package.json`:n `scripts`, lockfile,
+   dev-serverin konfigi, `docker-compose*.yml`, `prisma/schema.prisma`, workspace-rakenne),
+   näyttää kootun JSONin lähteineen ja kirjoittaa sen vasta hyväksynnän jälkeen. Luotu
+   konfig täyttää vähintään `start`in ja `services`-taulukon — eli poistaa täsmälleen sen
+   arvauksen, jonka vanha FALLBACK-tila teki.
 7. **Pending-migraatio → migrate deploy + generate (myös ilman pullia).** PHASE 3a ajaa
    `prisma migrate status`in **aina** kun `prisma/schema.prisma` on repo-juuressa — myös
    kun `BEHIND == 0` eikä mitään pullattu. Jos kanta ei ole ajan tasalla — vaikka migraatio
@@ -808,3 +1020,26 @@ varmista että kukin pätee yhä:
    skeemariippuvaiseen pyyntöön (`Unknown field ... for select statement`), vaikka sekä
    kanta että skeema ovat kunnossa. Repo ilman `prisma/schema.prisma`:aa ohittaa vaiheen
    hiljaa. Jos generate failaa → STOP, ei dev-serveriä.
+
+13. **Luonti on kertaluontoinen eikä pysäytä seuraavaa ajoa.** Kun repossa ei ole
+   `.claude/refresh.json`:ia mutta `start` on johdettavissa, PHASE 0b kirjoittaa konfigin
+   ja ajaa **saman `ensure_ignored`-huollon heti kirjoituksen jälkeen**, joten tuore
+   trackaamaton konfig ei näy `git status --porcelain`issa eikä PHASE 1 pysähdy komennon
+   omaan tuotokseen seuraavalla ajolla. Toinen ajo lukee konfigin PHASE 0:ssa eikä palaa
+   PHASE 0b:hen — mitään ei luoda eikä ylikirjoiteta uudelleen, ja PHASE 3b on tälle
+   riville no-op. Jos `start`ia **ei** voi johtaa (repo ei ole dev-server-repo, kuten tämä
+   paketti itse) → STOP eikä tiedostoa kirjoiteta. Jos `refresh.json` on trackattu mutta
+   puuttuu työpuusta → sisältö näytetään, mitään ei kirjoiteta, ja komento neuvoo
+   `git restore`n. Luonti **ei** kirjoita `migrations`-kenttää, joten PHASE 3a:n
+   Prisma-autodetektio säilyy toimivana.
+14. **Konfigia koskettava commit → ehdotus raportissa, ei kirjoitusta, ei STOP:ia.** Kun
+   pullatut commitit (`BEFORE..AFTER`) koskettavat konfigin kattamaa asiaa — lockfile tai
+   pakettimanageri vaihtui, `scripts.dev` ei vastaa enää `start`-kenttää, uusi palvelu tai
+   portti ilmestyi (`docker-compose*.yml`, dev-serverin konfigi, `.env.example`),
+   `prisma/schema.prisma` ilmestyi ilman `migrations`-kenttää, tai repoon tuli uusi
+   workspace — PHASE 3e tuottaa **konkreettisen JSON-katkelman tai diffin** ja nimeää
+   **commitin joka sen laukaisi**. Ehdotus elää PHASE 6:n raportissa: tiedostoa ei
+   kirjoiteta, dev-server käynnistyy ja raportti valmistuu normaalisti. Ehdotus **vaimenee
+   itsestään** — seuraavalla ajolla diff on eri eikä sama rivi toistu, joten mekanismi ei
+   tarvitse tilatiedostoa, muistia eikä vaimennuslaskuria. Kun `BEHIND == 0` tai konfig
+   luotiin tässä ajossa, vaihe ohitetaan kokonaan.
