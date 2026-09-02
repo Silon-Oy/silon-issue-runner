@@ -297,6 +297,89 @@ Kohderepo voi ohjata orkestraattoria tiedostolla `.claude/run-issues.json`:
 
 Ympäristömuuttuja voittaa aina tiedoston. Puuttuva tiedosto on no-op.
 
+### Koodausstandardi kohderepoon (`.claude/principles.md`)
+
+[`principles/coding.md`](principles/coding.md) on paketin kanoninen, aina päällä oleva
+koodausstandardi. Se latautuu vain sille, jolla **paketti on asennettuna** — mikä jättää katveeseen
+juuri sen lukijan, jonka takia standardi kirjoitettiin yhteiseksi: kanssakehittäjän, joka on
+kloonannut kohderepon muttei ole ajanut `install.sh`:ta.
+
+Kuluttajia on kolme, eikä niillä ole yhteistä latautumispintaa paketin kautta:
+
+| Kuluttaja | Mitä hänellä on | Mitä paketti tavoittaa |
+|---|---|---|
+| Orkestroitu agentti | worktree kohderepossa + paketti | tavoittaa |
+| Kanssakehittäjän interaktiivinen sessio | **kohderepo, ei välttämättä pakettia** | **ei tavoita** |
+| Ylläpitäjän oma sessio | globaali `CLAUDE.md` | tavoittaa |
+
+Ainoa pinta, joka on varmasti kaikilla kolmella, on **kohderepo itse**.
+
+#### Valinta: kopio, ei importtia paketin polkuun
+
+| Vaihtoehto | Kattaa kanssakehittäjän | Ajautuu lähteestä |
+|---|---|---|
+| `@`-import paketin polkuun (`@~/.claude/scripts/run-issues/principles/coding.md`) | **ei** — edellyttää, että paketti on samalla koneella | ei |
+| **Kopio `.claude/principles.md` + `@`-import repon `CLAUDE.md`:stä** | **kyllä** — kulkee repon mukana | kyllä, ja ajautuma hallitaan alla |
+
+Import olisi ajautumaton mutta ratkaisee väärän ongelman: se kaatuu täsmälleen siinä tapauksessa,
+jonka takia standardi viedään repotasolle. **Kopio valitaan**, ja sen ainoa haitta — ajautuminen —
+on tietoisesti hyväksytty ja hoidetaan ohjeella, ei koneistolla.
+
+Pelkkä tiedosto `.claude/`-hakemistossa ei riitä: Claude Code lataa projektimuistina kohderepon
+**`CLAUDE.md`**:n ja sen `@`-importit, ei mielivaltaista tiedostoa `.claude/`-hakemistosta. Kopio
+tarvitsee siis myös rivin repon `CLAUDE.md`:hen — muuten se on vain tiedosto, joka ei lataudu.
+
+#### Käyttöönotto kohderepossa
+
+Ajaa se, jolla paketti on koneella. Kohderepon juuressa:
+
+```bash
+PKG="$HOME/.claude/scripts/run-issues"
+SRC="$PKG/principles/coding.md"
+REV="$(git -C "$PKG" log -1 --format=%h -- principles/coding.md 2>/dev/null || echo tuntematon)"
+
+mkdir -p .claude
+{
+  printf '> **Kopio — älä muokkaa tätä tiedostoa.** Kanoninen lähde on\n'
+  printf '> claude-issue-runner -paketin `principles/coding.md` (revisio `%s`).\n' "$REV"
+  printf '> Muutokset tehdään lähteeseen; tämä kopio päivitetään sieltä.\n\n'
+  cat "$SRC"
+} > .claude/principles.md
+```
+
+Sitten kohderepon `CLAUDE.md`:hen yksi rivi:
+
+```markdown
+@.claude/principles.md
+```
+
+Kopion ensimmäiset rivit nimeävät kanonisen lähteen ja kieltävät paikallisen muokkauksen — sama
+kaava kuin muuallakin ("muokkaa lähteessä, älä kopiossa"). Revisiotunniste on **luettava fakta, ei
+versiotarkistus**: se kertoo yhdellä silmäyksellä, mistä kohtaa lähdettä kopio on otettu.
+
+Molemmat tiedostot ovat kohderepon versionhallinnassa, joten kanssakehittäjä saa standardin
+kloonatessaan — ilman asennusvaihetta ja ilman skill-porttia. Sama kopio kattaa myös orkestroidun
+agentin, joka työskentelee saman repon worktreessä.
+
+#### Päivitysten levitys N repoon
+
+**Levityskoneistoa ei rakenneta — se on jo olemassa, ja se on tämä runner.** Kun
+`principles/coding.md` muuttuu, kopiot eivät päivity itsestään. Menettely on tietoisesti
+manuaalinen ja eksplisiittinen:
+
+1. Avaa kuhunkin kohderepoon issue (`/new-issue` kelpaa), joka pyytää päivittämään
+   `.claude/principles.md`:n paketin nykyisestä `principles/coding.md`:stä yllä olevalla komennolla.
+2. Labeloi issue repon poimintalabelilla, jolloin runner tekee muutoksen ja avaa PR:n normaalisti.
+3. Repoissa, jotka eivät ole watchlistillä, sama komento ajetaan käsin.
+
+Ajautuma on siis **hallittu ja näkyvä**, ei yllätys: kopion revisiotunniste kertoo mistä se on
+otettu, ja päivitys on tavallinen issue kuten mikä tahansa muukin muutos. Cronia, hookia tai bottia
+ei lisätä — automaattinen kirjoitus N repoon ohittaisi juuri sen katselmointiportin, jonka varassa
+kaikki muukin tämän runnerin tekemä muutos on.
+
+Tämä paketti **ei kirjoita kohderepoihin** käyttöönottoa. Ohje on tässä; käyttöönotto yksittäisessä
+repossa on oma työnsä siinä repossa.
+
 ---
 
 ## 5. Ympäristömuuttujat (asennus- ja konfigurointiaika)
