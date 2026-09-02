@@ -38,6 +38,19 @@ check(){ if [ "$2" = "$3" ]; then ok "$1 ($2)"; else bad "$1: got=[$2] expected=
 FX="$(mktemp -d "${TMPDIR:-/tmp}/action-test.XXXXXX")"
 trap 'rm -rf "$FX"; [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null' EXIT
 
+# action-server.sh SOURCES poller.env, and poller.env wins over the environment
+# (CLAUDE.md 8) — so the machine's own file overwrites whatever host list a case
+# sets and decides that case for it. On a machine whose poller.env names ANOTHER
+# machine, every --check below is answered by the host gate instead of the code
+# under test: exit 0, no output, two silent false passes and two failures that
+# say nothing about the service.
+#
+# Isolating per invocation is the wrong shape — it is what the two Part C cases
+# below already did, and the two added after them inherited the bug by omission.
+# Point it at nothing ONCE so no invocation can be added without the isolation.
+# A case that is genuinely ABOUT poller.env overrides this locally.
+export RUN_ISSUES_POLLER_ENV_FILE="$FX/no-such-poller.env"
+
 # ===========================================================================
 # A. action-dispatch.sh — delegation
 # ===========================================================================
@@ -309,12 +322,7 @@ kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
 # C. action-server.sh — config resolution, host gate, structural invariants
 # ===========================================================================
 # Host gate: a non-matching host no-ops (exit 0) with no output — like the pollers.
-# RUN_ISSUES_POLLER_ENV_FILE points at nothing here for the same reason as in the
-# unset case below: poller.env is SOURCED, so a real one on this machine that
-# sets RUN_ISSUES_ACTION_HOSTS would overwrite the value under test and let the
-# gate through.
 out="$(RUN_ISSUES_ACTION_HOSTS='no-such-host-xyz' RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
-       RUN_ISSUES_POLLER_ENV_FILE="$FX/no-such-poller.env" \
        RUN_ISSUES_LOG_DIR="$FX/gate-logs-foreign" \
        bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
 check "foreign host no-ops (exit 0)" "$rc" "0"
@@ -324,11 +332,10 @@ check "foreign host prints nothing" "$out" ""
 
 # Unset is NOT the same as non-matching (#152 removed the built-in default).
 # The service still exits 0 — KeepAlive.SuccessfulExit=false would crash-loop on
-# anything else — but says once why it bound nothing. RUN_ISSUES_POLLER_ENV_FILE
-# points at nothing so a real poller.env on this machine cannot decide the case,
-# and RUN_ISSUES_LOG_DIR keeps the notice out of the real ~/Library/Logs.
+# anything else — but says once why it bound nothing. RUN_ISSUES_LOG_DIR keeps
+# the notice out of the real ~/Library/Logs.
 GATE_LOGS="$FX/gate-logs"
-out="$(env -u RUN_ISSUES_ACTION_HOSTS RUN_ISSUES_POLLER_ENV_FILE="$FX/no-such-poller.env" \
+out="$(env -u RUN_ISSUES_ACTION_HOSTS \
        RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" RUN_ISSUES_LOG_DIR="$GATE_LOGS" \
        bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
 check "unset host list no-ops (exit 0)" "$rc" "0"
