@@ -275,6 +275,13 @@ export RUN_ISSUES_AUTO
 # On restart we ramp the budget up per retry; see restart_load_state.
 RUN_ISSUES_CLAUDE_TIMEOUT_MAX="${RUN_ISSUES_CLAUDE_TIMEOUT_MAX:-3600}"
 
+# The always-on coding standard (issue #175) follows the same three-step order
+# and the same .claude/run-issues.json convention, but its resolver lives in
+# lib/claude-call.sh rather than here: unlike the timeout, pr-watch.sh needs the
+# repo-level lookup too, and CLAUDE.md §7 forbids a second copy of a shared
+# primitive. load_repo_principles_file is called from the same places as
+# load_repo_timeout, and like it must run after source_machine_env.
+
 # load_repo_timeout <repo-root> — sets and exports RUN_ISSUES_CLAUDE_TIMEOUT from
 # the repo config if present and not already overridden via the environment.
 load_repo_timeout() {
@@ -641,6 +648,7 @@ resolve_repo_slug() {
 # ===========================================================================
 phase_a() {
   load_repo_timeout "$REPO_ROOT"
+  load_repo_principles_file "$REPO_ROOT"
   # Resolve OWNER_REPO from REMOTE_NAME up front so every subsequent gh call
   # can route via `gh --repo` for non-origin remotes (multi-org support), and
   # REPO_SLUG so lock / run-id / branch / tmux naming is repo-namespaced.
@@ -1201,6 +1209,7 @@ restart_load_state() {
   # Ramped, capped timeout: base * (1 + retry_count). load_repo_timeout sets the
   # base (env override > repo config > claude-call default).
   load_repo_timeout "$REPO_ROOT"
+  load_repo_principles_file "$REPO_ROOT"
   local base="${RUN_ISSUES_CLAUDE_TIMEOUT:-1800}"
   local ramped=$(( base * (1 + new_retry) ))
   if [ "$ramped" -gt "$RUN_ISSUES_CLAUDE_TIMEOUT_MAX" ]; then
@@ -1347,6 +1356,7 @@ continue_load_state() {
   CLARIFICATION_CONTEXT+="Issuen kirjoittajan vastaus:"$'\n'"$answer"
 
   load_repo_timeout "$REPO_ROOT"
+  load_repo_principles_file "$REPO_ROOT"
   log "continue: round=$new_round — re-running cycle review with the reply as context"
 }
 
