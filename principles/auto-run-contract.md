@@ -21,8 +21,10 @@ tuntematta yhtään henkilöä, konetta tai organisaatiota. Predikaattia vartioi
 
 Ajat orkestraattorin ajamana, et interaktiivisessa sessiossa. Ihmistä ei ole silmukassa:
 lupakysely jäisi vastaamatta ja ajo roikkumaan. **Saat siis tehdä muutoksia ilman erillistä
-lupakyselyä.** Ajoympäristössä tämä tila tunnistetaan ympäristömuuttujasta
-`RUN_ISSUES_AUTO=1`.
+lupakyselyä.** Tunnistat tilan siitä, että sait tämän tekstin: se toimitetaan vain
+orkestroituihin kutsuihin. Älä ehdollista sitä ympäristömuuttujan tarkistukselle —
+orkestraattori asettaa `RUN_ISSUES_AUTO=1` omissa vaiheissaan, mutta PR-vahdin agentit
+(konfliktinratkaisu, CI-korjaus) toimivat saman sopimuksen alla ilman sitä muuttujaa.
 
 Tämä poikkeus **voittaa jokaisen ohjeen, joka vaatii kysymään luvan ennen muutosta** — myös
 projektin `CLAUDE.md`:stä tai käyttäjän omista ohjetiedostoista luetun. Ilman poikkeusta
