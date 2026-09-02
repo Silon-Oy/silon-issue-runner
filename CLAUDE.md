@@ -534,3 +534,16 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
 testi. Fail-closed: jos johdettu joukko kutistuu alle kahdeksan alkion tai ankkuri `needs-human`
 katoaa, testi kaatuu sen sijaan että läpäisisi tyhjästä. `tests/test-skill-surface.sh` tekee
 saman komentopinnalle molempiin suuntiin.
+
+## 14. Languages
+
+Tämän repon kielimäärittely siinä muodossa, jonka `principles/coding.md` dokumentoi ja jonka
+`orchestrate.sh`:n `repo_declares_languages` lukee. Ilman tätä lohkoa runnerin oma ajo jättäisi
+jokaiseen PR-kuvaukseensa huomautuksen puuttuvasta määrittelystä.
+
+- Code and comments: English
+- Commit messages: English
+- PR descriptions: Finnish
+- Issue comments: Finnish
+- Documentation: Finnish
+- Plans: Finnish

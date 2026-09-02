@@ -187,6 +187,58 @@ jos niitä on.
 > **Ei vahvistusta ⇒ nolla kirjoitusta.** Sama suunnittele–sovella-jako kuin `install.sh`:ssa ja
 > `run-epic.sh`:ssa. Jos käyttäjä haluaa muutoksia, korjaa luonnos ja kysy uudelleen.
 
+### 4.1 Kielimäärittely — kysy, jos projektin `CLAUDE.md` ei sitä anna
+
+Ajo kirjoittaa ihmiselle näkyvää tekstiä: PR-kuvauksen, issue-kommentteja, dokumentaatiota.
+**Runner ei väitä niiden kieltä** — sen määrittelee kohderepo itse. Kysymys kuuluu tähän
+hetkeen, koska tämä on ainoa kohta koko ketjussa, jossa ihminen on varmasti paikalla.
+
+```bash
+LANG_DECL=1
+# Kohderepon juuri on työhakemisto (osio 1). Luetaan se tässä uudelleen eikä
+# osion muuttujasta: tyhjäksi jäänyt polku ohittaisi määrittelyn hiljaa ja
+# kysyisi kielet repolta, joka on ne jo kirjannut.
+grep -qiE '^#{1,6}[^#]*languages' "$(pwd)/CLAUDE.md" 2>/dev/null || LANG_DECL=0
+echo "LANGUAGE_DECLARATION=$LANG_DECL"
+```
+
+Tunnistuskuvio on sama kuin orkestraattorin `repo_declares_languages`illa, ja muoto on
+dokumentoitu kertaalleen: [`principles/coding.md`](../principles/coding.md), luku *Ihmiselle
+näkyvän tekstin kieli*. **Älä keksi tähän toista muotoa** — kaksi käsitystä siitä, mikä on
+määrittely, on sama kahdentuma kuin kaksi toteutusta samasta funktiosta.
+
+**`LANG_DECL=1` ⇒ älä kysy äläkä muokkaa mitään.** Jatka osioon 5.
+
+**`LANG_DECL=0` ⇒ kysy `AskUserQuestion`illa** ennen kuin luot issueta. Yksi kysymys, ei yhtä per
+pinta. Tee kysymyksessä ero näkyväksi: koodi, koodikommentit ja commit-viestit ovat jo
+englanniksi koodausstandardin nojalla, joten kysymys koskee **ihmiselle näkyviä pintoja** —
+PR-kuvaukset, issue-kommentit, dokumentaatio ja suunnitelmat.
+
+**Älä tarjoa mitään kieltä valmiiksi valittuna.** Repon olemassa oleva teksti kelpaa
+havainnoksi (*"repon dokumentaatio on tällä hetkellä kielellä X"*), ei oletusarvoksi: oikeaan
+osunut oletus on sattuma eikä johdos, ja sattuma menee läpi hiljaa.
+
+Kokoa vastauksesta valmis lisäys ja **näytä se osion 4 luonnoksen yhteydessä** samassa
+vahvistuksessa kuin issue. Tämä on ainoa kohta, jossa tämä komento koskee kohderepon
+työpuuhun, joten se ei saa tapahtua näkymättömissä:
+
+```markdown
+## Languages
+
+- Code and comments: English
+- Commit messages: English
+- PR descriptions: <vastaus>
+- Issue comments: <vastaus>
+- Documentation: <vastaus>
+- Plans: <vastaus>
+```
+
+> **Komento ei committaa.** Se lisää lohkon `CLAUDE.md`-tiedoston loppuun ja jättää muutoksen
+> työpuuhun, kuten muunkin tuotoksensa. Committaaminen on käyttäjän päätös.
+
+Sisarkomento [`/new-epic`](new-epic.md) tekee saman kokonaisuudelle osiossaan 2.1 — yksi kysymys
+kattaa siellä koko ketjun.
+
 ## 5. Kirjoita — kaikki kuusi poimintaehtoa yhdellä kutsulla
 
 Poimintaehdot ovat `lib/issue.sh`:n `pick_oldest_candidate` ja `_pick_filter_jq`. Luotavan issuen
@@ -203,6 +255,10 @@ on täytettävä **kaikki kuusi**:
 
 Kolme ehtoa täyttyy rakenteellisesti eikä niitä tarvitse tarkistaa: issue on `open`, se ei ole PR,
 eikä sillä ole avoimia `blocked_by`-estäjiä, koska tämä komento ei luo riippuvuuksia.
+
+Jos osio 4.1 tuotti kielimäärittelyn, **kirjoita se ensin** kohderepon `CLAUDE.md`:hen. Sen
+jälkeen syntyvä issue on jo sellainen, jonka ajo lukee määrittelyn — päinvastaisessa
+järjestyksessä poller voi ehtiä väliin.
 
 Jos osio 1.1 löysi puuttuvia labeleita **ja** käyttäjä hyväksyi niiden luonnin, luo ne ensin —
 muuten issue syntyisi labelilla, jota ei ole:
@@ -246,6 +302,7 @@ Tulosta aina, myös epäonnistumisessa:
 | Labelit | mitkä lisättiin |
 | Luodut labelit | jos osio 5 loi puuttuvia labeleita, mitkä |
 | Watchlist | osion 1 huomio, jos `COVERED=1` |
+| Kielimäärittely | kirjattiinko se `CLAUDE.md`:hen (osio 4.1) — ja että muutos on committaamatta |
 
 Jos kirjoitus epäonnistui, kerro **komento, jolla ihminen tekee sen käsin** — yllä oleva `gh api`
 -kutsu kelpaa sellaisenaan. Lopuksi:

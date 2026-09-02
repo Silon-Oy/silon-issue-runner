@@ -328,6 +328,31 @@ load_repo_base_branch() {
   fi
 }
 
+# repo_declares_languages <worktree-path> — 0 = the target repo declares the
+# languages of its human-visible surfaces, 1 = it does not.
+#
+# The package must not assert which human language a target repo speaks: that
+# choice belongs to the repo, and shipping the operator's own preference would
+# make a correct hit a coincidence rather than a derivation. The declaration
+# therefore lives in the TARGET repo's own CLAUDE.md, and this reader is the
+# machine half of the shape documented in principles/coding.md ("Määrittelyn
+# muoto"): a heading line carrying the word `Languages`. Documented shape and
+# detected shape are the same sentence on purpose — two ideas of "what counts as
+# a declaration" is precisely the duplication CLAUDE.md §7 forbids.
+#
+# Deliberately NOT fail-closed, unlike the S2b/S2c gates: the gate that closes
+# this hole sits at issue-writing time, where a human is present (/new-issue,
+# /new-epic). A run must not stop because a repo has not been asked yet — it
+# falls back to the coding standard's portable default (code and commit messages
+# in English) and says so once, in the PR body.
+LANGUAGE_DECL_PATTERN='^#{1,6}[^#]*languages'
+
+repo_declares_languages() {
+  local f="$1/CLAUDE.md"
+  [ -f "$f" ] || return 1
+  grep -qiE "$LANGUAGE_DECL_PATTERN" "$f"
+}
+
 # ---------- helpers ----------
 slugify_title() {
   printf '%s' "$1" \
@@ -2016,6 +2041,12 @@ PROVISION_ENV
   {
     echo "Auto-run for issue #$ISSUE_NUM — $ISSUE_TITLE"
     echo
+    # One line, only when the target repo has not declared the languages of its
+    # human-visible surfaces. Never a blocker (see repo_declares_languages).
+    if ! repo_declares_languages "$WORKTREE_PATH"; then
+      echo "> **No language declaration** in this repository's \`CLAUDE.md\`, so this run fell back to the coding standard's default (code and commit messages in English) — declare the languages of the human-visible surfaces there; \`/new-issue\` and \`/new-epic\` ask for them."
+      echo
+    fi
     echo "## Cycle review"
     echo
     echo '```'
