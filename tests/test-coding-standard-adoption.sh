@@ -192,12 +192,19 @@ fi
 
 # === The documented shape and the reader agree =============================
 # Two ideas of "what counts as adoption" is the duplication CLAUDE.md §7 forbids,
-# so README.md §5 must actually document the path the reader resolves.
-if grep -qF '@.claude/principles.md' "$ROOT/README.md" \
-   && grep -qF 'CODING_STANDARD_IMPORT_PATH' "$ORCH"; then
-  echo "PASS: README.md §5 documents the import orchestrate.sh reads"
+# so README.md §5 must actually document the path the reader resolves. The path
+# is derived from the reader rather than restated here: a guard that hardcoded it
+# would keep passing after the reader moved. Fail-closed — a derivation that
+# yields nothing means the constant was renamed away, which is itself the drift.
+IMPORT_PATH=$(sed -n "s/^CODING_STANDARD_IMPORT_PATH='\([^']*\)'.*\$/\1/p" "$ORCH" | head -1)
+if [ -z "$IMPORT_PATH" ]; then
+  echo "FAIL: CODING_STANDARD_IMPORT_PATH no longer readable from orchestrate.sh"
+  FAIL=1
+elif grep -qF "@$IMPORT_PATH" "$ROOT/README.md"; then
+  echo "PASS: README.md §5 documents @$IMPORT_PATH, the import orchestrate.sh reads"
 else
-  echo "FAIL: the documented shape and the reader have drifted apart"; FAIL=1
+  echo "FAIL: README.md does not document @$IMPORT_PATH — documented shape and reader have drifted apart"
+  FAIL=1
 fi
 
 echo "----------------------------------------"
