@@ -44,16 +44,12 @@ pnpm-monorepo-build verifioinnissa). Ohjeet tässä tilanteessa:
 
 Jos restart-konteksti on tyhjä, tämä on tavallinen ensiajo — ohita tämä osio.
 
-## Sääntöjä (RUN_ISSUES_AUTO=1)
+## Toimintasopimus
 
-Olet automaattisessa tilassa. Sinun **EI** tarvitse kysyä lupaa jokaiseen muutokseen, mutta:
-
-- **Älä commitoi `main`-haaraan.** Olet feature-haarassa `{{BRANCH}}`; pysy siinä.
-- **Älä lisää salaisuuksia** committeihin, prompteihin tai PR-kommentteihin.
-- **Älä aja destruktiivisia komentoja prodiin.** Sinulla on kloonattu kanta, jos klooni
-  on annettu — käytä sitä.
-- **Jos issue-speksi on epäselvä työn aikana**: pysähdy, commitoi siihen mennessä syntynyt
-  työ, ja kirjaa kysymys PR-kuvaukseen draft-tilassa. Älä arvaa.
+Toimintasopimus — lupa toimia ilman lupakyselyä ja sen rajat — on toimitettu tälle kutsulle
+järjestelmäkehotteena paketin tiedostosta `principles/auto-run-contract.md`. Sitä ei toisteta
+tässä, jotta kahta rinnakkaista sanamuotoa ei synny. Tämän ajon feature-haara on nimetty yllä
+kohdassa **Konteksti**.
 
 ## Selain-UI-verifiointi (jos serving-osoite on injektoitu)
 

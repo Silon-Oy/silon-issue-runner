@@ -5,6 +5,7 @@
 #   - a prompt file (already rendered with placeholders substituted)
 #   - an output file:  <run-dir>/<step-id>.out
 #   - an exit-code file: <run-dir>/<step-id>.exit
+#   - the appended system prompt: <run-dir>/<step-id>.system-prompt.md
 # This separation keeps the orchestrator state-machine simple (it just
 # checks the exit file) and lets prompts be re-read for debugging.
 
@@ -51,7 +52,7 @@ RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-$RUN_ISSUES_CLAUDE_CMD_DEFAULT}"
 # Example: RUN_ISSUES_CLAUDE_MODEL=claude-opus-4-8
 RUN_ISSUES_CLAUDE_MODEL="${RUN_ISSUES_CLAUDE_MODEL:-}"
 
-# ---------- always-on coding standard (issue #175) ----------
+# ---------- always-on system prompt: contract + coding standard ----------
 # Every orchestrated step gets the package's coding standard as an APPENDED
 # system prompt. Before this, only 01-cycle-review.md injected anything
 # (the TARGET repo's CLAUDE.md, a different document); S8/S9 and the PR
@@ -67,11 +68,27 @@ RUN_ISSUES_CLAUDE_MODEL="${RUN_ISSUES_CLAUDE_MODEL:-}"
 # models (symlink to the package root, or dotfiles submodule).
 RUN_ISSUES_PRINCIPLES_FILE_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/principles/coding.md"
 
+# The packaged operating contract (issue #176): what an orchestrated agent is
+# allowed to do without asking, and the four boundaries on that permission. It
+# used to live in prompts/02-implementer.md AND in the operator's own user-level
+# CLAUDE.md, so it reached the implementer twice and the PR watcher's agents not
+# at all — and a co-developer whose own instructions say "never change anything
+# without asking" got an agent arguing with the automation.
+#
+# Deliberately NOT the same file as the coding standard, and deliberately WITHOUT
+# an env var of its own. The standard is overridable per repo (principles_file)
+# and opt-out-able (RUN_ISSUES_PRINCIPLES_FILE=""); the contract must survive
+# both, because a target repo shipping its own coding standard must not be able
+# to silently drop the runner's own operating boundaries. Two files, one flag —
+# hence the concatenation in _resolve_system_prompt_file.
+RUN_ISSUES_CONTRACT_FILE_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/principles/auto-run-contract.md"
+
 # NOTE the absence of a `RUN_ISSUES_PRINCIPLES_FILE="${RUN_ISSUES_PRINCIPLES_FILE:-...}"`
 # line here. Two independent reasons, both load-bearing:
 #
 #  1. `:-` collapses "unset" into "set to empty", and those must stay distinct:
-#     unset = use the packaged standard, empty = send no system prompt at all.
+#     unset = use the packaged standard, empty = send no coding standard at all
+#     (the contract above is unaffected either way).
 #     Presence (${VAR+x}), not emptiness, is therefore the test everywhere below.
 #  2. lib/machine-env.sh snapshots every ALREADY-SET RUN_ISSUES_* name and
 #     restores it over the machine env file. Anything this module materialises at
@@ -138,6 +155,56 @@ _resolve_principles_file() {
     printf '%s' "$RUN_ISSUES_PRINCIPLES_FILE_DEFAULT"
   else
     _claude_call_log "WARNING: packaged coding standard missing at $RUN_ISSUES_PRINCIPLES_FILE_DEFAULT — sending no system prompt"
+  fi
+  return 0
+}
+
+# _resolve_system_prompt_file <run-dir> <step-id> — print the single path to
+# append as a system prompt, or nothing when there is none. Never fails the run.
+#
+# The CLI flag takes ONE file but the package has two always-on documents with
+# different override rules (see RUN_ISSUES_CONTRACT_FILE_DEFAULT). They are
+# therefore concatenated into a per-step file next to the step's .out/.exit,
+# which keeps them re-readable for debugging exactly like the rendered prompt is.
+#
+# The contract comes FIRST: it is the one document that cannot be overridden, and
+# a reader (human or model) hitting the permission rule before the style rules
+# matches the order in which they matter.
+#
+# Fail-soft in three directions, because none of these may kill a run: a missing
+# packaged contract degrades to the standard alone, a missing standard degrades
+# to the contract alone, and an unwritable run-dir degrades to the contract file
+# itself (the non-overridable half) rather than to nothing.
+_resolve_system_prompt_file() {
+  local run_dir="$1" step_id="$2"
+
+  local contract=""
+  if [ -r "$RUN_ISSUES_CONTRACT_FILE_DEFAULT" ]; then
+    contract="$RUN_ISSUES_CONTRACT_FILE_DEFAULT"
+  else
+    _claude_call_log "WARNING: packaged operating contract missing at $RUN_ISSUES_CONTRACT_FILE_DEFAULT — the agent will not be told it may act without asking"
+  fi
+
+  local principles
+  principles=$(_resolve_principles_file)
+
+  # Only one of the two present (or neither): no concatenation needed, and no
+  # temp file to fail to write.
+  if [ -z "$contract" ]; then
+    printf '%s' "$principles"
+    return 0
+  fi
+  if [ -z "$principles" ]; then
+    printf '%s' "$contract"
+    return 0
+  fi
+
+  local combined="$run_dir/${step_id}.system-prompt.md"
+  if { cat "$contract"; printf '\n'; cat "$principles"; } 2>/dev/null > "$combined"; then
+    printf '%s' "$combined"
+  else
+    _claude_call_log "WARNING: could not write $combined — sending the operating contract alone"
+    printf '%s' "$contract"
   fi
   return 0
 }
@@ -216,7 +283,7 @@ call_claude() {
   # somewhere with a space in it. The ${arr[@]+"${arr[@]}"} form expands to zero
   # words when empty without tripping `set -u` on bash 3.2 (macOS system bash).
   local principles_file
-  principles_file=$(_resolve_principles_file)
+  principles_file=$(_resolve_system_prompt_file "$run_dir" "$step_id")
   local -a principles_args=()
   [ -n "$principles_file" ] && principles_args=(--append-system-prompt-file "$principles_file")
 

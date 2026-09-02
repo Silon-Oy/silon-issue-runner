@@ -22,7 +22,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_CLAUDE_TIMEOUT_MAX` | `3600` | Ramppaavan timeoutin katto |
 | `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu |
 | `RUN_ISSUES_CLAUDE_MODEL` | *(tyhjä)* | Mallin ohitus |
-| `RUN_ISSUES_PRINCIPLES_FILE` | *(asettamatta)* = paketin `principles/coding.md` | Jokaiseen orkestroituun claude-kutsuun liitettävä koodausstandardi (`--append-system-prompt-file`). **Asettamatta jättäminen ja tyhjäksi asettaminen ovat eri asia:** tyhjä = ei järjestelmäkehotetta lainkaan. Lukukelvoton polku ⇒ lokirivi + paketin oletus, ei ajon kaatumista |
+| `RUN_ISSUES_PRINCIPLES_FILE` | *(asettamatta)* = paketin `principles/coding.md` | Jokaiseen orkestroituun claude-kutsuun liitettävä koodausstandardi (`--append-system-prompt-file`). **Asettamatta jättäminen ja tyhjäksi asettaminen ovat eri asia:** tyhjä = ei koodausstandardia lainkaan. Lukukelvoton polku ⇒ lokirivi + paketin oletus, ei ajon kaatumista. **Ei koske toimintasopimusta** (`principles/auto-run-contract.md`), joka liitetään samaan järjestelmäkehotteeseen aina eikä ole ohitettavissa |
 | `RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT` | `1200` | S7b:n aikakatto |
 | `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Koneistokohtainen env-tiedosto |
 | `RUN_ISSUES_LOCK_ROOT` | `$HOME/Library/Application Support/run-issues/locks` | Lukkohakemistojen juuri |

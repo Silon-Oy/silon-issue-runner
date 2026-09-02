@@ -35,10 +35,16 @@ geneerinen *sisältö* kuuluu tänne, kun se läpäisee **omistajuuspredikaatin*
 > Nimeääkö teksti yhtäkään henkilöä, konetta, organisaatiota, asiakasta, credentialia tai
 > paketin ulkopuolista polkua? Jos kyllä, se on konfiguraatiota eikä kuulu tänne.
 
-`principles/coding.md` on tämän ensimmäinen ja kanoninen tapaus: aina päällä oleva
-koodausstandardi yhtenä tekstinä, johon muut kanavat viittaavat sen sijaan että tiivistäisivät
-tai kopioisivat sitä. `tests/test-principles-neutrality.sh` vartioi predikaattia mekaanisesti
-(kielletty sanasto, nolla osumaa, fail-closed derivaatio).
+`principles/`-hakemisto on tämän kanoninen toteutus: aina päällä olevat tekstit, joihin muut
+kanavat viittaavat sen sijaan että tiivistäisivät tai kopioisivat ne. Sivuja on kaksi ja niiden
+ero on **korvattavuudessa**, ei aiheessa: `principles/coding.md` (koodausstandardi) on
+kohderepon korvattavissa ja opt-outattavissa, `principles/auto-run-contract.md`
+(orkestroidun ajon toimintasopimus: lupa toimia ilman lupakyselyä ja sen neljä rajaa) **ei ole
+kumpaakaan** — kohderepo ei saa pystyä poistamaan runnerin omia toimintarajoja. Siksi kaksi
+tiedostoa yhden sijaan; `lib/claude-call.sh` yhdistää ne yhdeksi järjestelmäkehotteeksi, koska
+CLI:n lippu ottaa yhden tiedoston. `tests/test-principles-neutrality.sh` vartioi predikaattia
+mekaanisesti koko hakemistossa (kielletty sanasto, nolla osumaa, fail-closed derivaatio ja
+fail-closed tiedostojoukko).
 
 Osat: **orkestraattori** (`orchestrate.sh` + `lib/` + `prompts/`), **pollerit** (`poller.sh`,
 `pr-watch-poller.sh`), **PR-vahti** (`pr-watch.sh`), **apuvälineet** (`cleanup-run.sh`,
@@ -318,7 +324,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `action-service.py` | **Ainoa Python-tiedosto.** Ohjaamon HTTP + auth -ydin: fail-closed `tailscale whois`, kolmikerroksinen CSRF, audit-loki, `execve` dispatcheriin — ei koskaan koske gh:hun itse |
 | `action-token.sh` | Ohjaamon jaettu CSRF-token. Bearer-salaisuus: ei koskaan `status.json`iin, lokiin eikä kommenttiin |
 | `archive.sh` | Terminaalitilaisten run-dirien siirto `run-issues-archive/`iin. PR-suoja on paikallinen, ei gh-kutsu |
-| `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi) ja aina päällä olevan koodausstandardin toimitus — myös PR-vahti kutsuu tästä `load_repo_principles_file`ia |
+| `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi) ja aina päällä olevan järjestelmäkehotteen toimitus: toimintasopimus + koodausstandardi yhdistettynä — myös PR-vahti kutsuu tästä `load_repo_principles_file`ia |
 | `env-bootstrap.sh` | Pakettimanagerin tunnistus S7b:n fail-fast-asennusporttiin |
 | `epic.sh` | Epic-tason automaatio: ajolabelien propagointi, `needs-human`-eskalaatio, valmiuskommentti. Best-effort (aina rc 0) |
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |

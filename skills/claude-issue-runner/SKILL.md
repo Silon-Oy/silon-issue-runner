@@ -2,7 +2,7 @@
 name: claude-issue-runner
 description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean or auto-merge label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /run-issues, /run-epic, /pr-watch or /cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
-version: 2.2.0
+version: 2.3.0
 ---
 
 # claude-issue-runner — järjestelmän käyttöohje
@@ -104,6 +104,24 @@ seurausta:
 - **Epäonnistunut ajo jättää issuen varatuksi `auto-claimed`illa**, ja issue palaa automaatioon
   vasta siivouksen jälkeen: poller ei poimi samaa issueta yhä uudelleen samaan seinään. **Älä
   poista `auto-claimed`ia käsin** — se palauttaisi keskeneräisen ajon poimintaan.
+
+## Mitä automaattiajo saa tehdä — ja mitä ei
+
+Ajon agentti toimii **ilman lupakyselyä**: ihmistä ei ole silmukassa, joten kysymys jäisi
+vastaamatta ja ajo roikkumaan. Se ei ole ero kontrollissa vaan ero siinä, missä kontrolli on:
+ajo tapahtuu omassa worktreessään omalla feature-haarallaan, ja **pull request on
+katselmoitavissa ennen mergeä** — siinä portti on.
+
+Rajat ovat ajon aikana neljä: ei committia eikä pushia oletushaaraan, ei salaisuuksia mihinkään
+mitä ajo kirjoittaa, ei destruktiivisia komentoja tuotantoon, eikä arvaamista epäselvästä
+speksistä — epäselvä speksi päätyy draft-PR:ksi ja kysymykseksi, ei arvaukseksi.
+
+**Tämä on ihmiselle luettava kuvaus, ei sopimuksen toimituskanava.** Kanoninen sanamuoto on
+paketin tiedostossa `principles/auto-run-contract.md`, ja se liitetään jokaiseen agenttikutsuun
+järjestelmäkehotteena. Sopimus ei siis ole kiinni siitä, latautuuko tämä skill.
+
+Käytännön seuraus sinulle: **et voi estää muutosta ohjeella, joka vaatii kysymään luvan.** Jos
+haluat tehdä issuen itse, käytä `wip`-labelia.
 
 ## Riippuvuudet ja epicit
 

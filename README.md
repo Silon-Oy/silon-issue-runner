@@ -1146,34 +1146,25 @@ paketin bash-skripti ei suorita sitä.
 
 ### 7.3 `RUN_ISSUES_AUTO=1` -rajat
 
-Automaattiajossa agentti saa tehdä muutoksia ilman erillistä lupakyselyä. Rajat asetetaan
-[`prompts/02-implementer.md`](prompts/02-implementer.md):ssä, ja sama sopimus kannattaa
-kirjata omaan globaaliin `~/.claude/CLAUDE.md`-tiedostoosi, jotta se pätee myös silloin kun
-ajat agenttia käsin. Kopioi:
+Automaattiajossa agentti saa tehdä muutoksia ilman erillistä lupakyselyä. Sopimus siitä, mitä
+tuo lupa kattaa ja mitkä ovat sen rajat, on **yhtenä tekstinä paketissa**:
+[`principles/auto-run-contract.md`](principles/auto-run-contract.md). Lue rajat sieltä — tässä
+osiossa niitä ei toisteta, jotta kahta rinnakkaista sanamuotoa ei pääse syntymään.
 
-```markdown
-## Poikkeus — `RUN_ISSUES_AUTO=1`
+Toimitus on rakenteellinen, ei ohjeistettu: `lib/claude-call.sh` liittää sopimuksen
+**jokaiseen** orkestroituun claude-kutsuun `--append-system-prompt-file`-lipulla — cycle
+review, toteutus, evoluutiovaihe sekä PR-vahdin konfliktinratkaisu ja CI-korjaus. Mitään ei siis
+tarvitse kopioida omaan `CLAUDE.md`-tiedostoon, eikä sopimus ole kiinni siitä, mitä ajokoneen
+käyttäjätason muisti sattuu sisältämään.
 
-Kun ympäristömuuttuja `RUN_ISSUES_AUTO=1` on asetettu, olet `/run-issues`-orkestraattorin
-ajamana ja saat tehdä muutoksia ilman erillistä lupakyselyä. Rajat tässä tilassa:
+Sopimus kulkee samassa järjestelmäkehotteessa kuin koodausstandardi (§5, `principles_file`),
+mutta se on **eri tiedosto tarkoituksella**: kohderepon `principles_file`-korvaus ja
+`RUN_ISSUES_PRINCIPLES_FILE=""` -opt-out koskevat vain koodausstandardia. Kumpikaan ei voi
+pudottaa sopimusta, koska kohderepo ei saa pystyä poistamaan runnerin omia toimintarajoja.
 
-- **Älä koskaan committaa tai pushaa `main`-haaraan** — orkestraattori on luonut feature-haaran
-  (`auto-run/<repo-slug>-issue-<N>-<slug>`); pysy siinä.
-- **Älä lisää salaisuuksia** (API-avaimet, salasanat, tokenit) committeihin, prompteihin,
-  lokeihin tai PR-kommentteihin.
-- **Älä aja destruktiivisia komentoja prodiin** (drop database, force push remoteen,
-  `rm -rf` repon ulkopuolelle, tuotantopalvelinten muutokset). Käytä kloonattua kantaa,
-  jos sellainen on annettu.
-- **Jos issue-speksi on epäselvä tai ristiriidassa havaitun koodin kanssa**: pysähdy,
-  committaa siihen mennessä syntynyt työ, avaa PR **draftina** ja kirjoita PR-kuvaukseen
-  tarkka kysymys — älä arvaa.
-```
-
-Haaranimen muoto on repo-nimiavaruudella varustettu, jotta kahden repon issue #5 eivät
-törmää samassa kloonissa. Ei-`origin`-remotelle nimeen tulee lisäksi remoten nimi.
-
-**Jos muutat lohkoa, muuta `prompts/02-implementer.md` samalla.** Muuten agentin ajonaikaiset
-säännöt ja globaali `CLAUDE.md` ajautuvat erilleen, ja agentti noudattaa promptia.
+Ajon feature-haaran nimi on repo-nimiavaruudella varustettu
+(`auto-run/<repo-slug>-issue-<N>-<slug>`), jotta kahden repon issue #5 eivät törmää samassa
+kloonissa. Ei-`origin`-remotelle nimeen tulee lisäksi remoten nimi.
 
 ### 7.4 AI-konfliktinratkaisu on oletuksena pois
 
