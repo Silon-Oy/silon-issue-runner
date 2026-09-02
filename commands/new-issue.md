@@ -195,7 +195,10 @@ hetkeen, koska tämä on ainoa kohta koko ketjussa, jossa ihminen on varmasti pa
 
 ```bash
 LANG_DECL=1
-grep -qiE '^#{1,6}[^#]*languages' "$REPO_ROOT/CLAUDE.md" 2>/dev/null || LANG_DECL=0
+# Kohderepon juuri on työhakemisto (osio 1). Luetaan se tässä uudelleen eikä
+# osion muuttujasta: tyhjäksi jäänyt polku ohittaisi määrittelyn hiljaa ja
+# kysyisi kielet repolta, joka on ne jo kirjannut.
+grep -qiE '^#{1,6}[^#]*languages' "$(pwd)/CLAUDE.md" 2>/dev/null || LANG_DECL=0
 echo "LANGUAGE_DECLARATION=$LANG_DECL"
 ```
 
