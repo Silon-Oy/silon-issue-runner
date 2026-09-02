@@ -51,6 +51,132 @@ RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-$RUN_ISSUES_CLAUDE_CMD_DEFAULT}"
 # Example: RUN_ISSUES_CLAUDE_MODEL=claude-opus-4-8
 RUN_ISSUES_CLAUDE_MODEL="${RUN_ISSUES_CLAUDE_MODEL:-}"
 
+# ---------- always-on coding standard (issue #175) ----------
+# Every orchestrated step gets the package's coding standard as an APPENDED
+# system prompt. Before this, only 01-cycle-review.md injected anything
+# (the TARGET repo's CLAUDE.md, a different document); S8/S9 and the PR
+# watcher's agents relied on Claude Code loading the operator's own user-level
+# memory, so the rules applied only on the machine that happened to have them.
+# Delivery must be structural, not incidental — hence the CLI flag rather than a
+# skill, whose description-gated loading is a silent-failure mechanism for
+# always-on rules.
+#
+# The packaged standard. A named constant (like RUN_ISSUES_CLAUDE_CMD_DEFAULT)
+# because _resolve_principles_file needs it as the fallback target, not just as
+# an initial value. Derived from BASH_SOURCE so it resolves in both install
+# models (symlink to the package root, or dotfiles submodule).
+RUN_ISSUES_PRINCIPLES_FILE_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/principles/coding.md"
+
+# NOTE the absence of a `RUN_ISSUES_PRINCIPLES_FILE="${RUN_ISSUES_PRINCIPLES_FILE:-...}"`
+# line here. Two independent reasons, both load-bearing:
+#
+#  1. `:-` collapses "unset" into "set to empty", and those must stay distinct:
+#     unset = use the packaged standard, empty = send no system prompt at all.
+#     Presence (${VAR+x}), not emptiness, is therefore the test everywhere below.
+#  2. lib/machine-env.sh snapshots every ALREADY-SET RUN_ISSUES_* name and
+#     restores it over the machine env file. Anything this module materialises at
+#     source time (claude-call.sh is sourced before source_machine_env runs) can
+#     consequently never be set from ~/.config/run-issues/env again. Leaving the
+#     variable untouched keeps that delivery channel open and keeps "nobody
+#     configured this" decidable for the whole run.
+#
+# Resolution therefore happens lazily, at call time:
+#   1. RUN_ISSUES_PRINCIPLES_FILE from the environment / machine env file
+#   2. principles_file in the target repo's .claude/run-issues.json
+#      (applied by load_repo_principles_file, which yields to 1)
+#   3. this package's own principles/coding.md
+
+# _claude_call_log <message> — log through the caller's `log` when it has one
+# (orchestrate.sh writes to its run log), else to stderr. Same discovery pattern
+# as lib/machine-env.sh's _machine_env_log.
+_claude_call_log() {
+  if declare -F log >/dev/null 2>&1; then
+    log "claude-call: $1"
+  else
+    printf '[claude-call %s] %s\n' "$(date -u +%FT%TZ)" "$1" >&2
+  fi
+}
+
+# _resolve_principles_file — print the path to append as a system prompt, or
+# nothing when no system prompt should be sent. Never fails the run.
+#
+# MEASURED, and the reason this function exists at all: the flag is fail-CLOSED
+# on a bad path. Against claude CLI 2.1.257,
+# `--append-system-prompt-file /does/not/exist -p ...` aborts with
+# "Error: Append system prompt file not found: ..." before the agent starts —
+# it does not warn and continue. An unreadable override reaching the command
+# line would therefore kill every step of every run over one typo'd config key.
+# So readability is checked HERE and a bad path degrades to the packaged
+# standard; if even that is gone the flag is dropped entirely rather than
+# passed as a path we know the CLI will reject.
+#
+# (The same probe established that the option exists despite being absent from
+# `--help`: an unknown option errors at parse time — `--bogus -p ...` prints
+# "unknown option" — whereas this one parsed and reached authentication.
+# `--version`/`--help` short-circuit option parsing and can verify neither.)
+_resolve_principles_file() {
+  # Unset: nobody configured anything -> the packaged standard.
+  if [ -z "${RUN_ISSUES_PRINCIPLES_FILE+x}" ]; then
+    if [ -r "$RUN_ISSUES_PRINCIPLES_FILE_DEFAULT" ]; then
+      printf '%s' "$RUN_ISSUES_PRINCIPLES_FILE_DEFAULT"
+    else
+      _claude_call_log "WARNING: packaged coding standard missing at $RUN_ISSUES_PRINCIPLES_FILE_DEFAULT — sending no system prompt"
+    fi
+    return 0
+  fi
+
+  # Set to empty: a deliberate opt-out, so it is silent, not a warning.
+  [ -n "$RUN_ISSUES_PRINCIPLES_FILE" ] || return 0
+
+  if [ -r "$RUN_ISSUES_PRINCIPLES_FILE" ]; then
+    printf '%s' "$RUN_ISSUES_PRINCIPLES_FILE"
+    return 0
+  fi
+
+  _claude_call_log "WARNING: principles file not readable: $RUN_ISSUES_PRINCIPLES_FILE — falling back to the packaged standard"
+  if [ -r "$RUN_ISSUES_PRINCIPLES_FILE_DEFAULT" ]; then
+    printf '%s' "$RUN_ISSUES_PRINCIPLES_FILE_DEFAULT"
+  else
+    _claude_call_log "WARNING: packaged coding standard missing at $RUN_ISSUES_PRINCIPLES_FILE_DEFAULT — sending no system prompt"
+  fi
+  return 0
+}
+
+# load_repo_principles_file <repo-root> — apply the target repo's
+# principles_file override unless the environment already decided.
+#
+# Same opt-in convention as claude_timeout_seconds / base_branch: the key lives
+# in the target repo's .claude/run-issues.json and an absent file, absent key or
+# broken JSON is a benign no-op. A relative value is resolved against the repo
+# root so a repo can ship its own standard without knowing the runner's CWD.
+#
+# The environment test is PRESENCE, not emptiness: RUN_ISSUES_PRINCIPLES_FILE=""
+# is a deliberate opt-out that a repo config must not silently undo.
+#
+# Callers must invoke this AFTER source_machine_env — see the note above; running
+# it earlier would let the machine env file lose to the repo config, inverting
+# the documented precedence.
+load_repo_principles_file() {
+  local repo="$1"
+  [ -n "${RUN_ISSUES_PRINCIPLES_FILE+x}" ] && return 0
+
+  local cfg="$repo/.claude/run-issues.json"
+  [ -f "$cfg" ] || return 0
+  jq -e . "$cfg" >/dev/null 2>&1 || return 0
+
+  local p
+  p=$(jq -r '.principles_file // empty' "$cfg" 2>/dev/null || true)
+  [ -n "$p" ] || return 0
+  case "$p" in
+    /*) : ;;
+    *) p="$repo/$p" ;;
+  esac
+
+  RUN_ISSUES_PRINCIPLES_FILE="$p"
+  export RUN_ISSUES_PRINCIPLES_FILE
+  _claude_call_log "using repo principles_file=$p from $cfg"
+}
+
 # Path to a `timeout` binary. macOS ships `gtimeout` via coreutils;
 # fall back to a no-op wrapper that just exec's the command if no
 # timeout is available. Binary selection is delegated to preflight_timeout_bin
@@ -85,15 +211,24 @@ call_claude() {
   local model_flag=""
   [ -n "$RUN_ISSUES_CLAUDE_MODEL" ] && model_flag="--model $RUN_ISSUES_CLAUDE_MODEL"
 
+  # An ARRAY, not a word-split string like model_flag: this one carries a
+  # filesystem path, and a repo or operator may legitimately keep the package
+  # somewhere with a space in it. The ${arr[@]+"${arr[@]}"} form expands to zero
+  # words when empty without tripping `set -u` on bash 3.2 (macOS system bash).
+  local principles_file
+  principles_file=$(_resolve_principles_file)
+  local -a principles_args=()
+  [ -n "$principles_file" ] && principles_args=(--append-system-prompt-file "$principles_file")
+
   local rc=0
   if [ -n "$timeout_prefix" ]; then
     # shellcheck disable=SC2086
-    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   else
     printf '[claude-call %s] WARNING: no timeout binary available (timeout/gtimeout), claude calls may hang indefinitely — install coreutils (brew install coreutils)\n' \
       "$(date -u +%FT%TZ)" >&2
     # shellcheck disable=SC2086
-    $RUN_ISSUES_CLAUDE_CMD $model_flag --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   fi
 
   printf '%s\n' "$rc" > "$exit_file"

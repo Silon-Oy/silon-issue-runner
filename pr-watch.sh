@@ -922,6 +922,13 @@ _pr_call_agent() {
   local crc=0
   (
     cd "$worktree" || exit 99
+    # The coding standard reaches these agents through call_claude like every
+    # orchestrated step does (issue #175); only the repo-level override needs
+    # resolving here, because the watcher — unlike the orchestrator — has no
+    # REPO_ROOT of its own. The worktree IS a checkout of the target repo, so it
+    # carries the same .claude/run-issues.json. Kept inside the subshell so the
+    # variable cannot leak across PRs from different repos in one scan.
+    load_repo_principles_file "$worktree"
     RUN_ISSUES_CLAUDE_TIMEOUT="$timeout_secs" \
       call_claude "$out_dir" "$step_id" "$prompt_file"
   ) || crc=$?
