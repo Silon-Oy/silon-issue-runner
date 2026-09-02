@@ -529,11 +529,15 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
   kirjoitukset, #130 haut) ja arkistointi (#128) siirtää massan pois kuumilta poluilta, mutta
   jo levyllä olevan 345 MB:n kutistaminen on oma päätöksensä.
 
-**Skillin sisältöä vartioi kaksi testiä.** `tests/test-skill-labels.sh` johtaa labelisanaston
+**Skillejä vartioi kolme testiä.** `tests/test-skill-labels.sh` johtaa labelisanaston
 **koodista** ja vaatii skilliltä jokaisen — koodiin lisätty label ilman skill-riviä on punainen
 testi. Fail-closed: jos johdettu joukko kutistuu alle kahdeksan alkion tai ankkuri `needs-human`
 katoaa, testi kaatuu sen sijaan että läpäisisi tyhjästä. `tests/test-skill-surface.sh` tekee
-saman komentopinnalle molempiin suuntiin.
+saman komentopinnalle molempiin suuntiin. Molemmat koskevat vain `skills/claude-issue-runner`ia;
+`tests/test-skill-triggers.sh` koskee **jokaista** skilliä ja pitää voimassa sen, mikä tekee
+skillistä oikean muodon: `description` on ehdollinen lataussääntö, joten ehdoitta laukeava
+kuvaus on sama asia kuin sääntö jota ei sovelleta, ja nimetty skilliä jota paketti ei toimita
+on sama hiljainen vika kuin nimetty komento jota ei ole.
 
 ## 14. Languages
 

@@ -889,14 +889,22 @@ Kaksi asiaa kannattaa muistaa ajaessa käsin:
   `RUN_ISSUES_POLLER_HOSTS` ja exittaavat hiljaa nollalla, jos osumaa ei tule (osio 8).
   Muuttujalla ei ole oletusarvoa: asettamatta poller ei aja missään.
 
-### 6.9 Skill: `claude-issue-runner`
+### 6.9 Skillit
+
+Skill on **ehdollinen lataaja**: Claude lukee vain sen `description`-kentän ja päättää siitä,
+vetääkö rungon mukaan sessioon. Se on oikea muoto silloin kun säännöllä on **aito laukaisuehto**,
+ja väärä muoto aina päällä olevalle säännölle — sellainen kuuluu tiedostoon
+[`principles/coding.md`](principles/coding.md), joka luetaan ehdoitta. `install.sh` linkittää
+jokaisen paketin skillin polkuun `$HOME/.claude/skills/` **per hakemisto** samalla ajolla kuin
+agentit ja slash-komennot, joten ne ovat **globaalisti käytettävissä** kaikissa repoissa, ei
+vain tässä.
+
+#### `claude-issue-runner` — järjestelmän oma skill
 
 Päätökset järjestelmästä tehdään **kohderepossa**, jossa tätä README:tä ei ole vieressä: siellä
 kirjoitetaan ja labeloidaan issue, ja siellä törmätään siihen mitä automaatio on jättänyt
 jälkeensä. Sitä hetkeä varten paketti toimittaa skillin
-[`skills/claude-issue-runner/SKILL.md`](skills/claude-issue-runner/SKILL.md), jonka `install.sh`
-linkittää polkuun `$HOME/.claude/skills/` samalla ajolla kuin agentit ja slash-komennot. Skill
-on siis **globaalisti käytettävissä** kaikissa repoissa, ei vain tässä.
+[`skills/claude-issue-runner/SKILL.md`](skills/claude-issue-runner/SKILL.md).
 
 Se latautuu Claude-sessioon progressiivisesti silloin kun näet järjestelmän jäljen (label,
 `auto-run/`-haara, `run.json`, markerikommentti, botin avaama PR) ja kattaa kuusi asiaa:
@@ -910,8 +918,25 @@ dokumentissa ja `CLAUDE.md`:ssä.
 Sisällön ajantasaisuutta vartioivat `tests/test-skill-labels.sh` (labelisanasto molempiin
 suuntiin) ja `tests/test-skill-surface.sh` (komento- ja skriptipinta molempiin suuntiin).
 
+#### Laukeavat skillit
+
+Nämä eivät koske järjestelmää itseään vaan **yhtä työn lajia**, jolla on tunnistettava alkuhetki.
+Sisältö on samaa luokkaa kuin `principles/coding.md`:ssä — geneeristä, ei kenenkään
+konfiguraatiota — mutta ehdollisena, koska sääntö on merkityksetön silloin kun sitä ei tarvita.
+
+| Skill | Laukeaa kun | Kattaa |
+|---|---|---|
+| [`e2e-testing`](skills/e2e-testing/SKILL.md) | kirjoitat, korjaat tai katselmoit selainta ajavaa end-to-end-testiä | Playwright oletuksena, web-first assertions käsin kirjoitettujen odotusten sijaan, `data-test`/`data-testid` tekstipohjaisten valitsimien sijaan, ja testitunnukset erillisenä tilinä — ei olemassa olevan käyttäjän salasanaa vaihtamalla |
+| [`container-build`](skills/container-build/SKILL.md) | projektin ensimmäinen konttibuild, tai image-buildi on hidas, ei osu cacheen tai epäilyttää sisältönsä puolesta | `.dockerignore` **ennen** ensimmäistä buildia ja mitä build-konteksti ilman sitä imaisee (riippuvuushakemistot, `.git`, `.env*`) |
+
+`tests/test-skill-triggers.sh` vartioi molempia sääntöjä mekaanisesti jokaiselle paketin
+skillille: `description` ei saa lukea ehdoitta laukeavana, eikä skill saa nimetä toista
+skilliä, jota paketti ei toimita.
+
+#### Kun `$HOME/.claude/skills` on vieras hakemistosymlinkki
+
 Jos `$HOME/.claude/skills` on koneella kokonainen hakemistosymlinkki (jonkin toisen lähteen
-omistama hakemisto), skill ei asennu automaattisesti: `install.sh` tulostaa siitä
+omistama hakemisto), skillit eivät asennu automaattisesti: `install.sh` tulostaa siitä
 `CONFLICT`-rivin ja exit-koodin 4, mutta linkittää agentit ja komennot normaalisti. Miksi
 kieltäytymisen sijaan conflict: [`CLAUDE.md`](CLAUDE.md) §3.
 
