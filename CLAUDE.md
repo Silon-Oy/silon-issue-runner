@@ -48,7 +48,8 @@ fail-closed tiedostojoukko).
 
 Osat: **orkestraattori** (`orchestrate.sh` + `lib/` + `prompts/`), **pollerit** (`poller.sh`,
 `pr-watch-poller.sh`), **PR-vahti** (`pr-watch.sh`), **apuvälineet** (`cleanup-run.sh`,
-`auto-clean.sh`, `stop-run.sh`, `status*.sh`, `run-epic.sh`, `self-update.sh`) ja
+`auto-clean.sh`, `auto-reset.sh`, `stop-run.sh`, `status*.sh`, `run-epic.sh`,
+`self-update.sh`) ja
 **Claude-integraatio** (`commands/`, `skills/`, `prompts/`, `principles/`).
 
 ## 2. Repo-juuri on mount-piste
@@ -251,7 +252,7 @@ Kolme mitattua tapausta samasta juuresta:
 
 | Paikka | Ennen | Korjaus |
 |---|---|---|
-| `scan_clean` | 337 GraphQL-kutsua/tikki (~4000/h) — yksi `gh issue view` per paikallinen issue | Kysy **labelia**, ei issueita: yksi listaus per repo, leikkaus muistissa |
+| `scan_teardown` | 337 GraphQL-kutsua/tikki (~4000/h) — yksi `gh issue view` per paikallinen issue | Kysy **labelia**, ei issueita: yksi listaus per repo per purkulabel, leikkaus muistissa |
 | `status.sh --github` | 318 turhaa `gh issue view`iä/päivitys | Suljettu issue on **terminaalitila** ⇒ detail kannetaan cache-missin yli |
 | PR-vahdin skannaus | 798 hakua/h, ~kaikki jo suljettujen PR:ien uudelleentarkistusta | Lopullisuustarkistus **haun eteen** paikallisesta tilasta |
 
@@ -353,15 +354,24 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-github.sh` | `status.sh --github`-rikastus. Ei omaa CI-rollupia eikä merge-päätöstä — kutsuu `pr-watch-lib.sh`:n omia |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot. `_iso_to_epoch` asuu täällä, jotta poller ja näkymä laskevat iän identtisesti |
+| `teardown.sh` | Label-vetoisen purun turvaportit **kutsuttavana funktiona**: lukko, run-dir-inventaario, `completed`-ajon PR-portti, `cleanup-run.sh`-delegaatti. `auto-clean.sh` ja `auto-reset.sh` ovat sen ohuita lopputuloskerroksia |
 | `version.sh` | Ajossa olevan version ja submodule-pinnin näkyväksi teko. Fail-soft: puuttuva `.git` ⇒ `?` |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 | `issue.test.sh`, `render-prompt.test.sh` | Yksikkötestit (`verify_claim`, `render_prompt`) |
 
-**Jaetut primitiivit — älä monista.** Neljä kohtaa, joissa kahden toteutuksen ajautuminen on
-aiemmin ollut oikea vika: poimintakysely (`pick_oldest_candidate`), epicin lapsijoukko
-(`list_epic_children` — **myös näkymä kutsuu tätä**, joten näkymä ja ajo eivät voi olla eri
-mieltä), ajon lopetus (`run_terminate`) ja poimintalabelien resolvointi (`poller_pick_labels` —
-`/new-epic` labeloi sillä, jottei se voi kirjoittaa epicille labelia jota poller ei poimi).
+**Jaetut primitiivit — älä monista.** Viisi kohtaa, joissa kahden toteutuksen ajautuminen on
+aiemmin ollut oikea vika tai olisi ilmeinen: poimintakysely (`pick_oldest_candidate`), epicin
+lapsijoukko (`list_epic_children` — **myös näkymä kutsuu tätä**, joten näkymä ja ajo eivät voi
+olla eri mieltä), ajon lopetus (`run_terminate`), poimintalabelien resolvointi
+(`poller_pick_labels` — `/new-epic` labeloi sillä, jottei se voi kirjoittaa epicille labelia
+jota poller ei poimi) ja **purun turvaportit** (`teardown_run` + pollerin `scan_teardown`).
+
+Viimeinen on eri luokkaa kuin muut: purkuverbejä on kaksi (`auto-clean` sulkee issuen,
+`auto-reset` jättää sen auki poimintaan) ja ne eroavat **neljässä arvossa** — liipaisulabel,
+skipped-label, suljetaanko issue, kommenttiteksti. Portit ovat turvakriittisiä, ja **puuttuva
+portti näyttää läpäisseeltä portilta**: kopiossa ajautuminen ei näy mistään. Siksi verbi on
+lopputuloskerros, ei toinen toteutus. Sama koskee skannausta — toinen label on toinen
+parametri, ei toinen skannausmuoto, jottei §5.4:n kustannusinvariantti kahdennu.
 
 ## 8. Ympäristömuuttujat
 
@@ -449,7 +459,7 @@ Neljä sääntöä, jotka eivät näy taulukosta:
 - **`needs-human` on pidätyslippu.** Sen ollessa paikallaan vahti ohittaa ajon hiljaa (ei
   uudelleenkommentointia joka tikillä); kun ihminen poistaa sen, ajo re-armataan.
 
-Ohjaamon toimintopalvelu delegoi neljä toimintoa `execve`llä olemassa oleville skripteille —
+Ohjaamon toimintopalvelu delegoi viisi toimintoa `execve`llä olemassa oleville skripteille —
 **ei riviäkään uutta purku-, merge- tai restart-logiikkaa**. Python ei koske gh:hun eikä
 labeleihin. Turvamalli: `README.md` §7.9.
 
