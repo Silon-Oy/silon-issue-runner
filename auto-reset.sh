@@ -28,7 +28,8 @@
 #   auto-reset.sh --repo <repo-root> --issue <N> [--remote <name>] [--dry-run]
 #
 # Exit codes:
-#   0  torn down, issue left OPEN, auto-reset label removed — back in pickup
+#   0  torn down, issue NOT closed, auto-reset label removed — an OPEN issue is
+#      back in pickup (a closed one is not reopened; see the note above)
 #   1  usage error
 #   3  per-issue lock held by another run — safe to retry on a later tick
 #   4  a completed run has an OPEN (or unresolvable) PR — labelled
@@ -134,7 +135,7 @@ Aja purku sillä koneella, jolla ajo tehtiin (ota siihen tarvittaessa ensin yhte
 ~/.claude/scripts/run-issues/cleanup-run.sh --issue $TD_ISSUE --force --yes
 \`\`\`
 
-Issue jätettiin auki. Issueen on lisätty label \`$TEARDOWN_SKIPPED_LABEL\` jotta auto-reset ei poimi sitä uudelleen.
+Issueta ei suljettu. Issueen on lisätty label \`$TEARDOWN_SKIPPED_LABEL\` jotta auto-reset ei poimi sitä uudelleen.
 EOF
 }
 
@@ -166,9 +167,9 @@ Issueen #$TD_ISSUE liittyvät paikalliset väliaikaisresurssit on purettu koneel
 - Worktree ja branch poistettu
 - DB-klooni dropattu (jos käytössä, best-effort)
 - Varaus purettu: assignaatio sekä \`auto-claimed\`- ja \`needs-human\`-labelit poistettu
-- **Issue jätettiin auki** ja palaa normaaliin poimintaan
+- **Issueta ei suljettu** — nollaus ei kosketa issuen auki/kiinni-tilaa kumpaankaan suuntaan
 
-Poller aloittaa ajon alusta puhtaasta basesta seuraavalla tikillä. Voit myös käynnistää sen heti komennolla \`/run-issues #$TD_ISSUE\`.
+Jos issue on auki, se täyttää nyt poimintaehdot ja poller aloittaa ajon alusta puhtaasta basesta seuraavalla tikillä; voit myös käynnistää sen heti komennolla \`/run-issues #$TD_ISSUE\`. Suljettua issueta nollaus ei avaa — avaa se itse, jos haluat ajon alkavan uudelleen.
 
 Olennaiset artefaktit on arkistoitu hakemistoon \`.claude/run-issues-archive/\`.
 EOF
