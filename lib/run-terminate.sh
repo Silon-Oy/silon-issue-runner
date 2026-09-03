@@ -74,8 +74,11 @@ _run_terminate_log() {
 
 # run_terminate <run-dir> <reason-slug> [<comment-context>]
 #   1. Kill any matching tmux session (run-issues-<N> / run-issues-restart-<N>
-#      / run-issues-continue-<N> / run-issues-clean-<N>) so the run stops
-#      consuming a GLOBAL_MAX slot.
+#      / run-issues-continue-<N> / run-issues-clean-<N> / run-issues-reset-<N>)
+#      so the run stops consuming a GLOBAL_MAX slot. The list is a literal
+#      enumeration of the poller's session prefixes: a verb missing here is a
+#      session nothing can stop, which is why the two teardown verbs are both
+#      named rather than one standing in for the other.
 #   2. Finalize run.json as blocked/<reason-slug> via state_finalize (state.sh),
 #      plus a <context>_finalized state_event.
 #   3. Best-effort: post a Finnish situation comment to the issue, add the
@@ -147,10 +150,12 @@ run_terminate() {
   fi
   for sess in "run-issues-${suffix}" "run-issues-restart-${suffix}" \
               "run-issues-continue-${suffix}" "run-issues-clean-${suffix}" \
+              "run-issues-reset-${suffix}" \
               ${suffix_alt:+"run-issues-${suffix_alt}"} \
               ${suffix_alt:+"run-issues-restart-${suffix_alt}"} \
               ${suffix_alt:+"run-issues-continue-${suffix_alt}"} \
-              ${suffix_alt:+"run-issues-clean-${suffix_alt}"}; do
+              ${suffix_alt:+"run-issues-clean-${suffix_alt}"} \
+              ${suffix_alt:+"run-issues-reset-${suffix_alt}"}; do
     # `=` forces an exact tmux target match; without it `run-issues-3` prefix-
     # matches `run-issues-34` and we would kill an unrelated running session.
     if tmux has-session -t "=$sess" 2>/dev/null; then
