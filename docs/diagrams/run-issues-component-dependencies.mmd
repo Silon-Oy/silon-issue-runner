@@ -2,10 +2,10 @@
 %% Shows which scripts call which libs and how external systems hook in.
 flowchart TB
     subgraph Triggers
-        CMD["/run-issues slash command<br/>(interactive)"]
+        CMD["/issue-runner:run-issue slash command<br/>(interactive)"]
         POLL["poller.sh<br/>(LaunchAgent, Studio)"]
-        CLEAN_CMD["/cleanup-run slash command<br/>(manual recovery)"]
-        PR_CMD["/pr-watch slash command<br/>(interactive, Phase 2)"]
+        CLEAN_CMD["/issue-runner:cleanup-run slash command<br/>(manual recovery)"]
+        PR_CMD["/issue-runner:pr-watch slash command<br/>(interactive, Phase 2)"]
         PR_POLL["pr-watch-poller.sh<br/>(LaunchAgent, Studio)"]
     end
 
