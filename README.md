@@ -1776,6 +1776,8 @@ testit voi ajaa samalla koneella jolla poller pyörii.
   provisiointihook (S7c).
 - [`docs/sprite-runner.md`](docs/sprite-runner.md) — ajokone Fly.io Spritessä
   (ikkunamalli pollerin sijaan): pystytys, Postgres ilman Dockeria, työnjako labeleilla.
+- [`docs/local-llm-runner.md`](docs/local-llm-runner.md) — ajokone paikallisella mallilla
+  (ToshLLM + Claude Code Intel-Macilla): mitatut rajat, kääreskripti, sudenkuopat.
 - [`docs/diagrams/`](docs/diagrams) — mermaid-kaaviot tilakoneista, poluista ja
   konfiguraation resolvoinnista.
 - [`examples/`](examples) — watchlistin ja `poller.env`:n itsedokumentoivat mallit.
