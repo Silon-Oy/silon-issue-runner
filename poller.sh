@@ -573,8 +573,12 @@ scan_blocked_answered() {
 # Without that fallback the fast path would be a SILENT correctness regression:
 # a truncated list would read as "nothing to clean" exactly when there is
 # something to clean. The ceiling is real rather than theoretical because the
-# label is never removed after a successful clean, so it accumulates on closed
-# issues (measured 2026-08-29: a production repo 100, claude-issue-runner 29).
+# label OUTLIVES most of the issues it is added to. auto-clean.sh removes it
+# only on the success path, and only best-effort (a failed removal is logged,
+# never retried); both non-cleanable exits keep it in place and add
+# auto-clean-skipped beside it, so a skipped issue stays labelled until a human
+# intervenes — in exactly the closed state `--state all` above deliberately
+# includes (measured 2026-08-29: a production repo 100, claude-issue-runner 29).
 # bash 3.2 has no associative arrays, so both the unique set and the label map
 # are temp files.
 scan_clean() {
@@ -628,10 +632,10 @@ scan_clean() {
   # stands, but the one remaining call has to leave the search connection too.
   #
   # Pagination is explicit and BOUNDED rather than `gh api --paginate`: the
-  # label is never removed after a successful clean, so it accumulates on closed
-  # issues (measured 2026-08-29: a production repo carried 100 of them), and an
-  # unbounded walk would grow without limit for a signal whose live set is
-  # nearly always empty.
+  # label survives every non-cleanable outcome (see the TRUNCATION note above),
+  # so it accumulates on closed issues (measured 2026-08-29: a production repo
+  # carried 100 of them), and an unbounded walk would grow without limit for a
+  # signal whose live set is nearly always empty.
   page=1
   rows=0
   : > "$labelled"
