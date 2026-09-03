@@ -68,8 +68,8 @@ POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-$HOME/.config/run-issues/poller.e
 # in commands/issue-runner/ and resolve as /issue-runner:<name>. The bare
 # commands entry is kept because its *.md glob now matches nothing: wanted stays
 # empty and plan_prune_owned removes every package-owned link left flat in
-# ~/.claude/commands by an earlier install. Without it a machine would carry
-# both /new-epic and /issue-runner:new-epic. Foreign entries are untouched
+# $HOME/.claude/commands by an earlier install. Without it a machine would
+# carry both /new-epic and /issue-runner:new-epic. Foreign entries are untouched
 # either way, and the real issue-runner subdirectory is not a symlink so the
 # prune skips it.
 LINKED_DIRS="commands commands/issue-runner"
