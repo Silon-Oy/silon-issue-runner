@@ -1,5 +1,4 @@
 .DS_Store
-.factory/
 
 # >>> /run-issues orchestrator runtime state (managed — do not edit) >>>
 # Per-run artefacts (logs, prompts, JSON state) and git worktrees created

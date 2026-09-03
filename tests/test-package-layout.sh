@@ -29,7 +29,7 @@ EXPECTED_FILES=(
   action-server.sh action-dispatch.sh self-update.sh publish-release.sh
   .gitignore CLAUDE.md README.md
 )
-EXPECTED_DIRS=(lib prompts tests db-clone agents commands skills docs/diagrams examples)
+EXPECTED_DIRS=(lib prompts tests db-clone commands skills docs/diagrams examples)
 
 for f in "${EXPECTED_FILES[@]}"; do
   if [ -f "$ROOT/$f" ]; then

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # test-install-links.sh — install.sh places per-file symlinks into
-# ~/.claude/{agents,commands} without ever touching a path it does not own.
+# ~/.claude/commands without ever touching a path it does not own.
 #
 # The ownership invariant is a safety property, not a convenience: the target
-# directories are shared with other sources (dotfiles ships its own agents
+# directories are shared with other sources (dotfiles ships its own commands
 # there), and deleting or overwriting a foreign file is irreversible. Every
 # case below asserts one half of that invariant — what the installer must do,
 # and what it must leave alone.
 #
 # Cases:
-#   1. Fresh home: one symlink per shipped agents/*.md and commands/*.md
+#   1. Fresh home: one symlink per shipped commands/*.md
 #   3. A foreign file in the target dir survives byte-identically, unlinked
 #      and un-backed-up
 #   4. A second run is a no-op (linked=relinked=pruned=0, tree unchanged)
@@ -18,9 +18,12 @@
 #      links survive
 #   7. --dry-run writes nothing at all
 #   9. A foreign ~/.claude/skills directory symlink -> CONFLICT (not a refusal),
-#      exit 4, agents/commands still installed, skills left untouched
+#      exit 4, commands still installed, skills left untouched
 #  10. Prune/foreign handling for skills: a package-owned skill link no longer
 #      shipped is pruned; a foreign real skill dir survives
+#  11. PRUNED_DIRS: a directory the package has stopped shipping into loses its
+#      package-owned links, keeps foreign ones, and is never created from
+#      scratch on a machine that does not have it
 #
 # (Case 1 also asserts that skills link at directory level on a fresh home.)
 #
@@ -85,7 +88,7 @@ else
   FAIL=1
 fi
 
-for d in agents commands; do
+for d in commands; do
   for src in "$ROOT/$d"/*.md; do
     [ -e "$src" ] || continue
     base="$(basename "$src")"
@@ -110,10 +113,18 @@ else
   FAIL=1
 fi
 
-if [ -d "$H1/.claude/agents" ] && [ ! -L "$H1/.claude/agents" ]; then
-  echo "PASS: case1 \$HOME/.claude/agents is a real directory, not a directory symlink"
+if [ -d "$H1/.claude/commands" ] && [ ! -L "$H1/.claude/commands" ]; then
+  echo "PASS: case1 \$HOME/.claude/commands is a real directory, not a directory symlink"
 else
-  echo "FAIL: case1 \$HOME/.claude/agents is not a real directory"; FAIL=1
+  echo "FAIL: case1 \$HOME/.claude/commands is not a real directory"; FAIL=1
+fi
+
+# A directory in PRUNED_DIRS must never be conjured on a machine that does not
+# have it: plan_prune_dir exists precisely because plan_link_dir would mkdir it.
+if [ ! -e "$H1/.claude/agents" ]; then
+  echo "PASS: case1 a pruned-only directory is not created on a fresh home"
+else
+  echo "FAIL: case1 installer created \$HOME/.claude/agents, which it no longer ships into"; FAIL=1
 fi
 
 # Skills are linked at directory level, not per file: $CLAUDE_HOME/skills/<name>
@@ -147,9 +158,9 @@ fi
 
 # ---- Case 3: a foreign file survives byte-identically ----
 H3="$WORK/home3"
-mkdir -p "$H3/.claude/agents"
-FOREIGN="$H3/.claude/agents/business-context.md"
-printf 'foreign agent owned by dotfiles\nline two\n' > "$FOREIGN"
+mkdir -p "$H3/.claude/commands"
+FOREIGN="$H3/.claude/commands/deploy-flow.md"
+printf 'foreign command owned by dotfiles\nline two\n' > "$FOREIGN"
 cp "$FOREIGN" "$WORK/foreign.expected"
 out3=$(run_install "$H3" 2>&1)
 rc3=$?
@@ -203,9 +214,9 @@ fi
 
 # ---- Case 5: a foreign file shadowing a shipped name ----
 H5="$WORK/home5"
-mkdir -p "$H5/.claude/agents"
-SHADOW="$H5/.claude/agents/architect.md"
-printf 'someone elses architect\n' > "$SHADOW"
+mkdir -p "$H5/.claude/commands"
+SHADOW="$H5/.claude/commands/new-issue.md"
+printf 'someone elses new-issue\n' > "$SHADOW"
 cp "$SHADOW" "$WORK/shadow.expected"
 out5=$(run_install "$H5" 2>&1)
 rc5=$?
@@ -235,9 +246,9 @@ fi
 
 # ---- Case 6: prune only what the package owns ----
 H6="$WORK/home6"
-mkdir -p "$H6/.claude/agents"
-ln -s "$ROOT/agents/ghost.md" "$H6/.claude/agents/ghost.md"       # package-owned, dangling
-ln -s "/nonexistent/foreign.md" "$H6/.claude/agents/foreign.md"   # foreign, dangling
+mkdir -p "$H6/.claude/commands"
+ln -s "$ROOT/commands/ghost.md" "$H6/.claude/commands/ghost.md"       # package-owned, dangling
+ln -s "/nonexistent/foreign.md" "$H6/.claude/commands/foreign.md"     # foreign, dangling
 out6=$(run_install "$H6" 2>&1)
 rc6=$?
 if [ "$rc6" -eq 0 ]; then
@@ -247,12 +258,12 @@ else
   printf '%s\n' "$out6" | sed 's/^/      /'
   FAIL=1
 fi
-if [ ! -L "$H6/.claude/agents/ghost.md" ]; then
+if [ ! -L "$H6/.claude/commands/ghost.md" ]; then
   echo "PASS: case6 dangling package-owned link pruned"
 else
   echo "FAIL: case6 dangling package-owned link survived"; FAIL=1
 fi
-if [ -L "$H6/.claude/agents/foreign.md" ]; then
+if [ -L "$H6/.claude/commands/foreign.md" ]; then
   echo "PASS: case6 dangling foreign link left untouched"
 else
   echo "FAIL: case6 installer removed a foreign symlink"; FAIL=1
@@ -263,15 +274,15 @@ fi
 # such a link, and the plan is applied in order, so a prune rule keyed on
 # "dangles" instead of "no longer shipped" would silently delete it.
 H6B="$WORK/home6b"
-mkdir -p "$H6B/.claude/agents"
-ln -s "$ROOT/agents/moved-away/architect.md" "$H6B/.claude/agents/architect.md"
+mkdir -p "$H6B/.claude/commands"
+ln -s "$ROOT/commands/moved-away/run-epic.md" "$H6B/.claude/commands/run-epic.md"
 out6b=$(run_install "$H6B" 2>&1)
 rc6b=$?
-if [ "$rc6b" -eq 0 ] && [ -L "$H6B/.claude/agents/architect.md" ] \
-   && [ "$(readlink "$H6B/.claude/agents/architect.md")" = "$ROOT/agents/architect.md" ]; then
+if [ "$rc6b" -eq 0 ] && [ -L "$H6B/.claude/commands/run-epic.md" ] \
+   && [ "$(readlink "$H6B/.claude/commands/run-epic.md")" = "$ROOT/commands/run-epic.md" ]; then
   echo "PASS: case6b stale package-owned link for a shipped name is repaired"
 else
-  echo "FAIL: case6b stale link not repaired (rc=$rc6b, readlink='$( [ -L "$H6B/.claude/agents/architect.md" ] && readlink "$H6B/.claude/agents/architect.md" )')"
+  echo "FAIL: case6b stale link not repaired (rc=$rc6b, readlink='$( [ -L "$H6B/.claude/commands/run-epic.md" ] && readlink "$H6B/.claude/commands/run-epic.md" )')"
   FAIL=1
 fi
 
@@ -292,7 +303,7 @@ if [ ! -e "$H7/.claude" ]; then
 else
   echo "FAIL: case7 --dry-run created $H7/.claude"; FAIL=1
 fi
-if printf '%s\n' "$out7" | grep -q '^plan: link .*agents/architect\.md'; then
+if printf '%s\n' "$out7" | grep -q '^plan: link .*commands/run-issues\.md'; then
   echo "PASS: case7 --dry-run prints the planned links"
 else
   echo "FAIL: case7 --dry-run did not print a plan:"
@@ -303,7 +314,7 @@ fi
 # ---- Case 9: a foreign skills directory symlink is a conflict, not a refusal ----
 # ~/.claude/skills may be a whole-directory symlink owned by another source (a
 # dotfiles tree not split into per-entry links). A refusal there would abort the
-# WHOLE install, taking agents/commands with it over an optional extra. So skills
+# WHOLE install, taking the commands with it over an optional extra. So skills
 # must degrade to a CONFLICT (exit 4) while the core links still install.
 # Rationale: CLAUDE.md §3.
 H9="$WORK/home9"
@@ -326,10 +337,10 @@ else
   FAIL=1
 fi
 # The core install must not be blocked by the skills conflict.
-if [ -L "$H9/.claude/agents/architect.md" ] && [ -L "$H9/.claude/commands/run-issues.md" ]; then
-  echo "PASS: case9 agents and commands still installed alongside the skills conflict"
+if [ -L "$H9/.claude/commands/run-issues.md" ] && [ -L "$H9/.claude/commands/run-epic.md" ]; then
+  echo "PASS: case9 commands still installed alongside the skills conflict"
 else
-  echo "FAIL: case9 skills conflict blocked the core agents/commands links"; FAIL=1
+  echo "FAIL: case9 skills conflict blocked the core command links"; FAIL=1
 fi
 # The foreign symlink and the tree behind it are left exactly as they were.
 if [ -L "$H9/.claude/skills" ] && [ "$(readlink "$H9/.claude/skills")" = "$H9/foreign-skills" ]; then
@@ -373,6 +384,61 @@ if [ -L "$H10/.claude/skills/claude-issue-runner" ]; then
   echo "PASS: case10 shipped skill still linked"
 else
   echo "FAIL: case10 shipped skill not linked"; FAIL=1
+fi
+
+# ---- Case 11: PRUNED_DIRS cleans up a directory the package left behind ----
+# When a whole shipped directory is removed (agents/, with the agent factory),
+# the links it produced stay on every machine that already installed it. They
+# cannot be cleaned up by leaving the name in LINKED_DIRS: that path also plans
+# a mkdir, so a clean machine would get an empty directory recreated for a
+# directory the package no longer has. PRUNED_DIRS is prune-without-mkdir, and
+# INV-OWN still decides what may go.
+H11="$WORK/home11"
+mkdir -p "$H11/.claude/agents"
+ln -s "$ROOT/agents/architect.md" "$H11/.claude/agents/architect.md"  # package-owned, now dangling
+ln -s "/nonexistent/other.md" "$H11/.claude/agents/other.md"          # foreign
+printf 'foreign agent owned by dotfiles\n' > "$H11/.claude/agents/business-context.md"
+out11=$(run_install "$H11" 2>&1)
+rc11=$?
+if [ "$rc11" -eq 0 ]; then
+  echo "PASS: case11 pruned-dir run exits 0"
+else
+  echo "FAIL: case11 pruned-dir run exited $rc11"
+  printf '%s\n' "$out11" | sed 's/^/      /'
+  FAIL=1
+fi
+if [ ! -L "$H11/.claude/agents/architect.md" ]; then
+  echo "PASS: case11 link into a removed shipped directory is pruned"
+else
+  echo "FAIL: case11 stale link into the removed agents/ survived"; FAIL=1
+fi
+if [ -L "$H11/.claude/agents/other.md" ] && [ -f "$H11/.claude/agents/business-context.md" ]; then
+  echo "PASS: case11 foreign entries in a pruned directory are left untouched"
+else
+  echo "FAIL: case11 installer removed a foreign entry while pruning"; FAIL=1
+fi
+# The directory itself is not the package's to delete: it may hold foreign
+# entries, and an empty one is harmless. Prune removes links, never directories.
+if [ -d "$H11/.claude/agents" ]; then
+  echo "PASS: case11 the pruned directory itself is left in place"
+else
+  echo "FAIL: case11 installer removed a directory it does not own"; FAIL=1
+fi
+
+# A foreign whole-directory symlink at a pruned name is skipped, not written
+# through — the same boundary plan_link_dir refuses at, minus the abort.
+H11B="$WORK/home11b"
+mkdir -p "$H11B/.claude" "$H11B/foreign-agents"
+ln -s "$ROOT/agents/architect.md" "$H11B/foreign-agents/architect.md"
+ln -s "$H11B/foreign-agents" "$H11B/.claude/agents"
+out11b=$(run_install "$H11B" 2>&1)
+rc11b=$?
+if [ "$rc11b" -eq 0 ] && [ -L "$H11B/foreign-agents/architect.md" ]; then
+  echo "PASS: case11b pruning does not reach through a foreign directory symlink"
+else
+  echo "FAIL: case11b pruned through a foreign directory symlink (rc=$rc11b)"
+  printf '%s\n' "$out11b" | sed 's/^/      /'
+  FAIL=1
 fi
 
 echo "----------------------------------------"

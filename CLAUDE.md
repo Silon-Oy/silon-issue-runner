@@ -49,7 +49,7 @@ fail-closed tiedostojoukko).
 Osat: **orkestraattori** (`orchestrate.sh` + `lib/` + `prompts/`), **pollerit** (`poller.sh`,
 `pr-watch-poller.sh`), **PR-vahti** (`pr-watch.sh`), **apuvälineet** (`cleanup-run.sh`,
 `auto-clean.sh`, `stop-run.sh`, `status*.sh`, `run-epic.sh`, `self-update.sh`) ja
-**Claude-integraatio** (`agents/`, `commands/`, `skills/`, `prompts/`, `principles/`).
+**Claude-integraatio** (`commands/`, `skills/`, `prompts/`, `principles/`).
 
 ## 2. Repo-juuri on mount-piste
 
@@ -88,10 +88,10 @@ Malleja on kaksi, ja ne eroavat vain siinä **kuka tuottaa polun `~/.claude/scri
 polun tuottaa vieras puu johon ei saa kirjoittaa, oletusmallissa mikään muu ei tuota sitä.
 Sidonta on siis **ehdollinen**: toimiva polku jätetään rauhaan riippumatta kuka sen tarjoaa.
 
-`agents/`, `commands/` ja `skills/` päätyvät kummassakin ketjussa polkuun
+`commands/` ja `skills/` päätyvät kummassakin ketjussa polkuun
 `~/.claude/scripts/run-issues/…`, mikä ei riitä: Claude Code lukee ne hakemistoista
-`~/.claude/{agents,commands,skills}/`. `install.sh` symlinkkaa agentit ja komennot sinne **per
-tiedosto** ja skillit **per hakemisto**, jotta muiden lähteiden tiedostot eivät korvaudu.
+`~/.claude/{commands,skills}/`. `install.sh` symlinkkaa komennot sinne **per tiedosto** ja
+skillit **per hakemisto**, jotta muiden lähteiden tiedostot eivät korvaudu.
 
 ### INV-OWN
 
@@ -109,9 +109,16 @@ Kolme johdannaista, luettavina kieltoina:
 3. **Asentaja ei kutsu `launchctl`ia.** Ks. §10.
 
 **Skills on tarkoituksella lievempi:** vieras hakemistosymlinkki tuottaa `conflict`in (exit 4),
-ei `refuse`a (exit 2). Kieltäytyminen on koko ajon laajuinen, ja agents/commands-kohdalla se
-suojaa **ydintoiminnallisuutta** — ilman niitä runner ei toimi. Skill on lisätieto; refuse
-siellä kaataisi myös ydinasennuksen.
+ei `refuse`a (exit 2). Kieltäytyminen on koko ajon laajuinen, ja `commands`-kohdalla se suojaa
+**paketin ainoaa ihmiselle näkyvää pintaa** `~/.claude`-puussa: ajo joka ohitti ne on
+asentanut jotain, mihin kukaan ei yllä. Skill on lisätieto; refuse siellä kaataisi myös
+ydinasennuksen.
+
+**Perustelu on pinta, ei toiminta.** Aiempi sanamuoto väitti, ettei runner toimi ilman
+`agents/`- ja `commands/`-linkkejä. Se ei pidä paikkaansa kummastakaan: pollerit kutsuvat
+skriptejä suoraan, eikä yksikään ajo lue `~/.claude/commands`-hakemistoa. `agents/` oli
+sitäkin heikommalla pohjalla — sen neljä määrittelyä kuuluivat agenttitehtaalle, jota runner
+ei koskaan kutsunut, ja hakemisto poistettiin niiden mukana.
 
 Riippuvuustarkistus (`lib/preflight.sh`) on asentajassa **neuvoa-antava**, orkestraattorin
 S0-portissa fataali. Sama lähde, eri vakavuus.
@@ -513,8 +520,8 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
 - **Ihmiseen viitataan roolilla — ei nimellä eikä `{{HUMAN}}`-muuttujalla.** #153 poisti
   kovakoodatun nimen 33 tiedostosta ja korvasi sen kontekstin mukaisella roolilla ("issuen
   kirjoittaja", "käyttäjä", "ylläpitäjä", "ihminen"). Parametrisointi jäi silti tekemättä:
-  se kattaisi vain `prompts/`, koska `render_prompt` ei koske komentoihin eikä agentteihin —
-  Claude Code lukee ne suoraan levyltä. Roolisana toimii kaikissa kolmessa ilman mekanismia,
+  se kattaisi vain `prompts/`, koska `render_prompt` ei koske komentoihin — Claude Code lukee
+  ne suoraan levyltä. Roolisana toimii molemmissa ilman mekanismia,
   joten puoliksi parametrisoitu olisi yhä huonompi kuin kumpikaan puhdas vaihtoehto (#9).
   Toiminnallista vaikutusta ei ole: bot ja ihminen erotellaan markerin aikaleimalla, ei
   nimellä.
@@ -527,7 +534,6 @@ testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittöm�
 **Aidot puutteet:**
 
 - `install.sh --uninstall` puuttuu. Omistajuuspredikaatti riittäisi sellaisenaan toteutukseen.
-- `commands/factory-run.md` viittaa puuttuvaan `templates/factory-init.sh`-skriptiin.
 - **5/13 `docs/diagrams/*.mmd` ei parsiudu** mermaid-cli 11.16.0:lla, eikä syntaksilla ole
   vartijaa. #12 jätti sen tietoisesti tekemättä, koska sen premissi (diagrammit ovat valideja)
   osoittautui vääräksi. Rikkinäinen diagrammi renderöityy tyhjäksi.

@@ -103,9 +103,12 @@ bash install.sh --with-launchagents   # + poller-plistit, vain jos ajat pollerei
 
 Mitä asennin tekee:
 
-- `~/.claude/agents/` ja `~/.claude/commands/` — per-tiedosto-symlink jokaiselle paketin
-  `*.md`-tiedostolle. Lähdejoukko on glob, joten uusi agentti tulee asennukseen pelkällä
-  nimeämisellä. Paketin omistamat symlinkit, joita paketti ei enää toimita, siivotaan.
+- `~/.claude/commands/` — per-tiedosto-symlink jokaiselle paketin `*.md`-tiedostolle.
+  Lähdejoukko on glob, joten uusi komento tulee asennukseen pelkällä nimeämisellä. Paketin
+  omistamat symlinkit, joita paketti ei enää toimita, siivotaan. Sama siivous kohdistuu myös
+  `~/.claude/agents/`-hakemistoon, johon paketti **ei enää asenna mitään**: se toimitti
+  aiemmin agenttitehtaan neljä alaagenttia, ja niiden linkit poistetaan koneilta joilla ne
+  yhä ovat. Tyhjää hakemistoa ei luoda koneelle, jolla sitä ei ole.
 - `~/.claude/skills/` — per-hakemisto-symlink jokaiselle paketin skillille (linkki on
   hakemistotasolla, koska skill on `<nimi>/SKILL.md` liitteineen). Sama omistajuussääntö ja
   siivous kuin yllä, mutta vieras `skills`-hakemisto tuottaa vain `CONFLICT`-rivin ja
@@ -131,7 +134,7 @@ Oma avaruus. **Älä sekoita** orkestraattorin tai PR-vahdin koodeihin (osio 9).
 polun jonka omistaa joku muu, ja jätti koko puun koskematta: nolla muutosta, ei
 puoliasennusta. Korjaus on siirtää vieras tiedosto pois tieltä ja ajaa asennus uudelleen.
 
-Yksi erikoistapaus kannattaa tunnistaa: jos `~/.claude/agents` on **kokonainen
+Yksi erikoistapaus kannattaa tunnistaa: jos `~/.claude/commands` on **kokonainen
 hakemistosymlinkki** (dotfiles-asetelma, jossa koko hakemisto tulee muualta), asentaja
 kieltäytyy aina. Korjaus kuuluu kyseiseen dotfiles-repoon: hakemisto korvataan tavallisella
 hakemistolla, jossa on per-tiedosto-symlinkit. **Puhtaalla koneella** hakemistot ovat
@@ -858,16 +861,10 @@ Claude Codessa, kohderepon juuressa:
 | `/pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/pr-watch.md`](commands/pr-watch.md) |
 | `/cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/cleanup-run.md`](commands/cleanup-run.md) |
 | `/refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/refresh.md`](commands/refresh.md) |
-| `/factory-run` | `<spec-polku>` | Agenttitehtaan pipeline yhdelle speksille. Ohje: [`commands/factory-run.md`](commands/factory-run.md) |
-| `/factory-metrics` | `[--all \| --last <N>]` | Näyttää agenttitehtaan ajojen mittarit. Ohje: [`commands/factory-metrics.md`](commands/factory-metrics.md) |
 
 Slash-komennot ovat ohjeita Claude Codelle, eivät skriptejä: agentti lukee ohjeen, ajaa
 tarvittavat komennot ja tulkitsee tulokset. Siksi ne toimivat vain Claude Coden sisällä —
 automaatio (poller) kutsuu skriptejä suoraan.
-
-**`/factory-run`-rajoite:** ohje kehottaa alustamaan `.factory/`-hakemiston skriptillä
-`templates/factory-init.sh`, jota **ei ole tässä repossa**. Alustus on toistaiseksi tehtävä
-käsin. Ks. [`CLAUDE.md`](CLAUDE.md) §13.
 
 ### 6.8 Skriptit ja apuvälineet
 
@@ -1443,14 +1440,14 @@ konfiguroimaton, eikä sen lokiin tule riviä.
 
 ### Ihmiseen viitataan roolilla, ei nimellä
 
-Promptit, slash-komennot, agenttimäärittelyt ja koodikommentit puhuvat ihmisestä **roolilla** —
+Promptit, slash-komennot ja koodikommentit puhuvat ihmisestä **roolilla** —
 "issuen kirjoittaja", "käyttäjä", "ylläpitäjä", "ihminen" — eivät nimellä. Nimi oli aiemmin
 kovakoodattu 33 tiedostoon, mikä sitoi paketin yhteen henkilöön (#153).
 
 Parametrisointia ei silti tehty: promptien sijoitusmekanismi kattaa vain
-[`prompts/`](prompts)-hakemiston, kun taas `commands/`- ja `agents/`-tiedostot lukee Claude
-Code suoraan levyltä. Roolisanamuoto toimii kaikissa kolmessa ilman mekanismia, joten
-puoliksi parametrisoitu `{{HUMAN}}` olisi ollut huonompi kuin kumpikaan puhdas vaihtoehto.
+[`prompts/`](prompts)-hakemiston, kun taas `commands/`-tiedostot lukee Claude Code suoraan
+levyltä. Roolisanamuoto toimii molemmissa ilman mekanismia, joten puoliksi parametrisoitu
+`{{HUMAN}}` olisi ollut huonompi kuin kumpikaan puhdas vaihtoehto.
 Ks. [`CLAUDE.md`](CLAUDE.md) §13.
 
 Valinta on **kosmeettinen eikä vaikuta toimintaan**: bot ja ihminen erotellaan markerin

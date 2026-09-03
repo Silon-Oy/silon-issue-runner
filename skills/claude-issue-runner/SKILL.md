@@ -226,6 +226,6 @@ avaruuksia, asennusta, turvamallia, LaunchAgent-konfiguraatiota, statussivua eik
 sisuskaluja — ne ovat paketin anatomiaa hakemistossa `$HOME/.claude/scripts/run-issues`
 (`README.md` ihmiselle, `CLAUDE.md` agentille).
 
-Paketin `commands/`-hakemiston factory- ja refresh-komennot sekä `agents/`-hakemiston neljä
-määrittelyä kuuluvat erilliseen agenttitehtaaseen eivätkä tähän järjestelmään; tämän runnerin
-omat "agentit" ovat `prompts/`-hakemiston promptipohjia.
+Paketin `commands/`-hakemiston `/refresh` on geneerinen apuri eikä osa tätä järjestelmää.
+Tämän runnerin "agentit" ovat `prompts/`-hakemiston promptipohjia — paketti ei toimita
+yhtään Claude Code -alaagenttia.

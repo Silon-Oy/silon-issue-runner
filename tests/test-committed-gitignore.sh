@@ -9,7 +9,7 @@
 # Cases:
 #   1. Repo root carries a .gitignore
 #   2. ensure_run_issues_gitignore on a copy -> return 1, byte-identical
-#   3. Preamble keeps '.factory/' (outside the managed block)
+#   3. Preamble keeps '.DS_Store' (outside the managed block)
 #   4. Every managed .claude/ path appears exactly once (no duplicates)
 #
 # Run: bash tests/test-committed-gitignore.sh
@@ -63,10 +63,10 @@ else
 fi
 
 # ---- Case 3: preamble entries survive outside the managed block ----
-if grep -qxF -- '.factory/' "$GI"; then
-  echo "PASS: '.factory/' present in the preamble"
+if grep -qxF -- '.DS_Store' "$GI"; then
+  echo "PASS: '.DS_Store' present in the preamble"
 else
-  echo "FAIL: '.factory/' missing from .gitignore"
+  echo "FAIL: '.DS_Store' missing from .gitignore"
   FAIL=1
 fi
 

@@ -2,8 +2,8 @@
 # test-install-refusals.sh — install.sh refuses foreign layouts, and a refusal
 # costs zero writes.
 #
-# On the machine this package was extracted from, $HOME/.claude/{agents,
-# commands,scripts} are all whole-directory symlinks into dotfiles. Refusing is
+# On the machine this package was extracted from, $HOME/.claude/{commands,
+# scripts} are both whole-directory symlinks into dotfiles. Refusing is
 # therefore the *default* path there, not an edge case, and it has to be as
 # well covered as a successful install.
 #
@@ -13,8 +13,10 @@
 # and still leave a half-installed tree.
 #
 # Cases:
-#   1. agents/ is a directory symlink   -> exit 2, commands/ never created
-#   2. commands/ is a directory symlink -> exit 2, agents/ never created
+#   1. a PRUNED_DIRS name is a directory symlink -> NOT a refusal: exit 0 and
+#      the install completes (the boundary's near miss, kept next to it)
+#   2. commands/ is a directory symlink -> exit 2, skills/ and scripts/ never
+#      created
 #   3. scripts/ is a directory symlink without run-issues -> exit 2, no writes
 #   4. scripts/ is a directory symlink WITH a working run-issues -> exit 0 and
 #      the symlink is not retargeted (the no-regression case for the dotfiles
@@ -73,22 +75,33 @@ FOREIGN_DIR="$WORK/foreign-assets"
 mkdir -p "$FOREIGN_DIR"
 printf 'someone elses agent\n' > "$FOREIGN_DIR/other.md"
 
-# ---- Case 1: agents/ is a directory symlink ----
+# ---- Case 1: a foreign directory symlink at a PRUNED_DIRS name ----
+# agents/ used to be a linked directory, so this shape used to refuse. It is now
+# prune-only, and prune has nothing to install and therefore nothing to leave
+# half-done: the foreign tree is skipped and the install completes. Kept here,
+# beside the refusals, because the whole value of the assertion is that it sits
+# one step outside a boundary the rest of this file defends.
 H1="$WORK/home1"
 mkdir -p "$H1/.claude"
 ln -s "$FOREIGN_DIR" "$H1/.claude/agents"
 out1=$(run_install "$H1" 2>&1)
 rc1=$?
-assert_refused "case1" "$rc1" "$out1" "$H1/.claude/agents"
-if [ ! -e "$H1/.claude/commands" ]; then
-  echo "PASS: case1 no commands/ directory was created (plan/apply split holds)"
+if [ "$rc1" -eq 0 ]; then
+  echo "PASS: case1 a foreign symlink at a pruned-only name is not a refusal"
 else
-  echo "FAIL: case1 refusal still created $H1/.claude/commands"; FAIL=1
+  echo "FAIL: case1 exited $rc1 (expected 0 — a pruned name must not refuse)"
+  printf '%s\n' "$out1" | sed 's/^/      /'
+  FAIL=1
 fi
-if [ ! -e "$H1/.claude/scripts" ]; then
-  echo "PASS: case1 no scripts/ directory was created"
+if printf '%s\n' "$out1" | grep -q '^REFUSED: '; then
+  echo "FAIL: case1 printed a REFUSED: line for a pruned-only name"; FAIL=1
 else
-  echo "FAIL: case1 refusal still created $H1/.claude/scripts"; FAIL=1
+  echo "PASS: case1 prints no REFUSED: line"
+fi
+if [ -L "$H1/.claude/commands/run-issues.md" ]; then
+  echo "PASS: case1 the install completed alongside the foreign tree"
+else
+  echo "FAIL: case1 the foreign tree blocked the command links"; FAIL=1
 fi
 if [ -L "$H1/.claude/agents" ] && [ "$(readlink "$H1/.claude/agents")" = "$FOREIGN_DIR" ]; then
   echo "PASS: case1 foreign directory symlink left as it was"
@@ -103,10 +116,18 @@ ln -s "$FOREIGN_DIR" "$H2/.claude/commands"
 out2=$(run_install "$H2" 2>&1)
 rc2=$?
 assert_refused "case2" "$rc2" "$out2" "$H2/.claude/commands"
-if [ ! -e "$H2/.claude/agents" ]; then
-  echo "PASS: case2 no agents/ directory was created"
+# The plan/apply split: a refusal raised on the first directory must leave every
+# later one untouched. With one linked directory left, skills/ and scripts/ are
+# what "later" means.
+if [ ! -e "$H2/.claude/skills" ]; then
+  echo "PASS: case2 no skills/ directory was created (plan/apply split holds)"
 else
-  echo "FAIL: case2 refusal still created $H2/.claude/agents"; FAIL=1
+  echo "FAIL: case2 refusal still created $H2/.claude/skills"; FAIL=1
+fi
+if [ ! -e "$H2/.claude/scripts" ]; then
+  echo "PASS: case2 no scripts/ directory was created"
+else
+  echo "FAIL: case2 refusal still created $H2/.claude/scripts"; FAIL=1
 fi
 
 # ---- Case 3: scripts/ is a directory symlink without run-issues ----
@@ -116,7 +137,7 @@ ln -s "$WORK/empty-scripts" "$H3/.claude/scripts"
 out3=$(run_install "$H3" 2>&1)
 rc3=$?
 assert_refused "case3" "$rc3" "$out3" "$H3/.claude/scripts"
-if [ ! -e "$H3/.claude/agents" ] && [ ! -e "$WORK/empty-scripts/run-issues" ]; then
+if [ ! -e "$H3/.claude/commands" ] && [ ! -e "$WORK/empty-scripts/run-issues" ]; then
   echo "PASS: case3 nothing was written into either tree"
 else
   echo "FAIL: case3 refusal still wrote something"; FAIL=1
@@ -147,7 +168,7 @@ if [ -L "$H4/.claude/scripts" ] && [ "$(readlink "$H4/.claude/scripts")" = "$OTH
 else
   echo "FAIL: case4 scripts symlink was modified"; FAIL=1
 fi
-if [ ! -e "$OTHER_PKG/run-issues/agents" ]; then
+if [ ! -e "$OTHER_PKG/run-issues/commands" ]; then
   echo "PASS: case4 nothing written inside the foreign scripts tree"
 else
   echo "FAIL: case4 wrote into the foreign scripts tree"; FAIL=1
@@ -158,10 +179,10 @@ else
   echo "FAIL: case4 said nothing about the scripts path"; FAIL=1
 fi
 # The rest of the install must still have happened.
-if [ -L "$H4/.claude/agents/architect.md" ]; then
-  echo "PASS: case4 agents still installed"
+if [ -L "$H4/.claude/commands/run-issues.md" ]; then
+  echo "PASS: case4 commands still installed"
 else
-  echo "FAIL: case4 agents were not installed"; FAIL=1
+  echo "FAIL: case4 commands were not installed"; FAIL=1
 fi
 
 # ---- Case 5: a foreign file occupies scripts/run-issues ----

@@ -1,14 +1,14 @@
 %% Author: Architect
 %% Created: 2026-07-31
 %% Topic: claude-issue-runner -paketin polkusidonnat install.sh:n jalkeen
-%% Task: issue #4 — install.sh sitoo agents/, commands/ ja scripts/run-issues -polut
+%% Task: issue #4 — install.sh sitoo commands/ ja scripts/run-issues -polut
+%% Paivitetty: agents/ poistettu paketista agenttitehtaan mukana
 
 flowchart TB
     subgraph PKG["claude-issue-runner (paketti) — rakenne C"]
         R["repo-juuri = run-issues-sisalto<br/>orchestrate.sh, poller.sh, lib/, prompts/, tests/"]
-        AG["agents/ (4 .md)"]
-        CM["commands/ (6 .md)"]
-        DOC["docs/diagrams/ (12 .mmd)"]
+        CM["commands/ (8 .md)"]
+        DOC["docs/diagrams/ (13 .mmd)"]
         EX["examples/run-issues-watchlist.example.json"]
         EX2["examples/run-issues-poller.env.example"]
         PL["com.claude-issue-runner.*.plist (2 kpl)"]
@@ -24,7 +24,6 @@ flowchart TB
 
     subgraph HOME["~/.claude ja ~/Library"]
         SCR["~/.claude/scripts/run-issues<br/>A: dotfiles-symlinkin kautta<br/>B: install.sh:n oma symlink -> PKG_ROOT"]
-        CAG["~/.claude/agents/ (oikea hakemisto, #5)"]
         CCM["~/.claude/commands/ (oikea hakemisto, #5)"]
         LA["~/Library/LaunchAgents/"]
     end
@@ -38,10 +37,8 @@ flowchart TB
 
     R -->|"A: submodule add"| SUB
     R -->|"B: install.sh symlink (puhdas kone)"| SCR
-    AG -->|"per-tiedosto-symlink"| CAG
     CM -->|"per-tiedosto-symlink"| CCM
     PL -->|"symlink, opt-in --with-launchagents"| LA
-    INS -.->|"omistaa (INV-OWN)"| CAG
     INS -.->|"omistaa (INV-OWN)"| CCM
     INS -.->|"omistaa (INV-OWN)"| SCR
     INS -.->|"omistaa (INV-OWN)"| LA

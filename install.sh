@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # install.sh — link this package's Claude assets into $HOME/.claude.
 #
-# Claude Code reads agents from $HOME/.claude/agents, slash commands from
-# $HOME/.claude/commands and skills from $HOME/.claude/skills. Those directories
-# are a shared namespace: dotfiles (or any other source) ships its own files
-# there too. The installer therefore operates under one invariant, and
-# everything else follows from it:
+# Claude Code reads slash commands from $HOME/.claude/commands and skills from
+# $HOME/.claude/skills. Those directories are a shared namespace: dotfiles (or
+# any other source) ships its own files there too. The installer therefore
+# operates under one invariant, and everything else follows from it:
 #
 #   INV-OWN — the installer may create, replace or remove a path only if that
 #   path is absent, or is a symlink whose target resolves inside this package
@@ -63,7 +62,17 @@ LAUNCH_AGENTS_DIR="${RUN_ISSUES_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-$HOME/.config/run-issues/poller.env}"
 
 # Directories whose contents this package owns file by file.
-LINKED_DIRS="agents commands"
+LINKED_DIRS="commands"
+
+# Directories this package no longer ships into, but whose links it once owned.
+# A removed directory cannot be pruned by LINKED_DIRS: plan_link_dir would also
+# mkdir the target, recreating on a clean machine the very directory that was
+# removed. So the migration gets its own named list — one line to read, one line
+# to delete once no machine can still carry the stale links.
+#
+#   agents/ — the agent factory's four subagent definitions. Removed with the
+#             factory commands; nothing in the runner ever invoked them.
+PRUNED_DIRS="agents"
 
 # Directories whose contents this package owns entry by entry, where each entry
 # is itself a directory (a skill is <name>/SKILL.md plus attachments).
@@ -87,8 +96,8 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Links this package's agents, slash commands and skills into $HOME/.claude,
-entry by entry, so that they coexist with assets from other sources.
+Links this package's slash commands and skills into $HOME/.claude, entry by
+entry, so that they coexist with assets from other sources.
 
 Options:
   --dry-run             Print the plan and exit without writing anything
@@ -191,11 +200,16 @@ count_action() {
 # mode selects both what an entry is and how a foreign directory at the target
 # is treated:
 #
-#   files  (default) — each entry is a *.md file (agents, commands). A foreign
+#   files  (default) — each entry is a *.md file (commands). A foreign
 #                      directory at the target is a REFUSAL that aborts the
-#                      whole run: these files are the package's core (without
-#                      agents and commands the runner does not work), so a
-#                      shadowed directory must stop everything, not be skipped.
+#                      whole run: the slash commands are the only thing this
+#                      package installs into $HOME/.claude that a human reaches
+#                      for directly, so a run that skipped them has installed
+#                      nothing usable and must stop rather than report success.
+#                      Note what the justification is NOT: the runner keeps
+#                      working without a single link here, because the pollers
+#                      invoke the scripts directly. What a foreign directory
+#                      costs is the entry surface, not the automation.
 #
 #   skills           — each entry is a <name>/SKILL.md subdirectory, linked at
 #                      directory level. A foreign directory at the target is a
@@ -204,7 +218,7 @@ count_action() {
 #                      legitimately be a whole-directory symlink owned by another
 #                      source (a dotfiles tree that has not been split into
 #                      per-entry links). Refusing there would abort the whole
-#                      install — including agents/commands — over an optional
+#                      install — including the commands — over an optional
 #                      extra. So skills degrades to a conflict line and lets the
 #                      core install proceed.
 #
@@ -214,7 +228,7 @@ count_action() {
 plan_link_dir() {
   local name="$1" mode="${2:-files}"
   local src_dir="$PKG_ROOT/$name" dst_dir="$CLAUDE_HOME/$name"
-  local src base dst entry ebase keep current
+  local src base dst current
   local wanted=() srcs=()
 
   # A whole-directory symlink (or a non-directory) means another source owns the
@@ -275,26 +289,58 @@ plan_link_dir() {
     fi
   done
 
-  # Prune: package-owned links whose name the package no longer ships. The
-  # decision rests on the name alone, never on whether the link resolves — a
-  # shipped name that currently dangles (a file moved inside the package) is
-  # already covered by the relink above, and pruning it here would undo that
-  # relink, since apply runs the plan in order.
-  if [ -d "$dst_dir" ]; then
-    for entry in "$dst_dir"/*; do
-      is_pkg_owned_link "$entry" || continue
-      ebase="$(basename "$entry")"
-      keep=0
-      if [ "${#wanted[@]}" -gt 0 ]; then
-        for base in "${wanted[@]}"; do
-          if [ "$base" = "$ebase" ]; then keep=1; break; fi
-        done
-      fi
-      if [ "$keep" -eq 0 ]; then
-        plan_add unlink "$entry"
-      fi
+  plan_prune_owned "$dst_dir" ${wanted[@]+"${wanted[@]}"}
+}
+
+# plan_prune_owned <dst_dir> [kept-name...] — plan the removal of every
+# package-owned link in <dst_dir> whose basename is not in the kept set.
+#
+# The decision rests on the name alone, never on whether the link resolves — a
+# shipped name that currently dangles (a file moved inside the package) is
+# already covered by the relink in plan_link_dir, and pruning it here would undo
+# that relink, since apply runs the plan in order.
+#
+# Read-only with respect to the directory itself: it never plans a mkdir. That
+# is what lets plan_prune_dir reuse it for a directory the package has stopped
+# shipping into, where creating the target would be exactly wrong.
+plan_prune_owned() {
+  local dst_dir="$1"; shift
+  local entry ebase keep name
+
+  [ -d "$dst_dir" ] || return 0
+  for entry in "$dst_dir"/*; do
+    is_pkg_owned_link "$entry" || continue
+    ebase="$(basename "$entry")"
+    keep=0
+    for name in "$@"; do
+      if [ "$name" = "$ebase" ]; then keep=1; break; fi
     done
+    if [ "$keep" -eq 0 ]; then
+      plan_add unlink "$entry"
+    fi
+  done
+}
+
+# plan_prune_dir <name> — migration path for a directory this package used to
+# link into and no longer does (PRUNED_DIRS).
+#
+# It is plan_link_dir with the shipped set empty, minus the mkdir: a machine
+# that still carries the old links gets them removed, and a machine that never
+# had them gets nothing — no empty directory conjured for a directory the
+# package has removed. INV-OWN limits the prune to links resolving inside this
+# package root, so foreign files inside the directory are passed over.
+#
+# A whole-directory symlink at the target is skipped outright, matching what
+# plan_link_dir refuses for: the directory belongs to another source, and a link
+# living inside it is that source's to remove even when its target resolves here.
+# Nothing is aborted, because with no shipped entries there is no install to
+# leave half-done — the stale links simply stay until that tree is fixed.
+plan_prune_dir() {
+  local dst_dir="$CLAUDE_HOME/$1"
+  if [ -L "$dst_dir" ]; then
+    return 0
   fi
+  plan_prune_owned "$dst_dir"
 }
 
 # plan_scripts_binding — make $CLAUDE_HOME/scripts/run-issues resolve to this
@@ -691,8 +737,11 @@ main() {
   for d in $LINKED_DIRS; do
     plan_link_dir "$d" files
   done
+  for d in $PRUNED_DIRS; do
+    plan_prune_dir "$d"
+  done
   # Skills come after the core directories: on the maintainer's machine skills
-  # produces a conflict (its target is a directory symlink) but agents/commands
+  # produces a conflict (its target is a directory symlink) but the commands
   # must still install, and the summary reads more naturally with the core
   # links reported before the conflict line.
   for d in $SKILL_DIRS; do

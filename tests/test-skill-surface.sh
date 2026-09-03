@@ -70,11 +70,9 @@ fi
 
 # ---- Case 3: every shipped command the skill should cover is named ----
 # Exclusions, each because the command is NOT part of this system:
-#   factory-run, factory-metrics — the separate agent factory (its own pipeline,
-#                                  its own spec format; the runner does not call it)
-#   refresh                      — a generic "bring the repo up to date" helper,
-#                                  usable with or without the runner
-EXCLUDE_CMDS="factory-run factory-metrics refresh"
+#   refresh — a generic "bring the repo up to date" helper, usable with or
+#             without the runner
+EXCLUDE_CMDS="refresh"
 for f in "$ROOT"/commands/*.md; do
   [ -f "$f" ] || continue
   base="$(basename "$f" .md)"
