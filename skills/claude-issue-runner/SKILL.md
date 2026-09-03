@@ -1,6 +1,6 @@
 ---
 name: claude-issue-runner
-description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean or auto-merge label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /run-issues, /run-epic, /pr-watch or /cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
+description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset or auto-merge label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /run-issues, /run-epic, /pr-watch or /cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
 version: 2.3.0
 ---
@@ -52,13 +52,15 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `epic` | sinä tai `/run-epic` | sinä | Estää poiminnan: epic kokoaa alaissueet muttei ole itse ajettava |
 | `auto-clean` (`RUN_ISSUES_CLEAN_LABEL`) | sinä | automaatio siivouksen jälkeen | Pyytää siivoamaan ajojäänteet ja **sulkemaan** issuen. **Ei koskaan poimintalabeliksi** |
 | `auto-clean-skipped` | automaatio, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
+| `auto-reset` (`RUN_ISSUES_RESET_LABEL`) | sinä (tai Ohjaamon *Nollaa*) | automaatio purun jälkeen | Pyytää purkamaan ajojäänteet **sulkematta** issueta: ajo alkaa alusta puhtaasta basesta. **Ei koskaan poimintalabeliksi** |
+| `auto-reset-skipped` | automaatio, kun se ei voi purkaa | **sinä**, kun olet hoitanut asian | Estää nollauksen loputtoman uudelleenyrityksen. Oma labelinsa, ei jaettu siivouksen kanssa |
 | `auto-merge` (`PR_WATCH_MERGE_LABEL`) | sinä issuelle, automaatio PR:lle | sinä | PR-vahti mergeää **vain** labeloidun PR:n |
 | `auto-claimed` | automaatio, kun ajo varaa issuen (S3) | automaatio, kun ajo perääntyy tai siivotaan | **Varaus**: estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Älä lisää tai poista käsin** |
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
 | `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä | sinä | Suodatettava merkintä epic-issuella |
 | `epic-complete` | automaatio, kun kaikki alaissueet ovat kiinni | sinä | Merkintä epicillä; **runner ei sulje epiciä** |
 
-Luo `auto-run`, `wip` ja `auto-clean` repoon itse: GitHub ei salli tuntemattoman labelin
+Luo `auto-run`, `wip`, `auto-clean` ja `auto-reset` repoon itse: GitHub ei salli tuntemattoman labelin
 liittämistä, ja automaatio luo vain omat labelinsa. Kolme kallista sekaannusta:
 
 - **Esto ei ole label.** Riippuvuudet merkitään GitHubin omalla "blocked by" -toiminnolla.
@@ -80,17 +82,17 @@ vastatessa). Issue lähtee ajoon täsmälleen kun **kaikki kuusi** pätevät:
    assignaatio ei estä poimintaa.
 3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa ("Mark as blocked by").
    Graafi luetaan suoraan riippuvuusrajapinnasta ehdokas kerrallaan, vanhimmasta alkaen.
-4. Issuella **ei ole** labelia `waiting`, `wip`, `epic` eikä `auto-clean`.
+4. Issuella **ei ole** labelia `waiting`, `wip`, `epic`, `auto-clean` eikä `auto-reset`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: yksi label, `auto-run`).
 6. Se on vanhin ehdot täyttävä issue — yksi issue per tikki per remote.
 
 Viides kohta yllättää useimmin: **poimintalabelit yhdistyvät JA-ehdolla, eivät TAI-ehdolla.**
 Jos poimintalabeleita on kaksi, issue tarvitsee molemmat.
 
-> **Ansa:** `auto-clean` on aina poissuljettu (kohta 4). Jos listaat sen poimintalabeliksi,
-> listaus pyytää palvelimelta `auto-clean`-issuet ja paikallinen suodatin pudottaa ne kaikki →
-> **nolla ehdokasta, ei virhettä, ei lokiriviä.** Repo jää pysyvästi tyhjäksi ajoista. Älä
-> koskaan käytä `auto-clean`ia poimintalabelina.
+> **Ansa:** `auto-clean` ja `auto-reset` ovat aina poissuljettuja (kohta 4). Jos listaat
+> kumman tahansa poimintalabeliksi, listaus pyytää palvelimelta juuri ne issuet ja paikallinen
+> suodatin pudottaa ne kaikki → **nolla ehdokasta, ei virhettä, ei lokiriviä.** Repo jää
+> pysyvästi tyhjäksi ajoista. Älä koskaan käytä purkulabelia poimintalabelina.
 
 ## Varaus on `auto-claimed`-label, assignaatio on kirjanpitoa
 
@@ -176,11 +178,13 @@ jatka listaa pidemmälle kuin on pakko.
    vanha ajo, mikä poistaa varauslabelin. **Assignaatio ei estä poimintaa.**
 2. **Riippuvuudet.** Onko issue merkitty "blocked by" johonkin avoimeen issueen? Katso issuen
    omasta näkymästä — **esto ei näy labeleissa.** Yksikin avoin estäjä riittää.
-3. **Estolabelit.** Onko issuella `waiting`, `wip`, `epic` tai `auto-clean`? Kaikki neljä
-   estävät poiminnan. Huom: `needs-human` **ei** estä poimintaa — varaus (`auto-claimed`) estää.
+3. **Estolabelit.** Onko issuella `waiting`, `wip`, `epic`, `auto-clean` tai `auto-reset`?
+   Kaikki viisi estävät poiminnan. Huom: `needs-human` **ei** estä poimintaa — varaus
+   (`auto-claimed`) estää. `auto-reset` on odotustila, ei vika: se poistuu itsestään, kun
+   purku on ajettu, ja issue lähtee sitten ajoon alusta.
 4. **Poimintalabelien JA-ehto.** Onko issuella **kaikki** konfiguroidut poimintalabelit? Jos
-   niitä on kaksi, yksi ei riitä. Ja jos `auto-clean` on vahingossa listattu poimintalabeliksi,
-   haku on itsensä kanssa ristiriidassa → nolla osumaa aina.
+   niitä on kaksi, yksi ei riitä. Ja jos `auto-clean` tai `auto-reset` on vahingossa listattu
+   poimintalabeliksi, haku on itsensä kanssa ristiriidassa → nolla osumaa aina.
 
 Jos mikään näistä ei ole syy, ongelma on ajoympäristössä (poller ei aja tällä koneella,
 watchlist ei kata repoa, rinnakkaisuuskatto täynnä) — ks. paketin README osio 9.
@@ -213,6 +217,9 @@ Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suo
 - `stop-run.sh` — pysäytä yksi elävä ajo (ei siivoa jäänteitä).
 - `cleanup-run.sh` — pura yhden ajon worktree, haara, run-dir, varaus ja lukko.
 - `auto-clean.sh` — sama siivous labelin laukaisemana, ja issuen sulkeminen.
+- `auto-reset.sh` — sama purku labelin laukaisemana **ilman** issuen sulkemista: issue palaa
+  poimintaan ja ajo alkaa alusta puhtaasta basesta. Turvaportit ovat kirjaimellisesti samat
+  rivit kuin siivouksessa (`lib/teardown.sh`); ero on vain lopputulos.
 
 **Siivous on konekohtaista:** worktree, run-dir ja lukko ovat sillä koneella, jolla ajo
 tapahtui, eikä väärällä koneella ajettu siivous löydä mitään. Liput ja exit-koodit ovat paketin

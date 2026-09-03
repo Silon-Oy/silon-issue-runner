@@ -423,6 +423,7 @@ skriptin `# Env:`-otsikkokommentti.
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku; asetettuna ainoa ehdokas |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Pollerien lokihakemisto |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee siivouksen |
+| `RUN_ISSUES_RESET_LABEL` | `auto-reset` | Label, joka laukaisee nollauksen: sama purku kuin siivouksessa, mutta issue jää auki |
 | `RUN_ISSUES_PICK_BLOCKED_PROBES` | `20` | Montako poimintaehdokasta enintään tarkistetaan estojen varalta per tikki (#133) |
 | `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` poistaa GitHubin kutsurajan perääntymisen käytöstä (#126). Oletuksena pollerit odottavat kasvavan ajan (5→60 min) rajaan törmättyään, koska torjuttu pyyntö pidentää estoa |
 | `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | Siivouslabelin repo-laajuisen listauksen rivikatto (#124); ylittyessä kattamattomat issuet luetaan yksitellen ja lokiin tulee WARNING |
@@ -493,7 +494,7 @@ gh api repos/<owner>/<repo>/issues
         ?labels=<jokainen konfiguroitu label>      ← palvelimen suodatin (JA-ehto)
         &state=open&sort=created&direction=asc
   → pudota PR:t sekä issuet, joilla on jokin näistä labeleista:   ← paikallinen suodatin (jq)
-    auto-claimed, waiting, wip, epic, auto-clean
+    auto-claimed, waiting, wip, epic, auto-clean, auto-reset
   → koeta jäljelle jääneitä vanhimmasta alkaen: onko avoimia blocked_by-estäjiä?
     ensimmäinen estämätön lähtee ajoon
 ```
@@ -514,16 +515,20 @@ Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
    issue lähtee ajoon normaalisti.
 3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa — poiminta lukee graafin
    suoraan riippuvuusrajapinnasta ehdokas kerrallaan (ks. 6.5).
-4. Issuella **ei ole** labelia `waiting`, `wip`, `epic` eikä `auto-clean`.
+4. Issuella **ei ole** labelia `waiting`, `wip`, `epic`, `auto-clean` eikä `auto-reset`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: `auto-run`).
 6. Se on vanhin ehdot täyttävä issue — **yksi issue per tikki per remote**.
 
 Viides kohta on se, joka useimmiten yllättää: **labelit yhdistyvät JA-ehdolla, eivät
 TAI-ehdolla.** Jos watchlistin `labels`-listassa on kaksi labelia, issue tarvitsee molemmat.
-Ja koska `auto-clean` on aina poissuljettu, **sen listaaminen poimintalabeliksi tekee reposta
-pysyvästi tyhjän** — listaus pyytäisi silloin palvelimelta `labels=auto-clean` ja paikallinen
-suodatin pudottaisi jokaisen osuman. Tulos on nolla ehdokasta, eikä siitä synny virhettä eikä
-lokiriviä.
+Ja koska `auto-clean` ja `auto-reset` ovat aina poissuljettuja, **kumman tahansa listaaminen
+poimintalabeliksi tekee reposta pysyvästi tyhjän** — listaus pyytäisi silloin palvelimelta
+`labels=auto-clean` ja paikallinen suodatin pudottaisi jokaisen osuman. Tulos on nolla
+ehdokasta, eikä siitä synny virhettä eikä lokiriviä.
+
+`auto-reset`in poissulku ei ole optimointi vaan **korrektiusehto**: nollauksen koko idea on,
+että poiminta jatkuu vasta kun purku on ajettu ja label poistettu. Ilman suodatinta poller
+voisi varata issuen ennen purkua, ja purku törmäisi issuekohtaiseen lukkoon joka tikillä.
 
 Poimintalabelit tulevat konfiguraatiosta kolmessa portaassa: watchlistin repokohtainen
 `labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. **Mikään
@@ -581,6 +586,8 @@ automaation lisäämää labelia kannata poistaa käsin ennen kuin syy on korjat
 | `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu; PR-vahti, kun CI-korjaus luovuttaa | `cleanup-run.sh` (myös `/cleanup-run`); PR:ltä **sinä** | Issuella: **ei estä poimintaa** — varaus (`auto-claimed`) estää; signaali sinulle. PR:llä: **pidättää PR-vahdin**, kunnes poistat sen (7.5) |
 | `auto-clean` | **sinä** | `auto-clean.sh` onnistuneen siivouksen jälkeen | Pyytää siivoamaan issuen ajojäänteet ja sulkemaan issuen. Ks. 6.6 h) |
 | `auto-clean-skipped` | `auto-clean.sh`, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
+| `auto-reset` | **sinä** tai Ohjaamon *Nollaa* | `auto-reset.sh` onnistuneen purun jälkeen | Pyytää purkamaan issuen ajojäänteet **sulkematta issueta**: ajo alkaa alusta puhtaasta basesta. Ks. 6.6 i) |
+| `auto-reset-skipped` | `auto-reset.sh`, kun se ei voi purkaa | **sinä**, kun olet hoitanut asian | Estää nollauksen loputtoman uudelleenyrityksen. Oma labelinsa, jottei kahden purkuverbin tila mene sekaisin |
 | `auto-merge` | **sinä** issuelle | — | Propagoituu issuelta PR:lle, ja PR-vahti mergeää vain labeloidun PR:n |
 
 Kolme yleistä sekaannusta kannattaa erottaa heti:
@@ -596,14 +603,15 @@ Kolme yleistä sekaannusta kannattaa erottaa heti:
   (`RUN_ISSUES_PR_LABELS_CSV`, oletus `auto-merge`). Jos lisäät labelin issuelle vasta PR:n
   avaamisen jälkeen, se ei siirry itsestään — lisää se silloin suoraan PR:lle.
 
-Kaksi labelinimeä on vaihdettavissa ympäristömuuttujalla: `auto-clean`
-(`RUN_ISSUES_CLEAN_LABEL`) ja `auto-merge` (`PR_WATCH_MERGE_LABEL`). `waiting`, `wip`,
-`auto-claimed`, `needs-human` ja `auto-clean-skipped` ovat kovakoodattuja.
+Kolme labelinimeä on vaihdettavissa ympäristömuuttujalla: `auto-clean`
+(`RUN_ISSUES_CLEAN_LABEL`), `auto-reset` (`RUN_ISSUES_RESET_LABEL`) ja `auto-merge`
+(`PR_WATCH_MERGE_LABEL`). `waiting`, `wip`, `auto-claimed`, `needs-human`,
+`auto-clean-skipped` ja `auto-reset-skipped` ovat kovakoodattuja.
 
 Automaation itsensä lisäämät labelit (`waiting`, `auto-claimed`, `needs-human`,
-`auto-clean-skipped` sekä PR:lle kopioitavat) luodaan repoon tarvittaessa itsestään. **Sinun
-lisäämäsi labelit (`auto-run`, `wip`, `auto-clean`) pitää luoda repoon itse** — GitHub ei salli
-tuntemattoman labelin liittämistä.
+`auto-clean-skipped`, `auto-reset-skipped` sekä PR:lle kopioitavat) luodaan repoon tarvittaessa
+itsestään. **Sinun lisäämäsi labelit (`auto-run`, `wip`, `auto-clean`, `auto-reset`) pitää luoda
+repoon itse** — GitHub ei salli tuntemattoman labelin liittämistä.
 
 ### 6.4 Varaus (`auto-claimed`) ja assignaatio
 
@@ -827,7 +835,19 @@ ajoja ei löydy tältä koneelta, siivous jättää issuen rauhaan ja lisää
 `auto-clean-skipped`-labelin, jotta se ei yritä samaa joka viides minuutti. Kaavio:
 [`docs/diagrams/run-issues-auto-clean-flow.mmd`](docs/diagrams/run-issues-auto-clean-flow.mmd).
 
-**i) PR on auki — mitä auto-merge vaatii.** PR-vahti mergeää vain, kun **kaikki kolme**
+**i) Haluat ajaa issuen alusta.** Lisää issuelle `auto-reset`-label (tai paina Ohjaamosta
+*Nollaa*). Poller purkaa ajojäänteet **täsmälleen kuten `auto-clean`** — samat turvaportit,
+sama `cleanup-run.sh` — mutta **jättää issuen auki**. Koska purku poistaa myös assignaation ja
+`auto-claimed`/`needs-human`-labelit, issue täyttää poimintaehdot heti kun `auto-reset`-label
+on poistettu, ja poller aloittaa ajon alusta puhtaasta basesta seuraavalla tikillä. Nollaus ei
+käynnistä ajoa itse eikä avaa suljettua issueta.
+
+Ero `auto-clean`iin on **vain lopputulos**: siivous on lopetusverbi (issue sulkeutuu), nollaus
+on uudelleenajoverbi. Portit ovat kirjaimellisesti samat rivit (`lib/teardown.sh`). Jos issuella
+on `completed`-ajo, jonka PR on yhä auki, nollaus kieltäytyy ja lisää `auto-reset-skipped`in —
+muuten samalle issuelle syntyisi toinen PR. Sulje PR ensin.
+
+**j) PR on auki — mitä auto-merge vaatii.** PR-vahti mergeää vain, kun **kaikki kolme**
 toteutuu: PR:llä on `auto-merge`-label, CI on vihreä ja GitHub raportoi PR:n mergettäväksi.
 Draft ei ole mergettävä. Vanhentuneen tai konfliktisen PR:n rebase tehdään feature-haaran
 omassa worktreessä, ja CI on ajettava uudelleen vihreäksi ennen mergeä (osio 7.4). Punaisen
@@ -881,6 +901,7 @@ käytettävissä.
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run` |
 | `cleanup-run.sh` | `cleanup-run.sh --issue <N> --yes` | Ajojäänteiden purku. `--list`, `--all`, `--force`, `--dry-run`, `--remote` |
 | `auto-clean.sh` | *(pollerin kutsuma)* | Label-vetoinen siivous + issuen sulkeminen. Käsin: `--repo <polku> --issue <N>` |
+| `auto-reset.sh` | *(pollerin kutsuma)* | Sama purku ilman issuen sulkemista — issue palaa poimintaan. Käsin: `--repo <polku> --issue <N>` |
 | `poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin issue-automaatio |
 | `pr-watch-poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin PR-automaatio |
 | `install.sh` | `bash install.sh --dry-run` | Asennus (osio 3) |
@@ -1301,7 +1322,7 @@ julkisen tunnelin taakse ilman todennettua pääsynhallintaa.
 ### 7.9 Ohjaamon toimintopalvelu on mutaatiokanava — turvamalli sitova
 
 Statussivu on lähtökohtaisesti **luku-pinta**. Kun asennat Ohjaamon toimintopalvelun
-([`action-server.sh`](action-server.sh)), sivulle tulee neljä toimintonappia (Pysäytä / Siivoa /
+([`action-server.sh`](action-server.sh)), sivulle tulee viisi toimintonappia (Pysäytä / Siivoa / Nollaa /
 Salli auto-merge / Jatka), joista jokainen on ohut kuori olemassa olevan skriptin tai labelin
 päälle — mutta se on myös **kirjoitusrajapinta**, joten turvamalli on tiukempi kuin sivulla.
 Kaikki alla oleva on **sitovaa**, ei suositus.
@@ -1589,6 +1610,24 @@ kieltäytyy, `MERGED`/`CLOSED` siivotaan ja issue suljetaan. `auto-clean-skipped
 silmukkasuoja — poista se käsin, kun olet hoitanut asian, jos haluat siivouksen yrittävän
 uudelleen.
 
+### Label-vetoinen nollaus (`auto-reset.sh`)
+
+Oma avaruutensa, ei siivouksen jatke — numerot sattuvat osumaan yhteen, mutta niitä ei ole
+yhtenäistetty eikä pidä yhtenäistää.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Purettu, **issue jätetty auki**, `auto-reset`-label poistettu — issue palaa poimintaan |
+| 1 | Käyttövirhe tai remotea ei voitu selvittää |
+| 3 | Issuen lukko on toisella ajolla — turvallista yrittää seuraavalla tikillä |
+| 4 | Issuen `completed`-ajolla on **avoin** (tai selvittämätön) PR — ei purettu, `auto-reset-skipped` lisätty. Nollaus tuottaisi samalle issuelle toisen PR:n, joten sulje PR ensin |
+| 5 | Tältä koneelta ei löydy ajoja tälle issuelle — `auto-reset-skipped` lisätty ja kommenttiin kirjattu konekohtainen ohje |
+| 6 | Purku (`cleanup-run.sh`) epäonnistui |
+
+Portit ovat kirjaimellisesti samat rivit kuin siivouksessa (`lib/teardown.sh`), joten myös
+kieltäytymiset osuvat samoihin kohtiin. Ero on lopputuloksessa: **issueta ei suljeta eikä avata
+uudelleen**, ja onnistuneen purun jälkeen issue täyttää poimintaehdot heti.
+
 ### Yksittäisen ajon pysäytys (`stop-run.sh`)
 
 | Koodi | Merkitys |
@@ -1729,7 +1768,8 @@ Kolme sääntöä:
   ennen purkua, joten siivous ei hävitä tutkittavaa jälkeä.
 
 Vaihtoehto ilman komentoriviä: lisää issuelle `auto-clean`-label, jolloin poller tekee saman
-ja sulkee issuen (6.6 h).
+ja sulkee issuen (6.6 h) — tai `auto-reset`, jolloin poller tekee saman purun mutta jättää
+issuen auki, ja ajo alkaa alusta puhtaasta basesta (6.6 i).
 
 ### Hätävarat
 

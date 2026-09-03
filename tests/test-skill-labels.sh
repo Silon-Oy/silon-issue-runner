@@ -7,13 +7,14 @@
 # test-readme.sh derives its exit-code expectations from the scripts.
 #
 # What it guards:
-#   a) the hardcoded labels the skill names (waiting, wip, needs-human,
-#      auto-clean-skipped) each appear in the code
+#   a) the hardcoded labels the skill names (waiting, wip, needs-human, and the
+#      two teardown loop guards) each appear in the code
 #   b) the labels the skill marks configurable (auto-clean / RUN_ISSUES_CLEAN_LABEL,
-#      auto-merge / PR_WATCH_MERGE_LABEL) are configurable in the code, and the
-#      skill names their env var rather than presenting the name as fixed
-#   c) the pickup query's negative label terms (-label:waiting -label:wip
-#      -label:<clean>) in lib/issue.sh match the labels the skill claims block
+#      auto-reset / RUN_ISSUES_RESET_LABEL, auto-merge / PR_WATCH_MERGE_LABEL) are
+#      configurable in the code, and the skill names their env var rather than
+#      presenting the name as fixed
+#   c) the pickup query's local exclusion labels (waiting, wip, epic, and the
+#      teardown labels) in lib/issue.sh match the labels the skill claims block
 #      pickup
 #   d) BIDIRECTIONAL coverage: the FULL label vocabulary derived from the code
 #      is named in the skill. (a)-(c) only walk skill→code, so a label added to
@@ -63,7 +64,7 @@ label_in_skill() {
 # ---- Case 2: hardcoded labels the skill names exist in the code ----
 # These are the labels the skill presents as fixed. If the code renamed one, the
 # skill would be teaching a foreign repo a label that no longer does anything.
-for label in waiting wip needs-human auto-clean-skipped; do
+for label in waiting wip needs-human auto-clean-skipped auto-reset-skipped; do
   in_skill=0; in_code=0
   label_in_skill "$label" && in_skill=1
   label_in_code "$label" && in_code=1
@@ -93,6 +94,7 @@ assert_configurable() {
   fi
 }
 assert_configurable auto-clean RUN_ISSUES_CLEAN_LABEL auto-clean
+assert_configurable auto-reset RUN_ISSUES_RESET_LABEL auto-reset
 assert_configurable auto-merge PR_WATCH_MERGE_LABEL auto-merge
 
 # ---- Case 4: pickup exclusion labels match the skill's blocker claim ----
@@ -166,10 +168,11 @@ derived_labels() {
     grep -hoE '[A-Z_]*LABEL="[a-z][a-z0-9-]*"' "${CODE_FILES[@]}" 2>/dev/null \
       | sed 's/.*="//; s/"$//'
 
-    # 4. documented defaults of the configurable labels + the poller's default
-    grep -hoE '\$\{RUN_ISSUES_CLEAN_LABEL:-[a-z][a-z0-9-]*\}' "${CODE_FILES[@]}" 2>/dev/null \
-      | sed 's/.*:-//; s/}$//'
-    grep -hoE '\$\{PR_WATCH_MERGE_LABEL:-[a-z][a-z0-9-]*\}' "${CODE_FILES[@]}" 2>/dev/null \
+    # 4. documented defaults of the configurable labels + the poller's default.
+    # Matched by SHAPE (`${*_LABEL:-<default>}`), not by naming the variables: a
+    # per-variable grep would silently not cover the NEXT configurable label
+    # added, which is exactly the drift this case exists to catch.
+    grep -hoE '\$\{[A-Z_]*LABEL:-[a-z][a-z0-9-]*\}' "${CODE_FILES[@]}" 2>/dev/null \
       | sed 's/.*:-//; s/}$//'
     grep -hoE 'default_labels // \["[a-z][a-z0-9-]*"\]' "$ROOT/poller.sh" 2>/dev/null \
       | sed 's/.*\["//; s/"\]//'

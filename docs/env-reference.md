@@ -46,17 +46,18 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_HOME` | *(pollerin oma `SCRIPT_DIR`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Luetaan vain ympäristöstä |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Liveness-raja: vanhempi ajo tapetaan ja finalisoidaan `blocked/stalled_in_<state>`. **Täytyy** ylittää pisin laillinen yksivaiheinen claude-kutsu |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee `auto-clean.sh`:n |
+| `RUN_ISSUES_RESET_LABEL` | `auto-reset` | Label, joka laukaisee `auto-reset.sh`:n (#202): sama purku kuin siivouksessa, mutta **issue jää auki** ja palaa poimintaan. Luetaan kolmessa paikassa, joiden on oltava samaa mieltä: pollerin reset-skannaus, `pick_oldest_candidate`in poissulku ja `action-dispatch.sh`:n `reset`. Silmukkasuoja `auto-reset-skipped` on kovakoodattu, kuten `auto-clean-skipped` |
 | `RUN_ISSUES_PICK_BLOCKED_PROBES` | `20` | Montako poimintaehdokasta enintään koetetaan `count_open_blockers`illa ennen kuin tikki luovuttaa (#133). `-is:blocked`illa ei ole REST-vastinetta, joten esto tarkistetaan ehdokas kerrallaan vanhimmasta alkaen ja pysähdytään ensimmäiseen vapaaseen. Tavallinen hinta on **yksi** koetus (riippuvuusketjussa vanhin lapsi on se ajettava); katto estää kokonaan estetyn backlogin kävelemisen joka tikillä. Katon täyttyminen = "ei ehdokasta", seuraava tikki yrittää uudelleen |
 | `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` = poista perääntyminen käytöstä (#126). Hätävara samalla perusteella kuin `RUN_ISSUES_SKIP_PREFLIGHT`: uusi portti ei saa koskaan olla syy siihen, ettei ajo käynnisty toimivalla koneella. Luetaan kummassakin pollerissa, `pr-watch.sh`:ssa ja `status.sh`:ssa |
-| `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | **Vain `poller.sh`:n `scan_clean`.** Montako riviä siivouslabelin repo-laajuinen listaus hakee (#124). Ylittyessään lista ei enää todista poissaoloa, joten kattamattomat paikalliset issuet luetaan yksitellen ja lokiin tulee WARNING. Nosto on halpa; oletus riittää kunnes labeloituja issueita on ≥200 |
-| `RUN_ISSUES_FINISHED_SCAN_LIMIT` | `500` | **Vain `poller.sh`:n `scan_finished`.** Montako riviä avoimien issueiden ja avoimien PR:ien repo-laajuiset listaukset hakevat (#107). Sama katkaisusemantiikka kuin `RUN_ISSUES_CLEAN_SCAN_LIMIT`illa, mutta **päinvastaisesta syystä**: `scan_clean` kysyy harvinaista labelia, tämä kysyy *avoimien* joukkoa ja käyttää poissaoloa **sulkeutumisen todisteena** — katkaistu lista ei todista mitään, joten kattamattomat ehdokkaat luetaan yksitellen (`_rest_issue_path`/`_rest_pull_path`) ja lokiin tulee WARNING. Katkaisu saa maksaa **kutsuja, ei ohituksia** |
+| `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | **Vain `poller.sh`:n `scan_teardown`** (eli molemmat purkuverbit). Montako riviä purkulabelin repo-laajuinen listaus hakee (#124). Ylittyessään lista ei enää todista poissaoloa, joten kattamattomat paikalliset issuet luetaan yksitellen ja lokiin tulee WARNING. Nosto on halpa; oletus riittää kunnes labeloituja issueita on ≥200 |
+| `RUN_ISSUES_FINISHED_SCAN_LIMIT` | `500` | **Vain `poller.sh`:n `scan_finished`.** Montako riviä avoimien issueiden ja avoimien PR:ien repo-laajuiset listaukset hakevat (#107). Sama katkaisusemantiikka kuin `RUN_ISSUES_CLEAN_SCAN_LIMIT`illa, mutta **päinvastaisesta syystä**: `scan_teardown` kysyy harvinaista labelia, tämä kysyy *avoimien* joukkoa ja käyttää poissaoloa **sulkeutumisen todisteena** — katkaistu lista ei todista mitään, joten kattamattomat ehdokkaat luetaan yksitellen (`_rest_issue_path`/`_rest_pull_path`) ja lokiin tulee WARNING. Katkaisu saa maksaa **kutsuja, ei ohituksia** |
 | `PR_WATCH_GLOBAL_MAX` | *(watchlistin `pr_watch_max_concurrent`, tai sen puuttuessa `global_max_concurrent`)* | **Vain `pr-watch-poller.sh`.** PR-vahdin oma rinnakkaisuuskatto (#47). PR-skannaus on sekuntien työ, joten se voi käydä selvästi korkeammalla katolla kuin kymmenien minuuttien orkestraattoriajot ilman että `poller.sh`:n rinnakkaisuus kasvaa. Ympäristömuuttuja voittaa watchlist-avaimen |
 
 Watchlistin resolvointijärjestys ilman overridea: `$HOME/.config/run-issues/watchlist.json` →
 `$HOME/dotfiles/machine-studio/run-issues-watchlist.json`. Jälkimmäinen on **vain fallback**
 (ks. §12); ensisijainen polku ei koskaan ole dotfiles-puu.
 
-**Siivousskannauksen kustannusinvariantti (#124).** `scan_clean` kysyy **labelia, ei issueita**:
+**Purkuskannauksen kustannusinvariantti (#124).** `scan_teardown` kysyy **labelia, ei issueita**:
 yksi `gh issue list --label <clean> --state all` per repo × remote, ja leikkaus paikallisten
 run-dirien issue-numeroihin tehdään muistissa. Aiemmin se luki yhden `gh issue view`n **per uniikki
 paikallinen issue**, jolloin hinta oli `O(historialliset run-dirit)` eikä `O(työ)` — mitattuna 337
@@ -69,6 +70,12 @@ usein jo suljettu — mitattuna **jokainen** orgin `auto-clean`-issue oli suljet
 (`RUN_ISSUES_CLEAN_SCAN_LIMIT`), ilman jota katkennut lista lukisi "ei siivottavaa" juuri silloin kun
 siivottavaa on. Label ei poistu onnistuneen siivouksen jälkeen, joten se kertyy suljetuille issueille
 ja katto on aito eikä teoreettinen.
+
+Toinen purkuverbi (#202) **ei muuta invarianttia vaan skaalaa sen**: sama funktio ajetaan toisella
+labeliparilla, eli yksi listaus lisää per repo × remote per tikki — ei toista skannausmuotoa. Portti
+"ei paikallisia run-direjä ⇒ ei verkkokutsua" pätee molempiin, joten repo, jolla ei ole tällä koneella
+mitään, tekee edelleen nolla kutsua. `tests/test-scan-clean.sh` assertoi myös reset-verbin
+kutsumäärän erikseen.
 
 **PR-vahdin rotaatiokursori (#47).** `pr-watch-poller.sh` iteroi watchlistiä
 rotaatiokursorilla: se muistaa mihin repoon jäi ja jatkaa seuraavalla tikillä siitä eteenpäin
@@ -104,7 +111,7 @@ estetty" — mikä johti aiemmin väärään diagnoosiin (purskeeksi, jota tahdi
 18 kutsua sekunnin välein kaatui silti).
 
 Siirretyt kyselyt: `pick_oldest_candidate` (`lib/issue.sh`), `epic_list_open` (`lib/epic.sh`),
-`scan_clean`in labelikysely (`poller.sh`) ja `status_github_fetch_epics` (`lib/status-github.sh`)
+`scan_teardown`in labelikysely (`poller.sh`) ja `status_github_fetch_epics` (`lib/status-github.sh`)
 — moduulin kolme muuta kutsua eivät osu hakuyhteyteen eivätkä siirtyneet. Semantiikka säilyy:
 REST **ANDaa** `labels=`-listan kuten erilliset `label:"x"`-termit (mitattu: `labels=auto-run,epic`
 → 0, `labels=auto-run` → 5), ja REST `/issues` palauttaa **myös PR:t**, joten `.pull_request`
@@ -226,7 +233,7 @@ joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
 | `RUN_ISSUES_RENDER_GITHUB` | `0` | **#78.** `1` = LaunchAgent-polku (ilman `--input`ia) ajaa `status.sh --github`in, jolloin sivulle tulee issue-otsikot (`github.issue_title` rivin pääteksti) ja CI/mergevalmius-chipit avoimen PR:n riveille. Fail-soft: jos `--github`-ajo epäonnistuu kokonaan (exit ≠ 0/3), skripti putoaa paikalliseen luentaan ja renderöi V1-sivun. `status.sh --github` on itsekin fail-soft (repon verkkovirhe → `repos_failed`, ei kaada), joten fallback on varajärjestely. `0` = pelkkä paikallinen luenta, bitilleen kuin ennen #78:aa. Vaikuttaa vain no-`--input`-polkuun. **Otsikot sivulla → sivua ei saa altistaa julkisesti (README §7.8).** Asennusesimerkissä (`examples/run-issues-poller.env.example`) oletukseksi `1` |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Skripti ohjaa oman stdout/stderrinsä `status-render.stdout.log`/`.stderr.log`-tiedostoihin täältä, kun ei aja TTY:llä (plistissä ei loki-avaimia, §11) |
 | `RUN_ISSUES_HOME` | *(scriptin oma hakemisto)* | Testien injektiopiste; myös `status.sh`:n sijainti LaunchAgent-polulla (ilman `--input`ia) |
-| `RUN_ISSUES_ACTION_BASE` | *(tyhjä)* | **#77.** Toimintopalvelun URL selaimen näkökulmasta (esim. `http://studio:8081`). Asetettuna `status-render.sh` upottaa sivulle base-URLin + jaetun tokenin (`<meta>`) ja renderöi neljä toimintonappia; JS POSTaa palveluun. **Tyhjä = puhdas V1-lukupinta, ei nappeja** (koko V2 opt-in). Token vain `index.html`iin, ei koskaan `status.json`iin |
+| `RUN_ISSUES_ACTION_BASE` | *(tyhjä)* | **#77.** Toimintopalvelun URL selaimen näkökulmasta (esim. `http://studio:8081`). Asetettuna `status-render.sh` upottaa sivulle base-URLin + jaetun tokenin (`<meta>`) ja renderöi viisi toimintonappia; JS POSTaa palveluun. **Tyhjä = puhdas V1-lukupinta, ei nappeja** (koko V2 opt-in). Token vain `index.html`iin, ei koskaan `status.json`iin |
 
 ### Ohjaamon toimintopalvelu (`action-server.sh`, `action-dispatch.sh`, #77)
 
