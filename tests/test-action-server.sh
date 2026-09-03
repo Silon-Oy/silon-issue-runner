@@ -113,6 +113,20 @@ if grep -q 'repos/o/acme/issues/5/labels' "$GH_ARGS" && grep -q 'labels\[\]=auto
   ok "clean POSTs auto-clean label to the issue"
 else bad "clean gh args wrong: $(cat "$GH_ARGS")"; fi
 
+# --- reset: adds auto-reset label to the issue (issue #202) ---
+# Security-model rule 5: the reset action must be a LABEL WRITE and nothing else.
+# Asserting the gh args is not enough on its own — a teardown smuggled in here
+# would still POST the label — so the argv shape is pinned below and the whole
+# gh call ledger is checked for a single labels POST.
+: > "$GH_ARGS"; echo 0 > "$GH_RC"
+dispatch reset --repo "$FX/repo" --owner o/acme --issue 5; check "reset exit 0" "$?" "0"
+if grep -q 'repos/o/acme/issues/5/labels' "$GH_ARGS" && grep -q 'labels\[\]=auto-reset' "$GH_ARGS"; then
+  ok "reset POSTs auto-reset label to the issue"
+else bad "reset gh args wrong: $(cat "$GH_ARGS")"; fi
+if grep -q 'issue close' "$GH_ARGS"; then
+  bad "reset closed the issue — it must only add a label"
+else ok "reset never closes the issue"; fi
+
 # --- allow-merge: adds auto-merge label to the PR ---
 : > "$GH_ARGS"
 dispatch allow-merge --repo "$FX/repo" --owner o/acme --pr 9; check "allow-merge exit 0" "$?" "0"
@@ -143,6 +157,8 @@ else bad "resume timed_out tmux args wrong: $(cat "$TMUX_ARGS")"; fi
 # --- usage errors ---
 dispatch bogus-action --issue 1 >/dev/null 2>&1; check "unknown action -> exit 1" "$?" "1"
 dispatch clean --repo "$FX/repo" >/dev/null 2>&1; check "clean without --issue -> exit 1" "$?" "1"
+dispatch reset --repo "$FX/repo" >/dev/null 2>&1; check "reset without --issue -> exit 1" "$?" "1"
+dispatch reset --repo "$FX/repo" --issue abc >/dev/null 2>&1; check "reset with non-numeric --issue -> exit 1" "$?" "1"
 
 # ===========================================================================
 # B. lib/action-service.py — auth + CSRF + audit over HTTP
@@ -218,6 +234,16 @@ code="$(post "${VALID[@]}")"
 check "valid POST -> 200" "$code" "200"
 check "valid POST ok:true" "$(jq -r '.ok' "$FX/body.txt" 2>/dev/null)" "true"
 if grep -q 'clean --issue 5' "$DISP_ARGS"; then ok "service execs dispatch with the action argv"; else bad "dispatch argv wrong: $(cat "$DISP_ARGS")"; fi
+
+# The reset verb must pass the service's argv ALLOWLIST too (issue #202).
+# build_argv returns None for an unknown action, so an action the dispatch script
+# understands but the service does not would render a button that does nothing.
+: > "$DISP_ARGS"; echo 0 > "$DISP_RC"
+code="$(post -H "Origin: $ORIGIN" -H "Content-Type: application/json" \
+  -H "X-Run-Issues-Action: 1" -H "X-Run-Issues-Token: $TOKEN" \
+  --data '{"action":"reset","issue_number":5,"repo_path":"/x","owner_repo":"o/acme"}')"
+check "reset POST -> 200" "$code" "200"
+if grep -q 'reset --issue 5' "$DISP_ARGS"; then ok "service execs dispatch with the reset argv"; else bad "reset argv wrong: $(cat "$DISP_ARGS")"; fi
 
 # Rule 5: a failing delegate surfaces its output + a non-2xx.
 echo 2 > "$DISP_RC"

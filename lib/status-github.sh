@@ -44,14 +44,19 @@ _STATUS_GH_PR_FIELDS='number,state,mergeable,mergeStateStatus,labels,statusCheck
 _STATUS_GH_ISSUE_FIELDS='number,title,labels'
 
 # _STATUS_GH_STATE_LABELS — the ONLY issue labels the Ohjaamo surfaces (issue
-# #106): the reservation (auto-clean), failed-cleanup (auto-clean-skipped) and
-# attention (needs-human) signals a run's issue carries. These three pass into the
-# github payload as github.issue_labels; the issue's FULL label set is NEVER
-# carried (scope-out: not a general label view, and a tight whitelist keeps the
-# leak surface the same as the title in #78). A jq array and the SINGLE source of
-# truth for which labels surface: both places that extract labels (the map builder
-# below and the detail read) filter against it with the same `index($n)` idiom.
-_STATUS_GH_STATE_LABELS='["auto-clean","auto-clean-skipped","needs-human"]'
+# #106): the two teardown queues (auto-clean / auto-reset), their failed-teardown
+# guards (auto-clean-skipped / auto-reset-skipped) and the attention signal
+# (needs-human) a run's issue carries. These pass into the github payload as
+# github.issue_labels; the issue's FULL label set is NEVER carried (scope-out:
+# not a general label view, and a tight whitelist keeps the leak surface the same
+# as the title in #78). A jq array and the SINGLE source of truth for which
+# labels surface: both places that extract labels (the map builder below and the
+# detail read) filter against it with the same `index($n)` idiom.
+#
+# A row's action button locks itself off this array (status-render.sh's
+# lockReason), so a teardown label missing HERE would leave that lock dead code —
+# the button would happily re-post a label the issue already carries.
+_STATUS_GH_STATE_LABELS='["auto-clean","auto-clean-skipped","auto-reset","auto-reset-skipped","needs-human"]'
 
 # status_github_build_issue_labels_map <issues-json> — map every OPEN issue to the
 # whitelisted subset of its labels (issue #106), keyed by issue number as a string:

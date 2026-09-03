@@ -124,7 +124,7 @@ fi
 SCHEMA_VERSION=1
 
 # ---- Ohjaamo action channel (#77): opt-in mutation buttons -------------------
-# The page grows four action buttons (Pysäytä / Siivoa / Salli auto-merge /
+# The page grows five action buttons (Pysäytä / Siivoa / Nollaa / Salli auto-merge /
 # Jatka) ONLY when RUN_ISSUES_ACTION_BASE names the reachable action service
 # (action-server.sh, on a Tailscale address). When it does, we embed the service
 # base URL and the shared CSRF token (lib/action-token.sh) as <meta> tags; the
@@ -338,12 +338,16 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .gh-chip.ci-red{color:#fff;background:var(--c-stalled);border-color:var(--c-stalled)}
 .gh-chip.ci-pending{color:#fff;background:var(--c-attention);border-color:var(--c-attention)}
 .gh-chip.issue-closed{color:#fff;background:var(--c-cleanup);border-color:var(--c-cleanup)}
-/* Issue state-label chips (#106): the three whitelisted labels a run's issue
-   carries. needs-human is the loud attention signal, auto-clean the reservation,
-   auto-clean-skipped the failed-cleanup warning. */
+/* Issue state-label chips (#106): the whitelisted labels a run's issue carries.
+   needs-human is the loud attention signal, auto-clean/auto-reset the two
+   teardown queues, *-skipped their failed-teardown warnings. The two queue chips
+   share a colour because they share a meaning ("a teardown is pending"); the
+   wording is what separates the verbs. */
 .gh-chip.label-needs-human{color:#fff;background:var(--c-stalled);border-color:var(--c-stalled)}
 .gh-chip.label-auto-clean{color:#fff;background:var(--c-cleanup);border-color:var(--c-cleanup)}
 .gh-chip.label-auto-clean-skipped{color:#fff;background:var(--c-attention);border-color:var(--c-attention)}
+.gh-chip.label-auto-reset{color:#fff;background:var(--c-cleanup);border-color:var(--c-cleanup)}
+.gh-chip.label-auto-reset-skipped{color:#fff;background:var(--c-attention);border-color:var(--c-attention)}
 .gh-age{color:var(--muted);font-size:.72rem}
 .row-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
 .row-sub{color:var(--muted);font-size:.78rem;margin-top:.15rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -491,18 +495,22 @@ a:hover{text-decoration:underline}
     return "Issue suljettu";
   }
 
-  // github.issue_labels -> row chips (#106). The three whitelisted state labels a
-  // run's issue carries, rendered in a FIXED priority order (most important first)
-  // so a row reads the same regardless of the array's order. needs-human is the
-  // system's loudest "needs a human" signal; auto-clean marks the run already in
-  // the cleanup queue; auto-clean-skipped means a cleanup was attempted and failed
-  // (also needs a human). The chip TEXT comes from this static map, never from the
-  // raw GitHub label string — the array is only tested for membership.
-  var LABEL_ORDER = ["needs-human", "auto-clean", "auto-clean-skipped"];
+  // github.issue_labels -> row chips (#106). The whitelisted state labels a run's
+  // issue carries, rendered in a FIXED priority order (most important first) so a
+  // row reads the same regardless of the array's order. needs-human is the
+  // system's loudest "needs a human" signal; auto-clean and auto-reset mark the
+  // run as already queued for a teardown (closing / re-running respectively);
+  // the *-skipped pair means that teardown was attempted and refused (also needs
+  // a human). The chip TEXT comes from this static map, never from the raw GitHub
+  // label string — the array is only tested for membership.
+  var LABEL_ORDER = ["needs-human", "auto-clean", "auto-clean-skipped",
+                     "auto-reset", "auto-reset-skipped"];
   var LABEL_CHIPS = {
     "needs-human":        {label:"Vaatii ihmisen",       css:"label-needs-human"},
     "auto-clean":         {label:"Siivousjonossa",       css:"label-auto-clean"},
-    "auto-clean-skipped": {label:"Siivous epäonnistui",  css:"label-auto-clean-skipped"}
+    "auto-clean-skipped": {label:"Siivous epäonnistui",  css:"label-auto-clean-skipped"},
+    "auto-reset":         {label:"Nollausjonossa",       css:"label-auto-reset"},
+    "auto-reset-skipped": {label:"Nollaus epäonnistui",  css:"label-auto-reset-skipped"}
   };
   // hasLabel(g, name) — is the named label on the run's issue? Reads only the named
   // github.issue_labels array (allowlist), never iterates the github object.
@@ -609,6 +617,10 @@ a:hover{text-decoration:underline}
   // Which actions a row offers, by the identifiers it carries.
   function canStop(r){ return !!r.run_dir && r.status === "initialized"; }
   function canClean(r){ return r.issue_number != null && r.class !== "running"; }
+  // Reset offers on exactly the same rows as clean: it is the same teardown, and
+  // both refuse a live run for the same reason. No mass variant (scope-out) —
+  // "reset everything" is not a thing a human means to do by accident.
+  function canReset(r){ return canClean(r); }
   function canMerge(r){
     if (r.pr_number == null) return false;
     return !r.github || r.github.pr_state === "OPEN" || r.github.pr_state == null;
@@ -628,8 +640,9 @@ a:hover{text-decoration:underline}
   // or the channel is not configured (keeps the V1 look on rows without actions).
   function renderActions(r){
     if (!actionsConfigured) return null;
-    var stop = canStop(r), clean = canClean(r), merge = canMerge(r), resume = canResume(r);
-    if (!(stop || clean || merge || resume)) return null;
+    var stop = canStop(r), clean = canClean(r), reset = canReset(r),
+        merge = canMerge(r), resume = canResume(r);
+    if (!(stop || clean || reset || merge || resume)) return null;
 
     var wrap = el("div", null);
     var bar = el("div", "actions");
@@ -655,11 +668,15 @@ a:hover{text-decoration:underline}
     // signal is data-driven (github.issue_labels from status.json), so it survives
     // a page refresh (AC4).
     var queued = hasLabel(r.github, "auto-clean");
+    var resetQueued = hasLabel(r.github, "auto-reset");
     add(stop, "Pysäytä", "danger", "stop",
         "Pysäytä ajo" + idn + "?\n\ntmux-istunto tapetaan; worktree, haara ja run-dir SÄILYVÄT.");
     add(clean, "Siivoa", "danger", "clean",
         "Siivoa ajo" + idn + "?\n\nLisää auto-clean-label — poller poistaa worktreen, haaran, run-dirin ja assignaation turvaportteineen.",
         queued ? "Jo siivousjonossa (auto-clean-label issuella)" : null);
+    add(reset, "Nollaa", "danger", "reset",
+        "Nollaa ajo" + idn + "?\n\nLisää auto-reset-label — poller purkaa worktreen, haaran, run-dirin ja varauksen samoin turvaportein kuin Siivoa, mutta JÄTTÄÄ ISSUEN AUKI: ajo alkaa alusta puhtaasta basesta.",
+        resetQueued ? "Jo nollausjonossa (auto-reset-label issuella)" : null);
     add(merge, "Salli auto-merge", "go", "allow-merge",
         "Salli auto-merge PR #" + (r.pr_number != null ? r.pr_number : "?") + "?\n\nLisää auto-merge-label — vahti mergeää (ja ratkaisee konfliktin) kun CI on vihreä.");
     add(resume, "Jatka", null, "resume",

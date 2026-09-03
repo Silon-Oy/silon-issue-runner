@@ -311,7 +311,28 @@ if [ -f "$HTMLLB" ]; then
   # AC3: the Siivoa button disables (with a reason) when auto-clean is present.
   present "JS computes queued from auto-clean" 'hasLabel(r.github, "auto-clean")' "$HTMLLB"
   presenti "Siivoa disable reason names the label" "Jo siivousjonossa (auto-clean-label issuella)" "$HTMLLB"
+  # The reset verb (issue #202) is the same shape one label over: its own chips,
+  # its own button, and the same data-driven lock. The lock is only reachable if
+  # auto-reset is on lib/status-github.sh's surfaced-label whitelist, so that
+  # array is asserted at its source below rather than inferred from the page.
+  presenti "auto-reset chip wording" "Nollausjonossa" "$HTMLLB"
+  presenti "auto-reset-skipped chip wording" "Nollaus epäonnistui" "$HTMLLB"
+  present "Nollaa button is wired to the reset action" 'add(reset, "Nollaa", "danger", "reset"' "$HTMLLB"
+  present "JS computes resetQueued from auto-reset" 'hasLabel(r.github, "auto-reset")' "$HTMLLB"
+  presenti "Nollaa disable reason names the label" "Jo nollausjonossa (auto-reset-label issuella)" "$HTMLLB"
+  # The confirmation must say the thing that distinguishes reset from clean.
+  presenti "Nollaa confirmation says the issue stays open" "JÄTTÄÄ ISSUEN AUKI" "$HTMLLB"
 fi
+
+# The whitelist that feeds github.issue_labels lives in lib/status-github.sh. A
+# label missing THERE makes the lock above dead code: the button would re-post a
+# label the issue already carries. Read from the source, not from the page.
+GH_LIB="$(cd "$(dirname "$RENDER")" && pwd)/lib/status-github.sh"
+for lbl in auto-clean auto-clean-skipped auto-reset auto-reset-skipped needs-human; do
+  if grep -q "\"$lbl\"" "$GH_LIB"; then
+    ok "surfaced-label whitelist carries $lbl"
+  else bad "lib/status-github.sh does not surface '$lbl' — the row chip and button lock would be dead"; fi
+done
 
 # ---- Case 4c: epic rollup lane (#79) --------------------------------------
 # A document with an epics[] list and an epic title that is an XSS payload. The

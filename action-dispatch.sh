@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# action-dispatch.sh — the four Ohjaamo actions, each a thin shell over an
+# action-dispatch.sh — the five Ohjaamo actions, each a thin shell over an
 # existing script or label (issue #77).
 #
 # The action SERVICE (lib/action-service.py) never touches gh, labels or the
@@ -10,6 +10,8 @@
 #
 #   stop         -> stop-run.sh --run-dir <dir> --yes         (worktree/branch kept)
 #   clean        -> auto-clean label on the issue; the poller tears it down
+#   reset        -> auto-reset label on the issue; the poller tears it down and
+#                   leaves the issue OPEN, so pickup starts the run over
 #   allow-merge  -> auto-merge label on the PR; pr-watch does the rest
 #   resume       -> timed_out run: orchestrate.sh --restart <dir> (detached tmux)
 #                   otherwise:     remove the needs-human label (un-hold the run)
@@ -22,6 +24,7 @@
 #   action-dispatch.sh <action> [selectors]
 #     stop         --run-dir <dir>
 #     clean        --repo <path> --issue <N> [--owner <o/r>]
+#     reset        --repo <path> --issue <N> [--owner <o/r>]
 #     allow-merge  --repo <path> --pr <N>    [--owner <o/r>]
 #     resume       --repo <path> --issue <N> [--owner <o/r>] [--run-dir <dir>]
 #                  [--remote <name>] [--repo-slug <slug>]
@@ -52,6 +55,7 @@ set +e
 die_usage() { printf 'action-dispatch: %s\n' "$1" >&2; exit 1; }
 
 CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
+RESET_LABEL="${RUN_ISSUES_RESET_LABEL:-auto-reset}"
 MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
 
 # ---- parse: <action> then flag/value pairs ----
@@ -107,6 +111,19 @@ action_clean() {
   _require_number "$ISSUE" || die_usage "clean needs --issue <N>"
   ( [ -n "$REPO_ROOT" ] && cd "$REPO_ROOT" 2>/dev/null || cd "$SCRIPT_DIR"
     labels_add "$OWNER_REPO" "$ISSUE" "$CLEAN_LABEL" )
+  local rc=$?
+  [ "$rc" -eq 0 ] || exit 2
+  exit 0
+}
+
+# ---- action: reset ----
+# Add the auto-reset label; the poller's reset scan tears the run down with the
+# SAME safety gates as clean and leaves the issue open. Sibling of action_clean
+# down to the line, and for the same reason (rule 5): nothing is torn down here.
+action_reset() {
+  _require_number "$ISSUE" || die_usage "reset needs --issue <N>"
+  ( [ -n "$REPO_ROOT" ] && cd "$REPO_ROOT" 2>/dev/null || cd "$SCRIPT_DIR"
+    labels_add "$OWNER_REPO" "$ISSUE" "$RESET_LABEL" )
   local rc=$?
   [ "$rc" -eq 0 ] || exit 2
   exit 0
@@ -174,7 +191,8 @@ action_resume() {
 case "$ACTION" in
   stop)        action_stop ;;
   clean)       action_clean ;;
+  reset)       action_reset ;;
   allow-merge) action_allow_merge ;;
   resume)      action_resume ;;
-  *) die_usage "unknown action '$ACTION' (want: stop|clean|allow-merge|resume)" ;;
+  *) die_usage "unknown action '$ACTION' (want: stop|clean|reset|allow-merge|resume)" ;;
 esac

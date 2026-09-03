@@ -313,11 +313,14 @@ def build_argv(action, body):
             return None
         return [DISPATCH, "stop", "--run-dir", run_dir]
 
-    if action == "clean":
+    # clean and reset are the two teardown verbs. Same selector, same argv shape;
+    # the difference (does the issue close?) lives entirely in the poller-side
+    # scripts, so this layer stays a pure allowlist (issue #202).
+    if action in ("clean", "reset"):
         issue = _s(body, "issue_number")
         if not issue.isdigit():
             return None
-        argv = [DISPATCH, "clean", "--issue", issue]
+        argv = [DISPATCH, action, "--issue", issue]
         _add_repo(argv, body)
         return argv
 
