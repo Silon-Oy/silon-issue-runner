@@ -94,6 +94,15 @@ Sidonta on siis **ehdollinen**: toimiva polku jätetään rauhaan riippumatta ku
 `~/.claude/{commands,skills}/`. `install.sh` symlinkkaa komennot sinne **per tiedosto** ja
 skillit **per hakemisto**, jotta muiden lähteiden tiedostot eivät korvaudu.
 
+**Komennot asuvat nimiavaruudessa, koska `~/.claude/commands` on jaettu.** Claude Code johtaa
+nimiavaruuden alihakemistosta — `commands/issue-runner/<nimi>.md` kutsutaan muodossa
+`/issue-runner:<nimi>` — joten sama omistajuusraja, jonka INV-OWN vetää levyllä, näkyy myös
+kutsumuodossa: yleisnimi ei kerro alkuperäänsä eikä kestä valtausta. `LINKED_DIRS` pitää siksi
+**kaksi** merkintää: `commands/issue-runner` linkittää, ja paljas `commands` on migraatio —
+sen `*.md`-globi ei osu enää mihinkään, joten sen prune poistaa vanhat litteät paketin
+omistamat linkit eikä kone kanna kumpaakin nimeä. Tiedoston nimeäminen muotoon
+`issue-runner:<nimi>.md` **ei** tuota nimiavaruutta; vain hakemisto tuottaa.
+
 ### INV-OWN
 
 > Asentaja saa luoda, korvata tai poistaa vain polun, joka **puuttuu** tai on **symlink, jonka
@@ -363,8 +372,9 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 aiemmin ollut oikea vika tai olisi ilmeinen: poimintakysely (`pick_oldest_candidate`), epicin
 lapsijoukko (`list_epic_children` — **myös näkymä kutsuu tätä**, joten näkymä ja ajo eivät voi
 olla eri mieltä), ajon lopetus (`run_terminate`), poimintalabelien resolvointi
-(`poller_pick_labels` — `/new-epic` labeloi sillä, jottei se voi kirjoittaa epicille labelia
-jota poller ei poimi) ja **purun turvaportit** (`teardown_run` + pollerin `scan_teardown`).
+(`poller_pick_labels` — `/issue-runner:new-epic` labeloi sillä, jottei se voi kirjoittaa
+epicille labelia jota poller ei poimi) ja **purun turvaportit** (`teardown_run` + pollerin
+`scan_teardown`).
 
 Viimeinen on eri luokkaa kuin muut: purkuverbejä on kaksi (`auto-clean` sulkee issuen,
 `auto-reset` jättää sen auki poimintaan) ja ne eroavat **neljässä arvossa** — liipaisulabel,

@@ -30,8 +30,8 @@ Kaksi erillistä pipelineä, jotka eivät jaa tilaa keskenään:
 
 Kaksi käyttötapaa:
 
-- **Interaktiivinen** — Claude Coden slash-komennot `/run-issues #N` ja `/pr-watch` omalla
-  koneella, ihminen katsoo vierestä.
+- **Interaktiivinen** — Claude Coden slash-komennot `/issue-runner:run-issue #N` ja
+  `/issue-runner:pr-watch` omalla koneella, ihminen katsoo vierestä.
 - **Poller** — `poller.sh` ja `pr-watch-poller.sh` LaunchAgenteina, jotka käyvät watchlistin
   repot läpi määrävälein ilman ihmistä. Tämä on se tila, jossa turvamallin kysymykset ovat
   aidosti kiinnostavia.
@@ -103,9 +103,15 @@ bash install.sh --with-launchagents   # + poller-plistit, vain jos ajat pollerei
 
 Mitä asennin tekee:
 
-- `~/.claude/commands/` — per-tiedosto-symlink jokaiselle paketin `*.md`-tiedostolle.
-  Lähdejoukko on glob, joten uusi komento tulee asennukseen pelkällä nimeämisellä. Paketin
-  omistamat symlinkit, joita paketti ei enää toimita, siivotaan. Sama siivous kohdistuu myös
+- `~/.claude/commands/issue-runner/` — per-tiedosto-symlink jokaiselle paketin
+  `commands/issue-runner/*.md`-tiedostolle. Alihakemisto on kutsumuodon lähde: Claude Code
+  johtaa nimiavaruuden siitä, joten komennot kutsutaan muodossa `/issue-runner:<nimi>` eikä
+  yleisnimellä, jonka mikä tahansa muu lähde voi vallata jaetussa hakemistossa. Lähdejoukko on
+  glob, joten uusi komento tulee asennukseen pelkällä nimeämisellä. Paketin omistamat
+  symlinkit, joita paketti ei enää toimita, siivotaan — myös vanhat litteät linkit suoraan
+  `~/.claude/commands/`-hakemistossa, jottei kone kanna sekä `/issue-runner:new-epic`iä että
+  `/issue-runner:new-epic`iä. Vieraat tiedostot ja vieraiden lähteiden symlinkit jäävät
+  koskematta. Sama siivous kohdistuu myös
   `~/.claude/agents/`-hakemistoon, johon paketti **ei enää asenna mitään**: se toimitti
   aiemmin agenttitehtaan neljä alaagenttia, ja niiden linkit poistetaan koneilta joilla ne
   yhä ovat. Tyhjää hakemistoa ei luoda koneelle, jolla sitä ei ole.
@@ -379,7 +385,7 @@ vartioi sitä.
 `principles/coding.md` muuttuu, kopiot eivät päivity itsestään. Menettely on tietoisesti
 manuaalinen ja eksplisiittinen:
 
-1. Avaa kuhunkin kohderepoon issue (`/new-issue` kelpaa), joka pyytää päivittämään
+1. Avaa kuhunkin kohderepoon issue (`/issue-runner:new-issue` kelpaa), joka pyytää päivittämään
    `.claude/principles.md`:n paketin nykyisestä `principles/coding.md`:stä yllä olevalla komennolla.
 2. Labeloi issue repon poimintalabelilla, jolloin runner tekee muutoksen ja avaa PR:n normaalisti.
 3. Repoissa, jotka eivät ole watchlistillä, sama komento ajetaan käsin.
@@ -536,7 +542,7 @@ labelin nimi ei ole kovakoodattu poimintaan** — `auto-run` on pelkkä konventi
 **pollerin** tehtävä: orkestraattori ei enää poimi (ei `poll`-tilaa, ei `RUN_ISSUES_LABELS_CSV`ää),
 joten koko paketissa on yksi poimintakysely.
 
-**Nimetty ajo ohittaa poimintaehdot.** `/run-issues #N` ja `orchestrate.sh <repo> <N>` eivät
+**Nimetty ajo ohittaa poimintaehdot.** `/issue-runner:run-issue #N` ja `orchestrate.sh <repo> <N>` eivät
 tee hakua lainkaan, joten labelit ja avoimuus eivät estä niitä. Claim tarkistetaan silti:
 **käsin assignattu issue lähtee nyt ajoon** (assignaatio ei ole varaus, ks. 6.4), mutta jos
 **toinen runner** ehtii varata saman issuen samaan aikaan, tämä ajo perääntyy (exit 3).
@@ -582,8 +588,8 @@ automaation lisäämää labelia kannata poistaa käsin ennen kuin syy on korjat
 | `auto-run` | **sinä** | sinä | Poimintaehto. Nimi tulee watchlistin konfiguraatiosta (`default_labels` tai repon `labels`), ei koodista |
 | `waiting` | orkestraattori, kun ajo jää odottamaan vastaustasi | orkestraattori, kun `--continue` jatkaa | Estää poiminnan sillä aikaa kun tarkennus on kesken |
 | `wip` | **sinä** | sinä | Estää poiminnan. Tarkoitettu "teen tämän itse" -merkinnäksi |
-| `auto-claimed` | orkestraattori, kun ajo varaa issuen (S3) | orkestraattori, kun ajo perääntyy; `cleanup-run.sh` (myös `/cleanup-run`) siivouksessa | **Varausmerkintä** (6.4): estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Vain automaatio kirjoittaa** — älä lisää tai poista käsin |
-| `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu; PR-vahti, kun CI-korjaus luovuttaa | `cleanup-run.sh` (myös `/cleanup-run`); PR:ltä **sinä** | Issuella: **ei estä poimintaa** — varaus (`auto-claimed`) estää; signaali sinulle. PR:llä: **pidättää PR-vahdin**, kunnes poistat sen (7.5) |
+| `auto-claimed` | orkestraattori, kun ajo varaa issuen (S3) | orkestraattori, kun ajo perääntyy; `cleanup-run.sh` (myös `/issue-runner:cleanup-run`) siivouksessa | **Varausmerkintä** (6.4): estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Vain automaatio kirjoittaa** — älä lisää tai poista käsin |
+| `needs-human` | orkestraattori tai poller, kun ajo epäonnistuu; PR-vahti, kun CI-korjaus luovuttaa | `cleanup-run.sh` (myös `/issue-runner:cleanup-run`); PR:ltä **sinä** | Issuella: **ei estä poimintaa** — varaus (`auto-claimed`) estää; signaali sinulle. PR:llä: **pidättää PR-vahdin**, kunnes poistat sen (7.5) |
 | `auto-clean` | **sinä** | `auto-clean.sh` onnistuneen siivouksen jälkeen | Pyytää siivoamaan issuen ajojäänteet ja sulkemaan issuen. Ks. 6.6 h) |
 | `auto-clean-skipped` | `auto-clean.sh`, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
 | `auto-reset` | **sinä** tai Ohjaamon *Nollaa* | `auto-reset.sh` onnistuneen purun jälkeen | Pyytää purkamaan issuen ajojäänteet **sulkematta issueta**: ajo alkaa alusta puhtaasta basesta. Ks. 6.6 i) |
@@ -637,12 +643,12 @@ Kolme käytännön seurausta:
 1. **Käsin assignattu issue lähtee ajoon normaalisti.** Assignaatio ei ole poimintaehto eikä
    varaus. Jos haluat tehdä issuen itse, käytä **`wip`-labelia** — se on nyt ainoa "teen tämän
    itse" -opt-out.
-2. **Nimetty ajo ei enää kaadu toisen ihmisen issueen.** `/run-issues #N` ohittaa poimintaehdot,
+2. **Nimetty ajo ei enää kaadu toisen ihmisen issueen.** `/issue-runner:run-issue #N` ohittaa poimintaehdot,
    ja claim-tarkistus hyväksyy etukäteen tehdyn assignaation (joukko ennen ∪ `@me`). Vasta
    **toisen runnerin** kilpaileva varaus samassa 5 sekunnin ikkunassa kaataa ajon (exit 3).
 3. **Varaus ei vapaudu itsestään, jos ajo epäonnistuu.** `auto-claimed` poistuu vain neljässä
    tilanteessa: hävitty varauskilpailu, `--resume --decision CANCEL`, `cleanup-run.sh`
-   (myös `/cleanup-run`) ja PR-vahdin mergenjälkeinen siivous. Estynyt tai jumiutunut ajo pitää
+   (myös `/issue-runner:cleanup-run`) ja PR-vahdin mergenjälkeinen siivous. Estynyt tai jumiutunut ajo pitää
    varauksen (ja assignaation) siivoukseen asti.
 
 Kolmas kohta on tarkoituksellinen: epäonnistunut ajo jättää issuen varatuksi, jotta poller ei
@@ -683,11 +689,11 @@ GitHubin natiivilla **sub-issue**-toiminnolla (vanhoissa epiceissä rungon task-
 `- [ ] Otsikko #123` toimii varamuotona). Ajojärjestys tulee alaissueiden keskinäisistä
 `blocked_by`-riippuvuuksista aivan kuten yllä.
 
-Rakenteen voi koota käsin GitHubin UI:ssa tai komennolla **`/new-epic <kuvaus kokonaisuudesta>`**,
+Rakenteen voi koota käsin GitHubin UI:ssa tai komennolla **`/issue-runner:new-epic <kuvaus kokonaisuudesta>`**,
 joka pilkkoo kuvauksen epiciksi ja alaissueiksi, linkittää lapset sub-issueiksi, merkitsee
 riippuvuudet ja labeloi **vain epicin** ajoon — tuossa järjestyksessä, koska ajolabeli ennen
 riippuvuuksia päästäisi ketjun ajoon väärässä järjestyksessä. Komento ei aja mitään: sen jälkeen
-ketjun käynnistää poller tai `/run-epic`.
+ketjun käynnistää poller tai `/issue-runner:run-epic`.
 
 - **Epic ei koskaan itse aja.** `epic`-label pitää epicin poiminnan ulkopuolella (sama tapa kuin
   `waiting`/`wip`), ja lukon jälkeinen S2c-portti varmistaa saman autoritatiivisesti — epicin
@@ -714,14 +720,14 @@ Labelit `epic`, `epic-attention` ja `epic-complete` ovat kiinteitä nimiä.
   valmiuskommentti nimeävät lapsen `owner/repo#N`-muodossa, ja valmius vaatii **kaikkien** lasten
   sulkeutumista repoista riippumatta. Jokainen lapsi ajetaan silti omassa repossaan omana
   ajonaan ja omana PR:nään — yhden ajon lukot ja worktree eivät ylitä repo-rajaa. **Huomaa:**
-  lapsen ajaa vain kone, jonka watchlist kattaa kyseisen repon; `/run-epic`-raportti varoittaa
+  lapsen ajaa vain kone, jonka watchlist kattaa kyseisen repon; `/issue-runner:run-epic`-raportti varoittaa
   erikseen lapsista, joiden repo ei ole tämän koneen watchlistissä (labelit lisätään, mutta
   mikään paikallinen poller ei aja niitä). Vieraan **organisaation** lapseen kirjoitus tapahtuu
   henkilökohtaisella identiteetillä tai epäonnistuu näkyvästi — GitHub App -tunnistautuminen on
   org-kohtainen (ei laajenneta).
 
-**Yhden komennon käynnistys — `/run-epic`.** Sen sijaan että lisäisit `auto-run`in epiciin käsin
-ja odottaisit tikkiä, `/run-epic #N` (skripti `run-epic.sh`) tekee sen heti: se **validoi**
+**Yhden komennon käynnistys — `/issue-runner:run-epic`.** Sen sijaan että lisäisit `auto-run`in epiciin käsin
+ja odottaisit tikkiä, `/issue-runner:run-epic #N` (skripti `run-epic.sh`) tekee sen heti: se **validoi**
 epicin rakenteen (avoin, alaissueita on, `blocked_by`-graafi on syklitön) **ennen mitään
 kirjoitusta**, lisää `epic`-labelin jos se puuttuu, propagoi ajolabelit avoimille alaissueille
 (**sama jaettu propagointi** kuin pollerilla, kukin lapsen omaan repoon), ja raportoi **lapset
@@ -729,9 +735,9 @@ repoittain**: mikä alaissue ajaa ensin, mitkä ovat estettyjä ja minkä takana
 on, ja mitkä lapset ovat repossa jota tämä kone ei aja. `--dry-run` tulostaa saman raportin
 kirjoittamatta mitään; `--start-now` käynnistää ensimmäisen ajokelpoisen lapsen heti (hyödyllinen
 koneella jolla poller ei aja). Ks. exit-koodit osiossa 9 ja ohje
-[`commands/run-epic.md`](commands/run-epic.md).
+[`commands/issue-runner/run-epic.md`](commands/issue-runner/run-epic.md).
 
-**Epicin keskeytys — `/run-epic #N --stop`.** Symmetrinen käynnistyksen kanssa ja samalla
+**Epicin keskeytys — `/issue-runner:run-epic #N --stop`.** Symmetrinen käynnistyksen kanssa ja samalla
 suunnittele–sovella-jaolla. Se tekee kaksi asiaa olemassa olevalla koneistolla: (1) pysäyttää
 epicin **elävät lapsiajot** delegoimalla `stop-run.sh`:lle (turvakriittistä lopetuslogiikkaa ei
 monisteta — sama periaate kuin `stop-run.sh` ↔ `lib/run-terminate.sh`), ja (2) vapauttaa
@@ -754,7 +760,7 @@ PR:n, jonka rungossa on katselmoinnin ja evoluution tulokset sekä `Closes #<N>`
 jäi osittaiseksi, **PR avataan draftina** — se on tarkoituksellinen signaali, ja PR-vahti ei
 mergeä draftia.
 
-**b) Katselmointiportti käsiajossa.** Interaktiivisessa ajossa (`/run-issues #N` ilman
+**b) Katselmointiportti käsiajossa.** Interaktiivisessa ajossa (`/issue-runner:run-issue #N` ilman
 auto-tilaa) orkestraattori pysähtyy katselmoinnin jälkeen ja exittaa koodilla **10**. Ajo,
 lukko ja assignaatio jäävät elämään. Jatka:
 
@@ -806,7 +812,7 @@ tuloste:
 | `db_clone_rc_<n>` | Db-kloonaus epäonnistui |
 | toteuttaja palautti `BLOCKED` | Agentti ei pystynyt toteuttamaan issueta |
 
-Korjaa syy, siivoa ajo (`/cleanup-run`) ja päästä issue takaisin poimintaan.
+Korjaa syy, siivoa ajo (`/issue-runner:cleanup-run`) ja päästä issue takaisin poimintaan.
 
 **f) Ajo jäi jumiin.** Jos ajon viimeisin tapahtuma on vanhempi kuin
 `RUN_ISSUES_STALE_AFTER` (oletus 3600 s), poller tappaa sen tmux-session, merkitsee ajon
@@ -873,14 +879,14 @@ Claude Codessa, kohderepon juuressa:
 
 | Komento | Argumentit | Mitä tekee |
 |---|---|---|
-| `/run-issues` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/run-issues.md`](commands/run-issues.md) |
-| `/run-epic` | `[#N] [--dry-run] [--start-now] [--stop]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan. `--stop` keskeyttää epicin (6.5). Ohje: [`commands/run-epic.md`](commands/run-epic.md) |
-| `/new-issue` | `<kuvaus tehtävästä>` | Kirjoittaa kuvauksesta yhden ajon kokoisen issuen, joka täyttää kaikki poimintaehdot: paketin oma runko ja tämän koneen poimintalabelit (6.2). Luonnos vahvistetaan ennen kirjoitusta; epicin kokoinen kuvaus vain ehdotetaan eskaloitavaksi. Kysyy kohderepon kielimäärittelyn ja kirjaa sen repon `CLAUDE.md`:hen, jos se puuttuu. Ei aja mitään. Ohje: [`commands/new-issue.md`](commands/new-issue.md) |
-| `/new-epic` | `<kuvaus kokonaisuudesta>` | Pilkkoo kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää sub-issueiksi, merkitsee `blocked_by`-riippuvuudet ja labeloi vain epicin ajoon (6.5). Kysyy kohderepon kielimäärittelyn kuten `/new-issue`. Ei aja mitään. Ohje: [`commands/new-epic.md`](commands/new-epic.md) |
-| `/report-problem` | `<ongelma omin sanoin>` | Triagee kuvatun ongelman repon koodista ja lokeista, kysyy puuttuvat toistoaskeleet ja tarkistaa duplikaatit avoimista issueista. Päätyy yhteen kolmesta: korjausohje ilman issueta, issue `/new-issue`n kautta, tai kokonaisuus `/new-epic`in kautta. Ei korjaa eikä aja mitään. Ohje: [`commands/report-problem.md`](commands/report-problem.md) |
-| `/pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/pr-watch.md`](commands/pr-watch.md) |
-| `/cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/cleanup-run.md`](commands/cleanup-run.md) |
-| `/refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/refresh.md`](commands/refresh.md) |
+| `/issue-runner:run-issue` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/issue-runner/run-issue.md`](commands/issue-runner/run-issue.md) |
+| `/issue-runner:run-epic` | `[#N] [--dry-run] [--start-now] [--stop]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan. `--stop` keskeyttää epicin (6.5). Ohje: [`commands/issue-runner/run-epic.md`](commands/issue-runner/run-epic.md) |
+| `/issue-runner:new-issue` | `<kuvaus tehtävästä>` | Kirjoittaa kuvauksesta yhden ajon kokoisen issuen, joka täyttää kaikki poimintaehdot: paketin oma runko ja tämän koneen poimintalabelit (6.2). Luonnos vahvistetaan ennen kirjoitusta; epicin kokoinen kuvaus vain ehdotetaan eskaloitavaksi. Kysyy kohderepon kielimäärittelyn ja kirjaa sen repon `CLAUDE.md`:hen, jos se puuttuu. Ei aja mitään. Ohje: [`commands/issue-runner/new-issue.md`](commands/issue-runner/new-issue.md) |
+| `/issue-runner:new-epic` | `<kuvaus kokonaisuudesta>` | Pilkkoo kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää sub-issueiksi, merkitsee `blocked_by`-riippuvuudet ja labeloi vain epicin ajoon (6.5). Kysyy kohderepon kielimäärittelyn kuten `/issue-runner:new-issue`. Ei aja mitään. Ohje: [`commands/issue-runner/new-epic.md`](commands/issue-runner/new-epic.md) |
+| `/issue-runner:problem` | `<ongelma omin sanoin>` | Triagee kuvatun ongelman repon koodista ja lokeista, kysyy puuttuvat toistoaskeleet ja tarkistaa duplikaatit avoimista issueista. Päätyy yhteen kolmesta: korjausohje ilman issueta, issue `/issue-runner:new-issue`n kautta, tai kokonaisuus `/issue-runner:new-epic`in kautta. Ei korjaa eikä aja mitään. Ohje: [`commands/issue-runner/problem.md`](commands/issue-runner/problem.md) |
+| `/issue-runner:pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/issue-runner/pr-watch.md`](commands/issue-runner/pr-watch.md) |
+| `/issue-runner:cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/issue-runner/cleanup-run.md`](commands/issue-runner/cleanup-run.md) |
+| `/issue-runner:refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/issue-runner/refresh.md`](commands/issue-runner/refresh.md) |
 
 Slash-komennot ovat ohjeita Claude Codelle, eivät skriptejä: agentti lukee ohjeen, ajaa
 tarvittavat komennot ja tulkitsee tulokset. Siksi ne toimivat vain Claude Coden sisällä —
@@ -1167,7 +1173,7 @@ riippuvuuspuuhun samalla tasolla kuin luottaisit siihen ajaessasi `npm install`i
 Vieraan repon ajaminen on sama päätös kuin vieraan repon asentaminen.
 
 Yksi poikkeus listalla ei ole shell-mekanismi lainkaan: `.claude/refresh.json` on
-`/refresh`-slash-komennon lukema konfiguraatio, jonka tulkitsee Claude-agentti. Mikään
+`/issue-runner:refresh`-slash-komennon lukema konfiguraatio, jonka tulkitsee Claude-agentti. Mikään
 paketin bash-skripti ei suorita sitä.
 
 ### 7.3 `RUN_ISSUES_AUTO=1` -rajat
@@ -1502,7 +1508,7 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | Ajo alkoi mutta mitään ei tapahdu | Rinnakkaisuuskatto täynnä | Lokissa `at cap (n/m)`; nosta `global_max_concurrent` tai odota |
 | Vastasin tarkennuskysymykseen, mutta mitään ei tapahtunut | Vastaus ennen markeria, tai useampi kommentti (vain uusin luetaan) | Kirjoita vastaus uudelleen **yhtenä** kommenttina (6.6 c) |
 | PR on auki, CI vihreä, mutta ei mergeydy | `auto-merge`-label puuttuu **PR:ltä**, tai PR on draft | Lisää label PR:lle; draft merkitään valmiiksi käsin |
-| Ajo epäonnistui, korjasin syyn, issue ei palaa | Assignaatio ja `needs-human` jäivät | `/cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
+| Ajo epäonnistui, korjasin syyn, issue ei palaa | Assignaatio ja `needs-human` jäivät | `/issue-runner:cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
 | Siivous ei löydä ajoa | Ajo tapahtui toisella koneella | Aja siivous siellä; PR-vahti tulostaa lokiin valmiin komennon |
 
 ### Ajon tilat (`run.json`)
@@ -1749,8 +1755,8 @@ tapahtui**:
 
 ```bash
 # Claude Codessa, kohderepon juuressa:
-/cleanup-run --list
-/cleanup-run --issue <N>
+/issue-runner:cleanup-run --list
+/issue-runner:cleanup-run --issue <N>
 
 # tai suoraan, esim. ssh:n yli poller-koneella:
 "$HOME/.claude/scripts/run-issues/cleanup-run.sh" --list

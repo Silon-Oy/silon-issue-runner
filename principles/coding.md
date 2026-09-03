@@ -127,8 +127,8 @@ portin sijainti: kielikysymys esitetään issuen kirjoitushetkellä, jossa ihmin
 ajonaikainen esto rankaisisi repoa aukosta, jonka toinen portti on suunniteltu sulkemaan.
 Kieli ei myöskään ole turvallisuuskysymys, joten fail-closed olisi tässä väärä oletusarvo.
 
-Issue-luontikomennot `/new-issue` ja `/new-epic` esittävät kysymyksen ja kirjaavat vastauksen
-tässä kuvatussa muodossa.
+Issue-luontikomennot `/issue-runner:new-issue` ja `/issue-runner:new-epic` esittävät kysymyksen
+ja kirjaavat vastauksen tässä kuvatussa muodossa.
 
 ## Kehityspalvelimen portti worktreessä
 
