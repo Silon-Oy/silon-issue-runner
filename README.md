@@ -109,7 +109,7 @@ Mitä asennin tekee:
   yleisnimellä, jonka mikä tahansa muu lähde voi vallata jaetussa hakemistossa. Lähdejoukko on
   glob, joten uusi komento tulee asennukseen pelkällä nimeämisellä. Paketin omistamat
   symlinkit, joita paketti ei enää toimita, siivotaan — myös vanhat litteät linkit suoraan
-  `~/.claude/commands/`-hakemistossa, jottei kone kanna sekä `/issue-runner:new-epic`iä että
+  `~/.claude/commands/`-hakemistossa, jottei kone kanna sekä `/new-epic`iä että
   `/issue-runner:new-epic`iä. Vieraat tiedostot ja vieraiden lähteiden symlinkit jäävät
   koskematta. Sama siivous kohdistuu myös
   `~/.claude/agents/`-hakemistoon, johon paketti **ei enää asenna mitään**: se toimitti
