@@ -9,7 +9,7 @@
 # and what it must leave alone.
 #
 # Cases:
-#   1. Fresh home: one symlink per shipped commands/*.md
+#   1. Fresh home: one symlink per shipped commands/issue-runner/*.md
 #   3. A foreign file in the target dir survives byte-identically, unlinked
 #      and un-backed-up
 #   4. A second run is a no-op (linked=relinked=pruned=0, tree unchanged)
@@ -24,6 +24,9 @@
 #  11. PRUNED_DIRS: a directory the package has stopped shipping into loses its
 #      package-owned links, keeps foreign ones, and is never created from
 #      scratch on a machine that does not have it
+#  12. Namespace migration: a package-owned link left flat in ~/.claude/commands
+#      by a pre-namespace install is pruned, while a foreign flat file carrying
+#      the same name survives
 #
 # (Case 1 also asserts that skills link at directory level on a fresh home.)
 #
@@ -88,7 +91,7 @@ else
   FAIL=1
 fi
 
-for d in commands; do
+for d in commands/issue-runner; do
   for src in "$ROOT/$d"/*.md; do
     [ -e "$src" ] || continue
     base="$(basename "$src")"
@@ -103,14 +106,34 @@ for d in commands; do
 done
 
 # A newly shipped command must arrive via the glob with no installer change
-# (#82: /run-epic). This is the acceptance criterion "install.sh linkittää uuden
-# komennon (globi kattaa — todennettava testissä)" made explicit for run-epic.md.
-if [ -L "$H1/.claude/commands/run-epic.md" ] \
-   && [ "$(readlink "$H1/.claude/commands/run-epic.md")" = "$ROOT/commands/run-epic.md" ]; then
-  echo "PASS: case1 commands/run-epic.md linked via the glob (no installer change)"
+# (#82: /issue-runner:run-epic). This is the acceptance criterion "install.sh
+# linkittää uuden komennon (globi kattaa — todennettava testissä)" made explicit
+# for run-epic.md.
+if [ -L "$H1/.claude/commands/issue-runner/run-epic.md" ] \
+   && [ "$(readlink "$H1/.claude/commands/issue-runner/run-epic.md")" = "$ROOT/commands/issue-runner/run-epic.md" ]; then
+  echo "PASS: case1 commands/issue-runner/run-epic.md linked via the glob (no installer change)"
 else
-  echo "FAIL: case1 commands/run-epic.md not linked — the command glob missed a new command"
+  echo "FAIL: case1 commands/issue-runner/run-epic.md not linked — the command glob missed a new command"
   FAIL=1
+fi
+
+# The namespace directory itself must be a real directory the installer created,
+# not a symlink: per-file ownership (INV-OWN derivation 1) only holds if every
+# entry inside it is individually owned.
+if [ -d "$H1/.claude/commands/issue-runner" ] && [ ! -L "$H1/.claude/commands/issue-runner" ]; then
+  echo "PASS: case1 \$HOME/.claude/commands/issue-runner is a real directory"
+else
+  echo "FAIL: case1 \$HOME/.claude/commands/issue-runner is not a real directory"; FAIL=1
+fi
+
+# Nothing may be left flat in ~/.claude/commands: a machine carrying both
+# /new-epic and /issue-runner:new-epic is exactly what the bare commands entry
+# in LINKED_DIRS exists to prevent.
+flat=$(find "$H1/.claude/commands" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')
+if [ "$flat" = "0" ]; then
+  echo "PASS: case1 no command is linked flat into \$HOME/.claude/commands"
+else
+  echo "FAIL: case1 $flat command(s) still linked flat into \$HOME/.claude/commands"; FAIL=1
 fi
 
 if [ -d "$H1/.claude/commands" ] && [ ! -L "$H1/.claude/commands" ]; then
@@ -143,12 +166,12 @@ for src in "$ROOT/skills"/*/; do
 done
 
 # ---- Case 2: the scripts binding the slash commands depend on ----
-# commands/{run-issues,cleanup-run,pr-watch}.md and prompts/02-implementer.md
-# all invoke "$HOME/.claude/scripts/run-issues/<script>". On the maintainer's
-# machine dotfiles creates that path; on any other machine nothing does, so a clean
-# clone would install commands pointing at a script that does not exist. This
-# assertion is the acceptance criterion "clone -> install.sh -> /run-issues
-# works" reduced to something a test can check.
+# commands/issue-runner/{run-issue,cleanup-run,pr-watch}.md and
+# prompts/02-implementer.md all invoke "$HOME/.claude/scripts/run-issues/<script>".
+# On the maintainer's machine dotfiles creates that path; on any other machine
+# nothing does, so a clean clone would install commands pointing at a script that
+# does not exist. This assertion is the acceptance criterion "clone -> install.sh
+# -> /issue-runner:run-issue works" reduced to something a test can check.
 if [ -x "$H1/.claude/scripts/run-issues/orchestrate.sh" ]; then
   echo "PASS: case2 \$HOME/.claude/scripts/run-issues/orchestrate.sh is reachable"
 else
@@ -214,8 +237,8 @@ fi
 
 # ---- Case 5: a foreign file shadowing a shipped name ----
 H5="$WORK/home5"
-mkdir -p "$H5/.claude/commands"
-SHADOW="$H5/.claude/commands/new-issue.md"
+mkdir -p "$H5/.claude/commands/issue-runner"
+SHADOW="$H5/.claude/commands/issue-runner/new-issue.md"
 printf 'someone elses new-issue\n' > "$SHADOW"
 cp "$SHADOW" "$WORK/shadow.expected"
 out5=$(run_install "$H5" 2>&1)
@@ -238,7 +261,7 @@ else
   echo "FAIL: case5 shadowing file was overwritten"; FAIL=1
 fi
 # The conflict must not block the rest of the install.
-if [ -L "$H5/.claude/commands/run-issues.md" ]; then
+if [ -L "$H5/.claude/commands/issue-runner/run-issue.md" ]; then
   echo "PASS: case5 unaffected files still installed"
 else
   echo "FAIL: case5 conflict blocked unrelated links"; FAIL=1
@@ -274,15 +297,15 @@ fi
 # such a link, and the plan is applied in order, so a prune rule keyed on
 # "dangles" instead of "no longer shipped" would silently delete it.
 H6B="$WORK/home6b"
-mkdir -p "$H6B/.claude/commands"
-ln -s "$ROOT/commands/moved-away/run-epic.md" "$H6B/.claude/commands/run-epic.md"
+mkdir -p "$H6B/.claude/commands/issue-runner"
+ln -s "$ROOT/commands/issue-runner/moved-away/run-epic.md" "$H6B/.claude/commands/issue-runner/run-epic.md"
 out6b=$(run_install "$H6B" 2>&1)
 rc6b=$?
-if [ "$rc6b" -eq 0 ] && [ -L "$H6B/.claude/commands/run-epic.md" ] \
-   && [ "$(readlink "$H6B/.claude/commands/run-epic.md")" = "$ROOT/commands/run-epic.md" ]; then
+if [ "$rc6b" -eq 0 ] && [ -L "$H6B/.claude/commands/issue-runner/run-epic.md" ] \
+   && [ "$(readlink "$H6B/.claude/commands/issue-runner/run-epic.md")" = "$ROOT/commands/issue-runner/run-epic.md" ]; then
   echo "PASS: case6b stale package-owned link for a shipped name is repaired"
 else
-  echo "FAIL: case6b stale link not repaired (rc=$rc6b, readlink='$( [ -L "$H6B/.claude/commands/run-epic.md" ] && readlink "$H6B/.claude/commands/run-epic.md" )')"
+  echo "FAIL: case6b stale link not repaired (rc=$rc6b, readlink='$( [ -L "$H6B/.claude/commands/issue-runner/run-epic.md" ] && readlink "$H6B/.claude/commands/issue-runner/run-epic.md" )')"
   FAIL=1
 fi
 
@@ -303,7 +326,7 @@ if [ ! -e "$H7/.claude" ]; then
 else
   echo "FAIL: case7 --dry-run created $H7/.claude"; FAIL=1
 fi
-if printf '%s\n' "$out7" | grep -q '^plan: link .*commands/run-issues\.md'; then
+if printf '%s\n' "$out7" | grep -q '^plan: link .*commands/issue-runner/run-issue\.md'; then
   echo "PASS: case7 --dry-run prints the planned links"
 else
   echo "FAIL: case7 --dry-run did not print a plan:"
@@ -337,7 +360,8 @@ else
   FAIL=1
 fi
 # The core install must not be blocked by the skills conflict.
-if [ -L "$H9/.claude/commands/run-issues.md" ] && [ -L "$H9/.claude/commands/run-epic.md" ]; then
+if [ -L "$H9/.claude/commands/issue-runner/run-issue.md" ] \
+   && [ -L "$H9/.claude/commands/issue-runner/run-epic.md" ]; then
   echo "PASS: case9 commands still installed alongside the skills conflict"
 else
   echo "FAIL: case9 skills conflict blocked the core command links"; FAIL=1
@@ -440,6 +464,61 @@ else
   printf '%s\n' "$out11b" | sed 's/^/      /'
   FAIL=1
 fi
+
+# ---- Case 12: the namespace migration ----
+# A machine installed before the commands moved into commands/issue-runner
+# carries package-owned links flat in ~/.claude/commands. The bare "commands"
+# entry in LINKED_DIRS now globs nothing, so its prune must clear exactly those
+# links — leaving the machine with /issue-runner:<name> only, never both. The
+# foreign file guards the other half: prune is keyed on package ownership, not
+# on the name, so a file another source put at an old command name survives.
+H12="$WORK/home12"
+mkdir -p "$H12/.claude/commands"
+# Old package-owned links, both at names that still ship and at names that were
+# renamed away. Ownership is read off the target, so a link into the package
+# root qualifies whether or not the file behind it still exists.
+ln -s "$ROOT/commands/issue-runner/new-epic.md" "$H12/.claude/commands/new-epic.md"
+ln -s "$ROOT/commands/run-issues.md"            "$H12/.claude/commands/run-issues.md"
+ln -s "$ROOT/commands/report-problem.md"        "$H12/.claude/commands/report-problem.md"
+# A foreign file at an old command name.
+FOREIGN12="$H12/.claude/commands/refresh.md"
+printf 'someone elses refresh\n' > "$FOREIGN12"
+cp "$FOREIGN12" "$WORK/foreign12.expected"
+
+out12=$(run_install "$H12" 2>&1)
+rc12=$?
+if [ "$rc12" -eq 0 ]; then
+  echo "PASS: case12 migration run exits 0"
+else
+  echo "FAIL: case12 migration run exited $rc12"
+  printf '%s\n' "$out12" | sed 's/^/      /'
+  FAIL=1
+fi
+
+for stale in new-epic run-issues report-problem; do
+  if [ ! -e "$H12/.claude/commands/$stale.md" ] && [ ! -L "$H12/.claude/commands/$stale.md" ]; then
+    echo "PASS: case12 stale flat link commands/$stale.md pruned"
+  else
+    echo "FAIL: case12 stale flat link commands/$stale.md survived — machine carries both names"
+    FAIL=1
+  fi
+done
+
+if [ ! -L "$FOREIGN12" ] && cmp -s "$FOREIGN12" "$WORK/foreign12.expected"; then
+  echo "PASS: case12 foreign flat file at an old command name left untouched"
+else
+  echo "FAIL: case12 installer removed or overwrote a foreign flat file"; FAIL=1
+fi
+
+# The renamed commands must now exist under the namespace, and only there.
+for want in run-issue problem; do
+  if [ -L "$H12/.claude/commands/issue-runner/$want.md" ] \
+     && [ "$(readlink "$H12/.claude/commands/issue-runner/$want.md")" = "$ROOT/commands/issue-runner/$want.md" ]; then
+    echo "PASS: case12 renamed command $want.md linked under the namespace"
+  else
+    echo "FAIL: case12 renamed command $want.md not linked under the namespace"; FAIL=1
+  fi
+done
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "install-links: all passed" || echo "install-links: FAILURES"

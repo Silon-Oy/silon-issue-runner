@@ -62,7 +62,17 @@ LAUNCH_AGENTS_DIR="${RUN_ISSUES_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-$HOME/.config/run-issues/poller.env}"
 
 # Directories whose contents this package owns file by file.
-LINKED_DIRS="commands"
+#
+# The two commands entries are one mechanism, not a special case. Claude Code
+# derives a command's namespace from its subdirectory, so the shipped files live
+# in commands/issue-runner/ and resolve as /issue-runner:<name>. The bare
+# commands entry is kept because its *.md glob now matches nothing: wanted stays
+# empty and plan_prune_owned removes every package-owned link left flat in
+# ~/.claude/commands by an earlier install. Without it a machine would carry
+# both /new-epic and /issue-runner:new-epic. Foreign entries are untouched
+# either way, and the real issue-runner subdirectory is not a symlink so the
+# prune skips it.
+LINKED_DIRS="commands commands/issue-runner"
 
 # Directories this package no longer ships into, but whose links it once owned.
 # A removed directory cannot be pruned by LINKED_DIRS: plan_link_dir would also

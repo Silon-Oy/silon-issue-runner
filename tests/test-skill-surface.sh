@@ -9,7 +9,8 @@
 # directions (test-skill-labels.sh does the same for the label vocabulary):
 #
 #   Case 1  the skill exists and is non-empty
-#   Case 2  forward — every `/name` the skill names has a commands/name.md
+#   Case 2  forward — every `/issue-runner:name` the skill names has a
+#           commands/issue-runner/name.md
 #   Case 3  backward — every shipped command (minus a justified exclusion list)
 #           is named in the skill
 #   Case 4  forward — every `name.sh` the skill names is an executable file at
@@ -54,16 +55,26 @@ skill_tokens() {
 }
 
 # ---- Case 2: every slash command the skill names is shipped ----
-CMD_TOKENS="$(skill_tokens | grep -E '^/[a-z][a-z0-9-]*$' | sed 's|^/||' | sort -u)"
+# The commands live in a namespace directory, so the invocation form carries a
+# colon: commands/issue-runner/new-epic.md is typed as /issue-runner:new-epic.
+# The pattern deliberately still admits the bare `/name` form and resolves it
+# against the (now empty) commands root, so a stale un-namespaced name left in
+# the skill fails loudly instead of falling out of the token set unnoticed.
+CMD_TOKENS="$(skill_tokens | grep -E '^/([a-z][a-z0-9-]*:)?[a-z][a-z0-9-]*$' | sed 's|^/||' | sort -u)"
 if [ -z "$CMD_TOKENS" ]; then
   echo "FAIL: the skill names no slash commands at all — token extraction broke?"; FAIL=1
 else
   while IFS= read -r cmd; do
     [ -n "$cmd" ] || continue
-    if [ -f "$ROOT/commands/$cmd.md" ]; then
-      echo "PASS: skill command '/$cmd' is shipped as commands/$cmd.md"
+    # namespace:name -> commands/namespace/name.md; bare name -> commands/name.md
+    case "$cmd" in
+      *:*) rel="commands/${cmd%%:*}/${cmd#*:}.md" ;;
+      *)   rel="commands/$cmd.md" ;;
+    esac
+    if [ -f "$ROOT/$rel" ]; then
+      echo "PASS: skill command '/$cmd' is shipped as $rel"
     else
-      echo "FAIL: skill names '/$cmd' but commands/$cmd.md does not exist"; FAIL=1
+      echo "FAIL: skill names '/$cmd' but $rel does not exist"; FAIL=1
     fi
   done <<< "$CMD_TOKENS"
 fi
@@ -73,20 +84,27 @@ fi
 #   refresh — a generic "bring the repo up to date" helper, usable with or
 #             without the runner
 EXCLUDE_CMDS="refresh"
-for f in "$ROOT"/commands/*.md; do
+for f in "$ROOT"/commands/issue-runner/*.md; do
   [ -f "$f" ] || continue
   base="$(basename "$f" .md)"
   skip=0
   for ex in $EXCLUDE_CMDS; do [ "$base" = "$ex" ] && skip=1; done
   if [ "$skip" -eq 1 ]; then
-    echo "PASS: shipped command '/$base' excluded by design (not part of this system)"
+    echo "PASS: shipped command '/issue-runner:$base' excluded by design (not part of this system)"
     continue
   fi
-  if grep -qF -- "\`/$base\`" "$SKILL"; then
-    echo "PASS: shipped command '/$base' is named in the skill"
+  if grep -qF -- "\`/issue-runner:$base\`" "$SKILL"; then
+    echo "PASS: shipped command '/issue-runner:$base' is named in the skill"
   else
-    echo "FAIL: shipped command '/$base' is not named in the skill"; FAIL=1
+    echo "FAIL: shipped command '/issue-runner:$base' is not named in the skill"; FAIL=1
   fi
+done
+
+# Nothing may be left in the commands root: a flat file there would ship as an
+# un-namespaced command and slip past both directions of this test.
+for f in "$ROOT"/commands/*.md; do
+  [ -f "$f" ] || continue
+  echo "FAIL: $(basename "$f") sits in the commands root — commands ship namespaced"; FAIL=1
 done
 
 # ---- Case 4: every script the skill names exists and is executable ----

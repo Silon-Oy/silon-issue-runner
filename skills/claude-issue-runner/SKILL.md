@@ -1,6 +1,6 @@
 ---
 name: claude-issue-runner
-description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset or auto-merge label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /run-issues, /run-epic, /pr-watch or /cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
+description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset or auto-merge label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
 version: 2.3.0
 ---
@@ -49,7 +49,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `auto-run` | sinä (tai epic-propagointi) | sinä | Poimintaehto. Nimi tulee watchlistin konfiguraatiosta (`default_labels` tai repon `labels`), ei koodista |
 | `wip` | **vain sinä** | sinä | Estää poiminnan. "Teen tämän itse" — ja epicin lapsella opt-out propagoinnista |
 | `waiting` | automaatio, kun ajo odottaa vastaustasi | automaatio, kun jatkat | Estää poiminnan tarkennuksen ajaksi |
-| `epic` | sinä tai `/run-epic` | sinä | Estää poiminnan: epic kokoaa alaissueet muttei ole itse ajettava |
+| `epic` | sinä tai `/issue-runner:run-epic` | sinä | Estää poiminnan: epic kokoaa alaissueet muttei ole itse ajettava |
 | `auto-clean` (`RUN_ISSUES_CLEAN_LABEL`) | sinä | automaatio siivouksen jälkeen | Pyytää siivoamaan ajojäänteet ja **sulkemaan** issuen. **Ei koskaan poimintalabeliksi** |
 | `auto-clean-skipped` | automaatio, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
 | `auto-reset` (`RUN_ISSUES_RESET_LABEL`) | sinä (tai Ohjaamon *Nollaa*) | automaatio purun jälkeen | Pyytää purkamaan ajojäänteet **sulkematta** issueta: ajo alkaa alusta puhtaasta basesta. **Ei koskaan poimintalabeliksi** |
@@ -194,19 +194,22 @@ watchlist ei kata repoa, rinnakkaisuuskatto täynnä) — ks. paketin README osi
 Slash-komennot toimivat **vain Claude Coden sisällä** (ne ovat ohjeita agentille, eivät
 skriptejä):
 
-- `/run-issues` — aja orkestraattori **nimetylle** issuelle (`#N`); issuenumero on pakollinen,
-  automaattinen poiminta on pollerin tehtävä.
-- `/new-issue` — kirjoittaa vapaamuotoisesta kuvauksesta yhden ajon kokoisen issuen, joka
-  täyttää kaikki poimintaehdot: paketin oma runko ja tämän koneen poimintalabelit. Luonnos
+- `/issue-runner:run-issue` — aja orkestraattori **nimetylle** issuelle (`#N`); issuenumero on
+  pakollinen, automaattinen poiminta on pollerin tehtävä.
+- `/issue-runner:new-issue` — kirjoittaa vapaamuotoisesta kuvauksesta yhden ajon kokoisen issuen,
+  joka täyttää kaikki poimintaehdot: paketin oma runko ja tämän koneen poimintalabelit. Luonnos
   vahvistetaan ennen kirjoitusta. Ei aja mitään.
-- `/new-epic` — pilkkoo vapaamuotoisen kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää
-  ne sub-issueiksi, merkitsee riippuvuudet ja labeloi **vain epicin** ajoon. Ei aja mitään.
-- `/report-problem` — triagee kuvatun ongelman repon koodista ja lokeista ja päätyy yhteen
-  kolmesta: korjausohje **ilman issueta** (käyttövirhe tai konfiguraatio), issue `/new-issue`n
-  kautta, tai kokonaisuus `/new-epic`in kautta. Tarkistaa duplikaatit; ei korjaa eikä aja mitään.
-- `/run-epic` — validoi epicin rakenne ja propagoi ajolabelit sen alaissueille; `--stop` keskeyttää.
-- `/pr-watch` — aja PR-vahti yhdelle PR:lle tai skannaa tämän koneen valmiit ajot.
-- `/cleanup-run` — siivoa keskenjääneen ajon jäänteet.
+- `/issue-runner:new-epic` — pilkkoo vapaamuotoisen kuvauksen epiciksi ja alaissueiksi: luo
+  issuet, linkittää ne sub-issueiksi, merkitsee riippuvuudet ja labeloi **vain epicin** ajoon.
+  Ei aja mitään.
+- `/issue-runner:problem` — triagee kuvatun ongelman repon koodista ja lokeista ja päätyy yhteen
+  kolmesta: korjausohje **ilman issueta** (käyttövirhe tai konfiguraatio), issue
+  `/issue-runner:new-issue`n kautta, tai kokonaisuus `/issue-runner:new-epic`in kautta.
+  Tarkistaa duplikaatit; ei korjaa eikä aja mitään.
+- `/issue-runner:run-epic` — validoi epicin rakenne ja propagoi ajolabelit sen alaissueille;
+  `--stop` keskeyttää.
+- `/issue-runner:pr-watch` — aja PR-vahti yhdelle PR:lle tai skannaa tämän koneen valmiit ajot.
+- `/issue-runner:cleanup-run` — siivoa keskenjääneen ajon jäänteet.
 
 Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suoraan:
 
@@ -233,6 +236,7 @@ avaruuksia, asennusta, turvamallia, LaunchAgent-konfiguraatiota, statussivua eik
 sisuskaluja — ne ovat paketin anatomiaa hakemistossa `$HOME/.claude/scripts/run-issues`
 (`README.md` ihmiselle, `CLAUDE.md` agentille).
 
-Paketin `commands/`-hakemiston `/refresh` on geneerinen apuri eikä osa tätä järjestelmää.
+Paketin `commands/issue-runner/`-hakemiston `/issue-runner:refresh` on geneerinen apuri eikä
+osa tätä järjestelmää.
 Tämän runnerin "agentit" ovat `prompts/`-hakemiston promptipohjia — paketti ei toimita
 yhtään Claude Code -alaagenttia.

@@ -98,7 +98,7 @@ if printf '%s\n' "$out1" | grep -q '^REFUSED: '; then
 else
   echo "PASS: case1 prints no REFUSED: line"
 fi
-if [ -L "$H1/.claude/commands/run-issues.md" ]; then
+if [ -L "$H1/.claude/commands/issue-runner/run-issue.md" ]; then
   echo "PASS: case1 the install completed alongside the foreign tree"
 else
   echo "FAIL: case1 the foreign tree blocked the command links"; FAIL=1
@@ -179,7 +179,7 @@ else
   echo "FAIL: case4 said nothing about the scripts path"; FAIL=1
 fi
 # The rest of the install must still have happened.
-if [ -L "$H4/.claude/commands/run-issues.md" ]; then
+if [ -L "$H4/.claude/commands/issue-runner/run-issue.md" ]; then
   echo "PASS: case4 commands still installed"
 else
   echo "FAIL: case4 commands were not installed"; FAIL=1

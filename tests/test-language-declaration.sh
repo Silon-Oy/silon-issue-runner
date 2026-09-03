@@ -185,7 +185,7 @@ fi
 
 # Both issue-writing commands must carry the gate; that is the primary port,
 # and losing it silently would leave only the advisory note behind.
-for cmd in "$ROOT/commands/new-issue.md" "$ROOT/commands/new-epic.md"; do
+for cmd in "$ROOT/commands/issue-runner/new-issue.md" "$ROOT/commands/issue-runner/new-epic.md"; do
   if grep -qF 'languages' "$cmd"; then
     echo "PASS: $(basename "$cmd") carries the language gate"
   else
