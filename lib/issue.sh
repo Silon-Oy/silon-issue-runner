@@ -222,7 +222,8 @@ _pick_filter_jq() {
               and ($l | index("waiting")) == null
               and ($l | index("wip")) == null
               and ($l | index("epic")) == null
-              and ($l | index($ENV.RUN_ISSUES_PICK_CLEAN)) == null)
+              and ($l | index($ENV.RUN_ISSUES_PICK_CLEAN)) == null
+              and ($l | index($ENV.RUN_ISSUES_PICK_RESET)) == null)
      | .number ] | .[]'
 }
 
@@ -231,9 +232,14 @@ pick_oldest_candidate() {
   local labels_csv="${2:-}"
   local owner_repo="${3:-}"
   local remote="${4:-}"
-  # auto-clean issues are a teardown signal handled by the poller's scan_clean,
-  # never a development candidate.
+  # auto-clean and auto-reset issues are teardown signals handled by the poller's
+  # teardown scans, never development candidates. For auto-reset the exclusion is
+  # a CORRECTNESS condition rather than an optimisation: the whole point of a
+  # reset is that pickup resumes only once the teardown has run and the label is
+  # gone. Without the filter the poller could claim the issue first, and the
+  # teardown would then hit the per-issue lock (exit 3) on every tick.
   local clean_label="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
+  local reset_label="${RUN_ISSUES_RESET_LABEL:-auto-reset}"
   local probe_cap="${RUN_ISSUES_PICK_BLOCKED_PROBES:-20}"
 
   local qs candidates
@@ -248,8 +254,9 @@ pick_oldest_candidate() {
   if ! candidates=$(
     cd "$repo" || exit 1
     # `gh api --jq` runs jq WITHOUT exposing jq's own --arg, so the configurable
-    # clean label is passed through the environment and read with jq's $ENV.
+    # teardown labels are passed through the environment and read with jq's $ENV.
     export RUN_ISSUES_PICK_CLEAN="$clean_label"
+    export RUN_ISSUES_PICK_RESET="$reset_label"
     _issue_gh --remote "$remote" -- api "$(_rest_issues_path "$owner_repo" "$qs")" \
       --jq "$(_pick_filter_jq)" 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ); then

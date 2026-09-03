@@ -382,10 +382,12 @@ REPO8="$WORK/repo8"; mkdir -p "$REPO8"
 THIS_HOST="apphost"
 # shellcheck disable=SC2034
 RUN_ISSUES_CLEAN_LABEL="auto-clean"
+# shellcheck disable=SC2034
+RUN_ISSUES_RESET_LABEL="auto-reset"
 
-# Extract scan_clean from poller.sh and source it (same idiom as test-scan-clean).
+# Extract scan_teardown + its verb wrappers (same idiom as test-scan-clean).
 POLLER8="$HERE/../poller.sh"
-FN8=$(awk '/^scan_clean\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$POLLER8")
+FN8=$(awk '/^scan_teardown\(\) \{/{p=1} p{print} p&&/^scan_reset\(\)/{exit}' "$POLLER8")
 eval "$FN8"
 
 # 8a: N App-routed reads in ONE process => exactly ONE token mint (cache holds).

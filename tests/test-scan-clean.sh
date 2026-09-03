@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# test-scan-clean.sh — poller scan_clean selection gates, dedup, and API cost.
+# test-scan-clean.sh — poller teardown-scan selection gates, dedup, and API cost.
 #
-# scan_clean must emit UNIQUE "<issue> <repo>" lines only for issues that:
+# scan_teardown must emit UNIQUE "<issue> <repo>" lines only for issues that:
 #   - have at least one LOCAL run-dir on THIS host (host empty = local)
-#   - carry RUN_ISSUES_CLEAN_LABEL (auto-clean)
-#   - do NOT carry auto-clean-skipped
+#   - carry the verb's trigger label
+#   - do NOT carry the verb's OWN skipped label
 # and it must dedup multiple run-dirs of the same issue into one line.
+#
+# Since issue #202 there are two verbs over that one scan — scan_clean
+# (auto-clean / auto-clean-skipped) and scan_reset (auto-reset /
+# auto-reset-skipped). Case 5 asserts the second verb selects on its own label
+# pair, does not select the first verb's issues, and costs ONE list call.
 #
 # Since issue #124 the label is read with ONE repo-wide `gh issue list`, not one
 # `gh issue view` per local issue — the old shape cost 337 GraphQL calls per tick
@@ -40,8 +45,9 @@ mkdir -p "$REPO/.git"
 # shellcheck source=lib/issue.sh
 . "$HERE/../lib/issue.sh"
 
-# Extract scan_clean from poller.sh and source it.
-FN=$(awk '/^scan_clean\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$POLLER")
+# Extract scan_teardown + its two verb wrappers from poller.sh and source them
+# (issue #202 parametrised the one scan over both teardown labels).
+FN=$(awk '/^scan_teardown\(\) \{/{p=1} p{print} p&&/^scan_reset\(\)/{exit}' "$POLLER")
 eval "$FN"
 
 # Pin globals scan_clean reads.
@@ -49,6 +55,8 @@ eval "$FN"
 THIS_HOST="test-host"
 # shellcheck disable=SC2034
 RUN_ISSUES_CLEAN_LABEL="auto-clean"
+# shellcheck disable=SC2034
+RUN_ISSUES_RESET_LABEL="auto-reset"
 
 # Per-issue label fixture: $LABELDIR/<n> contains the CSV label string GitHub
 # would report for that issue. It drives BOTH mocked gh paths, so the list and
@@ -89,10 +97,13 @@ gh() {
       local page="${path##*page=}"; page="${page%%&*}"
       case "$page" in ''|*[!0-9]*) page=1 ;; esac
       [ "$page" = "1" ] || return 0     # fixtures never fill a page
+      # Honour labels= too: the same mock serves BOTH teardown verbs' scans, so
+      # a reset scan can never accidentally be answered with clean's rows.
+      local want="${path##*labels=}"; want="${want%%&*}"
       local f n csv
       for f in $(ls "$LABELDIR" | sort -n); do
         n="$f"; csv=$(cat "$LABELDIR/$n")
-        case ",$csv," in *,auto-clean,*) ;; *) continue ;; esac
+        case ",$csv," in *,"$want",*) ;; *) continue ;; esac
         grep -qx "$n" "$HIDDEN" 2>/dev/null && continue
         printf '%s\t%s\n' "$n" "$csv"
       done
@@ -199,6 +210,44 @@ OUT3=$(scan_clean "$FOREIGN")
 check "foreign-only: no output" "$OUT3" ""
 check "foreign-only: list calls" "$(n_list)" "0"
 check "foreign-only: view calls" "$(n_view)" "0"
+
+# --- reset-verb fixtures (issue #202) --------------------------------------
+# Issue 80: local + auto-reset → selected by scan_reset, NOT by scan_clean.
+mk_run 80 "test-host"; set_labels 80 "auto-reset"
+# Issue 81: local + auto-reset BUT also auto-reset-skipped → SKIP.
+mk_run 81 "test-host"; set_labels 81 "auto-reset,auto-reset-skipped"
+# Issue 82: local + auto-reset but carrying the OTHER verb's skipped label. The
+# two loop guards are deliberately separate, so auto-clean-skipped must NOT
+# suppress a reset — that is the whole reason they are distinct labels.
+mk_run 82 "test-host"; set_labels 82 "auto-reset,auto-clean-skipped"
+# The fixtures are created HERE, after the clean cases, so their call-count
+# assertions keep asserting the numbers they were written for.
+
+# ---- Case 5: the reset verb selects on its OWN label pair ------------------
+# Same scan (scan_teardown), a different label pair. Two things are asserted that
+# the clean cases cannot reach: that the verbs do not select each other's issues,
+# and that the second verb costs ONE list call per repo — not a second scan
+# shape (CLAUDE.md §5.4).
+reset_ledgers
+OUTR=$(scan_reset "$REPO" | sort)
+echo "--- scan_reset output ---"; echo "$OUTR"
+echo "$OUTR" | grep -q "^80 " || fail "reset: issue 80 (local+auto-reset) not selected"
+echo "$OUTR" | grep -q "^81 " && fail "reset: issue 81 (auto-reset-skipped) WAS selected"
+echo "$OUTR" | grep -q "^82 " || fail "reset: issue 82 suppressed by the OTHER verb's skipped label"
+echo "$OUTR" | grep -q "^10 " && fail "reset: issue 10 (auto-clean) WAS selected by the reset scan"
+COUNTR=$(printf '%s\n' "$OUTR" | grep -c '^[0-9]')
+check "reset: candidate count" "$COUNTR" "2"
+check "reset: list calls" "$(n_list)" "1"
+check "reset: view calls" "$(n_view)" "0"
+grep -q -- "labels=auto-reset" "$LIST_ARGS" || fail "reset scan did not query labels=auto-reset"
+grep -q -- "state=all" "$LIST_ARGS" || fail "reset scan missing state=all"
+
+# And the clean scan must be unchanged by the reset fixtures: an auto-reset issue
+# is not a clean target.
+reset_ledgers
+OUTC=$(scan_clean "$REPO" | sort)
+echo "$OUTC" | grep -q "^80 " && fail "clean: issue 80 (auto-reset) WAS selected by the clean scan"
+check "clean: candidate count unchanged by reset fixtures" "$(printf '%s\n' "$OUTC" | grep -c '^[0-9]')" "4"
 
 # ---- Case 4: no run-dir directory at all => no network ---------------------
 EMPTY="$WORK/empty"; mkdir -p "$EMPTY/.git"

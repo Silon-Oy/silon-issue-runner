@@ -88,6 +88,11 @@ REPO="$WORK/repo"; mkdir -p "$REPO"
 # --- fixture: ascending by creation, i.e. pickup order ----------------------
 # 10 and 17 are runnable; everything between carries exactly one disqualifier,
 # so a filter that drops the wrong term is caught by WHICH number comes back.
+# 18 sits out of numeric order on purpose: the list is in CREATION order, and it
+# has to precede 17 for its exclusion (auto-reset, issue #202) to be provable —
+# a term that fails open would return 18, not 17. That exclusion is a correctness
+# condition, not an optimisation: pickup must stay off a reset target until the
+# teardown has run and the label is gone.
 cat > "$ISSUES" <<'JSON'
 [
  {"number":10,"labels":[{"name":"auto-run"}]},
@@ -97,6 +102,7 @@ cat > "$ISSUES" <<'JSON'
  {"number":14,"labels":[{"name":"auto-run"},{"name":"epic"}]},
  {"number":15,"labels":[{"name":"auto-run"},{"name":"auto-clean"}]},
  {"number":16,"labels":[{"name":"auto-run"}],"pull_request":{"url":"x"}},
+ {"number":18,"labels":[{"name":"auto-run"},{"name":"auto-reset"}]},
  {"number":17,"labels":[{"name":"auto-run"}]}
 ]
 JSON

@@ -229,14 +229,17 @@ RUN_ISSUES_STALE_AFTER=3600
 OUT_STALLED=$(scan_stalled "$TR")
 check "scan_stalled ignores the archive dir" "$OUT_STALLED" ""
 
-# Extract + run scan_clean with a gh mock that would return the auto-clean label.
+# Extract + run scan_clean (scan_teardown's auto-clean wrapper) with a gh mock
+# that would return the auto-clean label.
 # lib/issue.sh supplies _rest_issues_path / _rest_issue_path.
 # shellcheck source=lib/issue.sh
 . "$ROOT/lib/issue.sh"
 set +e   # issue.sh re-enables -e; a test must keep collecting failures
-FN_CLEAN=$(awk '/^scan_clean\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$ROOT/poller.sh")
+FN_CLEAN=$(awk '/^scan_teardown\(\) \{/{p=1} p{print} p&&/^scan_reset\(\)/{exit}' "$ROOT/poller.sh")
 eval "$FN_CLEAN"
 RUN_ISSUES_CLEAN_LABEL="auto-clean"
+# shellcheck disable=SC2034
+RUN_ISSUES_RESET_LABEL="auto-reset"
 gh() {  # would report every issue as auto-clean — but there is no ACTIVE run-dir
   [ "${1:-}" = "api" ] || return 0
   case "$2" in

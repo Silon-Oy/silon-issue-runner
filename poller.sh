@@ -156,6 +156,10 @@ DEFAULT_LABELS=$(jq -r '(.default_labels // []) | map(select(type == "string" an
 RUN_ISSUES_MAX_RETRIES="${RUN_ISSUES_MAX_RETRIES:-1}"
 RUN_ISSUES_MAX_CLARIFICATIONS="${RUN_ISSUES_MAX_CLARIFICATIONS:-3}"
 RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
+# The sibling teardown label (issue #202). auto-reset runs the SAME teardown as
+# auto-clean and then leaves the issue OPEN, so pickup starts the run over from a
+# clean base. Two labels, one mechanism — see lib/teardown.sh.
+RUN_ISSUES_RESET_LABEL="${RUN_ISSUES_RESET_LABEL:-auto-reset}"
 # Liveness threshold for scan_stalled: if state.jsonl's last event timestamp
 # (or run.json.started_at as fallback) is older than this, the run is treated
 # as stalled — its tmux session is killed and the run finalized as
@@ -166,6 +170,7 @@ RUN_ISSUES_CLEAN_LABEL="${RUN_ISSUES_CLEAN_LABEL:-auto-clean}"
 # resetting the staleness clock).
 RUN_ISSUES_STALE_AFTER="${RUN_ISSUES_STALE_AFTER:-3600}"
 AUTO_CLEAN="${RUN_ISSUES_HOME}/auto-clean.sh"
+AUTO_RESET="${RUN_ISSUES_HOME}/auto-reset.sh"
 # cleanup-run.sh tears down a run WITHOUT closing the issue — the retry path for
 # an answered blocked run (issue #57) uses it, not auto-clean.sh (which closes).
 CLEANUP="${RUN_ISSUES_HOME}/cleanup-run.sh"
@@ -538,10 +543,16 @@ scan_blocked_answered() {
   return 0
 }
 
-# scan_clean <repo-path> [<remote>] [<owner/repo>] — prints UNIQUE
-# "<issue-number> <repo-path>" lines for issues that (a) have at least one
-# LOCAL run-dir on THIS host (filtered by remote when provided) and (b)
-# currently carry the RUN_ISSUES_CLEAN_LABEL but NOT auto-clean-skipped.
+# scan_teardown <repo-path> <remote> <owner/repo> <trigger-label> <skipped-label>
+# — prints UNIQUE "<issue-number> <repo-path>" lines for issues that (a) have at
+# least one LOCAL run-dir on THIS host (filtered by remote when provided) and
+# (b) currently carry <trigger-label> but NOT <skipped-label>.
+#
+# ONE scan, TWO verbs (issue #202). auto-clean and auto-reset select their
+# targets by exactly the same rule and differ only in which two labels they read,
+# so the selection lives here once and each verb is a one-line wrapper below.
+# Copying the scan per verb would double the cost invariant this function exists
+# to protect, in the place where a regression is least visible.
 #
 # Two phases keep network use minimal (the same discipline as scan_answered):
 #   Phase 1 — collect the unique set of issue numbers that have a local run-dir
@@ -560,12 +571,19 @@ scan_blocked_answered() {
 # 18 repos for over ten hours. Asking about the LABEL instead of about every
 # issue makes it O(1) per repo while the answer stays identical: the label list
 # comes from the issues connection (authoritative), NOT the eventually-consistent
-# search index, and auto-clean-skipped is read from the same payload.
+# search index, and the skipped label is read from the same payload.
 #
 # `--state all` is REQUIRED. A clean target is frequently already closed (PR
 # merged => issue auto-closed => run-dir still on disk; the Ohjaamo "Siivoa"
 # button targets exactly those). `--state open` would drop them silently —
 # measured 2026-08-29: every auto-clean-labelled issue in the org was closed.
+# A reset target is normally open, but the flag is shared and harmless there.
+#
+# COST (CLAUDE.md §5.4). The second verb adds ONE list read per repo per tick,
+# not a second scan shape: the "no local run-dirs => no network at all" guard
+# below applies to both, so a repo with nothing on this host still makes zero
+# calls. tests/test-scan-clean.sh asserts the counts explicitly rather than
+# inferring them from the result.
 #
 # TRUNCATION. gh caps the list at --limit rows, and past that the list is no
 # longer proof of ABSENCE. Every local issue the list did not cover is therefore
@@ -581,10 +599,12 @@ scan_blocked_answered() {
 # includes (measured 2026-08-29: a production repo 100, claude-issue-runner 29).
 # bash 3.2 has no associative arrays, so both the unique set and the label map
 # are temp files.
-scan_clean() {
+scan_teardown() {
   local repo_path="$1"
   local want_remote="${2:-}"
   local owner_repo="${3:-}"
+  local trigger_label="$4"
+  local skipped_label="$5"
   local runs_dir="$repo_path/.claude/run-issues"
   [ -d "$runs_dir" ] || return 0
 
@@ -642,7 +662,7 @@ scan_clean() {
   while [ "$rows" -lt "$limit" ]; do
     chunk=$(
       cd "$repo_path"
-      _issue_gh --remote "$want_remote" -- api "$(_rest_issues_path "$owner_repo" "labels=${RUN_ISSUES_CLEAN_LABEL}&state=all&per_page=100&page=${page}")" \
+      _issue_gh --remote "$want_remote" -- api "$(_rest_issues_path "$owner_repo" "labels=${trigger_label}&state=all&per_page=100&page=${page}")" \
         --jq '.[] | select(.pull_request == null) | "\(.number)\t\([.labels[].name] | join(","))"' \
         2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
     ) || break
@@ -655,8 +675,8 @@ scan_clean() {
   done
   if [ "$rows" -ge "$limit" ] 2>/dev/null; then
     truncated=1
-    printf '%s scan_clean: WARNING %s carries >= %s "%s" issues — list truncated, falling back to per-issue reads for uncovered runs\n' \
-      "$(date -u +%FT%TZ)" "${owner_repo:-$repo_path}" "$limit" "$RUN_ISSUES_CLEAN_LABEL" >&2
+    printf '%s scan_teardown: WARNING %s carries >= %s "%s" issues — list truncated, falling back to per-issue reads for uncovered runs\n' \
+      "$(date -u +%FT%TZ)" "${owner_repo:-$repo_path}" "$limit" "$trigger_label" >&2
   fi
 
   local n labels tab
@@ -676,18 +696,59 @@ scan_clean() {
       # The list is complete and does not mention this issue => not labelled.
       continue
     fi
-    # auto-clean-skipped wins: already handed to a human, never re-emit.
+    # The verb's own skipped label wins: already handed to a human, never
+    # re-emit. Each verb has its OWN loop guard so the two teardown verbs can
+    # never read each other's state.
     case ",$labels," in
-      *,auto-clean-skipped,*) continue ;;
+      *,"$skipped_label",*) continue ;;
     esac
     case ",$labels," in
-      *,"$RUN_ISSUES_CLEAN_LABEL",*) printf '%s %s\n' "$n" "$repo_path" ;;
+      *,"$trigger_label",*) printf '%s %s\n' "$n" "$repo_path" ;;
     esac
   done < <(sort -u "$seen")
 
   rm -f "$seen" "$labelled"
   # Return 0 regardless: callers capture this in a command substitution under
   # `set -e`, where a trailing-false branch would otherwise abort the caller.
+  return 0
+}
+
+# The two teardown verbs, each a name for one label pair. The skipped labels are
+# HARDCODED (matching auto-clean.sh / auto-reset.sh) while the trigger labels are
+# configurable, exactly as the scripts themselves have it.
+scan_clean() { scan_teardown "$1" "${2:-}" "${3:-}" "$RUN_ISSUES_CLEAN_LABEL" "auto-clean-skipped"; }
+scan_reset() { scan_teardown "$1" "${2:-}" "${3:-}" "$RUN_ISSUES_RESET_LABEL" "auto-reset-skipped"; }
+
+# _dispatch_teardown_pass <session-prefix> <delegate> <verb> <gerund> — reads
+# "<issue> <repo-path>" lines from STDIN (a scan_* wrapper) and launches the
+# delegate for each, under the poller's three standing constraints: the
+# duplicate-session guard, the repo/remote-scoped session name, and GLOBAL_MAX.
+#
+# Extracted from the clean pass so the reset pass is a second CALL rather than a
+# second copy (issue #202). Reads REMOTE / REPO_SLUG / GLOBAL_MAX / LOG /
+# RUNS_LOG from the loop scope, exactly as the inline version did.
+_dispatch_teardown_pass() {
+  local prefix="$1" delegate="$2" verb="$3" gerund="$4"
+  local line issue repo existing suffix session active
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    issue="${line%% *}"
+    repo="${line#* }"
+    if existing=$(_running_session_name "$prefix" "$REMOTE" "$REPO_SLUG" "$issue"); then
+      echo "$(date -u +%FT%TZ) poller: $verb session $existing already running" >> "$LOG"
+      continue
+    fi
+    suffix=$(session_suffix "$REMOTE" "$issue" "$REPO_SLUG")
+    session="${prefix}${suffix}"
+    active=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || active=0
+    if [ "$active" -ge "$GLOBAL_MAX" ]; then
+      echo "$(date -u +%FT%TZ) poller: at cap ($active/$GLOBAL_MAX), deferring $verb of issue $issue (remote=$REMOTE)" >> "$LOG"
+      break
+    fi
+    echo "$(date -u +%FT%TZ) poller: $gerund $session for repo=$repo issue=$issue remote=$REMOTE" >> "$LOG"
+    tmux new-session -d -s "$session" \
+      "'$delegate' --repo '$repo' --issue '$issue' --remote '$REMOTE' 2>&1 | tee -a '$RUNS_LOG'"
+  done
   return 0
 }
 
@@ -1107,26 +1168,15 @@ while IFS= read -r repo_json; do
     # instead of the second one being skipped every cycle as a "duplicate".
     REPO_SLUG=$(repo_slug "$REPO_PATH" "$REMOTE")
 
-    # ----- Clean labelled issues FIRST (before restart/continue/pick) --------
-    while IFS= read -r clean_line; do
-      [ -n "$clean_line" ] || continue
-      CLEAN_ISSUE="${clean_line%% *}"
-      CLEAN_REPO="${clean_line#* }"
-      if EXISTING=$(_running_session_name "run-issues-clean-" "$REMOTE" "$REPO_SLUG" "$CLEAN_ISSUE"); then
-        echo "$(date -u +%FT%TZ) poller: clean session $EXISTING already running" >> "$LOG"
-        continue
-      fi
-      CL_SUFFIX=$(session_suffix "$REMOTE" "$CLEAN_ISSUE" "$REPO_SLUG")
-      CL_SESSION="run-issues-clean-${CL_SUFFIX}"
-      ACTIVE=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || ACTIVE=0
-      if [ "$ACTIVE" -ge "$GLOBAL_MAX" ]; then
-        echo "$(date -u +%FT%TZ) poller: at cap ($ACTIVE/$GLOBAL_MAX), deferring clean of issue $CLEAN_ISSUE (remote=$REMOTE)" >> "$LOG"
-        break
-      fi
-      echo "$(date -u +%FT%TZ) poller: cleaning $CL_SESSION for repo=$CLEAN_REPO issue=$CLEAN_ISSUE remote=$REMOTE" >> "$LOG"
-      tmux new-session -d -s "$CL_SESSION" \
-        "'$AUTO_CLEAN' --repo '$CLEAN_REPO' --issue '$CLEAN_ISSUE' --remote '$REMOTE' 2>&1 | tee -a '$RUNS_LOG'"
-    done < <(scan_clean "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
+    # ----- Teardown passes FIRST (before restart/continue/pick) -------------
+    # Two verbs, one dispatcher (_dispatch_teardown_pass): auto-clean tears the
+    # run down and CLOSES the issue, auto-reset tears the same run down and
+    # leaves it OPEN so pickup starts it over. Both must run before the pick
+    # pass — an issue whose teardown is pending must not be claimed first.
+    _dispatch_teardown_pass "run-issues-clean-" "$AUTO_CLEAN" "clean" "cleaning" \
+      < <(scan_clean "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
+    _dispatch_teardown_pass "run-issues-reset-" "$AUTO_RESET" "reset" "resetting" \
+      < <(scan_reset "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
     # ----- Reconcile finished runs (issue #107) -----------------------------
     # Sibling of the clean pass above, but a different verb: auto-clean is a
