@@ -3,7 +3,7 @@ argument-hint: [#PR | scan]
 description: Aja /run-issues PR-valvoja yhdelle PR:lle (`#PR`) tai skannaa kaikki tämän koneen valmiit ajot (ei argumenttia / `scan`).
 ---
 
-# /pr-watch
+# /issue-runner:pr-watch
 
 Phase 2 PR-valvoja. Tarkistaa orkestraattorin avaamat PR:t ja, jos PR on
 `auto-merge`-labeloitu, CI-vihreä ja mergettävissä (kaikki kolme vaadittu),

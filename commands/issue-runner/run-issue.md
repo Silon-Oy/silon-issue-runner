@@ -3,7 +3,7 @@ argument-hint: "#N"
 description: Aja /run-issues-orkestraattori nimetylle issuelle (`#N`). Issuenumero on pakollinen — automaattinen poiminta on pollerin tehtävä.
 ---
 
-# /run-issues
+# /issue-runner:run-issue
 
 Geneerinen issue-pohjainen kehitysworkflow. Orkestraattori on **kaksivaiheinen tilakone**:
 
@@ -26,7 +26,7 @@ ISSUE_ARG="<n>"          # esim. "19" jos käyttäjä antoi #19
 
 # Ilman numeroa: älä aja orkestraattoria.
 if [ -z "$ISSUE_ARG" ] || [ "$ISSUE_ARG" = "<n>" ]; then
-  echo "usage: /run-issues #N — anna ajettava issuenumero (automaattinen poiminta on pollerin tehtävä)."
+  echo "usage: /issue-runner:run-issue #N — anna ajettava issuenumero (automaattinen poiminta on pollerin tehtävä)."
   exit 0
 fi
 

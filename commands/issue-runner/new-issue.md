@@ -3,7 +3,7 @@ argument-hint: "<kuvaus tehtävästä>"
 description: Kirjoita vapaamuotoisesta kuvauksesta yhden ajon kokoinen issue, joka täyttää kaikki poimintaehdot — luonnos vahvistetaan ennen kirjoitusta, epicin kokoinen kuvaus vain ehdotetaan eskaloitavaksi.
 ---
 
-# /new-issue
+# /issue-runner:new-issue
 
 Muuntaa vapaamuotoisen kuvauksen **ajokelpoiseksi issueksi**: paketin oman rungon mukainen
 speksi ja **ne labelit, joilla poller sen poimii**. Tästä eteenpäin ajon tekee poller — tämä
@@ -14,13 +14,13 @@ koodissa, eivät ihmisen muistissa: **jokainen niistä epäonnistuu hiljaa.** V�
 issue näyttää GitHubissa täsmälleen samalta kuin oikein labeloitu, se vain ei koskaan lähde
 ajoon eikä mikään kerro miksi.
 
-Sisarkomento on [`/new-epic`](new-epic.md), joka tekee saman kokonaisuudelle: epic, alaissueet,
+Sisarkomento on [`/issue-runner:new-epic`](new-epic.md), joka tekee saman kokonaisuudelle: epic, alaissueet,
 riippuvuudet. Tämä komento tekee **yhden issuen**.
 
 **Rajaukset, jotka pätevät aina:**
 
 - Komento **luo vain yhden uuden issuen**. Se ei muokkaa eikä sulje olemassa olevia.
-- **Ei riippuvuuksia eikä sub-issue-linkkejä.** Ketjut kuuluvat `/new-epic`ille.
+- **Ei riippuvuuksia eikä sub-issue-linkkejä.** Ketjut kuuluvat `/issue-runner:new-epic`ille.
 - Komento **ei koskaan kirjoita `auto-claimed`-labelia** — se on automaation oma varaus.
 - Komento **ei eskaloi epiciksi omin päin.** Se ehdottaa; päätöksen tekee käyttäjä.
 
@@ -30,8 +30,8 @@ Argumentti on vapaamuotoinen kuvaus yhdestä tehtävästä. Jos sitä ei ole, tu
 eikä kirjoita mitään:
 
 ```
-usage: /new-issue <kuvaus tehtävästä>
-  esim. /new-issue status.sh näyttää arkistoidut ajot samanlaisina kuin elävät — erottele ne omaan osioonsa.
+usage: /issue-runner:new-issue <kuvaus tehtävästä>
+  esim. /issue-runner:new-issue status.sh näyttää arkistoidut ajot samanlaisina kuin elävät — erottele ne omaan osioonsa.
 ```
 
 ## 1. Resolvoi poimintalabelit (vain lukua)
@@ -84,7 +84,7 @@ jota tämä komento on estämässä, vain omalla aiheuttamana.
 **`COVERED=1` on kerrottava käyttäjälle luonnoksessa sanallisesti**, esim.: *"Watchlist ei kata
 tätä repoa (tai sitä ei löytynyt), joten poimintalabeliksi tulee sisäänrakennettu oletus
 `auto-run`. Tämän koneen poller ei aja tätä repoa — ajon tekee se kone, jonka watchlist kattaa
-sen, tai käynnistät sen itse `/run-issues #N`."* Hiljainen oletus on tässä sama vika kuin väärä
+sen, tai käynnistät sen itse `/issue-runner:run-issue #N`."* Hiljainen oletus on tässä sama vika kuin väärä
 label: kummassakin issue ei lähde ajoon eikä mikään kerro miksi.
 
 **Tarkista poimintalabelit ennen luonnosta.** Jos `PICK_LABELS` sisältää jonkin näistä:
@@ -114,7 +114,7 @@ ennen kuin käyttäjä on hyväksynyt labelin luonnin — issue, joka ei koskaan
 täsmälleen se hiljainen vika, jota tämä komento on estämässä. Jos käyttäjä ei halua labelia
 luotavaksi, **lopeta ilman kirjoituksia** ja kerro miksi.
 
-> **Tämä poikkeaa `/new-epic` §3.4:stä tietoisesti, ei vahingossa.** POST `…/labels` kyllä luo
+> **Tämä poikkeaa `/issue-runner:new-epic` §3.4:stä tietoisesti, ei vahingossa.** POST `…/labels` kyllä luo
 > puuttuvan labelin itsestään, mutta noin syntyvä label on väriltään ja kuvaukseltaan tyhjä —
 > ja mikä tärkeämpää, **kirjoitusvirhe menee läpi hiljaa**: `auto-runn` syntyisi uutena labelina
 > eikä mikään erottaisi sitä oikeasta. Eksplisiittinen tarkistus tekee eron näkyväksi.
@@ -144,7 +144,7 @@ Jos mikään ei päde, jatka suoraan osioon 4.
 
 Jos jokin pätee, **kysy `AskUserQuestion`illa** — älä eskaloi itse. Esitä kysymyksessä lyhyt,
 konkreettinen perustelu: mihin osiin kuvaus hajoaisi ja miksi ne eivät mahdu yhteen ajoon.
-Vaihtoehdot ovat "Tee epic" (delegointi `/new-epic`ille) ja "Tee yksi issue" (jatka osioon 4
+Vaihtoehdot ovat "Tee epic" (delegointi `/issue-runner:new-epic`ille) ja "Tee yksi issue" (jatka osioon 4
 kuvatulla rajauksella).
 
 > **Miksi ehdotus eikä automatiikka:** väärä eskalaatio maksaa enemmän kuin yksi kysymys. Tämän
@@ -152,10 +152,10 @@ kuvatulla rajauksella).
 > tehtävän omin sanoin, ei speksinä. Yksi kysymys on halpa; kuudeksi issueksi pilkottu kuvaus,
 > jota kukaan ei pyytänyt, ei ole.
 
-**Hyväksytty eskalaatio delegoi `/new-epic`ille.** Älä toteuta epic-luontia täällä toista kertaa:
-sub-issue-linkit, `blocked_by`-riippuvuudet ja labelointijärjestys ovat `/new-epic`in vastuulla, ja
+**Hyväksytty eskalaatio delegoi `/issue-runner:new-epic`ille.** Älä toteuta epic-luontia täällä toista kertaa:
+sub-issue-linkit, `blocked_by`-riippuvuudet ja labelointijärjestys ovat `/issue-runner:new-epic`in vastuulla, ja
 niiden monistaminen tarkoittaisi kahta toteutusta, jotka ajautuvat erilleen. Kerro käyttäjälle,
-että jatko on `/new-epic <sama kuvaus>`, äläkä kirjoita mitään.
+että jatko on `/issue-runner:new-epic <sama kuvaus>`, äläkä kirjoita mitään.
 
 ## 4. Luonnos — ja vahvistus ennen kirjoitusta
 
@@ -203,7 +203,7 @@ echo "LANGUAGE_DECLARATION=$LANG_DECL"
 ```
 
 Tunnistuskuvio on sama kuin orkestraattorin `repo_declares_languages`illa, ja muoto on
-dokumentoitu kertaalleen: [`principles/coding.md`](../principles/coding.md), luku *Ihmiselle
+dokumentoitu kertaalleen: [`principles/coding.md`](../../principles/coding.md), luku *Ihmiselle
 näkyvän tekstin kieli*. **Älä keksi tähän toista muotoa** — kaksi käsitystä siitä, mikä on
 määrittely, on sama kahdentuma kuin kaksi toteutusta samasta funktiosta.
 
@@ -236,7 +236,7 @@ työpuuhun, joten se ei saa tapahtua näkymättömissä:
 > **Komento ei committaa.** Se lisää lohkon `CLAUDE.md`-tiedoston loppuun ja jättää muutoksen
 > työpuuhun, kuten muunkin tuotoksensa. Committaaminen on käyttäjän päätös.
 
-Sisarkomento [`/new-epic`](new-epic.md) tekee saman kokonaisuudelle osiossaan 2.1 — yksi kysymys
+Sisarkomento [`/issue-runner:new-epic`](new-epic.md) tekee saman kokonaisuudelle osiossaan 2.1 — yksi kysymys
 kattaa siellä koko ketjun.
 
 ## 5. Kirjoita — kaikki kuusi poimintaehtoa yhdellä kutsulla
@@ -310,4 +310,4 @@ Jos kirjoitus epäonnistui, kerro **komento, jolla ihminen tekee sen käsin** �
 > **Mitään ei ole käynnistetty, eikä tätä istuntoa tarvitse jäädä odottamaan.** Ajon tekee poller
 > seuraavalla tikillä (jos tämän koneen watchlist kattaa repon), omassa worktreessään ja omassa
 > istunnossaan. Tilan näkee `status.sh`:lla. Jos haluat käynnistää sen heti itse:
-> `/run-issues #<numero>`.
+> `/issue-runner:run-issue #<numero>`.

@@ -3,7 +3,7 @@ argument-hint: (ei argumentteja)
 description: Hae origin/main-muutokset, aja tarvittavat buildit agenttisesti ja käynnistä dev-server taustalle vain jos ei jo käynnissä.
 ---
 
-# /refresh
+# /issue-runner:refresh
 
 Geneerinen "tuo repo ajan tasalle ja varmista että dev pyörii" -komento. Sinä toimit
 **päätöksentekijänä**: et aja valmista skriptiä, vaan etenet vaiheittain (PHASE 0..6),
@@ -28,7 +28,7 @@ jää arvaamaan porttia ajosta toiseen.
    echo "REPO_ROOT=$REPO_ROOT"
    ```
 
-   Jos tuloste on `EI-GIT-REPO` → raportoi "Ei git-repo — /refresh vaatii repon" ja **STOP**.
+   Jos tuloste on `EI-GIT-REPO` → raportoi "Ei git-repo — /issue-runner:refresh vaatii repon" ja **STOP**.
 
 2. Lue konfig:
 
@@ -356,7 +356,7 @@ rikkinäisen kantatilan päälle).
 
 ## PHASE 3b — .gitignore-huolto (ajetaan aina)
 
-Varmista että `/refresh`:n **omat artefaktit** on gitignorattu projektissa, jottei
+Varmista että `/issue-runner:refresh`:n **omat artefaktit** on gitignorattu projektissa, jottei
 henkilökohtainen konfig tai runtime-loki vahingossa päädy versionhallintaan. Tämä vaihe
 ajetaan **aina** — myös kun `BEHIND == 0` — ja **ennen PHASE 5:tä**, koska PHASE 5
 kirjoittaa lokin (`.claude/refresh-dev.log`); loki pitää olla ignorattu ennen kirjoitusta.
@@ -404,7 +404,7 @@ pysähdy tähän, koska PHASE 1 sietää pelkkää `.gitignore`-muutosta.)
 
 ## PHASE 3c — Pending-migraatiot (ajetaan aina)
 
-`/refresh` on **"täsmää kanta koodin skeemaan"** -komento, ei vain *"sovella se mitä tässä
+`/issue-runner:refresh` on **"täsmää kanta koodin skeemaan"** -komento, ei vain *"sovella se mitä tässä
 pullissa tuli"*. Migraatiot voivat päätyä työpuuhun **ohi komennon oman pullin**: manuaalinen
 merge/rebase/checkout, `/run-issues`-orkestraattori, cherry-pick tai paikallisesti generoitu
 migraatio. Kaikissa näissä `BEHIND == 0` voi olla tosi vaikka **koodi on kantaa edellä** —
@@ -718,7 +718,7 @@ done
 for PGID in $PGIDS; do kill -KILL -"$PGID" 2>/dev/null || true; done
 ```
 
-> **Huom:** jos dev-server oli käynnissä omassa terminaalissasi (ei aiemman `/refresh`:n
+> **Huom:** jos dev-server oli käynnissä omassa terminaalissasi (ei aiemman `/issue-runner:refresh`:n
 > taustaprosessina), tämä pysäyttää sen — se käynnistyy uudelleen **taustalle** (PHASE 5)
 > eikä enää siihen terminaaliin. Raportoi tämä PHASE 6:ssa selvästi.
 
@@ -928,7 +928,7 @@ Kentät:
     pendingiä on → `apply` ajetaan; **exit ≠ 0** = ei mitään (tai kanta ei tavoitettavissa) →
     `apply` ohitetaan siististi ilman muutosyritystä. Ilman `check`:iä fallback on **always-apply**
     (`apply` ajetaan aina; nojaa idempotenssiin). Suositeltu erityisesti Postgresille, jotta
-    alhaalla oleva kanta ei aiheuta STOP:ia joka `/refresh`-ajossa.
+    alhaalla oleva kanta ei aiheuta STOP:ia joka `/issue-runner:refresh`-ajossa.
   - `note` *(string, valinnainen)* — vapaa muistiinpano (esim. idempotenssin peruste).
 
   Jos `migrations` on määritelty, **PHASE 3a:n Prisma-autodetektio ohitetaan kokonaan**

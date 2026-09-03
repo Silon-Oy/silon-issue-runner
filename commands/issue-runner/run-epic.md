@@ -3,12 +3,12 @@ argument-hint: [#N] [--dry-run] [--start-now] [--stop]
 description: Käynnistä koko epic yhdellä komennolla — validoi rakenteen, propagoi ajolabelit alaissueille ja raportoi ketjun tilan. --stop keskeyttää.
 ---
 
-# /run-epic
+# /issue-runner:run-epic
 
 Käynnistää **epic-issuen** ajon: validoi epicin rakenteen, propagoi ajolabelit (`auto-run`) sen
 avoimille alaissueille, ja poller ajaa ketjun normaalisti `blocked_by`-järjestyksessä. Tämä on
 eksplisiittinen käynnistyspinta sille, minkä poller muutenkin tekee joka tikki (ks.
-[`docs/epic-orchestration.md`](../docs/epic-orchestration.md)) — komennolla ketju lähtee heti,
+[`docs/epic-orchestration.md`](../../docs/epic-orchestration.md)) — komennolla ketju lähtee heti,
 odottamatta seuraavaa tikkiä, ja epicin rakenne tarkistetaan ennen mitään kirjoitusta.
 
 Epic on GitHub-issue jolla on **`epic`-label**; sen alaissueet liitetään GitHubin natiivilla
@@ -76,7 +76,7 @@ Koodit 1/2/3/5 ovat yhteisiä molemmille moodeille; 4 on vain käynnistys, 6 vai
 
 ## 3. Keskeytys — `--stop`
 
-`/run-epic #N --stop` keskeyttää käynnissä olevan epicin. Se on **symmetrinen** käynnistyksen
+`/issue-runner:run-epic #N --stop` keskeyttää käynnissä olevan epicin. Se on **symmetrinen** käynnistyksen
 kanssa: sama suunnittele–sovella-jako (kaikki luokittelu ensin, mitään ei kirjoiteta ennen kuin
 suunnitelma on koossa; `--dry-run` tulostaa saman suunnitelman kirjoittamatta) ja sama jaettu
 lapsijoukon resolvointi. Keskeytys on kaksiosainen:
@@ -91,7 +91,7 @@ lapsijoukon resolvointi. Keskeytys on kaksiosainen:
 Raportti vastaa neljään kysymykseen: mitkä ajot pysäytettiin, mitkä lapset vapautettiin, mitkä
 jäivät koskematta ja **miksi** (suljettu / vieras kone / `wip` / terminaalitila), ja jäikö jotain
 kesken. Keskeytys **ei siivoa** worktreetä/haaraa/run-diriä — käytä `cleanup-run.sh`ia tai
-`auto-clean`-labelia teardowniin. Uudelleenkäynnistys: `--stop` + myöhempi `/run-epic #N`.
+`auto-clean`-labelia teardowniin. Uudelleenkäynnistys: `--stop` + myöhempi `/issue-runner:run-epic #N`.
 
 ```bash
 set +e

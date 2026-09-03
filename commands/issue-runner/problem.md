@@ -1,17 +1,17 @@
 ---
 argument-hint: "<ongelma omin sanoin>"
-description: Triagee kuvattu ongelma repon koodista ja lokeista, kysy puuttuvat toistoaskeleet ja tarkista duplikaatit — päädy joko korjausohjeeseen ilman issueta, tai delegoi issue /new-issuelle ja kokonaisuus /new-epicille.
+description: Triagee kuvattu ongelma repon koodista ja lokeista, kysy puuttuvat toistoaskeleet ja tarkista duplikaatit — päädy joko korjausohjeeseen ilman issueta, tai delegoi issue /issue-runner:new-issuelle ja kokonaisuus /issue-runner:new-epicille.
 ---
 
-# /report-problem
+# /issue-runner:problem
 
 Ottaa vastaan **oireen** — "tämä ei toimi", "sivu näyttää väärältä", "ajo jäi jumiin" — selvittää
 mistä on kyse, ja tuottaa issuen **vain jos issue on oikea vastaus**. Tämä komento **ei aja
 mitään** eikä **korjaa mitään**.
 
-Ero sisarkomentoon [`/new-issue`](new-issue.md) on triage. `/new-issue` olettaa, että käyttäjä
+Ero sisarkomentoon [`/issue-runner:new-issue`](new-issue.md) on triage. `/issue-runner:new-issue` olettaa, että käyttäjä
 tietää mitä pitää tehdä; tämä komento on sitä varten, että hän tietää vain mikä ei toimi. Siksi
-tämä ei ole `/new-issue` toisella nimellä: **suurin osa arvosta on siinä lopputuloksessa, joka ei
+tämä ei ole `/issue-runner:new-issue` toisella nimellä: **suurin osa arvosta on siinä lopputuloksessa, joka ei
 ole issue.** Ilman "ei issueta" -haaraa komento kääntäisi jokaisen käyttövirheen ja
 konfiguraatio-ongelman jonoon meneväksi työksi, ja jonon laadun mittaa vasta se, kuinka moni sen
 issue oli oikeasti issue.
@@ -23,7 +23,7 @@ issue oli oikeasti issue.
 - Komento **ei luo issueta eikä epiciä omin päin.** Molemmat delegoidaan.
 - Komento **ei sulje eikä muokkaa olemassa olevia issueita.** Ainoa oma kirjoitus on
   duplikaattiosuman kommentti (osio 4), eikä sekään koske labeleihin.
-- Komento **ei aja orkestraattoria eikä `/run-issues`ia.**
+- Komento **ei aja orkestraattoria eikä `/issue-runner:run-issue`-komentoa.**
 
 > **Miksi korjaus on rajattu ulos.** Tämän komennon käyttäjä on se, joka ei osaa arvioida
 > korjausta. Hän ei myöskään osaa arvioida sitä ilman PR:ää ja CI:tä — joten "korjasin sen jo"
@@ -36,8 +36,8 @@ Argumentti on vapaamuotoinen kuvaus havaitusta ongelmasta. Jos sitä ei ole, tul
 lue eikä kirjoita mitään:
 
 ```
-usage: /report-problem <ongelma omin sanoin>
-  esim. /report-problem käynnistin ajon eilen issuelle 140 mutta mitään ei ole tapahtunut, PR:ää ei näy
+usage: /issue-runner:problem <ongelma omin sanoin>
+  esim. /issue-runner:problem käynnistin ajon eilen issuelle 140 mutta mitään ei ole tapahtunut, PR:ää ei näy
 ```
 
 ## 1. Triage — selvitä ennen kuin ehdotat mitään
@@ -115,14 +115,14 @@ käsitykseen, että hänen havaintonsa oli turha.
 - **Sama käyttövirhe on liian helppo tehdä.** Jos ohjelma hyväksyy virheellisen syötteen hiljaa
   eikä sano mitään, virheilmoituksen lisääminen on issue.
 
-### 3.2 Issue — delegoi `/new-issue`lle
+### 3.2 Issue — delegoi `/issue-runner:new-issue`lle
 
 Valitse tämä, kun kyseessä on aito vika tai puute, joka **mahtuu yhteen ajoon**: yksi
 itsenäisesti toteutettava muutos ilman järjestysriippuvuutta muihin.
 
-### 3.3 Epicin kokoinen — delegoi `/new-epic`ille
+### 3.3 Epicin kokoinen — delegoi `/issue-runner:new-epic`ille
 
-Valitse tämä, jos jokin näistä pätee (sama arviointi kuin `/new-issue` §3:ssa):
+Valitse tämä, jos jokin näistä pätee (sama arviointi kuin `/issue-runner:new-issue` §3:ssa):
 
 - korjaus hajoaa useaksi **itsenäisesti toteutettavaksi** muutokseksi,
 - osilla on **aito järjestysriippuvuus**, tai
@@ -179,8 +179,8 @@ Kommentin säännöt:
 ## 5. Delegointi — triagen tuotos menee argumenttiin
 
 Delegointi tarkoittaa, että **kerrot käyttäjälle komennon** — et kirjoita issueta itse. Sama
-kuvio kuin `/new-issue` §3:ssa, ja samasta syystä: issuen muoto, poimintalabelit ja niiden
-tarkistukset ovat `/new-issue`n ja `/new-epic`in vastuulla. Jos toteuttaisit ne täällä uudelleen,
+kuvio kuin `/issue-runner:new-issue` §3:ssa, ja samasta syystä: issuen muoto, poimintalabelit ja niiden
+tarkistukset ovat `/issue-runner:new-issue`n ja `/issue-runner:new-epic`in vastuulla. Jos toteuttaisit ne täällä uudelleen,
 kaksi toteutusta ajautuisi erilleen ja poimintaehdot pätisivät vain toisessa — täsmälleen se
 hiljainen vika, jota koko komentoperhe on estämässä.
 
@@ -198,14 +198,14 @@ sinä sen nyt tiedät. Argumenttiin kuuluu:
 Esitä komento valmiina rivinä, jonka käyttäjä voi kopioida sellaisenaan:
 
 ```
-/new-issue <oire>. Toisto: <mitä teit> → odotettiin <x>, tapahtui <y>. Havainto: <tiedosto:funktio tai poissuljetut>. Rajaus: <mitä ei kuulu>.
+/issue-runner:new-issue <oire>. Toisto: <mitä teit> → odotettiin <x>, tapahtui <y>. Havainto: <tiedosto:funktio tai poissuljetut>. Rajaus: <mitä ei kuulu>.
 ```
 
-Epic-haarassa sama `/new-epic`ille, ja siihen kuuluu lisäksi **osiin jako**, jonka perustelit
-osiossa 3.3 — se on juuri se tieto, jota `/new-epic` tarvitsee eikä voi päätellä oireesta.
+Epic-haarassa sama `/issue-runner:new-epic`ille, ja siihen kuuluu lisäksi **osiin jako**, jonka perustelit
+osiossa 3.3 — se on juuri se tieto, jota `/issue-runner:new-epic` tarvitsee eikä voi päätellä oireesta.
 
 **Älä aja delegoitua komentoa käyttäjän puolesta.** Se on hänen vahvistuksensa paikka:
-`/new-issue` ja `/new-epic` kysyvät luonnoksesta erikseen, ja tämän ohittaminen tekisi triagesta
+`/issue-runner:new-issue` ja `/issue-runner:new-epic` kysyvät luonnoksesta erikseen, ja tämän ohittaminen tekisi triagesta
 kirjoitusoikeuden.
 
 ## 6. Raportoi — myös silloin kun issueta ei syntynyt
@@ -222,7 +222,7 @@ Tulosta aina, riippumatta lopputuloksesta:
 Lopuksi, sanamuoto lopputuloksen mukaan:
 
 > **Lopputulos 3.1:** *Issueta ei luotu, koska issue ei ole tähän oikea vastaus — korjaus on yllä.
-> Mitään ei ole muutettu eikä käynnistetty. Jos korjaus ei auta, aja `/report-problem` uudelleen
+> Mitään ei ole muutettu eikä käynnistetty. Jos korjaus ei auta, aja `/issue-runner:problem` uudelleen
 > sillä mitä tapahtui sen jälkeen.*
 
 > **Lopputulokset 3.2 ja 3.3:** *Issueta ei ole vielä luotu — yllä oleva komento tekee sen ja

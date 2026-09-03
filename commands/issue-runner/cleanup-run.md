@@ -3,7 +3,7 @@ argument-hint: [<run-id> | --list | --all | --issue <N>]
 description: Siivoa keskenjääneen /run-issues-ajon worktree, branch, run-dir, GitHub-assignaatio ja paikallinen lukko.
 ---
 
-# /cleanup-run
+# /issue-runner:cleanup-run
 
 Helper-skripti `/run-issues`-orkestraattorin keskenjääneiden ajojen siivoukseen. Aja **kohderepon juuressa** ja **ajokoneella** — worktree, run-dir ja lukko sijaitsevat sillä koneella, jossa ajo tapahtui. Jos ajo tehtiin toisella koneella (esim. poller-koneella), ota siihen ensin yhteys ja aja siivous siellä:
 

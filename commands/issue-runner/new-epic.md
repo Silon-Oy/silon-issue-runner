@@ -3,14 +3,14 @@ argument-hint: "<kuvaus kokonaisuudesta>"
 description: Pilko kokonaisuus epiciksi ja alaissueiksi — luo issuet, linkitä ne sub-issueiksi, merkitse riippuvuudet ja labeloi epic ajoon. Suunnitelma vahvistetaan ennen ensimmäistäkään kirjoitusta.
 ---
 
-# /new-epic
+# /issue-runner:new-epic
 
 Muuntaa vapaamuotoisen kuvauksen **ajokelpoiseksi epiciksi**: yksi epic-issue, sen alaissueet,
 natiivit sub-issue-linkit, `blocked_by`-riippuvuudet ja lopuksi ajolabelit **vain epicille**.
-Tästä eteenpäin ketjun ajaa poller tai `/run-epic` — tämä komento **ei aja mitään**.
+Tästä eteenpäin ketjun ajaa poller tai `/issue-runner:run-epic` — tämä komento **ei aja mitään**.
 
-Sisarkomento on [`/run-epic`](run-epic.md), joka käynnistää jo olemassa olevan epicin. Epic-koneisto
-kokonaisuudessaan: [`docs/epic-orchestration.md`](../docs/epic-orchestration.md).
+Sisarkomento on [`/issue-runner:run-epic`](run-epic.md), joka käynnistää jo olemassa olevan epicin. Epic-koneisto
+kokonaisuudessaan: [`docs/epic-orchestration.md`](../../docs/epic-orchestration.md).
 
 **Rajaukset, jotka pätevät aina:**
 
@@ -25,8 +25,8 @@ Argumentti on vapaamuotoinen kuvaus kokonaisuudesta. Jos sitä ei ole, tulosta u
 eikä kirjoita mitään:
 
 ```
-usage: /new-epic <kuvaus kokonaisuudesta>
-  esim. /new-epic Statussivulle kirjautuminen: Tailscale-tunnistus, sessioevästeet ja audit-loki.
+usage: /issue-runner:new-epic <kuvaus kokonaisuudesta>
+  esim. /issue-runner:new-epic Statussivulle kirjautuminen: Tailscale-tunnistus, sessioevästeet ja audit-loki.
 ```
 
 ## 1. Resolvoi konteksti (vain lukua)
@@ -60,7 +60,7 @@ echo "WATCHLIST_COVERS_REPO=$COVERED"
 **`COVERED=1` on kerrottava käyttäjälle suunnitelmassa sanallisesti**, esim.: *"Watchlist ei kata
 tätä repoa (tai sitä ei löytynyt), joten poimintalabeliksi tulee sisäänrakennettu oletus
 `auto-run`. Tämän koneen poller ei aja tätä repoa — ketjun ajaa se kone, jonka watchlist kattaa
-sen, tai käynnistät sen itse `/run-epic #N --start-now`."* Hiljainen oletus on tässä sama vika
+sen, tai käynnistät sen itse `/issue-runner:run-epic #N --start-now`."* Hiljainen oletus on tässä sama vika
 kuin väärä label: molemmissa issue ei lähde ajoon eikä mikään kerro miksi.
 
 **Tarkista poimintalabelit ennen suunnitelmaa.** Jos `PICK_LABELS` sisältää jonkin näistä:
@@ -96,7 +96,7 @@ Lue kuvaus ja perehdy repoon sen verran, että pilkkominen osuu todelliseen kood
 
 - **Riippuvuudet:** mitkä lapset ovat `blocked_by` mihinkin lapseen. Vain aitoja
   järjestysriippuvuuksia — löysä ketjutus jonottaa ajot turhaan sarjaan. **Graafi ei saa olla
-  syklinen** (`/run-epic` kieltäytyy syklistä exit-koodilla 4).
+  syklinen** (`/issue-runner:run-epic` kieltäytyy syklistä exit-koodilla 4).
 - **Labelit:** epicille `epic` + `PICK_LABELS`. **Lapsille ei mitään** — poller propagoi
   ajolabelit epicin avoimille lapsille.
 
@@ -124,7 +124,7 @@ echo "LANGUAGE_DECLARATION=$LANG_DECL"
 ```
 
 Tunnistuskuvio on sama kuin orkestraattorin `repo_declares_languages`illa, ja muoto on
-dokumentoitu kertaalleen: [`principles/coding.md`](../principles/coding.md), luku *Ihmiselle
+dokumentoitu kertaalleen: [`principles/coding.md`](../../principles/coding.md), luku *Ihmiselle
 näkyvän tekstin kieli*. **Älä keksi tähän toista muotoa.**
 
 **`LANG_DECL=1` ⇒ älä kysy äläkä muokkaa mitään.** Jatka osioon 3.
@@ -153,7 +153,7 @@ Vahvistuksen jälkeen **lohko kirjoitetaan kohderepon `CLAUDE.md`:hen ennen osio
 kirjoitusta**, jotta ketju on määritelty jo silloin kun poller voi poimia sen. Komento **ei
 committaa**: muutos jää työpuuhun, kuten muukin sen tuotos.
 
-Sisarkomento [`/new-issue`](new-issue.md) tekee saman yhdelle issuelle osiossaan 4.1.
+Sisarkomento [`/issue-runner:new-issue`](new-issue.md) tekee saman yhdelle issuelle osiossaan 4.1.
 
 ## 3. Kirjoita — järjestys on ehdoton
 
@@ -231,7 +231,7 @@ gh api --method POST "repos/$OWNER_REPO/issues/$BLOCKED_NUM/dependencies/blocked
 
 **Jos yksikin riippuvuus epäonnistuu, älä labeloi epiciä vaiheessa 4.** Labelointi käynnistäisi
 ketjun, jonka järjestys on osittain merkitsemättä — juuri se, mitä järjestyksellä estetään.
-Raportoi tilanne ja kerro, että labeloinnin voi tehdä `/run-epic #N`illä sen jälkeen, kun
+Raportoi tilanne ja kerro, että labeloinnin voi tehdä `/issue-runner:run-epic #N`illä sen jälkeen, kun
 puuttuva riippuvuus on merkitty käsin.
 
 ### 3.4 Labelit — viimeisenä, vain epicille
@@ -272,5 +272,5 @@ Jokaisesta epäonnistuneesta kirjoituksesta kerrotaan **komento, jolla ihminen t
 yllä olevat `gh api` -kutsut kelpaavat sellaisenaan. Lopuksi:
 
 > **Mitään ei ole käynnistetty.** Ajon tekee poller seuraavalla tikillä (jos tämän koneen
-> watchlist kattaa repon) tai ihminen komennolla `/run-epic #<epic>`. Ketjun voi tarkistaa
-> etukäteen: `/run-epic #<epic> --dry-run`.
+> watchlist kattaa repon) tai ihminen komennolla `/issue-runner:run-epic #<epic>`. Ketjun voi tarkistaa
+> etukäteen: `/issue-runner:run-epic #<epic> --dry-run`.
