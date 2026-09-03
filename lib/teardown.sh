@@ -35,7 +35,7 @@
 # COMMENTS — the caller defines three functions, each printing a Finnish body.
 # They are what makes an outcome layer thin rather than empty: the gates are
 # shared, the words a human reads are not. Context is in the TD_* variables set
-# before the call (TD_REPO, TD_ISSUE, TD_REMOTE, TD_HOST, TD_TOTAL, TD_COMPLETED,
+# before the call (TD_ISSUE, TD_REMOTE, TD_HOST, TD_TOTAL, TD_COMPLETED,
 # TD_BLOCKING):
 #   teardown_comment_no_rundirs   gate 2 refused
 #   teardown_comment_open_pr      gate 3 refused
@@ -128,10 +128,14 @@ teardown_run() {
     fi
   done
 
-  # Context for the caller's comment functions.
-  TD_REPO="$repo"; TD_ISSUE="$issue"; TD_REMOTE="$remote"
-  TD_HOST="$(hostname -s)"
-  TD_TOTAL="$total"; TD_COMPLETED="$completed"; TD_BLOCKING=0
+  # Context for the caller's comment functions. Assigned here and read only
+  # there, which is what shellcheck cannot see across the indirection.
+  # shellcheck disable=SC2034
+  {
+    TD_ISSUE="$issue"; TD_REMOTE="$remote"
+    TD_HOST="$(hostname -s)"
+    TD_TOTAL="$total"; TD_COMPLETED="$completed"; TD_BLOCKING=0
+  }
 
   if [ "$total" -eq 0 ]; then
     # Cross-machine fallback: this issue has no run-dirs on this host. The
@@ -174,6 +178,7 @@ teardown_run() {
     done
 
     if [ "$blocking" -gt 0 ]; then
+      # shellcheck disable=SC2034
       TD_BLOCKING="$blocking"
       teardown_log "$blocking of $completed completed run-dir(s) for issue #$issue have an open/unknown PR — skipping"
       if [ "$dry" = "1" ]; then
