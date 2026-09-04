@@ -45,7 +45,7 @@ Jokaisen ajon kohdalla skripti tekee `run.json`:n perusteella:
 4. **DB-klooni** — **siivotaan automaattisesti** (`db-clone.sh cleanup`, best-effort). Jos drop epäonnistuu, skripti varoittaa eikä kaada siivousta — droppaa silloin manuaalisesti backend-kohtaisilla työkaluilla (`wp db drop`, `dropdb`, `docker compose down -v`).
 5. **Arkisto** — olennaiset artefaktit (`run.json`, `state.jsonl`, `01-cycle-review.out`, `03-evolution.out`) kopioidaan hakemistoon `.claude/run-issues-archive/<run-id>/` ennen run-dirin poistoa.
 6. **Run-kansio** (`rm -rf .claude/run-issues/<run-id>`)
-7. **Paikallinen lukko** (`rm -rf ~/Library/Application Support/run-issues/locks/<repo-slug>-issue-N.lock`) — lukon nimi luetaan ajon omasta `run.json`:ista (`repo_slug` + `remote`), joten siivous poistaa täsmälleen sen lukon jonka ajo pitää eikä koskaan toisen repon samannumeroista lukkoa. Ennen issue #67:ää nimi oli `issue-N.lock`; ajot jotka on aloitettu sitä ennen siivotaan yhä vanhalla nimellä.
+7. **Paikallinen lukko** (`rm -rf "$RUN_ISSUES_LOCK_ROOT"/<repo-slug>-issue-N.lock`; lukkojuuren oletus on alustakohtainen — macOS:llä `~/Library/Application Support/run-issues/locks`, muualla `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/locks`) — lukon nimi luetaan ajon omasta `run.json`:ista (`repo_slug` + `remote`), joten siivous poistaa täsmälleen sen lukon jonka ajo pitää eikä koskaan toisen repon samannumeroista lukkoa. Ennen issue #67:ää nimi oli `issue-N.lock`; ajot jotka on aloitettu sitä ennen siivotaan yhä vanhalla nimellä.
 
 ## Turvasäännöt
 

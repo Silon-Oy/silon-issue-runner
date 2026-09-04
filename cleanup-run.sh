@@ -27,8 +27,9 @@
 #   5. DB clone         (best-effort drop via db-clone.sh cleanup; non-fatal)
 #   6. Archive          (essential artefacts copied to .claude/run-issues-archive/<run-id>/)
 #   7. Run-dir          (rm -rf .claude/run-issues/<run-id>)
-#   8. Local lock       (rm -rf ~/Library/Application Support/run-issues/locks/<repo-slug>-issue-N.lock;
-#                        the name comes from the run's own run.json identity)
+#   8. Local lock       (rm -rf "$RUN_ISSUES_LOCK_ROOT"/<repo-slug>-issue-N.lock,
+#                        the root defaulting per platform via lib/paths.sh; the
+#                        name comes from the run's own run.json identity)
 #
 # Local vs. remote: steps 1 (assignment + label) are REMOTE — they need `gh` and
 # talk to GitHub. Steps 2–8 are LOCAL — they touch this machine only. The log
@@ -118,8 +119,8 @@ fi
 # locking.sh owns the lock-path convention (issue-N.lock). We source it so the
 # teardown removes the SAME directory that lock_issue created — deriving the
 # path here by hand was the original bug (it used issue-N without the .lock
-# suffix). Sourcing also defines RUN_ISSUES_LOCK_ROOT (default under
-# ~/Library/Application Support/run-issues/locks), honouring any test override.
+# suffix). Sourcing also defines RUN_ISSUES_LOCK_ROOT (default from
+# lib/paths.sh: default_lock_root), honouring any test override.
 # locking.sh pulls in git-remote.sh for remote_label, used to name multi-remote
 # locks (`<remote>-issue-<N>.lock` for non-origin).
 LOCKING_LIB="$SCRIPT_DIR/lib/locking.sh"

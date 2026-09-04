@@ -76,6 +76,8 @@ fi
 . "${RUN_ISSUES_HOME}/lib/preflight.sh"
 # shellcheck source=lib/action-token.sh
 . "${RUN_ISSUES_HOME}/lib/action-token.sh"
+# shellcheck source=lib/paths.sh
+. "${RUN_ISSUES_HOME}/lib/paths.sh"
 
 # poller-config.sh / git-remote.sh enable errexit at source time; re-disable it.
 # This script deliberately runs with `set -uo pipefail` and NO -e: it has many
@@ -84,7 +86,7 @@ fi
 set +e
 
 # Resolved above the gate, created below it — see poller.sh.
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 
 # ---- host gate (before any path is created) ----
 # Inherits the pollers' rule (#152): no default list, an unset variable earns

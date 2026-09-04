@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # lib/locking.sh — per-issue lock directory, atomic via mkdir(2).
 #
-# Lock root lives under ~/Library/Application Support/run-issues/locks/
-# (macOS convention; survives reboot, not synced to iCloud by default).
+# The lock root default is platform-dependent — lib/paths.sh:default_lock_root
+# owns both branches. It survives reboot and is not synced to iCloud.
 # Each lock is a directory named `<label>.lock` (see remote_label in
 # git-remote.sh for the label shapes) containing a `pid` file and an
 # `acquired_at` file with an ISO-8601 timestamp.
@@ -24,14 +24,11 @@
 # _legacy_lock_is_live) so the upgrade cannot spawn a second run for an issue
 # whose old-style lock is still live.
 #
-# Portability: this package targets macOS in practice (the lock root defaults to
-# ~/Library/Application Support and the pollers run as macOS LaunchAgents), so
-# "macOS-only" would be a defensible scope. Even so, the mtime read is done
-# through the portable `_lock_mtime` helper (uname-branched `stat`, mirroring
-# orchestrate.sh and github-app-auth.sh) rather than left latent — a bare
-# `stat -f` would misbehave under GNU coreutils, and the sibling call sites
-# already handle both platforms, so this keeps the codebase internally
-# consistent at no extra cost.
+# Portability: the mtime read is done through the portable `_lock_mtime` helper
+# (uname-branched `stat`, mirroring orchestrate.sh and github-app-auth.sh)
+# rather than left latent — a bare `stat -f` would misbehave under GNU
+# coreutils. The lock root itself branches on the same `uname -s` test, one
+# level up, in lib/paths.sh.
 #
 # This file is sourced by orchestrate.sh; do not execute top-level work.
 
@@ -44,8 +41,11 @@ set -euo pipefail
 _LOCKING_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=git-remote.sh
 . "$_LOCKING_DIR/git-remote.sh"
+# default_lock_root — the platform default for the lock root. Function-only.
+# shellcheck source=paths.sh
+. "$_LOCKING_DIR/paths.sh"
 
-RUN_ISSUES_LOCK_ROOT="${RUN_ISSUES_LOCK_ROOT:-${HOME}/Library/Application Support/run-issues/locks}"
+RUN_ISSUES_LOCK_ROOT="${RUN_ISSUES_LOCK_ROOT:-$(default_lock_root)}"
 RUN_ISSUES_LOCK_STALE_SECS="${RUN_ISSUES_LOCK_STALE_SECS:-86400}" # 24h
 
 # Logger — best-effort: reuse the caller's `log` function when defined

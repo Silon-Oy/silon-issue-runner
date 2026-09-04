@@ -13,7 +13,7 @@ flowchart TB
     S5{"5. host-portti: RUN_ISSUES_POLLER_HOSTS<br/>ei oletusta (#152)"}
     UNSET["exit 0 + YKSI rivi: muuttuja + poller.env-polku + konenimi<br/>stderr JA pollerin oma loki (launchd nielaisee stderrin)<br/>lokiin kerran — toisto vaietaan"]
     NOOP["exit 0 — mitaan ei kirjoiteta,<br/>ei edes lokihakemistoa"]
-    S6["6. LOG_DIR = RUN_ISSUES_LOG_DIR tai $HOME/Library/Logs<br/>mkdir -p; ei-TTY: exec >> stdout.log 2>> stderr.log"]
+    S6["6. LOG_DIR = RUN_ISSUES_LOG_DIR tai lib/paths.sh:default_log_dir<br/>(uname -s: Darwin = ~/Library/Logs, muu = XDG_STATE_HOME/run-issues/logs)<br/>mkdir -p; ei-TTY: exec >> stdout.log 2>> stderr.log"]
     S7{"7. poller_resolve_watchlist"}
     S8["8. ORCH / PRWATCH / AUTO_CLEAN / lib-sourcet<br/>= RUN_ISSUES_HOME/..."]
     RUN["Ajo: scan_stalled -> cap -> repos x remotes -> tmux"]

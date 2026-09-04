@@ -31,6 +31,7 @@
 import hmac
 import json
 import os
+import platform
 import shutil
 import signal
 import socket
@@ -42,12 +43,32 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # ---------------------------------------------------------------------------
 # Configuration, all from the environment action-server.sh exports.
 # ---------------------------------------------------------------------------
+
+
+def _default_log_dir():
+    """Platform default for the log directory — the mirror of lib/paths.sh.
+
+    action-server.sh exports RUN_ISSUES_LOG_DIR before exec'ing this file, so in
+    production this branch never runs. It exists anyway because the service is
+    also started directly by the test suite, and two different defaults living
+    in one package is precisely the drift the shared shell helper removes. The
+    branch shape matches lib/paths.sh: Darwin -> macOS layout, EVERYTHING ELSE
+    -> XDG, never an allow-list of the non-macOS platforms.
+    """
+    if platform.system() == "Darwin":
+        return os.path.expanduser("~/Library/Logs")
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "state"
+    )
+    return os.path.join(state, "run-issues", "logs")
+
+
 BIND = os.environ.get("RUN_ISSUES_ACTION_BIND", "127.0.0.1")
 PORT = int(os.environ.get("RUN_ISSUES_ACTION_PORT", "8081"))
 DISPATCH = os.environ.get("RUN_ISSUES_ACTION_DISPATCH", "")
 TAILSCALE_BIN = os.environ.get("RUN_ISSUES_TAILSCALE_BIN", "")
 TOKEN_FILE = os.environ.get("RUN_ISSUES_ACTION_TOKEN_FILE", "")
-LOG_DIR = os.environ.get("RUN_ISSUES_LOG_DIR", os.path.expanduser("~/Library/Logs"))
+LOG_DIR = os.environ.get("RUN_ISSUES_LOG_DIR") or _default_log_dir()
 LOG_MAX_BYTES = int(os.environ.get("RUN_ISSUES_LOG_MAX_BYTES", "10485760") or "0")
 AUDIT_LOG = os.path.join(LOG_DIR, "run-issues-action.audit.log")
 

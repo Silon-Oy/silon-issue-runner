@@ -26,6 +26,13 @@
 #
 # Defines functions only; no top-level work. Sourcing is side-effect-free.
 
+# default_log_dir — the platform default for the log directory, which is also
+# where this module's shared state file lives. Function-only, resolved relative
+# to this file so a caller that has cd'd elsewhere still finds it.
+_RATE_LIMIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=paths.sh
+. "$_RATE_LIMIT_DIR/paths.sh"
+
 # Backoff ladder in seconds. Doubling from one poller interval up to an hour;
 # the cap matters because a deadline further out than the outage would idle the
 # factory long after GitHub recovered.
@@ -68,7 +75,7 @@ rate_limit_file_matches() {
 
 # rate_limit_state_file — path of the shared backoff state file.
 rate_limit_state_file() {
-  printf '%s/.rate-limit-backoff' "${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+  printf '%s/.rate-limit-backoff' "${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 }
 
 # _rate_limit_read <path> — sets RATE_LIMIT_DEADLINE and RATE_LIMIT_STEP from the

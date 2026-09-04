@@ -57,6 +57,9 @@ _RUN_TERMINATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=issue.sh
 . "$_RUN_TERMINATE_DIR/issue.sh"
 
+# shellcheck source=paths.sh
+. "$_RUN_TERMINATE_DIR/paths.sh"
+
 # _run_terminate_log <message> — best-effort logger, same spirit as
 # lib/locking.sh:_locking_log. A caller that defines a log() function
 # (orchestrate.sh) gets it; the pollers set $LOG and the line lands in that
@@ -248,7 +251,7 @@ run_terminate() {
   # issue number alone was cross-repo lock theft (issue #67): finalizing a
   # stalled run in repo A deleted repo B's LIVE lock for the same issue number,
   # after which the next poller cycle could start a second run for B.
-  local lock_root="${RUN_ISSUES_LOCK_ROOT:-${HOME}/Library/Application Support/run-issues/locks}"
+  local lock_root="${RUN_ISSUES_LOCK_ROOT:-$(default_lock_root)}"
   local lock_label
   lock_label=$(remote_label "$remote_in_run" "$issue" "$slug_in_run")
   rm -rf "${lock_root}/${lock_label}.lock" 2>/dev/null || true
