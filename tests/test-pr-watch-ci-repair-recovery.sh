@@ -24,9 +24,16 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 PRWATCH="$HERE/../pr-watch.sh"
 STATE_LIB="$HERE/../lib/state.sh"
-THIS_HOST="$(hostname -s)"
+THIS_HOST="$(runner_host)"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "SKIP: jq not available"

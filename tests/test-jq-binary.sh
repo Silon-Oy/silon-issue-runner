@@ -70,7 +70,10 @@ fi
 # Sourcing must be side-effect free and must NOT shadow jq off Windows: `-b`
 # is a hard error on jq < 1.7, so the shim must stay out of the way where the
 # streams are already binary.
-BEHAVIOUR=$(bash -c '. "$1"; if declare -F jq >/dev/null 2>&1; then echo shadowed; else echo bare; fi' _ "$SHIM" 2>&1)
+# `unset -f jq` first, in every probe below: tests/run-all.sh sources this same
+# shim and it EXPORTS itself on Windows, so an inherited BASH_FUNC_jq would
+# answer these questions instead of the source line under test.
+BEHAVIOUR=$(bash -c 'unset -f jq; . "$1"; if declare -F jq >/dev/null 2>&1; then echo shadowed; else echo bare; fi' _ "$SHIM" 2>&1)
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) EXPECT=shadowed ;;
   *)                    EXPECT=bare ;;
@@ -97,12 +100,13 @@ else
   printf '#!/bin/sh\necho MINGW64_NT-10.0-26100\n' > "$STUB/uname"
   chmod +x "$STUB/uname"
 
-  SIM=$(PATH="$STUB:$PATH" bash -c '. "$1"; declare -F jq >/dev/null 2>&1 && echo shadowed || echo bare' _ "$SHIM" 2>&1)
+  SIM=$(PATH="$STUB:$PATH" bash -c 'unset -f jq; . "$1"; declare -F jq >/dev/null 2>&1 && echo shadowed || echo bare' _ "$SHIM" 2>&1)
   if [ "$SIM" = "shadowed" ]; then ok "simulated MINGW: jq is shadowed"; else bad "simulated MINGW: expected shadowed, got '$SIM'"; fi
 
   # The shadow must pass --binary through and keep jq's exit status, because
   # `jq -e` is used as a gate: a pipe-based fallback would report the pipe's.
   SIM_ARGS=$(PATH="$STUB:$PATH" bash -c '
+    unset -f jq
     . "$1"
     printf "%s\n" "$(declare -f jq)"' _ "$SHIM" 2>&1)
   case "$SIM_ARGS" in
@@ -110,8 +114,8 @@ else
     *)                 bad "the shadow does not pass -b: $SIM_ARGS" ;;
   esac
 
-  RC_TRUE=$(PATH="$STUB:$PATH" bash -c '. "$1"; jq -e ".a" <<< "{\"a\":1}" >/dev/null 2>&1; echo $?' _ "$SHIM")
-  RC_FALSE=$(PATH="$STUB:$PATH" bash -c '. "$1"; jq -e ".missing" <<< "{\"a\":1}" >/dev/null 2>&1; echo $?' _ "$SHIM")
+  RC_TRUE=$(PATH="$STUB:$PATH" bash -c 'unset -f jq; . "$1"; jq -e ".a" <<< "{\"a\":1}" >/dev/null 2>&1; echo $?' _ "$SHIM")
+  RC_FALSE=$(PATH="$STUB:$PATH" bash -c 'unset -f jq; . "$1"; jq -e ".missing" <<< "{\"a\":1}" >/dev/null 2>&1; echo $?' _ "$SHIM")
   if [ "$RC_TRUE" = "0" ] && [ "$RC_FALSE" = "1" ]; then
     ok "the shadow preserves jq -e's exit status (0 / 1)"
   else
@@ -122,7 +126,7 @@ else
   # package's installed-check in five places and would answer yes for one.
   EMPTY=$(mktemp -d "${TMPDIR:-/tmp}/jqnone.XXXXXX")
   cp "$STUB/uname" "$EMPTY/uname"
-  NOJQ=$(PATH="$EMPTY" /bin/bash -c '. "$1"; declare -F jq >/dev/null 2>&1 && echo shadowed || echo bare' _ "$SHIM" 2>/dev/null | tail -1)
+  NOJQ=$(PATH="$EMPTY" /bin/bash -c 'unset -f jq; . "$1"; declare -F jq >/dev/null 2>&1 && echo shadowed || echo bare' _ "$SHIM" 2>/dev/null | tail -1)
   rm -rf "$EMPTY"
   if [ "$NOJQ" = "bare" ]; then
     ok "no jq on PATH => no shadow (the installed-check stays honest)"

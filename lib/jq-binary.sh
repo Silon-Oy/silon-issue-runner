@@ -49,6 +49,14 @@
 # on macOS and Linux the function is never defined, so nothing is exported and
 # the environment is untouched.
 #
+# ONE CONSEQUENCE THE EXPORT CARRIES. `command -v jq` answers yes for a shell
+# function, so in a child that inherits the shim the installed-check is true
+# even if that child's PATH holds no jq at all. Nothing in the package strips
+# its own PATH, so the only place this shows is a test that stages "no tools":
+# tests/test-preflight.sh drops the function alongside the PATH it empties, and
+# tests/test-cleanup-run-report.sh reads link targets with `type -P`, which
+# ignores functions by definition.
+#
 # Defines a function only; no top-level work and no `set`. Sourcing is
 # side-effect-free, which matters because the pollers source it above their host
 # gate. tests/test-jq-binary.sh derives the entry point set from disk and fails

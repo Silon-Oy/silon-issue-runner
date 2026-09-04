@@ -172,7 +172,8 @@ check_hint() {
   fi
 }
 check_hint jq 'brew install jq'
-check_hint claude 'npm i -g @anthropic-ai/claude-code'
+check_hint claude 'npm i -g @anthropic-ai/claude-code (native install: set RUN_ISSUES_CLAUDE_CMD=claude)'
+check_hint jq-binary 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)'
 check_hint gh-auth 'gh auth login'
 check_hint timeout 'brew install coreutils (Git Bash on Windows: scoop install coreutils)'
 
@@ -187,7 +188,12 @@ fi
 # ---- Case 5: preflight_gate_report, have mode ----
 # An empty PATH makes the case machine-independent: it must not matter where
 # this machine happens to keep jq.
-out=$(PATH="" preflight_gate_report have /nonexistent/claude)
+#
+# `unset -f jq` belongs with the empty PATH, not beside it: on Windows the suite
+# runner exports lib/jq-binary.sh's shim, and `command -v jq` answers yes for a
+# function no matter what PATH says. A case that stages "no tools at all" has to
+# take the function away too, or it stages "no tools except one".
+out=$(unset -f jq; PATH="" preflight_gate_report have /nonexistent/claude)
 rc=$?
 if [ "$rc" -eq 2 ]; then
   echo "PASS: case5 missing required tools return 2"
@@ -238,7 +244,7 @@ chmod +x "$WORK/probe/timeout"
 printf '#!/bin/bash\nexit 127\n' > "$WORK/probe/npx"
 chmod +x "$WORK/probe/npx"
 
-out=$(PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
+out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
 rc=$?
 if [ "$rc" -eq 2 ]; then
   echo "PASS: case6 an installed npx with a missing package is still fatal"
@@ -253,7 +259,7 @@ fi
 
 printf '#!/bin/bash\nexit 0\n' > "$WORK/probe/npx"
 chmod +x "$WORK/probe/npx"
-out=$(PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
+out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
 rc=$?
 if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
   echo "PASS: case6 a complete environment reports nothing and returns 0"
@@ -263,7 +269,7 @@ fi
 
 # ---- Case 7: a missing timeout binary warns but never blocks ----
 rm -f "$WORK/probe/timeout"
-out=$(PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
+out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
 rc=$?
 if [ "$rc" -eq 0 ]; then
   echo "PASS: case7 a missing timeout binary is not fatal"

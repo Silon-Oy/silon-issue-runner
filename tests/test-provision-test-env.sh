@@ -26,6 +26,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=fs-capabilities.sh
+. "$HERE/fs-capabilities.sh"
 ORCH="$HERE/../orchestrate.sh"
 CLEANUP="$HERE/../cleanup-run.sh"
 STATE_LIB="$HERE/../lib/state.sh"
@@ -113,19 +115,26 @@ PE_A=$(jq -r '.provision_test_env // "ABSENT"' "$RD_A/run.json")
 [ "$PE_A" = "ABSENT" ] || { echo "FAIL (a): provision_test_env set to '$PE_A' on no-op"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (a) no hook -> no-op, implementer reached"
 
-# Also assert a present-but-not-executable hook is treated as no-op.
-RID_A2="20260523-1701-issue-71"
-WT_A2="$WORK/wt-a2"; mkdir -p "$WT_A2/.claude"
-echo '#!/usr/bin/env bash' > "$WT_A2/.claude/provision-test-env.sh"   # NOT chmod +x
-RD_A2=$(seed_run "$RID_A2" 71 "$WT_A2")
-rm -f "$SENTINEL"
-set +e
-run_orch "$ORCH" --resume "$RD_A2" --decision PROCEED >/dev/null 2>&1
-set -e
-grep -q '"event":"provision_test_env_skipped"' "$RD_A2/state.jsonl" \
-  || { echo "FAIL (a2): non-executable hook not skipped"; FAIL=1; }
-[ -f "$SENTINEL" ] || { echo "FAIL (a2): implementer not reached for non-exec hook"; FAIL=1; }
-[ "$FAIL" = "0" ] && echo "PASS (a2) present-but-not-executable hook -> no-op"
+# Also assert a present-but-not-executable hook is treated as no-op. The case
+# needs a filesystem on which such a hook can exist at all: MSYS derives the
+# execute bit from the `#!` line, so under Git Bash the file is executable the
+# moment it is written and the fixture would test the opposite of its name.
+if fs_can_stage_non_executable "$WORK"; then
+  RID_A2="20260523-1701-issue-71"
+  WT_A2="$WORK/wt-a2"; mkdir -p "$WT_A2/.claude"
+  echo '#!/usr/bin/env bash' > "$WT_A2/.claude/provision-test-env.sh"   # NOT chmod +x
+  RD_A2=$(seed_run "$RID_A2" 71 "$WT_A2")
+  rm -f "$SENTINEL"
+  set +e
+  run_orch "$ORCH" --resume "$RD_A2" --decision PROCEED >/dev/null 2>&1
+  set -e
+  grep -q '"event":"provision_test_env_skipped"' "$RD_A2/state.jsonl" \
+    || { echo "FAIL (a2): non-executable hook not skipped"; FAIL=1; }
+  [ -f "$SENTINEL" ] || { echo "FAIL (a2): implementer not reached for non-exec hook"; FAIL=1; }
+  [ "$FAIL" = "0" ] && echo "PASS (a2) present-but-not-executable hook -> no-op"
+else
+  echo "SKIP: (a2) — this filesystem makes every #!-file executable, so a non-executable hook cannot be staged"
+fi
 
 # ===========================================================================
 # (b) hook emits KEY=VALUE -> injected into implementer env + run-id isolation

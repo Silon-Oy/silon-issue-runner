@@ -24,6 +24,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 RUN_EPIC="$ROOT/run-epic.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -51,7 +58,7 @@ REC="$WORK/rec"; mkdir -p "$REC"
 : > "$REC/orchestrate"    # start-now shim arg line
 : > "$REC/stoprun"        # stop-run shim arg line
 
-THISHOST="$(hostname -s 2>/dev/null || echo unknown)"
+THISHOST="$(runner_host)"
 
 # seed_run <dir-id> <issue> <host> <status> [remote] — write a run.json fixture
 # under the repo's run-issues dir so run-epic's --stop scan can find (and classify)

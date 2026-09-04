@@ -92,7 +92,7 @@ preflight_install_hint() {
     gh)      printf 'brew install gh\n' ;;
     jq)      printf 'brew install jq\n' ;;
     npx)     printf 'brew install node (or nvm install --lts)\n' ;;
-    claude)  printf 'npm i -g @anthropic-ai/claude-code\n' ;;
+    claude)  printf 'npm i -g @anthropic-ai/claude-code (native install: set RUN_ISSUES_CLAUDE_CMD=claude)\n' ;;
     gh-auth) printf 'gh auth login\n' ;;
     jq-binary) printf 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)\n' ;;
     timeout) printf 'brew install coreutils (Git Bash on Windows: scoop install coreutils)\n' ;;
