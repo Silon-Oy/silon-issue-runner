@@ -1944,19 +1944,22 @@ Kaksi workflow'ta, joilla on eri tehtävä:
 
 | Workflow | Laukaisin | Alusta | Rooli |
 |---|---|---|---|
-| `.github/workflows/tests.yml` | jokainen pull request ja `main`-push | `macos-latest`, `brew install coreutils` | **portti** — PR:n ainoa check; punainen ajo estää mergen |
-| `.github/workflows/portability.yml` | `main`-push ja käsin (`workflow_dispatch`) | `windows-latest` (Git Bash, `MSYS=winsymlinks:nativestrict`) ja `ubuntu-latest` | **mittaus** — tulokset luetaan Actions-välilehdeltä |
+| `.github/workflows/tests.yml` | jokainen pull request ja `main`-push | `macos-latest` (+ `brew install coreutils`) ja `windows-latest` (Git Bash, `MSYS=winsymlinks:nativestrict`) | **portti** — PR:n ainoat checkit; punainen ajo estää mergen |
+| `.github/workflows/portability.yml` | `main`-push ja käsin (`workflow_dispatch`) | `ubuntu-latest` | **mittaus** — tulokset luetaan Actions-välilehdeltä |
 
-macOS on portti, koska se on alusta jolla pollerit ja LaunchAgentit ajavat. Windows- ja
-Ubuntu-ajot ovat toistaiseksi mittaus, eivät portti: niiden punaisuus on Windows-migraation
-työlista. Ne eivät ole PR-workflow'ssa neuvoa-antavina jobeina, koska PR-vahti lukee PR:n
-check-rollupin eikä koskaan mergeä punaisella tai keskeneräisellä rollupilla: job-tason
-`continue-on-error` **ei** tee epäonnistuneesta jobista `success`ia checks-API:ssa (vain
-workflow-ajo säästyy), ja hidas Git Bash -ajo pitäisi rollupin PENDING-tilassa koko kestonsa.
-Kumpikin parkkeeraisi jokaisen PR:n `WAIT_CI`-tilaan. Kun alusta on vihreä ja sen on määrä pysyä
-vihreänä, se siirretään `tests.yml`:ään pakolliseksi jobiksi — se on migraatioepicin
-viimeinen askel, ei lipun kääntö. Molemmilla workflow'illa on `timeout-minutes`, jottei jumiin
-jäänyt testi pidä ajoa kuutta tuntia.
+Portissa on kaksi alustaa, koska tuettuja ajotapoja on kaksi: macOS ajaa pollerit ja
+LaunchAgentit, Windows ajaa interaktiivisen polun (osio 3.2). Ubuntu on yhä mittaus, koska
+Linux-ajokoneen polkua ei ole ajettu läpi kertaakaan (osio 3.1) — siellä punainen rivi on
+löydös, ei regressio.
+
+**Neuvoa-antavaa jobia ei voi laittaa PR-workflow'hun.** PR-vahti lukee PR:n check-rollupin
+eikä koskaan mergeä punaisella tai keskeneräisellä rollupilla: job-tason `continue-on-error`
+**ei** tee epäonnistuneesta jobista `success`ia checks-API:ssa (vain workflow-ajo säästyy),
+ja hidas job pitäisi rollupin PENDING-tilassa koko kestonsa. Kumpikin parkkeeraisi jokaisen
+PR:n `WAIT_CI`-tilaan. Siksi alusta siirtyy `portability.yml`:stä `tests.yml`:ään vasta kun
+se on vihreä ja sen on määrä pysyä vihreänä — se on migraation viimeinen askel, ei lipun
+kääntö. Molemmilla workflow'illa on `timeout-minutes`, jottei jumiin jäänyt testi pidä ajoa
+kuutta tuntia.
 
 Repon juuren `.gitattributes` (`* text=auto eol=lf`) pitää työpuun rivinvaihdot LF:nä myös
 Windowsissa — CRLF rikkoisi `#!`-rivit ja jättäisi `\r`:n jokaiseen `$(...)`-kaappaukseen
