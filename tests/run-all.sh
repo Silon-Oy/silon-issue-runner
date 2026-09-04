@@ -47,9 +47,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------------------
 # Pool size
 # ---------------------------------------------------------------------------
-# Default to the machine's cores. Past a point the wall clock is bounded by the
-# slowest single file rather than by the pool, so the cap is not a resource
-# limit but the point where another worker stops buying anything.
+# Default to TWICE the machine's cores, because the work is waiting rather than
+# computing: a worker blocked in fork()/exec() leaves its core idle, so one
+# worker per core leaves the machine half asleep. Measured on a 14-core machine,
+# same 92 files: 7 workers 40 s, 14 workers 34 s, 28 workers 30 s. The cap of 32
+# is a guard rather than a measured optimum — past it the wall clock is bounded
+# by the slowest single file anyway, which the summary line names.
 #
 # Five probes, the HIGHEST valid answer wins, and the winner is named in the
 # summary line. The naming is the part that earns its keep: the pool ran two
@@ -76,12 +79,13 @@ detect_jobs() {
     case "$value" in ''|*[!0-9]*) continue ;; esac
     [ "$value" -gt "$JOBS_DETECTED" ] || continue
     JOBS_DETECTED="$value"
-    JOBS_SOURCE="$label"
+    JOBS_SOURCE="$label x2"
   done
 }
 detect_jobs
+JOBS_DETECTED=$((JOBS_DETECTED * 2))
 [ "$JOBS_DETECTED" -lt 2 ]  && JOBS_DETECTED=2
-[ "$JOBS_DETECTED" -gt 16 ] && JOBS_DETECTED=16
+[ "$JOBS_DETECTED" -gt 32 ] && JOBS_DETECTED=32
 
 JOBS="${RUN_ISSUES_TEST_JOBS:-$JOBS_DETECTED}"
 # An unreadable value must not silently pick a pool size for the operator: fall

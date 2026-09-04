@@ -1736,8 +1736,11 @@ exittaa **0** — paketti on siis testattavissa ilman alkuperäisen ylläpitäj�
 
 ### Rinnakkaisajo
 
-Ajuri ajaa testitiedostot rinnakkain, oletuksena yhtä monta kerrallaan kuin koneessa on
-ytimiä (katto 16). Syy on mitattu: paketti ei kuormita prosessoria vaan käynnistää prosesseja
+Ajuri ajaa testitiedostot rinnakkain, oletuksena **kaksi kertaa ytimien verran** (katto 32).
+Kerroin kaksi on mitattu: työntekijä joka odottaa prosessin käynnistymistä jättää ytimensä
+tyhjäkäynnille, joten yksi työntekijä per ydin nukuttaa koneesta puolet — 14-ytimisellä
+koneella samat 92 tiedostoa veivät 7 työntekijällä 40 s, 14:llä 34 s ja 28:lla 30 s. Myös
+rinnakkaisuuden syy on mitattu: paketti ei kuormita prosessoria vaan käynnistää prosesseja
 — samat 92 tiedostoa veivät yhdessä CI-ajossa macOS:llä 4,1 min ja Windowsissa 20,3 min, ja
 ne 63 tiedostoa jotka macOS suoritti alle sekunnissa veivät Git Bashissa keskimäärin 6,3 s.
 Kun kustannus osuu tiedostoon joka ei tee mitään, kyse ei ole tiedoston työstä vaan
@@ -1746,7 +1749,7 @@ halvempaa — vain limittää odottamisen.
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
-| `RUN_ISSUES_TEST_JOBS` | koneen ytimet, väliltä 2–16 | Montako testitiedostoa ajetaan yhtä aikaa. `1` = sarjassa **ja** live-tuloste |
+| `RUN_ISSUES_TEST_JOBS` | 2 × ytimet, väliltä 2–32 | Montako testitiedostoa ajetaan yhtä aikaa. `1` = sarjassa **ja** live-tuloste |
 
 Rinnakkaisajossa tiedoston tuloste kerätään talteen ja tulostetaan yhtenä lohkona vasta kun
 tiedosto valmistuu, joten lohkot pysyvät ehjinä mutta valmistumisjärjestyksessä. Kun jokin
