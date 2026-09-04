@@ -1127,8 +1127,9 @@ while IFS= read -r repo_json; do
   fi
 
   # Pickup labels for this repo: entry `labels`, else `default_labels`, else the
-  # built-in default. Shared with /new-epic via lib/poller-config.sh so the
-  # command cannot label a new epic with a set this poller would never pick up.
+  # built-in default. Shared with /issue-runner:new-epic via
+  # lib/poller-config.sh so the command cannot label a new epic with a set this
+  # poller would never pick up.
   LABELS_CSV=$(poller_pick_labels "$REPO_LABELS" "$DEFAULT_LABELS")
 
   # remotes array (default ["origin"]) — newline-separated for the inner loop.

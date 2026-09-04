@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-pick-labels.sh — the pickup-label resolution shared by poller.sh and
-# /new-epic (lib/poller-config.sh: poller_pick_labels,
+# /issue-runner:new-epic (lib/poller-config.sh: poller_pick_labels,
 # poller_watchlist_pick_labels).
 #
 # Why this is worth its own test: the label set decides which issues are ever
@@ -11,9 +11,9 @@
 # ordered.
 #
 # The chain used to live inline in two places in poller.sh (a jq default and a
-# shell fallback). /new-epic needs the same answer to label a new epic with a
-# set the poller will actually pick up, so the chain became one function and
-# these cases pin it.
+# shell fallback). /issue-runner:new-epic needs the same answer to label a new
+# epic with a set the poller will actually pick up, so the chain became one
+# function and these cases pin it.
 #
 # Cases:
 #   1. The lib parses and defines both functions
@@ -153,8 +153,8 @@ fi
 
 # ---- Case 8: poller.sh goes through the shared function ----
 # The chain must not grow a second implementation: a poller that resolved its
-# own labels could pick up a different set than /new-epic writes, and the
-# mismatch would look exactly like an issue that "just never runs".
+# own labels could pick up a different set than /issue-runner:new-epic writes,
+# and the mismatch would look exactly like an issue that "just never runs".
 POLLER="$ROOT/poller.sh"
 if grep -q 'poller_pick_labels' "$POLLER"; then
   ok "case8 poller.sh calls poller_pick_labels"

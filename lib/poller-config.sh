@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lib/poller-config.sh — configuration resolution for poller.sh,
-# pr-watch-poller.sh and /new-epic: the host gate, the watchlist lookup and the
-# pickup labels a repo's issues must carry.
+# pr-watch-poller.sh and /issue-runner:new-epic: the host gate, the watchlist
+# lookup and the pickup labels a repo's issues must carry.
 #
 # Both pollers make the same two decisions before they do anything else, and
 # both must be able to make them on a machine that has no ~/dotfiles. Keeping
@@ -152,9 +152,10 @@ poller_pick_labels() {
 #
 # The labels are printed in BOTH cases: rc 1 means "what you got is the built-in
 # default, say so out loud", never "no answer". A caller that swallows the rc
-# still gets a working label set; a caller that reports it (/new-epic) can tell
-# the human that nothing configured this, which is the difference between a
-# considered default and a label that will never be picked up.
+# still gets a working label set; a caller that reports it
+# (/issue-runner:new-epic) can tell the human that nothing configured this,
+# which is the difference between a considered default and a label that will
+# never be picked up.
 #
 # Not covered means any of: no path given, no watchlist, an unreadable or
 # unparseable watchlist, or no `.repos[]` entry whose `path` is this checkout.

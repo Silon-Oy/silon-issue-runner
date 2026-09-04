@@ -884,7 +884,7 @@ Claude Codessa, kohderepon juuressa:
 
 | Komento | Argumentit | Mitä tekee |
 |---|---|---|
-| `/issue-runner:run-issue` | `[#N]` | Ajaa orkestraattorin nimetylle issuelle; ilman argumenttia poimii vanhimman ehdot täyttävän (6.2). Ohje: [`commands/issue-runner/run-issue.md`](commands/issue-runner/run-issue.md) |
+| `/issue-runner:run-issue` | `#N` | Ajaa orkestraattorin nimetylle issuelle. Issuenumero on pakollinen; ilman sitä komento tulostaa usage-viestin eikä kutsu orkestraattoria — automaattinen poiminta on pollerin tehtävä (6.2). Ohje: [`commands/issue-runner/run-issue.md`](commands/issue-runner/run-issue.md) |
 | `/issue-runner:run-epic` | `[#N] [--dry-run] [--start-now] [--stop]` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille ja raportoi ketjun tilan. `--stop` keskeyttää epicin (6.5). Ohje: [`commands/issue-runner/run-epic.md`](commands/issue-runner/run-epic.md) |
 | `/issue-runner:new-issue` | `<kuvaus tehtävästä>` | Kirjoittaa kuvauksesta yhden ajon kokoisen issuen, joka täyttää kaikki poimintaehdot: paketin oma runko ja tämän koneen poimintalabelit (6.2). Luonnos vahvistetaan ennen kirjoitusta; epicin kokoinen kuvaus vain ehdotetaan eskaloitavaksi. Kysyy kohderepon kielimäärittelyn ja kirjaa sen repon `CLAUDE.md`:hen, jos se puuttuu. Ei aja mitään. Ohje: [`commands/issue-runner/new-issue.md`](commands/issue-runner/new-issue.md) |
 | `/issue-runner:new-epic` | `<kuvaus kokonaisuudesta>` | Pilkkoo kuvauksen epiciksi ja alaissueiksi: luo issuet, linkittää sub-issueiksi, merkitsee `blocked_by`-riippuvuudet ja labeloi vain epicin ajoon (6.5). Kysyy kohderepon kielimäärittelyn kuten `/issue-runner:new-issue`. Ei aja mitään. Ohje: [`commands/issue-runner/new-epic.md`](commands/issue-runner/new-epic.md) |
