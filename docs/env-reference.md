@@ -313,3 +313,32 @@ ympäristöä: asentavan shellin muuttuja olisi väärä puhtaan paperin lupaus.
 `RUN_ISSUES_GHA_REFRESH_BUFFER_SECONDS` (`300`),
 `RUN_ISSUES_GHA_TOKEN_ENDPOINT_BASE` (`https://api.github.com`).
 
+
+### Testipaketti (`tests/run-all.sh`)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_TEST_JOBS` | 2 × koneen ytimet, rajattuna välille 2–32 | Montako testitiedostoa ajetaan yhtä aikaa. `1` palauttaa sarja-ajon **ja** live-tulosteen (rinnakkaisajossa tiedoston tuloste odottaa lohkona sen valmistumista) |
+
+Kerroin kaksi on mitattu, ja se maksaa itsensä takaisin vain siellä missä estynyt työntekijä
+jättää ytimensä tyhjäkäynnille: macOS-runner 111 s → 74 s ja 14-ytiminen kone 34 s → 30 s,
+mutta Windows-runner 1015 s → 1020 s, koska `fork()`:in emulointi on itsessään
+prosessorityötä. Oletus pidetään, koska se voittaa kahdella alustalla ja mahtuu kolmannen
+hajontaan. Katto 32 on vartija eikä mitattu optimi.
+
+Ydinluku otetaan **suurimpana** viidestä mittarista (`nproc`, `getconf`, `sysctl`,
+`/proc/cpuinfo`, `%NUMBER_OF_PROCESSORS%`), ja yhteenvetorivi nimeää vastanneen mittarin.
+Nimeäminen on se osa joka maksaa itsensä takaisin: luku `2` ei erota kaksiytimistä konetta
+väärin vastanneesta mittarista, ja vain lähde kertoo kummasta on kyse. Poikkeus, jota varten
+override on olemassa: CPU-kiintiöidyssä kontissa suurin vastaus voi ylittää kiintiön, koska
+`/proc/cpuinfo` laskee isäntäkoneen ytimet.
+
+Oletus on rinnakkainen, koska paketti ei kuormita prosessoria vaan käynnistää prosesseja: samat
+92 tiedostoa veivät yhdessä CI-ajossa macOS:llä 4,1 min ja Windowsissa 20,3 min, ja ne 63
+tiedostoa jotka macOS ajoi alle sekunnissa veivät Git Bashissa keskimäärin 6,3 s. Katto 16 ei
+ole resurssiraja vaan piste, jonka jälkeen kokonaisaikaa sitoo hitain yksittäinen tiedosto eikä
+poolin koko. Lukukelvoton arvo putoaa arvoon `1` — ainoaan tilaan, joka käyttäytyy täsmälleen
+kuin poolia ei olisi.
+
+Rinnakkaisuuden ehto on testien hermeettisyys: oma `mktemp`-puu, `HOME` ja `RUN_ISSUES_*`-polut
+sen sisällä, efemeeri portti. Sama ehto koskee jokaista uutta testiä.

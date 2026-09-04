@@ -19,9 +19,13 @@
 #     every ecosystem branch, not just pnpm).
 #
 # Everything external (claude, gh, pnpm, composer) is mocked via PATH shims.
-# RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT=1 keeps tests fast (the kill-after grace
-# adds ~60s in the worst case, so we use a sleeping mock that should be killed
-# well before that grace expires).
+# RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT=1 keeps the two TIMEOUT cases fast (the
+# kill-after grace adds ~60s in the worst case, so we use a sleeping mock that
+# should be killed well before that grace expires). Case (b) is the opposite
+# assertion and must not share that budget: it claims a fast install does NOT
+# trip the wrapper, and one second is not a claim about the wrapper but about
+# how loaded the machine is. Under a parallel suite run the mock's own spawn can
+# outlast it, and the case then fails for a reason it does not test.
 #
 # Run: bash tests/test-env-bootstrap-timeout.sh
 
@@ -175,7 +179,9 @@ echo "CYCLE_REVIEW_DECISION: PROCEED" > "$RD_B/01-cycle-review.out"
 rm -f "$SENTINEL"
 
 set +e
-OUT_B=$(run_orch env RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT=1 \
+# 60, not 1: the mock returns immediately, so the budget costs nothing and only
+# has to be out of reach of scheduling jitter (see the header).
+OUT_B=$(run_orch env RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT=60 \
   "$ORCH" --resume "$RD_B" --decision PROCEED 2>&1)
 RC_B=$?
 set -e

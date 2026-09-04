@@ -1734,6 +1734,36 @@ Plain bash, ei testiframeworkia. Jokainen `test-*.sh` exittaa 0 = pass, ≠0 = f
 puuttuu (ei `jq`:ta, ei paikallista tietokantaa, väärä host), testi tulostaa `SKIP: <syy>` ja
 exittaa **0** — paketti on siis testattavissa ilman alkuperäisen ylläpitäjän ympäristöä.
 
+### Rinnakkaisajo
+
+Ajuri ajaa testitiedostot rinnakkain, oletuksena **kaksi kertaa ytimien verran** (katto 32).
+Kerroin kaksi on mitattu, ja sen hyöty riippuu siitä mitä odottaminen on: siellä missä
+estynyt työntekijä jättää ytimensä tyhjäkäynnille se maksaa itsensä takaisin (macOS-runner
+111 s → 74 s, 14-ytiminen kone 34 s → 30 s), ja siellä missä "odottaminen" on itse
+prosessorityötä se ei tee mitään (Windows-runner 1015 s → 1020 s, koska MSYS emuloi
+`fork()`:in kopioimalla prosessitilan — kaksi ydintä ei voi tehdä sitä enempää). Myös
+rinnakkaisuuden syy on mitattu: paketti ei kuormita prosessoria vaan käynnistää prosesseja
+— samat 92 tiedostoa veivät yhdessä CI-ajossa macOS:llä 4,1 min ja Windowsissa 20,3 min, ja
+ne 63 tiedostoa jotka macOS suoritti alle sekunnissa veivät Git Bashissa keskimäärin 6,3 s.
+Kun kustannus osuu tiedostoon joka ei tee mitään, kyse ei ole tiedoston työstä vaan
+käynnistyksen hinnasta (MSYS emuloi `fork()`:in), eikä ajuri voi tehdä käynnistyksestä
+halvempaa — vain limittää odottamisen.
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_TEST_JOBS` | 2 × ytimet, väliltä 2–32 | Montako testitiedostoa ajetaan yhtä aikaa. `1` = sarjassa **ja** live-tuloste |
+
+Rinnakkaisajossa tiedoston tuloste kerätään talteen ja tulostetaan yhtenä lohkona vasta kun
+tiedosto valmistuu, joten lohkot pysyvät ehjinä mutta valmistumisjärjestyksessä. Kun jokin
+testi jumittaa, aja se sarjassa (`RUN_ISSUES_TEST_JOBS=1`) — silloin tuloste virtaa
+puskuroimattomana ja näet mihin kohtaan se pysähtyi. Keskeytys (Ctrl-C) nimeää ne tiedostot,
+jotka olivat vielä kesken.
+
+Rinnakkaisuus on turvallista, koska testit ovat hermeettisiä: jokainen rakentaa oman
+`mktemp`-puunsa, osoittaa `HOME`:n ja `RUN_ISSUES_*`-polut sen sisään ja pyytää ytimeltä
+efemeerin portin silloin kun se sitoo sellaisen. **Uuden testin on täytettävä sama ehto** —
+kiinteä polku tai kiinteä portti näkyy satunnaisena punaisena rivinä, ei suorana virheenä.
+
 Testit **eivät koske oikeaan `~/.claude`-hakemistoon**: asentimen polut johdetaan
 `RUN_ISSUES_CLAUDE_HOME`- ja `RUN_ISSUES_LAUNCH_AGENTS_DIR`-overrideista, ja
 `tests/test-install-portability.sh` vartioi tätä. Se ei ole tyylisääntö vaan ehto sille, että
