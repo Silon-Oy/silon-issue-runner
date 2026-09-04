@@ -50,11 +50,22 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Default to the machine's cores. Past a point the wall clock is bounded by the
 # slowest single file rather than by the pool, so the cap is not a resource
 # limit but the point where another worker stops buying anything.
+#
+# Four probes, because no single one answers everywhere and a probe that answers
+# WRONG is the failure that hides: the first CI run of this pool asked `getconf`
+# first and ran two at a time on a four-core Windows runner — indistinguishable
+# from a small machine. Every answer is therefore validated as a number rather
+# than trusted, and $NUMBER_OF_PROCESSORS, which Windows sets itself, backstops
+# the three Unix tools.
 detect_jobs() {
-  local n=""
-  n="$(getconf _NPROCESSORS_ONLN 2>/dev/null)" || n=""
-  [ -n "$n" ] || n="$(nproc 2>/dev/null)" || n=""
-  [ -n "$n" ] || n="$(sysctl -n hw.ncpu 2>/dev/null)" || n=""
+  local n
+  for n in "$(nproc 2>/dev/null || true)" \
+           "$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)" \
+           "$(sysctl -n hw.ncpu 2>/dev/null || true)" \
+           "${NUMBER_OF_PROCESSORS:-}"; do
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    [ "$n" -ge 1 ] && break
+  done
   case "$n" in ''|*[!0-9]*) n=2 ;; esac
   [ "$n" -lt 2 ]  && n=2
   [ "$n" -gt 16 ] && n=16
