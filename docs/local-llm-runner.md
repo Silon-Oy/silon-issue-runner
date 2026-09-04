@@ -265,8 +265,8 @@ RUN_ISSUES_CLAUDE_CMD="$HOME/.local/bin/claude-toshllm" \
 ```
 
 Run-dir on kohderepon `.claude/run-issues/<run-id>`; `01-cycle-review.out` ja `state.jsonl`
-kertovat S6:n tuloksen ja keston. `run.json.host` on koneen `hostname -s`, ja `cleanup-run.sh`
-kieltäytyy vieraasta hostista — siivous tehdään samalla koneella.
+kertovat S6:n tuloksen ja keston. `run.json.host` on koneen lyhyt konenimi (`runner_host`),
+ja `cleanup-run.sh` kieltäytyy vieraasta hostista — siivous tehdään samalla koneella.
 
 ## Verifiointi
 
