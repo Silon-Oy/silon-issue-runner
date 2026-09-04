@@ -64,6 +64,10 @@ run_orch() {
 FAIL=0
 
 # === (a) rc-path: claude mock sleeps past a tiny timeout -> rc 124 =========
+# The rc-path exists only when timeout(1) can return 124; without a timeout
+# binary call_claude runs the mock uncapped, so the case is SKIPped the way the
+# sibling timeout tests do. Case (b) drives the cleanup trap and does not need it.
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
 cat > "$BIN/claude" <<'SH'
 #!/usr/bin/env bash
 sleep 30
@@ -88,6 +92,9 @@ CS_A=$(jq -r '.current_state' "$RD/run.json")
 grep -q '"event":"implementer_timed_out"' "$RD/state.jsonl" \
   || { echo "FAIL rc-path: no implementer_timed_out event"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS rc-path: timed_out + exit 7 + current_state/timeout_phase"
+else
+  echo "SKIP: rc-path case needs a timeout/gtimeout binary on PATH (brew install coreutils)"
+fi
 
 # === (b) trap-path: simulate a hard kill that skips the rc handler =========
 # Reset the run-dir to a fresh non-terminal S8 state, then make finalize_timeout's

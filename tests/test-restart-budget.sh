@@ -148,6 +148,19 @@ RE_C=$(jq -r '.blocked_reason' "$RD3/run.json")
 grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (c): needs-human not attempted"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (c) corrupt worktree -> blocked + needs-human + exit 0"
 
+# Cases (d) and (e) drive a real timeout: the claude mock overruns
+# RUN_ISSUES_CLAUDE_TIMEOUT and timeout(1) must return 124 for the rc-path to
+# exist at all. Without a timeout binary call_claude runs the mock uncapped and
+# the premise is gone, so the cases are SKIPped the way the sibling timeout
+# tests do (test-timeout-detection.sh, test-env-bootstrap-timeout.sh) rather
+# than failing on an environment gap.
+if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
+  echo "SKIP: cases (d) and (e) need a timeout/gtimeout binary on PATH (brew install coreutils)"
+  echo "----------------------------------------"
+  [ "$FAIL" -eq 0 ] && echo "restart-budget: all passed" || echo "restart-budget: FAILURES"
+  exit "$FAIL"
+fi
+
 # === (d) poller second-timeout: restart proceeds, claude times out AGAIN ===
 # This is the autoflow path the budget-branch never covers: scan_timed_out only
 # restarts runs with retry_count<MAX, so a restarted run that times out a second

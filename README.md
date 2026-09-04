@@ -1823,6 +1823,30 @@ Testit **eivät koske oikeaan `~/.claude`-hakemistoon**: asentimen polut johdeta
 `tests/test-install-portability.sh` vartioi tätä. Se ei ole tyylisääntö vaan ehto sille, että
 testit voi ajaa samalla koneella jolla poller pyörii.
 
+### CI-ajo
+
+Kaksi workflow'ta, joilla on eri tehtävä:
+
+| Workflow | Laukaisin | Alusta | Rooli |
+|---|---|---|---|
+| `.github/workflows/tests.yml` | jokainen pull request ja `main`-push | `macos-latest`, `brew install coreutils` | **portti** — PR:n ainoa check; punainen ajo estää mergen |
+| `.github/workflows/portability.yml` | `main`-push ja käsin (`workflow_dispatch`) | `windows-latest` (Git Bash, `MSYS=winsymlinks:nativestrict`) ja `ubuntu-latest` | **mittaus** — tulokset luetaan Actions-välilehdeltä |
+
+macOS on portti, koska se on alusta jolla pollerit ja LaunchAgentit ajavat. Windows- ja
+Ubuntu-ajot ovat toistaiseksi mittaus, eivät portti: niiden punaisuus on Windows-migraation
+työlista. Ne eivät ole PR-workflow'ssa neuvoa-antavina jobeina, koska PR-vahti lukee PR:n
+check-rollupin eikä koskaan mergeä punaisella tai keskeneräisellä rollupilla: job-tason
+`continue-on-error` **ei** tee epäonnistuneesta jobista `success`ia checks-API:ssa (vain
+workflow-ajo säästyy), ja hidas Git Bash -ajo pitäisi rollupin PENDING-tilassa koko kestonsa.
+Kumpikin parkkeeraisi jokaisen PR:n `WAIT_CI`-tilaan. Kun alusta on vihreä ja sen on määrä pysyä
+vihreänä, se siirretään `tests.yml`:ään pakolliseksi jobiksi — se on migraatioepicin
+viimeinen askel, ei lipun kääntö. Molemmilla workflow'illa on `timeout-minutes`, jottei jumiin
+jäänyt testi pidä ajoa kuutta tuntia.
+
+Repon juuren `.gitattributes` (`* text=auto eol=lf`) pitää työpuun rivinvaihdot LF:nä myös
+Windowsissa — CRLF rikkoisi `#!`-rivit ja jättäisi `\r`:n jokaiseen `$(...)`-kaappaukseen
+hiljaa. `tests/test-package-layout.sh` vartioi tiedostoa.
+
 ---
 
 ## 11. Viittaukset
