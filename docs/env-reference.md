@@ -271,11 +271,15 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 | `PR_WATCH_CI_MAX_POLLS` | `40` | CI-odotuksen kierrosten määrä |
 | `PR_WATCH_CI_POLL_SECS` | `15` | CI-odotuksen kierrosväli (40 × 15 s = 10 min) |
 
-### Julkaisu asiakasrepoon (`publish-release.sh`, #155)
+### Julkaisu julkiseen peiliin (`publish-release.sh`, #155)
+
+Kaikki kolme ovat **testien injektiopisteitä**, eivät käyttäjäkonfiguraatiota: tuotannossa arvot ovat skriptin omia vakioita, koska asiakasnimiä sisältävä konfiguraatiotiedosto olisi itsessään vuotopinta.
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
-| `RUN_ISSUES_PUBLISH_DENYLIST_FILE` | *(skriptin sisäänrakennettu lista)* | **Testien injektiopiste** vuotoportin kiellettyjen merkkijonojen listalle (yksi termi per rivi, `#` = kommentti). Ei käyttäjäkonfiguraatio: tuotannossa lista on skriptin oma vakio, koska asiakasnimiä sisältävä konfiguraatiotiedosto olisi itsessään vuotopinta. Osoitettu mutta puuttuva tiedosto ⇒ exit 3 (fail-closed), samoin tyhjä lista |
+| `RUN_ISSUES_PUBLISH_DENYLIST_FILE` | *(skriptin sisäänrakennettu lista)* | Korvaa vuotoporttien ja uudelleenkirjoituksen sääntölistan tiedostolla (yksi sääntö per rivi muodossa `termi` tai `termi==>korvaus`, `#` = kommentti). Osoitettu mutta puuttuva tiedosto ⇒ exit 3 (fail-closed), samoin tyhjä lista |
+| `RUN_ISSUES_PUBLISH_MAILMAP_FILE` | *(skriptin sisäänrakennettu lista)* | Korvaa tekijöiden sähköpostiosoitteiden normalisointilistan (git-shortlog(1)-muoto). Osoitettu mutta puuttuva tiedosto ⇒ exit 3 |
+| `RUN_ISSUES_PUBLISH_FILTER_REPO` | `git filter-repo` | Komento, jolla historian uudelleenkirjoitus ajetaan. Puuttuva tai kaatuva komento ⇒ exit 6; komento, joka ei kirjoita mitään uusiksi, pysähtyy historiaporttiin (exit 4) |
 
 ### Asennin
 

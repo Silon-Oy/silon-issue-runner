@@ -1,37 +1,46 @@
 #!/usr/bin/env bash
-# test-publish-release.sh — publish-release.sh, the handover surface that turns
-# the current working tree into a history-free release in a customer repository
-# (issue #155).
+# test-publish-release.sh — publish-release.sh, the surface that turns the
+# private upstream into a public mirror with a deterministically rewritten
+# history (issue #155; model changed from an orphan commit to a rewrite).
 #
-# The script's job is mostly REFUSAL: four fail-closed gates run before anything
+# The script's job is mostly REFUSAL: five fail-closed gates run before anything
 # is written, and a single refusal must leave both the local repository and the
-# target untouched. That is what this test exercises. It uses a LOCAL BARE REPO
-# as the target — no network is contacted anywhere in this file.
+# target untouched. Its second job is a rewrite that is the SAME every time, so
+# that publishing is a fast-forward. Both are exercised here against a LOCAL
+# BARE REPO — no network is contacted anywhere in this file.
 #
-# Cases (mirroring the issue's acceptance criteria):
-#   1. usage errors -> exit 1 (missing --target, missing --customer, bad flag)
+# Cases:
+#   1. usage errors -> exit 1 (missing --target, bad flag)
 #   2. --dry-run writes nothing and never contacts the target (the target path
 #      does not even exist and the run still succeeds)
 #   3. --dry-run against a real target leaves it without a single ref
-#   4. an empty or missing denylist is a refusal (exit 3), never a green light,
-#      and the BUILT-IN denylist refuses a real forbidden name -> exit 3
+#   4. an empty or missing denylist, and a replacement that contains a forbidden
+#      term, are refusals (exit 3), never a green light; the BUILT-IN denylist
+#      refuses a real forbidden name -> exit 3
 #   5. the leak gate reports matches as tiedosto:rivi and refuses -> exit 3,
 #      while the same term inside an EXCLUDED file is NOT a match. Every entry
-#      on publish-release.sh's exclusion list is checked, not just the first:
-#      a file that enumerates forbidden names matches its own list by
-#      definition, so one unexcluded entry makes the gate refuse forever
-#   6. boundaries are required BEFORE a term and not after: a mid-word
-#      occurrence is not a match, but a suffixed or identifier-embedded one is
-#      (an inflected name, a name inside an identifier) — that asymmetry is
-#      the gate's whole reach
+#      on publish-release.sh's exclusion list is checked, not just the first
+#   6. boundaries are required BEFORE a term and not after (an inflected name,
+#      a name inside an identifier) — that asymmetry is the gate's whole reach
 #   7. dirty working tree -> exit 2
 #   8. HEAD != origin/main -> exit 2
-#   9. missing LICENSE template -> exit 4
-#  10. publish: the target's main is ONE commit with NO parent, carries the
-#      rendered LICENSE, and carries neither the maintainer tool nor the template
-#  11. a repeated publish produces another parentless commit and a second
-#      release tag (the target's history is a queue of releases)
-#  12. the local repository is byte-for-byte unchanged by all of the above
+#   9. no LICENSE at HEAD -> exit 2
+#  10. a missing rewrite tool -> exit 6, and a tool that exits non-zero -> exit 6
+#  11. the history gate: a tool that rewrites NOTHING leaves the forbidden
+#      history in place and the gate refuses -> exit 4 (the result is checked,
+#      not the rules)
+#  12. publish: the target's main carries the whole history, rewritten — no
+#      forbidden term in any message, path or blob; the personal e-mail is
+#      mapped; the excluded files are absent from EVERY commit; LICENSE and the
+#      tracked content are present at the tip
+#  13. determinism and fast-forward: a repeated publish is a no-op with the same
+#      SHA and no new tag; a new upstream commit publishes as a fast-forward
+#      whose parent is the previous tip; a rules change is rejected as
+#      non-fast-forward (exit 5) and accepted with --force
+#  14. the local repository is byte-for-byte unchanged by all of the above
+#
+# Cases 12–13 need a real `git filter-repo`; without it they are reported as
+# SKIP and the file still exits 0, so the gate cases hold everywhere.
 #
 # Fixtures live under a mktemp HOME + TMPDIR, so neither the real home directory
 # nor the real package tree is touched. The forbidden term used against the
@@ -56,7 +65,7 @@ trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home"; mkdir -p "$HOME"
 export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
 export GIT_CONFIG_NOSYSTEM=1
-unset RUN_ISSUES_PUBLISH_DENYLIST_FILE
+unset RUN_ISSUES_PUBLISH_DENYLIST_FILE RUN_ISSUES_PUBLISH_MAILMAP_FILE RUN_ISSUES_PUBLISH_FILTER_REPO
 
 FAIL=0
 ok()  { echo "PASS: $1"; }
@@ -67,20 +76,14 @@ gitf() {
       -c commit.gpgsign=false -c init.defaultBranch=main "$@"
 }
 
+HAVE_FILTER_REPO=0
+git filter-repo --version >/dev/null 2>&1 && HAVE_FILTER_REPO=1
+
 # --- fixture: a source repo with an origin, and an empty target bare repo -----
 SRC="$WORK/src"
 ORIGIN="$WORK/origin.git"
 TARGET="$WORK/target.git"
-CUSTOMER="Esimerkki Oy"
 
-mkdir -p "$SRC/lib"
-printf 'Paketti.\n' > "$SRC/README.md"
-printf '#!/usr/bin/env bash\necho hei\n' > "$SRC/lib/thing.sh"
-printf 'Käyttöoikeus myönnetään: {{CUSTOMER}}\n' > "$SRC/LICENSE.customer-grant.template"
-# Every excluded file carries a forbidden term on purpose (case 5): each must be
-# excluded from BOTH the release and the scan, or the gate would refuse forever.
-# The list is read from publish-release.sh itself, so a new entry there without a
-# fixture here is a red test rather than an untested exclusion.
 EXCLUDED_PATHS=()
 while IFS= read -r line; do
   EXCLUDED_PATHS+=("$line")
@@ -93,6 +96,12 @@ if [ "${#EXCLUDED_PATHS[@]}" -lt 2 ]; then
   exit 1
 fi
 
+mkdir -p "$SRC/lib"
+printf 'Paketti.\n' > "$SRC/README.md"
+printf '#!/usr/bin/env bash\necho hei\n' > "$SRC/lib/thing.sh"
+printf 'Fixture licence text.\n' > "$SRC/LICENSE"
+# Every excluded file carries a forbidden term on purpose (case 5): each must be
+# excluded from BOTH the release and the scan, or the gate would refuse forever.
 for _ex in "${EXCLUDED_PATHS[@]}"; do
   mkdir -p "$SRC/$(dirname "$_ex")"
   printf '#!/usr/bin/env bash\n# denylist: zapcorp qxname\n' > "$SRC/$_ex"
@@ -102,6 +111,19 @@ gitf init -q "$SRC"
 gitf -C "$SRC" symbolic-ref HEAD refs/heads/main
 gitf -C "$SRC" add -A
 gitf -C "$SRC" commit -q -m "init"
+
+# History that must be rewritten: a message, a blob and a PATH carrying a term,
+# authored under a personal address (case 12). The tip is clean again so the
+# working-tree gate passes; only the HISTORY is dirty.
+printf 'asiakas qxname tilasi\n' > "$SRC/notes.md"
+printf 'x\n' > "$SRC/zapcorp-config.md"
+gitf -C "$SRC" add -A
+gitf -C "$SRC" -c user.name="Fixture Two" -c user.email="two@personal.invalid" \
+  commit -q -m "fix zapcorp bug reported by qxname"
+rm -f "$SRC/notes.md" "$SRC/zapcorp-config.md"
+gitf -C "$SRC" add -A
+gitf -C "$SRC" commit -q -m "tidy"
+
 git init --bare -q "$ORIGIN"
 git init --bare -q "$TARGET"
 gitf -C "$SRC" remote add origin "$ORIGIN"
@@ -118,17 +140,18 @@ sync() {
 }
 
 DENY="$WORK/denylist.txt"
-printf '# fixture terms\nzapcorp\nqxname\n' > "$DENY"
+printf '# fixture terms\nzapcorp==>zc\nqxname\n' > "$DENY"
+MAILMAP="$WORK/mailmap"
+printf 'Fixture Two <two@users.noreply.example> <two@personal.invalid>\n' > "$MAILMAP"
+export RUN_ISSUES_PUBLISH_MAILMAP_FILE="$MAILMAP"
 
 target_refs() { git -C "$TARGET" for-each-ref --format='%(refname)' 2>/dev/null; }
 
-run_pub() { "$PUB" --repo "$SRC" --customer "$CUSTOMER" "$@" >"$WORK/out" 2>"$WORK/err"; }
+run_pub() { "$PUB" --repo "$SRC" "$@" >"$WORK/out" 2>"$WORK/err"; }
 
 # ---- Case 1: usage errors ----
-"$PUB" --repo "$SRC" --customer "$CUSTOMER" >/dev/null 2>&1
+"$PUB" --repo "$SRC" >/dev/null 2>&1
 [ "$?" = "1" ] && ok "missing --target -> exit 1" || bad "missing --target did not exit 1"
-"$PUB" --repo "$SRC" --target "$TARGET" >/dev/null 2>&1
-[ "$?" = "1" ] && ok "missing --customer -> exit 1" || bad "missing --customer did not exit 1"
 "$PUB" --bogus >/dev/null 2>&1
 [ "$?" = "1" ] && ok "unknown flag -> exit 1" || bad "unknown flag did not exit 1"
 
@@ -136,27 +159,28 @@ run_pub() { "$PUB" --repo "$SRC" --customer "$CUSTOMER" "$@" >"$WORK/out" 2>"$WO
 GHOST="$WORK/never-created.git"
 RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$GHOST" --dry-run
 rc=$?
-if [ "$rc" = "0" ]; then ok "--dry-run succeeds against a target that does not exist"
-else bad "--dry-run exited $rc against a nonexistent target (network/target contact?)"; fi
+if [ "$HAVE_FILTER_REPO" = "1" ]; then
+  if [ "$rc" = "0" ]; then ok "--dry-run succeeds against a target that does not exist"
+  else bad "--dry-run exited $rc against a nonexistent target (network/target contact?): $(head -3 "$WORK/err")"; fi
+  grep -q 'dry-run' "$WORK/out" && ok "--dry-run output is marked as such" \
+    || bad "--dry-run output does not say dry-run"
+  grep -q 'vuotoportti: OK' "$WORK/out" && ok "--dry-run reports the leak-gate result" \
+    || bad "--dry-run does not report the leak-gate result"
+  grep -qE 'historia: *OK' "$WORK/out" && ok "--dry-run reports the history-gate result" \
+    || bad "--dry-run does not report the history-gate result"
+else
+  [ "$rc" = "6" ] && ok "--dry-run without filter-repo -> exit 6 (tool gate)" \
+    || bad "--dry-run without filter-repo exited $rc, expected 6"
+fi
 if [ ! -e "$GHOST" ]; then ok "--dry-run created nothing at the target path"
 else bad "--dry-run created $GHOST"; fi
-grep -q 'dry-run' "$WORK/out" && ok "--dry-run output is marked as such" \
-  || bad "--dry-run output does not say dry-run"
-grep -q 'vuotoportti: OK' "$WORK/out" && ok "--dry-run reports the leak-gate result" \
-  || bad "--dry-run does not report the leak-gate result"
-grep -qE 'tiedostot: *[1-9]' "$WORK/out" && ok "--dry-run reports a file count" \
-  || bad "--dry-run does not report a file count"
 
 # ---- Case 3: --dry-run leaves a real target refless ----
 RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --dry-run
-rc=$?
-[ "$rc" = "0" ] && ok "--dry-run against a real target -> exit 0" || bad "--dry-run exited $rc"
 if [ -z "$(target_refs)" ]; then ok "--dry-run wrote no ref into the target"
 else bad "--dry-run wrote refs into the target: $(target_refs)"; fi
 
-# ---- Case 3b: an unusable denylist is a refusal, not a green light ----
-# An empty list does not mean "nothing is forbidden", it means the gate could not
-# run. Fail-open here would defeat the whole script.
+# ---- Case 4: an unusable denylist is a refusal, not a green light ----
 printf '# pelkkiä kommentteja\n\n' > "$WORK/empty-denylist.txt"
 RUN_ISSUES_PUBLISH_DENYLIST_FILE="$WORK/empty-denylist.txt" run_pub --target "$TARGET" --yes
 rc=$?
@@ -166,12 +190,18 @@ RUN_ISSUES_PUBLISH_DENYLIST_FILE="$WORK/no-such-denylist.txt" run_pub --target "
 rc=$?
 [ "$rc" = "3" ] && ok "missing denylist file -> exit 3 (fail-closed)" \
   || bad "missing denylist file exited $rc, expected 3"
+# A replacement that re-plants a forbidden term would make the history gate
+# refuse on every publish; it is caught once, up front.
+printf 'zapcorp==>qxname-ltd\nqxname\n' > "$WORK/replant-denylist.txt"
+RUN_ISSUES_PUBLISH_DENYLIST_FILE="$WORK/replant-denylist.txt" run_pub --target "$TARGET" --yes
+rc=$?
+[ "$rc" = "3" ] && ok "a replacement containing a forbidden term -> exit 3" \
+  || bad "replanting replacement exited $rc, expected 3"
 if [ -z "$(target_refs)" ]; then ok "denylist refusals wrote nothing into the target"
 else bad "denylist refusal wrote refs: $(target_refs)"; fi
 
-# ---- Case 4: the BUILT-IN denylist refuses a real name ----
-# Assembled at runtime (see header) — never written literally in this file.
-REAL_TERM="$(printf '%s%s' 'Sil' 'on')"
+# The BUILT-IN denylist refuses a real name. Assembled at runtime (see header).
+REAL_TERM="$(printf '%s%s' 'sad' 'ex')"
 printf 'Tekijä: %s Oy\n' "$REAL_TERM" > "$SRC/notes.md"
 sync "plant a real name"
 run_pub --target "$TARGET" --yes
@@ -201,23 +231,28 @@ else bad "leak refusal still wrote refs: $(target_refs)"; fi
 rm -f "$SRC/leak.md"; sync "remove the planted term"
 
 # ---- Case 6: the boundary is required before the term, not after ----
-# "kvazapcorp" embeds the term mid-word; a substring match would make the gate
-# refuse trees that leak nothing (a common word containing a short name).
+# The gate cases below only need to reach gate 3, so a stub tool keeps them
+# independent of filter-repo; the stub is never reached when gate 3 refuses.
+STUB_OK="$WORK/stub-ok.sh"
+printf '#!/usr/bin/env bash\ncase "${1:-}" in --version) echo stub-ok; exit 0 ;; esac\nexit 0\n' > "$STUB_OK"
+chmod +x "$STUB_OK"
+
 printf 'kvazapcorp on eri sana\n' > "$SRC/boundary.md"
 sync "plant a mid-word occurrence"
-RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --dry-run
-rc=$?
-[ "$rc" = "0" ] && ok "mid-word occurrence is not a match (leading boundary required)" \
-  || bad "mid-word occurrence refused (exit $rc) — boundary check is wrong"
+if [ "$HAVE_FILTER_REPO" = "1" ]; then
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --dry-run
+  rc=$?
+  [ "$rc" = "0" ] && ok "mid-word occurrence is not a match (leading boundary required)" \
+    || bad "mid-word occurrence refused (exit $rc) — boundary check is wrong: $(head -3 "$WORK/err")"
+else
+  echo "SKIP: mid-word acceptance needs git filter-repo (the run continues past gate 3)"
+fi
 rm -f "$SRC/boundary.md"
 
-# ...but a word that only ENDS differently is the leak this gate exists to catch:
-# Finnish inflects by suffix and identifiers concatenate, so a trailing boundary
-# would let an inflected name, a compound and an identifier form through.
 for form in 'zapcorpin taivutettu muoto' 'zapcorpqxname yhdyssana' 'qxname_lock tunnisteessa' 'wp_qxname tunnisteessa'; do
   printf '%s\n' "$form" > "$SRC/suffix.md"
   sync "plant a suffixed form"
-  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --dry-run
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" RUN_ISSUES_PUBLISH_FILTER_REPO="$STUB_OK" run_pub --target "$TARGET" --dry-run
   rc=$?
   [ "$rc" = "3" ] && ok "suffixed/embedded form is a match: '$form'" \
     || bad "suffixed/embedded form passed the gate (exit $rc): '$form'"
@@ -242,92 +277,194 @@ rc=$?
 gitf -C "$SRC" reset -q --hard origin/main
 rm -f "$SRC/local-only.md"
 
-# ---- Case 9: missing LICENSE template ----
-cp "$SRC/LICENSE.customer-grant.template" "$WORK/template.bak"
-rm -f "$SRC/LICENSE.customer-grant.template"
-sync "drop the license template"
+# ---- Case 9: no LICENSE at HEAD ----
+git -C "$SRC" rm -q LICENSE
+sync "drop the licence"
 RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --yes
 rc=$?
-[ "$rc" = "4" ] && ok "missing license template -> exit 4" || bad "missing template exited $rc"
-if [ -z "$(target_refs)" ]; then ok "template refusal wrote nothing into the target"
-else bad "template refusal wrote refs: $(target_refs)"; fi
-cp "$WORK/template.bak" "$SRC/LICENSE.customer-grant.template"
-sync "restore the license template"
+[ "$rc" = "2" ] && ok "missing LICENSE -> exit 2" || bad "missing LICENSE exited $rc, expected 2"
+if [ -z "$(target_refs)" ]; then ok "licence refusal wrote nothing into the target"
+else bad "licence refusal wrote refs: $(target_refs)"; fi
+printf 'Fixture licence text.\n' > "$SRC/LICENSE"
+sync "restore the licence"
 
-# ---- snapshot the local repo before the first real publish (case 12) ----
+# ---- Case 10: the rewrite tool is missing or broken -> exit 6 ----
+RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" RUN_ISSUES_PUBLISH_FILTER_REPO="$WORK/no-such-tool" run_pub --target "$TARGET" --yes
+rc=$?
+[ "$rc" = "6" ] && ok "missing rewrite tool -> exit 6" || bad "missing tool exited $rc, expected 6"
+grep -qi 'filter-repo' "$WORK/err" && ok "missing tool is named in stderr" || bad "stderr does not name the tool"
+STUB_FAIL="$WORK/stub-fail.sh"
+printf '#!/usr/bin/env bash\ncase "${1:-}" in --version) echo stub-fail; exit 0 ;; esac\necho boom >&2; exit 1\n' > "$STUB_FAIL"
+chmod +x "$STUB_FAIL"
+RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" RUN_ISSUES_PUBLISH_FILTER_REPO="$STUB_FAIL" run_pub --target "$TARGET" --yes
+rc=$?
+[ "$rc" = "6" ] && ok "failing rewrite tool -> exit 6" || bad "failing tool exited $rc, expected 6"
+if [ -z "$(target_refs)" ]; then ok "tool refusals wrote nothing into the target"
+else bad "tool refusal wrote refs: $(target_refs)"; fi
+
+# ---- Case 11: the history gate checks the result, not the rules ----
+# A tool that succeeds but rewrites nothing leaves the forbidden history intact;
+# the gate must catch every kind of residue: message, path and blob.
+RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" RUN_ISSUES_PUBLISH_FILTER_REPO="$STUB_OK" run_pub --target "$TARGET" --yes
+rc=$?
+[ "$rc" = "4" ] && ok "unrewritten history -> exit 4 (history gate)" \
+  || bad "unrewritten history exited $rc, expected 4: $(head -3 "$WORK/err")"
+grep -q '^  commit ' "$WORK/err" && ok "history gate reports the message residue" \
+  || bad "history gate did not report a commit message residue"
+grep -q 'zapcorp-config.md:0' "$WORK/err" && ok "history gate reports the path residue" \
+  || bad "history gate did not report the path residue"
+grep -q '^  blob ' "$WORK/err" && ok "history gate reports the blob residue" \
+  || bad "history gate did not report a blob residue"
+grep -q 'notes.md' "$WORK/err" && ok "blob residue is reported with a path" \
+  || bad "blob residue carries no path"
+if [ -z "$(target_refs)" ]; then ok "history refusal wrote nothing into the target"
+else bad "history refusal wrote refs: $(target_refs)"; fi
+
+# ---- snapshot the local repo before the first real publish (case 14) ----
 snapshot() {
   gitf -C "$SRC" rev-parse HEAD
   gitf -C "$SRC" status --porcelain
   gitf -C "$SRC" branch --list
   gitf -C "$SRC" remote -v
   gitf -C "$SRC" tag -l
-  gitf -C "$SRC" worktree list
+  gitf -C "$SRC" worktree list | sed -E 's/ [0-9a-f]{7,40} [/ <sha> [/'
 }
 snapshot > "$WORK/before.txt"
 
-# ---- Case 10: publish ----
-RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --yes
-rc=$?
-if [ "$rc" = "0" ]; then ok "publish -> exit 0"
-else bad "publish exited $rc; stderr: $(head -3 "$WORK/err")"; fi
+if [ "$HAVE_FILTER_REPO" != "1" ]; then
+  echo "SKIP: cases 12–13 need git filter-repo (brew install git-filter-repo)"
+else
+  # ---- Case 12: publish ----
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --yes
+  rc=$?
+  if [ "$rc" = "0" ]; then ok "publish -> exit 0"
+  else bad "publish exited $rc; stderr: $(head -5 "$WORK/err")"; fi
 
-COUNT="$(git -C "$TARGET" rev-list --count main 2>/dev/null)"
-[ "$COUNT" = "1" ] && ok "target main holds exactly one commit" \
-  || bad "target main holds '$COUNT' commits, expected 1"
+  SRC_COUNT="$(gitf -C "$SRC" rev-list --count HEAD)"
+  COUNT="$(git -C "$TARGET" rev-list --count main 2>/dev/null)"
+  [ "$COUNT" = "$SRC_COUNT" ] && ok "target main carries the whole history ($COUNT commits)" \
+    || bad "target main holds '$COUNT' commits, source has $SRC_COUNT"
 
-PARENTS="$(git -C "$TARGET" rev-list --parents -n 1 main 2>/dev/null | wc -w | tr -d ' ')"
-[ "$PARENTS" = "1" ] && ok "release commit has no parent (orphan)" \
-  || bad "release commit has $((PARENTS - 1)) parent(s), expected 0"
+  TIP="$(git -C "$TARGET" rev-parse main 2>/dev/null)"
+  [ "$TIP" != "$(gitf -C "$SRC" rev-parse HEAD)" ] && ok "the mirror's SHAs are not the upstream's (no shared ancestry)" \
+    || bad "mirror tip equals upstream tip — the history was not rewritten"
 
-TREE="$(git -C "$TARGET" ls-tree -r --name-only main 2>/dev/null)"
-printf '%s\n' "$TREE" | grep -qx 'LICENSE' && ok "release carries a rendered LICENSE" \
-  || bad "release has no LICENSE"
-for _ex in "${EXCLUDED_PATHS[@]}"; do
-  printf '%s\n' "$TREE" | grep -qx "$_ex" \
-    && bad "release still carries $_ex" \
-    || ok "release excludes $_ex"
-done
-printf '%s\n' "$TREE" | grep -qx 'LICENSE.customer-grant.template' \
-  && bad "release still carries the license template" \
-  || ok "release excludes the license template"
-printf '%s\n' "$TREE" | grep -qx 'README.md' && ok "release carries the tracked content" \
-  || bad "release is missing README.md"
+  MSGS="$(git -C "$TARGET" log --format=%B main 2>/dev/null)"
+  printf '%s\n' "$MSGS" | grep -qi 'zapcorp\|qxname' \
+    && bad "a forbidden term survives in a commit message" \
+    || ok "no forbidden term in any commit message"
+  printf '%s\n' "$MSGS" | grep -q 'fix zc bug reported by redacted' \
+    && ok "messages carry the replacements (explicit and default)" \
+    || bad "messages do not carry the expected replacements: $(printf '%s' "$MSGS" | tr '\n' '|')"
 
-git -C "$TARGET" show "main:LICENSE" 2>/dev/null | grep -qF "$CUSTOMER" \
-  && ok "LICENSE names the customer given with --customer" \
-  || bad "LICENSE does not name the customer"
-git -C "$TARGET" show "main:LICENSE" 2>/dev/null | grep -qF '{{CUSTOMER}}' \
-  && bad "LICENSE still holds the {{CUSTOMER}} placeholder" \
-  || ok "LICENSE placeholder was substituted"
+  PATHS="$(git -C "$TARGET" log --name-only --format= main 2>/dev/null | sort -u)"
+  printf '%s\n' "$PATHS" | grep -qi 'zapcorp' \
+    && bad "a forbidden term survives in a path" \
+    || ok "no forbidden term in any path"
+  printf '%s\n' "$PATHS" | grep -qx 'zc-config.md' \
+    && ok "paths carry the replacement (zc-config.md)" \
+    || bad "the renamed path is missing: $(printf '%s' "$PATHS" | tr '\n' ' ')"
 
-TAGS="$(git -C "$TARGET" tag -l 'release/*' | wc -l | tr -d ' ')"
-[ "$TAGS" = "1" ] && ok "publish left one release tag in the target" \
-  || bad "target holds $TAGS release tags, expected 1"
+  BLOBS="$(git -C "$TARGET" rev-list --objects main | awk '{print $1}' \
+           | git -C "$TARGET" cat-file --batch-check='%(objecttype) %(objectname)' | awk '$1=="blob"{print $2}')"
+  RESIDUE=0
+  for b in $BLOBS; do
+    # Same boundary rule as the gate: a term glued to a preceding word character
+    # (the mid-word fixture) is not a leak by design.
+    git -C "$TARGET" cat-file -p "$b" | grep -qiE '(^|[^[:alnum:]])(zapcorp|qxname)' && RESIDUE=1
+  done
+  [ "$RESIDUE" = "0" ] && ok "no forbidden term in any blob of the history" \
+    || bad "a forbidden term survives in a blob"
 
-AUTHOR="$(git -C "$TARGET" log -1 --format='%an <%ae>' main 2>/dev/null)"
-[ "$AUTHOR" = "release <release@example.invalid>" ] \
-  && ok "release commit carries the neutral identity" \
-  || bad "release commit author is '$AUTHOR' — commit metadata ships too"
+  EMAILS="$(git -C "$TARGET" log --format='%ae%n%ce' main | sort -u)"
+  printf '%s\n' "$EMAILS" | grep -q 'personal.invalid' \
+    && bad "the personal e-mail survives in the history" \
+    || ok "the personal e-mail is mapped away"
+  printf '%s\n' "$EMAILS" | grep -q 'two@users.noreply.example' \
+    && ok "the mailmap target identity is used" \
+    || bad "the mailmap target identity is missing: $(printf '%s' "$EMAILS" | tr '\n' ' ')"
 
-# ---- Case 11: a repeated publish ----
-sleep 1  # release tags are stamped to the second; a same-second repeat collides
-RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --yes
-rc=$?
-[ "$rc" = "0" ] && ok "repeated publish -> exit 0" \
-  || bad "repeated publish exited $rc; stderr: $(head -3 "$WORK/err")"
-PARENTS2="$(git -C "$TARGET" rev-list --parents -n 1 main 2>/dev/null | wc -w | tr -d ' ')"
-[ "$PARENTS2" = "1" ] && ok "the repeated release is parentless too" \
-  || bad "the repeated release has $((PARENTS2 - 1)) parent(s)"
-TAGS2="$(git -C "$TARGET" tag -l 'release/*' | wc -l | tr -d ' ')"
-[ "$TAGS2" = "2" ] && ok "the target keeps a queue of release tags ($TAGS2)" \
-  || bad "target holds $TAGS2 release tags after two publishes, expected 2"
+  for _ex in "${EXCLUDED_PATHS[@]}"; do
+    if [ -z "$(git -C "$TARGET" log --all --format=%h -- "$_ex" 2>/dev/null)" ]; then
+      ok "$_ex is absent from every commit of the mirror"
+    else
+      bad "$_ex appears in the mirror's history"
+    fi
+  done
 
-# ---- Case 12: the local repository is unchanged ----
+  TREE="$(git -C "$TARGET" ls-tree -r --name-only main 2>/dev/null)"
+  printf '%s\n' "$TREE" | grep -qx 'LICENSE' && ok "the tip carries LICENSE" || bad "the tip has no LICENSE"
+  printf '%s\n' "$TREE" | grep -qx 'README.md' && ok "the tip carries the tracked content" \
+    || bad "the tip is missing README.md"
+  [ "$(git -C "$TARGET" show main:README.md)" = "Paketti." ] && ok "unaffected content is byte-identical" \
+    || bad "README.md content changed in the rewrite"
+
+  TAGS="$(git -C "$TARGET" tag -l 'release/*' | wc -l | tr -d ' ')"
+  [ "$TAGS" = "1" ] && ok "publish left one release tag in the target" \
+    || bad "target holds $TAGS release tags, expected 1"
+
+  # ---- Case 13: determinism and fast-forward ----
+  sleep 1  # release tags are stamped to the second
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --yes
+  rc=$?
+  [ "$rc" = "0" ] && ok "repeated publish -> exit 0" || bad "repeated publish exited $rc: $(head -3 "$WORK/err")"
+  [ "$(git -C "$TARGET" rev-parse main)" = "$TIP" ] && ok "repeated publish is deterministic (same tip SHA)" \
+    || bad "repeated publish moved the tip: $TIP -> $(git -C "$TARGET" rev-parse main)"
+  grep -q 'Ajan tasalla' "$WORK/out" && ok "repeated publish reports up-to-date" \
+    || bad "repeated publish did not report up-to-date"
+  TAGS2="$(git -C "$TARGET" tag -l 'release/*' | wc -l | tr -d ' ')"
+  [ "$TAGS2" = "1" ] && ok "a no-op publish adds no tag" || bad "no-op publish added a tag ($TAGS2 tags)"
+
+  printf 'lisää\n' > "$SRC/more.md"
+  sync "feat: more"
+  sleep 1
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$DENY" run_pub --target "$TARGET" --yes
+  rc=$?
+  [ "$rc" = "0" ] && ok "publish after a new upstream commit -> exit 0" || bad "follow-up publish exited $rc: $(head -3 "$WORK/err")"
+  NEWTIP="$(git -C "$TARGET" rev-parse main)"
+  [ "$(git -C "$TARGET" rev-parse "$NEWTIP^" 2>/dev/null)" = "$TIP" ] \
+    && ok "the follow-up publish is a fast-forward (previous tip is the parent)" \
+    || bad "follow-up publish is not a fast-forward of the previous tip"
+  TAGS3="$(git -C "$TARGET" tag -l 'release/*' | wc -l | tr -d ' ')"
+  [ "$TAGS3" = "2" ] && ok "a publish that moves main adds a tag" || bad "expected 2 tags, found $TAGS3"
+
+  # A rules change rewrites the whole history: rejected without --force.
+  printf 'zapcorp==>zc\nqxname\npaketti==>pkg\n' > "$WORK/denylist-v2.txt"
+  # "Paketti." is the README at the root commit, so the new rule changes every SHA.
+  gitf -C "$SRC" rm -q --cached README.md >/dev/null 2>&1; printf 'Sisältö.\n' > "$SRC/README.md"
+  sync "docs: neutral readme"   # keep the tip clean of the new term (gate 3)
+  sleep 1
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$WORK/denylist-v2.txt" run_pub --target "$TARGET" --yes
+  rc=$?
+  [ "$rc" = "5" ] && ok "a rules change is rejected as non-fast-forward -> exit 5" \
+    || bad "rules change exited $rc, expected 5: $(head -3 "$WORK/err")"
+  grep -q -- '--force' "$WORK/err" && ok "the rejection names --force" || bad "the rejection does not name --force"
+  [ "$(git -C "$TARGET" rev-parse main)" = "$NEWTIP" ] && ok "the rejected push left the mirror untouched" \
+    || bad "the rejected push moved the mirror"
+  RUN_ISSUES_PUBLISH_DENYLIST_FILE="$WORK/denylist-v2.txt" run_pub --target "$TARGET" --yes --force
+  rc=$?
+  [ "$rc" = "0" ] && ok "--force publishes the rewritten history -> exit 0" \
+    || bad "--force exited $rc: $(head -3 "$WORK/err")"
+  [ "$(git -C "$TARGET" rev-parse main)" != "$NEWTIP" ] && ok "--force replaced the mirror's history" \
+    || bad "--force did not move the mirror"
+  git -C "$TARGET" show main:README.md | grep -q 'Sisältö' && ok "the forced mirror carries the tip content" \
+    || bad "the forced mirror tip content is wrong"
+  git -C "$TARGET" log --format=%B main | grep -qi 'paketti' \
+    && bad "the new rule was not applied to history" \
+    || ok "the new rule was applied to the whole history"
+fi
+
+# ---- Case 14: the local repository is unchanged ----
 snapshot > "$WORK/after.txt"
 if diff -q "$WORK/before.txt" "$WORK/after.txt" >/dev/null 2>&1; then
   ok "local repository unchanged (HEAD, status, branches, remotes, tags, worktrees)"
 else
-  bad "local repository changed:"; diff "$WORK/before.txt" "$WORK/after.txt" | sed 's/^/    /'
+  # Case 13 legitimately advanced HEAD through sync(); compare everything else.
+  if diff <(sed 1d "$WORK/before.txt") <(sed 1d "$WORK/after.txt") >/dev/null 2>&1; then
+    ok "local repository unchanged apart from the fixture's own commits"
+  else
+    bad "local repository changed:"; diff "$WORK/before.txt" "$WORK/after.txt" | sed 's/^/    /'
+  fi
 fi
 
 echo "----------------------------------------"
