@@ -331,11 +331,12 @@ punaisesta testitiedostosta kaatui tähän. `lib/jq-binary.sh` varjostaa `jq`:n 
 kerrallaan: seuraava lisätty jäisi hiljaa ulos, joten `tests/test-jq-binary.sh` johtaa entry
 point -joukon levyltä fail-closed.
 
-**Argumentti.** MSYS kirjoittaa absoluutin POSIX-polun Windows-muotoon ennen kuin natiivi
-ohjelma näkee sen: `jq --arg p /c/src/repo` saapuu muodossa `C:/src/repo`, kun luettu
-**tiedosto** sanoo yhä `/c/src/repo`. Tiedosto-operandi *tarvitsee* muunnoksen, `--arg`-arvo
-ei, eikä niitä erota etuliitteestä ⇒ globaalia kytkintä ei ole. Polkuarvo kulkee `$ENV`:n
-kautta (`lib/poller-config.sh`, sama idiomi kuin `_pick_filter_jq`). Vartija on
+**Sisäänmeno.** MSYS kirjoittaa absoluutin POSIX-polun Windows-muotoon ennen kuin natiivi
+ohjelma näkee sen — **sekä argumenteissa että ympäristössä**, mitattu molemmista: `--arg p
+/tmp/x` ja `$ENV.P` saapuvat kumpikin muodossa `C:/…/x`, kun luettu **tiedosto** sanoo yhä
+`/tmp/x`. `$ENV` ei siis ole pakotie. Kytkintäkään ei ole: tiedosto-operandi *tarvitsee*
+muunnoksen samalla komentorivillä. Ainoa ratkaisu on olla viemättä polkua rajan yli — jq
+palauttaa merkinnät, **bash vertaa** (`lib/poller-config.sh`). Tuloste ei muunnu. Vartija on
 `windows-latest` `tests.yml`:ssä — pakollinen siinä missä macOS — ei grep.
 
 ## 6. Exit-koodit
