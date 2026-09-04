@@ -70,6 +70,8 @@ fi
 . "${RUN_ISSUES_HOME}/lib/log-rotate.sh"
 # shellcheck source=lib/host-gate-notice.sh
 . "${RUN_ISSUES_HOME}/lib/host-gate-notice.sh"
+# shellcheck source=lib/host.sh
+. "${RUN_ISSUES_HOME}/lib/host.sh"
 # shellcheck source=lib/preflight.sh
 . "${RUN_ISSUES_HOME}/lib/preflight.sh"
 # shellcheck source=lib/action-token.sh
@@ -91,7 +93,7 @@ LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 # on any non-zero exit, so reporting a config error with one would crash-loop.
 # The line goes through host_gate_notice for the same reason it does there: the
 # exec redirect that connects stderr is below this gate, not above it.
-HOST="$(hostname -s 2>/dev/null || echo unknown)"
+HOST="$(runner_host)"
 if [ -z "${RUN_ISSUES_ACTION_HOSTS:-}" ]; then
   host_gate_notice \
     "$(poller_host_unset_message RUN_ISSUES_ACTION_HOSTS "$POLLER_ENV_FILE" "$HOST")" \

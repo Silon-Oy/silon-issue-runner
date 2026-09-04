@@ -414,8 +414,9 @@ kilpailevat samasta työstä.
    `failed to connect to the docker API at unix:///var/run/docker.sock`, ei "Docker ei
    toimi Spritessä" -tuloksena.
 
-3. **`hostname -s` on omistajuuden perusta.** `run.json.host` ja `cleanup-run.sh`:n
-   host-portti nojaavat siihen. Jos Sprite luodaan uudelleen ja nimi muuttuu, edellisen
+3. **Koneen lyhyt konenimi on omistajuuden perusta.** `run.json.host` ja
+   `cleanup-run.sh`:n host-portti nojaavat siihen; molemmat lukevat sen samasta paikasta
+   (`runner_host`, `lib/host.sh`). Jos Sprite luodaan uudelleen ja nimi muuttuu, edellisen
    inkarnaation keskeneräiset ajot jäävät siivoamatta — `cleanup-run.sh` kieltäytyy
    "vieras host" -perusteella. Todennettu nimi tässä pystytyksessä: `claude-issue-runner`.
 

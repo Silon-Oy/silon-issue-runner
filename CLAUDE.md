@@ -347,6 +347,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |
 | `github-app-auth.sh` | Opt-in GitHub App -identiteetti. Kattaa kirjoitukset **ja** raskaimmat luvut |
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
+| `host.sh` | `runner_host`: koneen lyhyt konenimi yhdestä paikasta, nelivaiheisella varapolulla (`hostname -s` → `hostname` ensimmäiseen pisteeseen → `$COMPUTERNAME` → `unknown`). **Ei koskaan palauta tyhjää** — §5.6:n fail-closed-portit lukisivat tyhjän hostin vieraaksi koneeksi |
 | `host-gate-notice.sh` | Host-portin "muuttuja puuttuu" -rivin toimitus: stderr **ja** skriptin oma loki, kerran. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
@@ -368,13 +369,14 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 | `issue.test.sh`, `render-prompt.test.sh` | Yksikkötestit (`verify_claim`, `render_prompt`) |
 
-**Jaetut primitiivit — älä monista.** Viisi kohtaa, joissa kahden toteutuksen ajautuminen on
+**Jaetut primitiivit — älä monista.** Kuusi kohtaa, joissa kahden toteutuksen ajautuminen on
 aiemmin ollut oikea vika tai olisi ilmeinen: poimintakysely (`pick_oldest_candidate`), epicin
 lapsijoukko (`list_epic_children` — **myös näkymä kutsuu tätä**, joten näkymä ja ajo eivät voi
 olla eri mieltä), ajon lopetus (`run_terminate`), poimintalabelien resolvointi
 (`poller_pick_labels` — `/issue-runner:new-epic` labeloi sillä, jottei se voi kirjoittaa
-epicille labelia jota poller ei poimi) ja **purun turvaportit** (`teardown_run` + pollerin
-`scan_teardown`).
+epicille labelia jota poller ei poimi), konenimi (`runner_host` — sekä host-portin vertailu
+että `run.json.host`-kirjaus kulkevat siitä, joten portti ja kirjaus eivät voi olla eri mieltä
+koneen nimestä) ja **purun turvaportit** (`teardown_run` + pollerin `scan_teardown`).
 
 Viimeinen on eri luokkaa kuin muut: purkuverbejä on kaksi (`auto-clean` sulkee issuen,
 `auto-reset` jättää sen auki poimintaan) ja ne eroavat **neljässä arvossa** — liipaisulabel,

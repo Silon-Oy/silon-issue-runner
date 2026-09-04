@@ -47,6 +47,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/host-gate-notice.sh
 . "${RUN_ISSUES_HOME}/lib/host-gate-notice.sh"
 
+# runner_host (issue #213). Sourced above the gate because the gate is its first
+# caller. Defines functions only; no top-level work.
+# shellcheck source=lib/host.sh
+. "${RUN_ISSUES_HOME}/lib/host.sh"
+
 # Machine configuration. launchd hands an agent no environment of its own and
 # the login files hold nothing run-issues-specific, so this file is the only
 # channel through which a machine can configure its pollers. It is sourced, so
@@ -85,7 +90,7 @@ LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 # redirect below is what connects it, and it deliberately comes after the gate.
 # The notice therefore also appends to the poller's own log, which is where the
 # question "why has nothing run?" gets asked.
-HOST=$(hostname -s)
+HOST=$(runner_host)
 THIS_HOST="$HOST"
 if [ -z "${RUN_ISSUES_POLLER_HOSTS:-}" ]; then
   host_gate_notice \

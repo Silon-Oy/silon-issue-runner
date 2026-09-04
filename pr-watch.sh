@@ -75,6 +75,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/git-remote.sh"
 # shellcheck source=lib/locking.sh
 . "$SCRIPT_DIR/lib/locking.sh"
+# shellcheck source=lib/host.sh
+# runner_host (issue #213): THIS_HOST is compared against run.json.host, so
+# both sides must come from the same resolver.
+. "$SCRIPT_DIR/lib/host.sh"
 # shellcheck source=lib/state.sh
 . "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/pr-watch-lib.sh
@@ -159,7 +163,7 @@ TARGET="$2"
 [ -d "$REPO_ROOT/.git" ] || { echo "pr-watch: not a git repo: $REPO_ROOT" >&2; exit 1; }
 
 RUNS_DIR="$REPO_ROOT/.claude/run-issues"
-THIS_HOST="$(hostname -s)"
+THIS_HOST="$(runner_host)"
 
 # Per-PR routing (issues #33/#53), set at the top of watch_one from the run's OWN
 # remote recorded in run.json. PR_OWNER_REPO routes gh via `--repo owner/repo` so

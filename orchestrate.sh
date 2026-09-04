@@ -235,6 +235,11 @@ source "$SCRIPT_DIR/lib/issue-images.sh"
 source "$SCRIPT_DIR/lib/worktree.sh"
 # shellcheck source=lib/gitignore.sh
 source "$SCRIPT_DIR/lib/gitignore.sh"
+# shellcheck source=lib/host.sh
+# runner_host (issue #213) — the one resolver for this machine's short
+# hostname. state.sh sources it too (it writes run.json.host); named here as
+# well because this script calls it directly in the situation reports.
+source "$SCRIPT_DIR/lib/host.sh"
 # shellcheck source=lib/state.sh
 source "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/claude-call.sh
@@ -1456,7 +1461,7 @@ _post_situation_to_issue() {
   local artifact_mode="${5:-log}"
 
   local host
-  host=$(hostname -s)
+  host=$(runner_host)
 
   local body
   body="## /run-issues — ${headline}"$'\n\n'

@@ -20,7 +20,7 @@
 # Five safety constraints (issue #64):
 #   1. No --all, no default target. A stop is always an explicit single run;
 #      stopping everything is stopping the orchestrator (launchctl), not this.
-#   2. Per-run host gate: run.json.host != `hostname -s` -> exit 4, no side
+#   2. Per-run host gate: run.json.host != `runner_host` -> exit 4, no side
 #      effects. A foreign machine's live tmux session is never touched. (This is
 #      stop-run's OWN check — run_terminate returns 0 silently on a foreign host,
 #      so the exit-4 refusal must happen here, before delegation.)
@@ -44,6 +44,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# runner_host (issue #213): the per-run host gate below compares against
+# run.json.host, which lib/state.sh writes with this same resolver.
+# shellcheck source=lib/host.sh
+. "$SCRIPT_DIR/lib/host.sh"
 
 usage() {
   sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
@@ -148,7 +153,7 @@ fi
 
 # ---------- read the fields the gates need ----------
 RJ="$RESOLVED/run.json"
-THIS_HOST="$(hostname -s 2>/dev/null || echo unknown)"
+THIS_HOST="$(runner_host)"
 RUN_HOST=$(jq -r '.host // empty' "$RJ" 2>/dev/null || echo "")
 RUN_STATUS=$(jq -r '.status // empty' "$RJ" 2>/dev/null || echo "")
 RUN_ISSUE=$(jq -r '.issue_number // empty' "$RJ" 2>/dev/null || echo "")
