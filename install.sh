@@ -128,7 +128,8 @@ Environment:
 Exit codes:
   0  success (or --dry-run completed)
   1  usage error
-  2  refused — a target path is owned by something else; nothing was changed
+  2  refused — a target path is owned by something else, or `ln -s` does not
+     produce a real symlink here; nothing was changed
   3  apply failed unexpectedly
   4  completed, but foreign files shadow shipped names (nothing overwritten)
 EOF
@@ -181,9 +182,56 @@ is_pkg_owned_link() {
   esac
 }
 
+# probe_symlink_support — does `ln -s` on this machine produce a real symlink?
+#
+# Not every environment answers yes. Git Bash on Windows accepts `ln -s` and
+# silently copies unless Developer Mode is on and MSYS=winsymlinks:nativestrict
+# is set. That is the one failure mode INV-OWN cannot survive: ownership is
+# decided by reading the symlink target, so a copy reads back as a foreign
+# file. The install would look like it succeeded and the *next* run would
+# refuse — at a different path, with a reason that names the wrong problem.
+#
+# The probe is a capability question, so it is answered by doing the thing, the
+# same way preflight_probe_claude runs the CLI rather than looking for it: a
+# uname test would name a platform, not the behaviour, and would still be wrong
+# on the Windows machine that is configured correctly.
+#
+# It writes to a throwaway directory of its own, never into $HOME. Nothing here
+# may enter PLAN either — the plan is the record of what is written under the
+# home, and a probe that cleans up after itself writes nothing at all.
+probe_symlink_support() {
+  local dir target link rc=1
+  dir="$(mktemp -d 2>/dev/null)" || return 1
+  target="$dir/target"
+  link="$dir/link"
+  if : >"$target" 2>/dev/null \
+    && ln -s "$target" "$link" 2>/dev/null \
+    && [ -L "$link" ] \
+    && [ "$(readlink "$link" 2>/dev/null)" = "$target" ]; then
+    rc=0
+  fi
+  rm -rf "$dir"
+  return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # Plan
 # ---------------------------------------------------------------------------
+
+# plan_symlink_capability — the planning phase's first gate.
+#
+# Placed ahead of every other plan_* function on purpose: the refusal it raises
+# is about the mechanism the whole plan is made of, so learning it after the
+# other gates have run would only delay the same exit 2. A refusal here costs
+# zero writes for the ordinary structural reason (INV-OWN consequence 2), not
+# because this function is careful.
+plan_symlink_capability() {
+  if probe_symlink_support; then
+    log "symlink capability: ok — ln -s produced a real symlink (probed in a temporary directory, outside \$HOME)"
+    return 0
+  fi
+  refuse "ln -s does not produce a real symlink on this machine (probed in a temporary directory). This package decides ownership by reading a symlink's target, so a copy would read back as a foreign file and the next install would refuse for the wrong reason. On Windows/Git Bash: enable Developer Mode, then re-run with MSYS=winsymlinks:nativestrict in the environment (MSYS=winsymlinks:nativestrict bash install.sh)."
+}
 
 # plan_add <action> [args...] — actions: mkdir | link | relink | unlink | skip.
 # Fields are tab-separated; no path this package deals with contains a tab.
@@ -744,6 +792,7 @@ main() {
   report_preflight
   report_host_gate
 
+  plan_symlink_capability
   for d in $LINKED_DIRS; do
     plan_link_dir "$d" files
   done

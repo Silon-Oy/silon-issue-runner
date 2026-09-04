@@ -137,7 +137,7 @@ Oma avaruus. **Älä sekoita** orkestraattorin tai PR-vahdin koodeihin (osio 9).
 |---|---|
 | 0 | Onnistui (tai `--dry-run` valmis) |
 | 1 | Käyttövirhe (tuntematon lippu) |
-| 2 | **Kieltäydytty — mitään ei muutettu.** Kohdepolku on jonkun muun omistama |
+| 2 | **Kieltäydytty — mitään ei muutettu.** Kohdepolku on jonkun muun omistama, tai `ln -s` ei tuota tällä koneella aitoa symlinkkiä |
 | 3 | Apply epäonnistui kesken (odottamaton tiedostojärjestelmävirhe); uusi ajo konvergoi |
 | 4 | Valmis, mutta vieras tiedosto varjostaa paketin toimittamaa nimeä — mitään ei ylikirjoitettu |
 
@@ -150,6 +150,21 @@ hakemistosymlinkki** (dotfiles-asetelma, jossa koko hakemisto tulee muualta), as
 kieltäytyy aina. Korjaus kuuluu kyseiseen dotfiles-repoon: hakemisto korvataan tavallisella
 hakemistolla, jossa on per-tiedosto-symlinkit. **Puhtaalla koneella** hakemistot ovat
 tavallisia hakemistoja tai puuttuvat, jolloin asennus menee läpi normaalisti.
+
+Toinen exit 2:n syy ei koske polkua vaan **ympäristöä: `ln -s` ei kaikkialla tuota aitoa
+symlinkkiä.** Windowsin Git Bash hyväksyy komennon ja tekee hiljaa kopion, ellei Developer Mode
+ole päällä ja `MSYS=winsymlinks:nativestrict` asetettuna. Asentaja koettaa kyvyn
+suunnitteluvaiheen alussa väliaikaishakemistossa — ei `$HOME`-puussa — ja kieltäytyy ennen
+ainuttakaan kirjoitusta, jos koetus epäonnistuu. Syy on sama omistajuussääntö kuin yllä:
+omistajuus luetaan symlinkin kohteesta, joten kopio näyttäisi seuraavalle ajolle vieraalta
+tiedostolta ja se kieltäytyisi väärästä syystä toisessa kohdassa. Korjaus:
+
+```bash
+# Windows, Git Bash: Developer Mode päälle asetuksista, sitten
+MSYS=winsymlinks:nativestrict bash install.sh
+```
+
+Onnistuneen koetuksen tulos näkyy myös `--dry-run`-ajossa rivillä `symlink capability: ok`.
 
 Kaksi rajoitetta:
 
