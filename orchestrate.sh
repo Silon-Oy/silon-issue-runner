@@ -341,10 +341,11 @@ load_repo_base_branch() {
 # a declaration" is precisely the duplication CLAUDE.md §7 forbids.
 #
 # Deliberately NOT fail-closed, unlike the S2b/S2c gates: the gate that closes
-# this hole sits at issue-writing time, where a human is present (/new-issue,
-# /new-epic). A run must not stop because a repo has not been asked yet — it
-# falls back to the coding standard's portable default (code and commit messages
-# in English) and says so once, in the PR body.
+# this hole sits at issue-writing time, where a human is present
+# (/issue-runner:new-issue, /issue-runner:new-epic). A run must not stop because
+# a repo has not been asked yet — it falls back to the coding standard's
+# portable default (code and commit messages in English) and says so once, in
+# the PR body.
 LANGUAGE_DECL_PATTERN='^#{1,6}[^#]*languages'
 
 repo_declares_languages() {
@@ -2079,7 +2080,7 @@ PROVISION_ENV
     # One line, only when the target repo has not declared the languages of its
     # human-visible surfaces. Never a blocker (see repo_declares_languages).
     if ! repo_declares_languages "$WORKTREE_PATH"; then
-      echo "> **No language declaration** in this repository's \`CLAUDE.md\`, so this run fell back to the coding standard's default (code and commit messages in English) — declare the languages of the human-visible surfaces there; \`/new-issue\` and \`/new-epic\` ask for them."
+      echo "> **No language declaration** in this repository's \`CLAUDE.md\`, so this run fell back to the coding standard's default (code and commit messages in English) — declare the languages of the human-visible surfaces there; \`/issue-runner:new-issue\` and \`/issue-runner:new-epic\` ask for them."
       echo
     fi
     # Same shape, same asymmetry: one advisory line when the repo's CLAUDE.md

@@ -9,12 +9,13 @@
 # now lives in the TARGET repo's own CLAUDE.md, and its shape is documented once
 # in principles/coding.md: a heading line carrying the word `Languages`.
 #
-# The gate that closes the hole sits at issue-writing time (/new-issue,
-# /new-epic), where a human is present. S10 is deliberately NOT fail-closed: a
-# repo that has not been asked yet still gets its run, plus one line in the PR
-# body saying the declaration is missing. That asymmetry is the whole point, so
-# the test asserts BOTH directions — a note that never appears and a note that
-# always appears are equally broken, and neither shows up in any other test.
+# The gate that closes the hole sits at issue-writing time
+# (/issue-runner:new-issue, /issue-runner:new-epic), where a human is present.
+# S10 is deliberately NOT fail-closed: a repo that has not been asked yet still
+# gets its run, plus one line in the PR body saying the declaration is missing.
+# That asymmetry is the whole point, so the test asserts BOTH directions — a
+# note that never appears and a note that always appears are equally broken, and
+# neither shows up in any other test.
 #
 # The assertion is made against $RD/pr-body.md on disk rather than the `gh pr
 # create` call, because the body file is the artefact the orchestrator builds
