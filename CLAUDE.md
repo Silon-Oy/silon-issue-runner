@@ -543,14 +543,13 @@ bash tests/run-all.sh        # paketin juuresta
 bash tests/test-<nimi>.sh    # yksittäinen
 ```
 
-- Plain bash, ei framework. `set -uo pipefail` — **ei `-e`**: testin pitää kerätä kaikki
-  virheet, ei kaatua ensimmäiseen.
-- Puuttuva esiehto (ei `jq`:ta, ei tietokantaa, väärä host) ⇒ `SKIP: <syy>` ja **exit 0**.
-  Paketin on oltava testattavissa ilman ylläpitäjän ympäristöä.
+- Plain bash, ei framework. `set -uo pipefail` — **ei `-e`**: testi kerää kaikki virheet,
+  ei kaadu ensimmäiseen.
+- Puuttuva esiehto (ei `jq`:ta, ei tietokantaa, väärä host) ⇒ `SKIP: <syy>` ja **exit 0**:
+  paketin on oltava testattavissa ilman ylläpitäjän ympäristöä ja dotfiles-kontekstia.
 - `run-all.sh` poimii globilla — uusi testi tulee ajoon nimeämällä.
-
-Testipaketti ajaa ilman dotfiles-kontekstia ja on samalla rakenteen regressiosuoja: jokainen
-testi resolvoi `$HERE/../lib/…`, joten hakemistosiirto rikkoisi ne välittömästi.
+- Tiedostot ajetaan **rinnakkain**, joten hermeettisyys on ehto, ei tyyli: oma mktemp-puu ja
+  `HOME`, efemeeri portti. `RUN_ISSUES_TEST_JOBS=1` = sarjassa + live-tuloste.
 
 ## 13. Tunnetut avoimet asiat
 
