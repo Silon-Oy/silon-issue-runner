@@ -1,0 +1,9 @@
+# Line endings are normalised to LF in the working tree on every platform.
+#
+# The package is a bash toolkit: a CRLF checkout would break `#!` lines, break
+# heredocs and make every `$(...)` capture carry a stray \r. On Windows that
+# failure is silent — the files look fine in an editor — so the normalisation is
+# pinned here rather than left to a per-machine core.autocrlf setting.
+#
+# tests/test-package-layout.sh guards this file's presence and its eol=lf rule.
+* text=auto eol=lf

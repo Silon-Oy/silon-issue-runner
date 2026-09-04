@@ -1823,6 +1823,27 @@ Testit **eivät koske oikeaan `~/.claude`-hakemistoon**: asentimen polut johdeta
 `tests/test-install-portability.sh` vartioi tätä. Se ei ole tyylisääntö vaan ehto sille, että
 testit voi ajaa samalla koneella jolla poller pyörii.
 
+### CI-ajo
+
+`.github/workflows/tests.yml` ajaa saman `tests/run-all.sh`:n jokaisessa pull requestissa ja
+`main`iin pushattaessa kolmella käyttöjärjestelmällä:
+
+| Ajo | Kuori | Status |
+|---|---|---|
+| `macos-latest` | system bash | **pakollinen** — punainen ajo estää mergen |
+| `windows-latest` | Git Bash (`shell: bash`, `MSYS=winsymlinks:nativestrict`) | neuvoa-antava (`continue-on-error`) |
+| `ubuntu-latest` | system bash | neuvoa-antava (`continue-on-error`) |
+
+macOS on ainoa portti, koska se on alusta jolla pollerit ja LaunchAgentit ajavat. Windows- ja
+Ubuntu-ajot ovat toistaiseksi **mittaus, ei portti**: niiden punaisuus on Windows-migraation
+työlista, ja pakollisena ne pysäyttäisivät PR-vahdin `WAIT_CI`-tilaan ennen kuin
+siirrettävyyskorjaukset ovat mainissa. Neuvoa-antava ajo raportoi checks-API:lle `success`in,
+joten tulokset luetaan Actions-välilehdeltä, ei rollupista.
+
+Repon juuren `.gitattributes` (`* text=auto eol=lf`) pitää työpuun rivinvaihdot LF:nä myös
+Windowsissa — CRLF rikkoisi `#!`-rivit ja jättäisi `\r`:n jokaiseen `$(...)`-kaappaukseen
+hiljaa. `tests/test-package-layout.sh` vartioi tiedostoa.
+
 ---
 
 ## 11. Viittaukset

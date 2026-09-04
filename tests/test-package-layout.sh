@@ -13,6 +13,7 @@
 #   3. Plists: new names only, Label == filename
 #   4. Diagram references resolve and no .mmd is empty
 #   5. CLAUDE.md and README.md exist at the root
+#   6. .gitattributes pins LF line endings  <-- the Windows checkout guard
 #
 # Run: bash tests/test-package-layout.sh
 
@@ -27,7 +28,7 @@ EXPECTED_FILES=(
   orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh
   cleanup-run.sh auto-clean.sh install.sh status.sh status-render.sh
   action-server.sh action-dispatch.sh self-update.sh
-  .gitignore CLAUDE.md README.md
+  .gitignore .gitattributes CLAUDE.md README.md
 )
 EXPECTED_DIRS=(lib prompts tests db-clone commands skills docs/diagrams examples)
 
@@ -164,6 +165,28 @@ for m in "$ROOT"/docs/diagrams/*.mmd; do
     echo "FAIL: empty diagram: $(basename "$m")"; FAIL=1
   fi
 done
+
+# ---- Case 6: LF line endings ----
+# Every shipped file is bash, markdown or JSON that bash reads. A CRLF checkout
+# breaks `#!` lines and leaves a stray \r in every `$(...)` capture, and on
+# Windows it does so silently. Deleting .gitattributes, or loosening its rule,
+# would reintroduce that failure without touching a single script — so the file
+# is guarded here alongside the other invariants no other test can reach.
+GITATTRIBUTES="$ROOT/.gitattributes"
+if [ -f "$GITATTRIBUTES" ]; then
+  echo "PASS: .gitattributes present at the package root"
+  if grep -qE '(^|[[:space:]])eol=lf([[:space:]]|$)' "$GITATTRIBUTES"; then
+    echo "PASS: .gitattributes pins eol=lf"
+  else
+    echo "FAIL: .gitattributes carries no eol=lf rule — a Windows checkout would"
+    echo "      write CRLF and break every script silently."
+    FAIL=1
+  fi
+else
+  echo "FAIL: .gitattributes missing at the package root — without it a Windows"
+  echo "      checkout writes CRLF line endings and breaks every script."
+  FAIL=1
+fi
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "package-layout: all passed" || echo "package-layout: FAILURES"

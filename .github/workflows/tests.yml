@@ -1,0 +1,68 @@
+# tests.yml — run the package test suite on the three platforms it is expected
+# to survive on.
+#
+# macOS is the gate: it is the platform the pollers and LaunchAgents run on, so
+# a red macOS job blocks the merge queue. Windows and Ubuntu are advisory for
+# now (continue-on-error) — they are the measurement that the Windows-migration
+# epic reads as its work list, and a red advisory job must not park the PR
+# watcher in WAIT_CI before the portability fixes have landed.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Advisory jobs report success to the checks API even when they fail, so the
+    # PR watcher's CI rollup stays green while Windows is still being ported.
+    continue-on-error: ${{ matrix.advisory }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            advisory: false
+          - os: windows-latest
+            advisory: true
+          - os: ubuntu-latest
+            advisory: true
+    defaults:
+      run:
+        # On windows-latest this selects Git Bash; elsewhere it is the system
+        # bash. The suite is plain bash either way.
+        shell: bash
+    env:
+      # Git Bash only: make `ln -s` create real symlinks instead of file copies,
+      # so the installer tests exercise the ownership predicate they are written
+      # against. Ignored on macOS and Linux.
+      MSYS: winsymlinks:nativestrict
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Some tests build repositories on top of this checkout's history.
+          fetch-depth: 0
+
+      - name: Configure git
+        # The runners ship without an identity, and without an explicit default
+        # branch `git init` would produce `master` — the suite's temporary
+        # repositories assume the same default a development machine has.
+        run: |
+          git config --global init.defaultBranch main
+          git config --global user.name  "ci"
+          git config --global user.email "ci@example.invalid"
+
+      - name: Show toolchain
+        run: |
+          bash --version | head -1
+          git --version
+          jq --version || echo "jq: not available"
+
+      - name: Run the test suite
+        run: bash tests/run-all.sh
