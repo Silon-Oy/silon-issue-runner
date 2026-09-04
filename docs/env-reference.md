@@ -321,10 +321,10 @@ ympäristöä: asentavan shellin muuttuja olisi väärä puhtaan paperin lupaus.
 | `RUN_ISSUES_TEST_JOBS` | koneen ytimet, rajattuna välille 2–16 | Montako testitiedostoa ajetaan yhtä aikaa. `1` palauttaa sarja-ajon **ja** live-tulosteen (rinnakkaisajossa tiedoston tuloste odottaa lohkona sen valmistumista) |
 
 Ydinluku otetaan **suurimpana** viidestä mittarista (`nproc`, `getconf`, `sysctl`,
-`/proc/cpuinfo`, `%NUMBER_OF_PROCESSORS%`), ja yhteenvetorivi kertoo kumpi vastasi. Syy on
-mitattu: Git Bashissa mittarit alivastaavat, ja ensimmäisen vastauksen ottava ketju ajoi
-nelituumaisella Windows-runnerilla kaksi tiedostoa kerrallaan. Poikkeus, jota varten override
-on olemassa: CPU-kiintiöidyssä kontissa suurin vastaus voi ylittää kiintiön, koska
+`/proc/cpuinfo`, `%NUMBER_OF_PROCESSORS%`), ja yhteenvetorivi nimeää vastanneen mittarin.
+Nimeäminen on se osa joka maksaa itsensä takaisin: luku `2` ei erota kaksiytimistä konetta
+väärin vastanneesta mittarista, ja vain lähde kertoo kummasta on kyse. Poikkeus, jota varten
+override on olemassa: CPU-kiintiöidyssä kontissa suurin vastaus voi ylittää kiintiön, koska
 `/proc/cpuinfo` laskee isäntäkoneen ytimet.
 
 Oletus on rinnakkainen, koska paketti ei kuormita prosessoria vaan käynnistää prosesseja: samat

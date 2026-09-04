@@ -51,18 +51,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # slowest single file rather than by the pool, so the cap is not a resource
 # limit but the point where another worker stops buying anything.
 #
-# Five probes, the HIGHEST valid answer wins, and the winner is reported. Both
-# halves are measured, not defensive: two CI runs of this pool ran two files at
-# a time on a four-core Windows runner, and since the merge commit under test
-# provably contained the probe chain, the probes there do not fail — they
-# UNDER-report, and a chain that takes the first answer takes the low one. Nor
-# does a wrong answer announce itself: the floor of 2 makes it look like a small
-# machine, which is why the summary line now names the source.
+# Five probes, the HIGHEST valid answer wins, and the winner is named in the
+# summary line. The naming is the part that earns its keep: the pool ran two
+# files at a time on the Windows runner for two runs, and "2" is
+# indistinguishable between a two-core machine and a probe that answered wrong —
+# only the source told us which (nproc, and the runner really does have two
+# cores against macOS's three). Taking the highest answer rather than the first
+# is the cheap half of the same idea: no single probe can pin the pool low.
 #
 # Caveat the override exists for: under a CPU-quota'd container the highest
 # answer can exceed the quota, because /proc/cpuinfo counts the host's cores.
-# There RUN_ISSUES_TEST_JOBS is the answer; over-reporting has not been observed
-# on any platform this package is gated on.
+# There RUN_ISSUES_TEST_JOBS is the answer.
 JOBS_DETECTED=0
 JOBS_SOURCE=floor
 detect_jobs() {
