@@ -125,7 +125,25 @@ check "truncated -> error kind" "$(jq -r '.read_errors[0].error' "$OUT2")" "inva
 check "fallback still reads good runs" "$(jq '.runs | length' "$OUT2")" "3"
 rm -rf "$RUNS/20260601-999999-issue-9"
 
-# ---- 50 000-line noise state.jsonl read in under a second (tail, not whole) ----
+# ---- state.jsonl is read by its TAIL, never whole (CLAUDE.md 5.3) -----------
+# This used to be a stopwatch: one status.sh run over a 50 000-line file had to
+# finish in under three seconds. It measured the wrong thing in both directions.
+# It reported a cost bug on a healthy tree under Git Bash, where starting that
+# many processes exceeds three seconds by itself; and it passed a REAL whole-file
+# regression on macOS, because reading 50 000 lines in a bash loop costs about a
+# second — well inside the same threshold. Verified by breaking status.sh's
+# `tail` on purpose: the stopwatch stayed green.
+#
+# So the property is asserted directly instead. Two runs with the same 50 000-line
+# file differ only in WHERE the decisive pr_classified event sits:
+#
+#   issue 5  — the event is the LAST line          => a tail read finds it
+#   issue 11 — the event is the FIRST line         => a tail read CANNOT find it
+#
+# A reader that takes the tail reports WAIT_CI for one and nothing for the other.
+# A reader that takes the whole file reports a verdict for both, and issue 7 is
+# what fails. No clock, no threshold, nothing that depends on how fast the
+# machine is.
 NOISE_RUN="$RUNS/20260601-120000-issue-5"
 mkdir -p "$NOISE_RUN"
 cat > "$NOISE_RUN/run.json" <<JSON
@@ -136,20 +154,30 @@ awk 'BEGIN{for(i=0;i<49999;i++) print "{\"event\":\"pr_watch_skipped\",\"ts\":\"
   > "$NOISE_RUN/state.jsonl"
 printf '{"event":"pr_classified","ts":"2026-06-01T12:31:00Z","data":{"decision":"WAIT_CI"}}\n' \
   >> "$NOISE_RUN/state.jsonl"
-START="$(date +%s)"
+# The out-of-tail twin: same size, same noise, but its only pr_classified event
+# is line 1 — 50 000 lines above the tail window.
+BURIED_RUN="$RUNS/20260601-130000-issue-11"
+mkdir -p "$BURIED_RUN"
+cat > "$BURIED_RUN/run.json" <<JSON
+{"run_id":"r11","repo":"$REPO","issue_number":11,"status":"completed","started_at":"2026-06-01T13:00:00Z","finished_at":"2026-06-01T13:30:00Z","host":"$HOST","current_state":"S12_Finalize","remote":"origin","repo_slug":"repo-a","base_branch":"main"}
+JSON
+printf '{"event":"pr_classified","ts":"2026-06-01T13:00:01Z","data":{"decision":"MERGED"}}\n' \
+  > "$BURIED_RUN/state.jsonl"
+awk 'BEGIN{for(i=0;i<50000;i++) print "{\"event\":\"pr_watch_skipped\",\"ts\":\"2026-06-01T13:00:00Z\",\"data\":{}}"}' \
+  >> "$BURIED_RUN/state.jsonl"
+
 OUT3="$FX/out3.json"
 run_status --json > "$OUT3"; rc=$?
-END="$(date +%s)"
-ELAPSED=$((END - START))
 check "noise run exit 0" "$rc" "0"
-if [ "$ELAPSED" -lt 3 ]; then
-  ok "50k-line noise state.jsonl read fast (${ELAPSED}s)"
-else
-  bad "50k-line noise read too slow (${ELAPSED}s) — is the whole file being read?"
-fi
-# The last tail line's verdict must be found -> pr_in_flight (WAIT_CI).
-check "noise run verdict from tail" \
+
+# In the tail window -> found.
+check "verdict on the last line is read" \
   "$(jq -r '.runs[] | select(.issue_number==5) | .pr_local_verdict' "$OUT3")" "WAIT_CI"
+
+# Above the tail window -> must NOT be found. This is the assertion that fails
+# when someone replaces the tail with a whole-file read.
+check "verdict 50k lines above the tail is NOT read" \
+  "$(jq -r '.runs[] | select(.issue_number==11) | .pr_local_verdict' "$OUT3")" "null"
 
 # ---- foreign-host run-dir: included, is_local:false ----
 mkdir -p "$RUNS/20260601-160000-issue-7"

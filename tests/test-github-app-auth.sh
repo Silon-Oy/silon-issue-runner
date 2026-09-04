@@ -163,10 +163,10 @@ if fs_enforces_unreadable "$WORK"; then
   RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$NOREAD" gha_enabled 2>/dev/null \
     && fail "1d: gha_enabled accepted an unreadable .pem" \
     || ok "1d: fail-closed when .pem unreadable"
+  chmod 600 "$NOREAD"  # so cleanup can remove it
 else
   echo "SKIP: 1d — this filesystem ignores chmod 000, so an unreadable file cannot be staged"
 fi
-chmod 600 "$NOREAD"  # so cleanup can remove it
 
 # ---------- TEST 2: gha_token mints + caches --------------------------------
 echo "--- TEST 2: gha_token mints + caches ---"

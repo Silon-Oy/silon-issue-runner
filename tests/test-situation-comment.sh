@@ -15,6 +15,14 @@
 
 set -uo pipefail
 
+# Body assertions read from a here-string, never `printf ... | grep -q`. With
+# pipefail on, `grep -q` exits the moment it matches and the writer at the head
+# of the pipe takes EPIPE — so a SUCCESSFUL match reports the pipeline as
+# failed and the case prints its failure message. It only fires once the body is
+# big enough that the write does not fit in one buffer, which is exactly case 4
+# (60 KB): the suite was green for months and then failed on an unrelated
+# commit. A here-string has no second process to break.
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORCH="$HERE/../orchestrate.sh"
 ISSUE_LIB="$HERE/../lib/issue.sh"
@@ -81,15 +89,15 @@ _post_situation_to_issue "cycle_review_blocker" "Cycle review esti ajon. Korjaa 
 BODY=$(cat "$CAPTURE")
 echo "--- case 1 body (first 6 lines) ---"; printf '%s\n' "$BODY" | head -6
 
-printf '%s' "$BODY" | grep -q 'Cycle review esti ajon' || { echo "FAIL c1: headline missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'CYCLE_REVIEW_DECISION: BLOCKER' || { echo "FAIL c1: artifact decision line missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q '<details open>' || { echo "FAIL c1: prose artifact not in <details>"; FAIL=1; }
-printf '%s' "$BODY" | grep -q '<summary>cr.out</summary>' || { echo "FAIL c1: prose <summary> missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q '```' && { echo "FAIL c1: prose artifact wrapped in code fence"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'run-issues:awaiting-answer' && { echo "FAIL c1: marker present in non-awaitable"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Vastaa tähän issueen' && { echo "FAIL c1: reply prompt present in non-awaitable"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Status/syy: `cycle_review_blocker`' || { echo "FAIL c1: kind meta line missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Runner-version: `' || { echo "FAIL c1: Runner-version meta line missing"; FAIL=1; }
+grep -q 'Cycle review esti ajon' <<< "$BODY" || { echo "FAIL c1: headline missing"; FAIL=1; }
+grep -q 'CYCLE_REVIEW_DECISION: BLOCKER' <<< "$BODY" || { echo "FAIL c1: artifact decision line missing"; FAIL=1; }
+grep -q '<details open>' <<< "$BODY" || { echo "FAIL c1: prose artifact not in <details>"; FAIL=1; }
+grep -q '<summary>cr.out</summary>' <<< "$BODY" || { echo "FAIL c1: prose <summary> missing"; FAIL=1; }
+grep -q '```' <<< "$BODY" && { echo "FAIL c1: prose artifact wrapped in code fence"; FAIL=1; }
+grep -q 'run-issues:awaiting-answer' <<< "$BODY" && { echo "FAIL c1: marker present in non-awaitable"; FAIL=1; }
+grep -q 'Vastaa tähän issueen' <<< "$BODY" && { echo "FAIL c1: reply prompt present in non-awaitable"; FAIL=1; }
+grep -q 'Status/syy: `cycle_review_blocker`' <<< "$BODY" || { echo "FAIL c1: kind meta line missing"; FAIL=1; }
+grep -q 'Runner-version: `' <<< "$BODY" || { echo "FAIL c1: Runner-version meta line missing"; FAIL=1; }
 grep -q '"event":"situation_posted"' "$RUN_DIR/state.jsonl" || { echo "FAIL c1: no situation_posted event"; FAIL=1; }
 grep -q '"awaitable":"0"' "$RUN_DIR/state.jsonl" || { echo "FAIL c1: event awaitable!=0"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 1: blocker prose (<details>, no fence), no marker, event"
@@ -100,11 +108,11 @@ _post_situation_to_issue "cycle_review_clarification" "Tarvitsen tarkennusta." "
 BODY=$(cat "$CAPTURE")
 echo "--- case 2 body (first 4 lines) ---"; printf '%s\n' "$BODY" | head -4
 
-printf '%s' "$BODY" | head -1 | grep -q 'run-issues:awaiting-answer' || { echo "FAIL c2: marker not on first line"; FAIL=1; }
-printf '%s' "$BODY" | grep -q "run=$RUN_ID" || { echo "FAIL c2: marker run field wrong"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Vastaa tähän issueen' || { echo "FAIL c2: reply prompt missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Tarvitsen tarkennusta' || { echo "FAIL c2: headline missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q '<details open>' || { echo "FAIL c2: prose artifact not in <details>"; FAIL=1; }
+head -1 <<< "$BODY" | grep -q 'run-issues:awaiting-answer' || { echo "FAIL c2: marker not on first line"; FAIL=1; }
+grep -q "run=$RUN_ID" <<< "$BODY" || { echo "FAIL c2: marker run field wrong"; FAIL=1; }
+grep -q 'Vastaa tähän issueen' <<< "$BODY" || { echo "FAIL c2: reply prompt missing"; FAIL=1; }
+grep -q 'Tarvitsen tarkennusta' <<< "$BODY" || { echo "FAIL c2: headline missing"; FAIL=1; }
+grep -q '<details open>' <<< "$BODY" || { echo "FAIL c2: prose artifact not in <details>"; FAIL=1; }
 grep -q '"awaitable":"1"' "$RUN_DIR/state.jsonl" || { echo "FAIL c2: event awaitable!=1"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 2: clarification, marker first + reply prompt + prose"
 
@@ -112,8 +120,8 @@ grep -q '"awaitable":"1"' "$RUN_DIR/state.jsonl" || { echo "FAIL c2: event await
 : > "$RUN_DIR/state.jsonl"
 _post_situation_to_issue "pr_create_failed" "PR-luonti epäonnistui." "" 0
 BODY=$(cat "$CAPTURE")
-printf '%s' "$BODY" | grep -q 'PR-luonti epäonnistui' || { echo "FAIL c3: headline missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q '```' && { echo "FAIL c3: code fence present with no artifact"; FAIL=1; }
+grep -q 'PR-luonti epäonnistui' <<< "$BODY" || { echo "FAIL c3: headline missing"; FAIL=1; }
+grep -q '```' <<< "$BODY" && { echo "FAIL c3: code fence present with no artifact"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 3: no artifact -> no code fence"
 
 # === case 4: oversized artifact -> truncation notice + fallback + < 64KiB =
@@ -126,9 +134,9 @@ BODY_BYTES=$(printf '%s' "$BODY" | wc -c | tr -d ' ')
 echo "--- case 4 body bytes: $BODY_BYTES ---"
 
 [ "$BODY_BYTES" -lt 65536 ] || { echo "FAIL c4: body $BODY_BYTES >= 65536"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'typistetty' || { echo "FAIL c4: truncation notice missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'IMPLEMENTER_RESULT: BLOCKED' || { echo "FAIL c4: decision line (tail) dropped"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Täysi loki Studiolla' || { echo "FAIL c4: fallback path missing"; FAIL=1; }
+grep -q 'typistetty' <<< "$BODY" || { echo "FAIL c4: truncation notice missing"; FAIL=1; }
+grep -q 'IMPLEMENTER_RESULT: BLOCKED' <<< "$BODY" || { echo "FAIL c4: decision line (tail) dropped"; FAIL=1; }
+grep -q 'Täysi loki Studiolla' <<< "$BODY" || { echo "FAIL c4: fallback path missing"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 4: oversized -> notice + fallback, body under cap"
 
 # === case 5b: awaitable "blocked" (marker + blocked-flavoured reply) ========
@@ -140,10 +148,10 @@ printf '%s' "$BODY" | grep -q 'Täysi loki Studiolla' || { echo "FAIL c4: fallba
 _post_situation_to_issue "implementer_blocked" "Implementer jumissa." "" blocked
 BODY=$(cat "$CAPTURE")
 echo "--- case 5b body (first 3 lines) ---"; printf '%s\n' "$BODY" | head -3
-printf '%s' "$BODY" | head -1 | grep -q 'run-issues:awaiting-answer' || { echo "FAIL c5b: marker not on first line"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'este on poistettu' || { echo "FAIL c5b: blocked reply prompt missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'yritetään uudelleen' || { echo "FAIL c5b: blocked retry wording missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Studio jatkaa automaattisesti' && { echo "FAIL c5b: clarification prompt leaked into blocked"; FAIL=1; }
+head -1 <<< "$BODY" | grep -q 'run-issues:awaiting-answer' || { echo "FAIL c5b: marker not on first line"; FAIL=1; }
+grep -q 'este on poistettu' <<< "$BODY" || { echo "FAIL c5b: blocked reply prompt missing"; FAIL=1; }
+grep -q 'yritetään uudelleen' <<< "$BODY" || { echo "FAIL c5b: blocked retry wording missing"; FAIL=1; }
+grep -q 'Studio jatkaa automaattisesti' <<< "$BODY" && { echo "FAIL c5b: clarification prompt leaked into blocked"; FAIL=1; }
 grep -q '"awaitable":"blocked"' "$RUN_DIR/state.jsonl" || { echo "FAIL c5b: event awaitable!=blocked"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 5b: blocked flavour, marker + distinct reply prompt"
 
@@ -153,10 +161,10 @@ LOG="$WORK/db.log"
 { echo "mysqldump: column-aligned   output"; echo "ERROR 1045 (28000): Access denied"; } > "$LOG"
 _post_situation_to_issue "db_clone_failed" "DB-klooni epäonnistui." "$LOG" 0 log
 BODY=$(cat "$CAPTURE")
-printf '%s' "$BODY" | grep -q 'DB-klooni epäonnistui' || { echo "FAIL c5: headline missing"; FAIL=1; }
-printf '%s' "$BODY" | grep -q '```' || { echo "FAIL c5: log artifact not in code fence"; FAIL=1; }
-printf '%s' "$BODY" | grep -q '<details open>' && { echo "FAIL c5: log mode used <details>"; FAIL=1; }
-printf '%s' "$BODY" | grep -q 'Access denied' || { echo "FAIL c5: log content missing"; FAIL=1; }
+grep -q 'DB-klooni epäonnistui' <<< "$BODY" || { echo "FAIL c5: headline missing"; FAIL=1; }
+grep -q '```' <<< "$BODY" || { echo "FAIL c5: log artifact not in code fence"; FAIL=1; }
+grep -q '<details open>' <<< "$BODY" && { echo "FAIL c5: log mode used <details>"; FAIL=1; }
+grep -q 'Access denied' <<< "$BODY" || { echo "FAIL c5: log content missing"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS case 5: log mode -> code fence preserved"
 
 echo "----------------------------------------"
