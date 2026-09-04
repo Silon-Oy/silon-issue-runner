@@ -85,6 +85,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Exempt the suite's trees from Defender
+        # This suite's cost is exec, not compute: ~92 files, each spawning jq,
+        # git, grep and a gh shim per assertion. Defender scans every image as
+        # it is exec'd and every file those processes touch, which is a second
+        # per-spawn tax on top of MSYS emulating fork() — a cost attached to
+        # nothing the tests assert. Excluded: the checkout, both temp trees the
+        # tests mktemp into, and Git's own bin dir; plus the four processes
+        # whose file I/O IS the suite.
+        #
+        # Advisory by construction. An image where Defender is absent, locked
+        # by policy or already disabled must not turn the gate red, so the
+        # failure is caught and printed. Nothing here changes what the tests
+        # assert; it only stops the scanner from re-reading the same binaries
+        # tens of thousands of times.
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:TEMP, 'C:\Program Files\Git'
+            Add-MpPreference -ExclusionProcess 'bash.exe', 'git.exe', 'jq.exe', 'gh.exe'
+            Write-Host "Defender exclusions added"
+          } catch {
+            Write-Host "Defender exclusions unavailable, continuing: $($_.Exception.Message)"
+          }
+
       - name: Configure git
         run: |
           git config --global init.defaultBranch main
