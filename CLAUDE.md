@@ -478,7 +478,7 @@ labeleihin. Turvamalli: `README.md` §7.9.
 - **launchd tunnistaa agentin `Label`ista, ei tiedostonimestä.** Uuden plistin lataaminen ei
   korvaa vanhaa: ilman `bootout`ia koneella ajaisi kaksi polleria samasta koodista, jakaen
   watchlistin ja kilpaillen samasta rinnakkaisuuskatosta. Konventio: `Label` == tiedostonimi
-  ilman `.plist`, `plutil -lint` porttina. Historiallinen `com.maintainer.*` → `com.claude-issue-runner.*`
+  ilman `.plist`, `plutil -lint` porttina. Historiallinen `com.legacy.*` → `com.claude-issue-runner.*`
   -migraatio: `README.md`.
 - **`$HOME` laajenee plistissä vain `ProgramArguments`issa**, koska laajennuksen tekee
   `/bin/bash -l -c` -kääre. `StandardOutPath`/`StandardErrorPath` ovat launchd:n omia avaimia

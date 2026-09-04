@@ -119,11 +119,21 @@ for p in "${PLISTS[@]}"; do
     echo "SKIP: plutil not available — plist lint/Label check skipped"
   fi
 done
-# shellcheck disable=SC2144
-if compgen -G "$ROOT/com.maintainer.*.plist" >/dev/null; then
-  echo "FAIL: legacy com.maintainer.*.plist still present at the package root"; FAIL=1
+# Every plist at the package root must carry the package label prefix. A plist
+# under any other prefix is a leftover from before the label rename (CLAUDE.md,
+# section 10): launchd would load it as a second agent from the same code.
+STRAY_PLISTS=""
+for p in "$ROOT"/*.plist; do
+  [ -e "$p" ] || continue
+  case "$(basename "$p")" in
+    com.claude-issue-runner.*) ;;
+    *) STRAY_PLISTS="$STRAY_PLISTS $(basename "$p")" ;;
+  esac
+done
+if [ -n "$STRAY_PLISTS" ]; then
+  echo "FAIL: plist(s) outside the com.claude-issue-runner.* label prefix at the package root:$STRAY_PLISTS"; FAIL=1
 else
-  echo "PASS: no legacy com.maintainer.*.plist at the package root"
+  echo "PASS: every plist at the package root carries the com.claude-issue-runner.* label prefix"
 fi
 
 # ---- Case 4: diagrams ----

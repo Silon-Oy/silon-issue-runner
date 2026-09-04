@@ -57,7 +57,7 @@ echo "PR_WATCH_EXIT=$RC"
   (`run.json.host`). Toisen koneen PR mergetään, mutta siivous jätetään tekemättä
   ja tulostetaan `ssh`-ohje.
 - **Auto-tila (Studion poller)** ajaa `pr-watch.sh ... scan` 5 min välein
-  `com.maintainer.pr-watch-poller` -LaunchAgentista. Slash-komentoa ei silloin tarvita.
+  `com.claude-issue-runner.pr-watch-poller` -LaunchAgentista. Slash-komentoa ei silloin tarvita.
   Poller kytkee **AI-konfliktinratkaisun päälle** (`PR_WATCH_ENABLE_CONFLICT_RESOLUTION=1`)
   kaikille watchlist-repoille, jotta auto-merge etenee rebase-konfliktin läpi ilman ihmistä.
   Override: exportaa `0` pollerin ympäristöön.

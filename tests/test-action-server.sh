@@ -172,7 +172,7 @@ AUDIT_LOG="$AUDIT_DIR/run-issues-action.audit.log"
 
 # tailscale shim: whois returns the login named in a control file (or fails);
 # ip -4 / status --json satisfy action-server.sh's resolution (Part C).
-WHOIS_CTL="$FX/whois.txt"; echo "maintainer@example" > "$WHOIS_CTL"
+WHOIS_CTL="$FX/whois.txt"; echo "alice@example" > "$WHOIS_CTL"
 TS_SHIM="$BIN/tailscale"
 cat > "$TS_SHIM" <<SH
 #!/usr/bin/env bash
@@ -182,7 +182,7 @@ case "\$1" in
     [ "\$v" = "FAIL" ] && exit 1
     printf '{"UserProfile":{"LoginName":"%s"}}\n' "\$v"; exit 0 ;;
   ip) printf '127.0.0.1\n'; exit 0 ;;
-  status) printf '{"Self":{"UserID":1},"User":{"1":{"LoginName":"maintainer@example"}}}\n'; exit 0 ;;
+  status) printf '{"Self":{"UserID":1},"User":{"1":{"LoginName":"alice@example"}}}\n'; exit 0 ;;
 esac
 exit 0
 SH
@@ -204,7 +204,7 @@ RUN_ISSUES_ACTION_BIND=127.0.0.1 RUN_ISSUES_ACTION_PORT="$PORT" \
   RUN_ISSUES_ACTION_DISPATCH="$STUB_DISPATCH" \
   RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
   RUN_ISSUES_ACTION_TOKEN_FILE="$TOKFILE" \
-  RUN_ISSUES_ACTION_ALLOWED_USERS="maintainer@example" \
+  RUN_ISSUES_ACTION_ALLOWED_USERS="alice@example" \
   RUN_ISSUES_ACTION_ORIGIN="$ORIGIN" \
   RUN_ISSUES_LOG_DIR="$AUDIT_DIR" \
   "$PYBIN" "$ROOT/lib/action-service.py" >"$FX/srv.out" 2>&1 &
@@ -229,7 +229,7 @@ VALID=(-H "Origin: $ORIGIN" -H "Content-Type: application/json"
        -H "X-Run-Issues-Action: 1" -H "X-Run-Issues-Token: $TOKEN"
        --data '{"action":"clean","issue_number":5,"repo_path":"/x","owner_repo":"o/acme"}')
 
-echo "maintainer@example" > "$WHOIS_CTL"; : > "$DISP_ARGS"; echo 0 > "$DISP_RC"
+echo "alice@example" > "$WHOIS_CTL"; : > "$DISP_ARGS"; echo 0 > "$DISP_RC"
 code="$(post "${VALID[@]}")"
 check "valid POST -> 200" "$code" "200"
 check "valid POST ok:true" "$(jq -r '.ok' "$FX/body.txt" 2>/dev/null)" "true"
@@ -280,7 +280,7 @@ check "whois failure (unknown device) -> 403" "$code" "403"
 echo "someone@else" > "$WHOIS_CTL"
 code="$(post "${VALID[@]}")"
 check "disallowed tailnet user -> 403" "$code" "403"
-echo "maintainer@example" > "$WHOIS_CTL"
+echo "alice@example" > "$WHOIS_CTL"
 
 # Rule 3: the audit log recorded actions AND denials, and NEVER the token.
 if [ -s "$AUDIT_LOG" ]; then
@@ -295,7 +295,7 @@ fi
 # Injection defence-in-depth: a run_dir carrying shell metacharacters is rejected
 # (400) BEFORE any delegate runs, so nothing dangerous reaches the dispatch/tmux
 # layer. (The tmux restart also uses execvp, but this closes the class at the door.)
-echo "maintainer@example" > "$WHOIS_CTL"; : > "$DISP_ARGS"
+echo "alice@example" > "$WHOIS_CTL"; : > "$DISP_ARGS"
 code="$(post -H "Origin: $ORIGIN" -H "Content-Type: application/json" -H "X-Run-Issues-Action: 1" \
   -H "X-Run-Issues-Token: $TOKEN" \
   --data '{"action":"resume","issue_number":7,"run_dir":"/x/$(touch /tmp/pwned).run","remote":"origin"}')"
@@ -330,14 +330,14 @@ ROT_LOG="$ROT_DIR/run-issues-action.audit.log"
 head -c 500 /dev/zero | tr '\0' 'x' > "$ROT_LOG"   # 500 bytes, over the 50-byte cap
 RUN_ISSUES_ACTION_BIND=127.0.0.1 RUN_ISSUES_ACTION_PORT="$PORT2" \
   RUN_ISSUES_ACTION_DISPATCH="$STUB_DISPATCH" RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
-  RUN_ISSUES_ACTION_TOKEN_FILE="$TOKFILE" RUN_ISSUES_ACTION_ALLOWED_USERS="maintainer@example" \
+  RUN_ISSUES_ACTION_TOKEN_FILE="$TOKFILE" RUN_ISSUES_ACTION_ALLOWED_USERS="alice@example" \
   RUN_ISSUES_ACTION_ORIGIN="$ORIGIN" RUN_ISSUES_LOG_DIR="$ROT_DIR" \
   RUN_ISSUES_LOG_MAX_BYTES=50 \
   "$PYBIN" "$ROOT/lib/action-service.py" >/dev/null 2>&1 &
 SRV_PID=$!
 base2="http://127.0.0.1:$PORT2"
 for _ in $(seq 1 50); do curl -fsS "$base2/healthz" >/dev/null 2>&1 && break; sleep 0.1; done
-echo "maintainer@example" > "$WHOIS_CTL"
+echo "alice@example" > "$WHOIS_CTL"
 curl -sS -o /dev/null -X POST "$base2/action" -H "Origin: $ORIGIN" -H "Content-Type: application/json" \
   -H "X-Run-Issues-Action: 1" -H "X-Run-Issues-Token: $TOKEN" \
   --data '{"action":"clean","issue_number":5}' >/dev/null 2>&1
@@ -383,7 +383,7 @@ fi
 
 # --check with an allowed host + shims resolves config and exits 0.
 out="$(RUN_ISSUES_ACTION_HOSTS='*' RUN_ISSUES_TAILSCALE_BIN="$TS_SHIM" \
-       RUN_ISSUES_ACTION_BIND=127.0.0.1 RUN_ISSUES_ACTION_ALLOWED_USERS='maintainer@example' \
+       RUN_ISSUES_ACTION_BIND=127.0.0.1 RUN_ISSUES_ACTION_ALLOWED_USERS='alice@example' \
        RUN_ISSUES_ACTION_TOKEN_FILE="$FX/token2" RUN_ISSUES_LOG_DIR="$AUDIT_DIR" \
        bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
 check "--check with shims exits 0" "$rc" "0"
@@ -393,12 +393,12 @@ if printf '%s' "$out" | grep -q 'bind=127.0.0.1:8081'; then ok "--check reports 
 TS_EMPTY="$BIN/tailscale-empty"
 cat > "$TS_EMPTY" <<'SH'
 #!/usr/bin/env bash
-case "$1" in ip) exit 0 ;; status) printf '{"Self":{"UserID":1},"User":{"1":{"LoginName":"maintainer@example"}}}\n'; exit 0 ;; esac
+case "$1" in ip) exit 0 ;; status) printf '{"Self":{"UserID":1},"User":{"1":{"LoginName":"alice@example"}}}\n'; exit 0 ;; esac
 exit 0
 SH
 chmod +x "$TS_EMPTY"
 out="$(RUN_ISSUES_ACTION_HOSTS='*' RUN_ISSUES_TAILSCALE_BIN="$TS_EMPTY" \
-       RUN_ISSUES_ACTION_ALLOWED_USERS='maintainer@example' RUN_ISSUES_ACTION_TOKEN_FILE="$FX/token3" \
+       RUN_ISSUES_ACTION_ALLOWED_USERS='alice@example' RUN_ISSUES_ACTION_TOKEN_FILE="$FX/token3" \
        RUN_ISSUES_LOG_DIR="$AUDIT_DIR" bash "$ROOT/action-server.sh" --check 2>&1)"; rc=$?
 check "no Tailscale address -> refuse bind (exit 3)" "$rc" "3"
 

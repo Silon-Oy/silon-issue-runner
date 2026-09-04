@@ -67,20 +67,20 @@ host_case() {
   fi
 }
 
-host_case 0 'host-a'  '*host-a*'              'single pattern matches'
-host_case 0 'host-a'  'laptop,*host-a*'       'a later pattern in the list matches'
-host_case 1 'some-laptop' '*host-a*,*host-a*' 'a foreign host does not match'
+host_case 0 'studio-host'  '*studio-host*'            'single pattern matches'
+host_case 0 'studio-host'  'laptop,*studio-host*'     'a later pattern in the list matches'
+host_case 1 'some-laptop' '*studio-host*,*STUDIO-HOST*' 'a foreign host does not match'
 host_case 0 'some-laptop' '*'                         'the wildcard allows any host'
 host_case 1 'some-laptop' ''                          'an empty list allows nothing'
 host_case 1 'anything'    '   '                       'a whitespace-only list allows nothing'
 host_case 0 'b-host'      'a-host,,b-host'            'empty list elements are ignored'
 host_case 0 'b-host'      'a-host, b-host'            'whitespace after a comma is tolerated'
-host_case 1 'host-a'  'host-a'                'matching is case-sensitive and exact'
+host_case 1 'Studio-Host'  'studio-host'              'matching is case-sensitive and exact'
 
 # A pattern must be matched as a glob against the host, never expanded against
 # the working directory: a stray file named like the pattern must not decide it.
-( cd "$WORK" && : > 'host-a-decoy' ) 2>/dev/null
-( cd "$WORK" && poller_host_allowed 'some-laptop' '*host-a*' )
+( cd "$WORK" && : > 'studio-host-decoy' ) 2>/dev/null
+( cd "$WORK" && poller_host_allowed 'some-laptop' '*studio-host*' )
 if [ $? -eq 1 ]; then
   ok "case2 patterns are not glob-expanded against the working directory"
 else
@@ -94,8 +94,12 @@ fi
 # back both problems it caused: the package knowing a machine by name, and a
 # misconfigured machine being indistinguishable from a foreign one. A grep,
 # not a variable read, because the point is that no such name exists any more.
+# The name itself is assembled from fragments at runtime: written literally here
+# it would plant the very machine name this case exists to keep out of the tree.
+LEGACY_HOST="$(printf '%s-%s' 'Mac' 'Studio')"
+LEGACY_HOST_LC="$(printf '%s' "$LEGACY_HOST" | tr '[:upper:]' '[:lower:]')"
 for f in "$ROOT/poller.sh" "$ROOT/pr-watch-poller.sh" "$ROOT/action-server.sh" "$LIB"; do
-  if hits=$(grep -nE 'host-a|host-a|POLLER_HOSTS_LEGACY_DEFAULT' "$f" 2>/dev/null); then
+  if hits=$(grep -nE "$LEGACY_HOST|$LEGACY_HOST_LC|POLLER_HOSTS_LEGACY_DEFAULT" "$f" 2>/dev/null); then
     bad "case3 $(basename "$f") still carries a built-in host default:"
     printf '%s\n' "$hits" | sed 's/^/      /'
   else

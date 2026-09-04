@@ -24,7 +24,7 @@
 #
 #   3. The installer never calls launchctl. launchd mutates a live user
 #      session, is not idempotent under a redirected $HOME (so it could not be
-#      tested), and the com.maintainer -> com.claude-issue-runner migration needs a
+#      tested), and the com.legacy -> com.claude-issue-runner migration needs a
 #      deliberate one-off bootout (CLAUDE.md, section 11). Plist files are
 #      deployed; the launchctl commands are printed for the user to run.
 #

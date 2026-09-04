@@ -1,6 +1,6 @@
 %% Author: Architect
 %% Created: 2026-07-31
-%% Topic: LaunchAgent-labelien migraatio com.maintainer.* -> com.claude-issue-runner.*
+%% Topic: LaunchAgent-labelien migraatio com.legacy.* -> com.claude-issue-runner.*
 %% Task: issue #3 — plistien uudelleennimeaminen ja I4:n kaksoispoller-riski
 
 stateDiagram-v2
@@ -8,10 +8,10 @@ stateDiagram-v2
 
     [*] --> Legacy
 
-    Legacy: LEGACY\ncom.maintainer.run-issues-poller LOADED\ncom.maintainer.pr-watch-poller LOADED\nlahde: ~/dotfiles/com.maintainer.*.plist
+    Legacy: LEGACY\ncom.legacy.run-issues-poller LOADED\ncom.legacy.pr-watch-poller LOADED\nlahde: ~/dotfiles/com.legacy.*.plist
 
     Legacy --> DoubleLoaded: #3 nimeaa plistit uusiksi\nJA uudet deployataan (#4)\nILMAN bootoutia
-    Legacy --> BootedOut: bootout vanhat labelit\n+ rm ~/Library/LaunchAgents/com.maintainer.*\n+ rm dotfiles-juuren lahdeplistit
+    Legacy --> BootedOut: bootout vanhat labelit\n+ rm ~/Library/LaunchAgents/com.legacy.*\n+ rm dotfiles-juuren lahdeplistit
 
     DoubleLoaded: VIRHETILA\nkaksi polleria samasta koodista\nsama watchlist, sama GLOBAL_MAX-katto\nkilpailevat lukoista
     DoubleLoaded --> BootedOut: korjaus = sama bootout-sarja
