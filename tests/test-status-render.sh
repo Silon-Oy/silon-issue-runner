@@ -27,6 +27,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 RENDER="$ROOT/status-render.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -495,7 +502,7 @@ check "old status.json untouched" "$(cat "$OUT3/status.json")" '{"prev":true}'
 REPO="$FX/repo"
 RUNS="$REPO/.claude/run-issues/20260601-100000-issue-1"
 mkdir -p "$RUNS"
-HOST="$(hostname -s 2>/dev/null || echo unknown)"
+HOST="$(runner_host)"
 cat > "$RUNS/run.json" <<JSON
 {"run_id":"r1","repo":"$REPO","issue_number":1,"status":"blocked","started_at":"2026-06-01T10:00:00Z","finished_at":"2026-06-01T10:05:00Z","host":"$HOST","current_state":"S6_CycleReview","blocked_reason":"cycle_review_blocker","remote":"origin","repo_slug":"repo","base_branch":"main"}
 JSON

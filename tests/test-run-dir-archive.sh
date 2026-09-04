@@ -28,6 +28,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "SKIP: jq not installed"
@@ -50,7 +57,7 @@ WORK=$(mktemp -d -t run-dir-archive.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 cd "$WORK" || { echo "FAIL: cannot cd into WORK"; exit 1; }
 
-THIS_HOST=$(hostname -s 2>/dev/null || echo "unknown")
+THIS_HOST=$(runner_host)
 NOW=$(date -u +%s)
 THIRTY_D=$(( 30 * 86400 ))
 OLD_TS="2020-01-01T00:00:00Z"                       # ~6y old, well past 30d

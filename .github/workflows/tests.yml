@@ -1,14 +1,19 @@
-# tests.yml — the merge gate: the package test suite on macOS, the platform the
-# pollers and LaunchAgents run on.
+# tests.yml — the merge gate: the package test suite on the platforms that are
+# supported, meaning the ones a regression is allowed to stop a merge on.
 #
-# This workflow is deliberately the ONLY check a pull request carries. The PR
-# watcher (pr-watch.sh) reads the PR's check rollup, and it never merges on a
-# red or pending rollup: a job-level `continue-on-error` does NOT make a failing
-# job report success to the checks API (the job's own conclusion stays
-# `failure`, only the workflow run is spared), and a slow advisory job keeps the
-# rollup PENDING for as long as it runs. Either would park every PR in WAIT_CI.
-# The portability runs (Windows, Ubuntu) therefore live in portability.yml,
-# which runs on main and on demand and never enters a PR's rollup.
+# macOS is where the pollers and the LaunchAgents run. Windows is where the
+# INTERACTIVE path runs — Claude Code driving the package's scripts through Git
+# Bash, with no poller, no launchd and no cockpit (epic #211). Both are gates,
+# so both are here.
+#
+# EVERY JOB IN THIS FILE MUST BE A REAL GATE. The PR watcher (pr-watch.sh) reads
+# the PR's check rollup and never merges on a red or pending rollup: a job-level
+# `continue-on-error` does NOT make a failing job report success to the checks
+# API (the job's own conclusion stays `failure`, only the workflow run is
+# spared), and a slow advisory job keeps the rollup PENDING for as long as it
+# runs. Either would park every PR in WAIT_CI. An advisory platform therefore
+# belongs in portability.yml, which never enters a PR's rollup — that is where
+# Ubuntu still is.
 name: tests
 
 on:
@@ -20,7 +25,7 @@ permissions:
   contents: read
 
 jobs:
-  tests:
+  macos:
     name: tests (macos-latest)
     runs-on: macos-latest
     # A wedged test must not hold the rollup for the default six hours.
@@ -54,6 +59,46 @@ jobs:
           git --version
           jq --version || echo "jq: not available"
           gtimeout --version | head -1 || echo "gtimeout: not available"
+
+      - name: Run the test suite
+        run: bash tests/run-all.sh
+
+  windows:
+    name: tests (windows-latest)
+    runs-on: windows-latest
+    # Git Bash spawns processes far slower than macOS; the suite takes several
+    # times its macOS duration here. The cap keeps a wedged run from burning
+    # hours, not from finishing.
+    timeout-minutes: 45
+    defaults:
+      run:
+        # Selects Git Bash, which is the shell Claude Code's Bash tool uses on
+        # Windows — the interactive path this job is the gate for.
+        shell: bash
+    env:
+      # Make `ln -s` create real symlinks instead of file copies, so the
+      # installer tests exercise the ownership predicate they are written
+      # against. README section 3.2 asks a Windows user for the same setting.
+      MSYS: winsymlinks:nativestrict
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config --global init.defaultBranch main
+          git config --global user.name  "ci"
+          git config --global user.email "ci@example.invalid"
+
+      - name: Show toolchain
+        run: |
+          uname -s
+          bash --version | head -1
+          git --version
+          jq --version || echo "jq: not available"
+          jq -b -n 1 >/dev/null 2>&1 && echo "jq: --binary supported" || echo "jq: NO --binary (jq < 1.7)"
+          timeout --version 2>/dev/null | head -1 || echo "timeout: not available or not GNU"
 
       - name: Run the test suite
         run: bash tests/run-all.sh

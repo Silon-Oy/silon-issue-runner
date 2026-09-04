@@ -38,6 +38,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd "$HERE/.." && pwd -P)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 INSTALL="$ROOT/install.sh"
 
 if [ ! -f "$INSTALL" ]; then
@@ -49,7 +56,7 @@ WORK=$(mktemp -d -t install-host-gate.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 FAIL=0
-HOST="$(hostname -s 2>/dev/null || echo unknown)"
+HOST="$(runner_host)"
 
 # run_install <home> [args...] — a throwaway home, so the suite never touches
 # the live ~/.claude the pollers use on this very machine.

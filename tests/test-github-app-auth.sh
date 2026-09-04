@@ -45,6 +45,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$HERE/../lib/github-app-auth.sh"
 
 WORK=$(mktemp -d -t gha-test.XXXXXX)
+# Two assertions below are really assertions about POSIX file permissions, which
+# a Git Bash checkout on plain NTFS accepts and ignores. Probe the filesystem
+# rather than name a platform (tests/fs-capabilities.sh explains why).
+# shellcheck source=fs-capabilities.sh
+. "$HERE/fs-capabilities.sh"
 SERVER_PID=""
 cleanup() {
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -153,10 +158,14 @@ RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$WORK/nope.pem" gha_enabled 2>/dev/null 
   || ok "1c: fail-closed when .pem missing"
 
 # OFF when private key path points to an unreadable file.
-NOREAD="$WORK/noread.pem"; cp "$PEM" "$NOREAD"; chmod 000 "$NOREAD"
-RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$NOREAD" gha_enabled 2>/dev/null \
-  && fail "1d: gha_enabled accepted an unreadable .pem" \
-  || ok "1d: fail-closed when .pem unreadable"
+if fs_enforces_unreadable "$WORK"; then
+  NOREAD="$WORK/noread.pem"; cp "$PEM" "$NOREAD"; chmod 000 "$NOREAD"
+  RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$NOREAD" gha_enabled 2>/dev/null \
+    && fail "1d: gha_enabled accepted an unreadable .pem" \
+    || ok "1d: fail-closed when .pem unreadable"
+else
+  echo "SKIP: 1d — this filesystem ignores chmod 000, so an unreadable file cannot be staged"
+fi
 chmod 600 "$NOREAD"  # so cleanup can remove it
 
 # ---------- TEST 2: gha_token mints + caches --------------------------------
@@ -169,13 +178,12 @@ HITS1=$(cat "$HIT_COUNTER")
 
 # Cache file exists with mode 0600.
 [ -f "$RUN_ISSUES_GHA_CACHE_FILE" ] && ok "2c: cache file written" || fail "2c: cache file missing"
-PERM=""
-if [ "$(uname -s)" = "Darwin" ]; then
-  PERM=$(stat -f '%Lp' "$RUN_ISSUES_GHA_CACHE_FILE" 2>/dev/null || echo "")
+if fs_enforces_modes "$WORK"; then
+  PERM=$(fs_file_mode "$RUN_ISSUES_GHA_CACHE_FILE")
+  [ "$PERM" = "600" ] && ok "2d: cache file mode 0600" || fail "2d: cache file mode $PERM (expected 600)"
 else
-  PERM=$(stat -c '%a' "$RUN_ISSUES_GHA_CACHE_FILE" 2>/dev/null || echo "")
+  echo "SKIP: 2d — this filesystem does not reflect chmod, so the 0600 write cannot be observed"
 fi
-[ "$PERM" = "600" ] && ok "2d: cache file mode 0600" || fail "2d: cache file mode $PERM (expected 600)"
 
 # Second call with a still-valid cache must NOT mint again.
 T2=$(gha_token 2>/dev/null) || fail "2e: gha_token failed on cached call"

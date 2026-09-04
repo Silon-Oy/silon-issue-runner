@@ -111,11 +111,25 @@ fi
 FAKEBIN="$WORK/fakebin"; mkdir -p "$FAKEBIN"
 missing_tool=0
 for t in bash dirname basename git jq sed cat tr cut grep mktemp rm mkdir cp uname stat env; do
-  p=$(command -v "$t" 2>/dev/null) || { missing_tool=1; continue; }
+  # `type -P` and not `command -v`: the latter answers with the NAME of a shell
+  # function when one shadows the tool, and lib/jq-binary.sh shadows jq on
+  # Windows. A name is not a link target.
+  p=$(type -P "$t" 2>/dev/null) || { missing_tool=1; continue; }
+  [ -n "$p" ] || { missing_tool=1; continue; }
   ln -s "$p" "$FAKEBIN/$t"
 done
 
-if [ "$missing_tool" -eq 1 ]; then
+# The curated PATH has to actually work, and on Git Bash it does not: the tools
+# are `<name>.exe`, so a link named `<name>` is a file Windows will not launch,
+# and every command in the child resolves to nothing (exit 127) — which the case
+# below would read as "the gh gate did not fire". Prove the PATH first.
+if [ "$missing_tool" -eq 0 ] && ! PATH="$FAKEBIN" bash -c 'git --version' >/dev/null 2>&1; then
+  missing_tool=2
+fi
+
+if [ "$missing_tool" -eq 2 ]; then
+  echo "SKIP: the assembled gh-free PATH is not executable here (Git Bash: a PATH entry needs its .exe name)"
+elif [ "$missing_tool" -eq 1 ]; then
   echo "SKIP: could not assemble a gh-free PATH (a base tool is missing)"
 else
   REPO_C="$WORK/repoC"

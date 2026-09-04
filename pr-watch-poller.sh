@@ -19,6 +19,10 @@ set -euo pipefail
 # docs/diagrams/poller-config-resolution.mmd.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
+# Sourced before any other library because they all read jq output (lib/jq-binary.sh).
+# shellcheck source=lib/jq-binary.sh
+. "$SCRIPT_DIR/lib/jq-binary.sh"
 
 # The package root. Read from the environment ONLY (never from poller.env),
 # because it must be known before any file is sourced. A test injection point,

@@ -24,6 +24,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 PRWATCH="$ROOT/pr-watch.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -88,7 +95,7 @@ check "tail window bounded (deep decision unseen)" "$(pr_last_decision "$A/deep.
 # ===========================================================================
 echo "=== Part B: repeated SKIP_CLOSED does not grow state.jsonl ==="
 STATE_LIB="$ROOT/lib/state.sh"
-THIS_HOST="$(hostname -s 2>/dev/null || echo unknown)"
+THIS_HOST="$(runner_host)"
 
 # A closed (MERGED) PR classifies as SKIP_CLOSED regardless of labels/CI.
 PR_VIEW_CLOSED='{"state":"MERGED","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN",

@@ -39,6 +39,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 
 for req in jq git; do
   if ! command -v "$req" >/dev/null 2>&1; then
@@ -171,7 +178,7 @@ fi
 H2=$(mk_home home2)
 mk_watchlist "$WORK/wl2.json" "$WORK/nonexistent-repo-2"
 run_poller poller.sh "$H2" \
-  RUN_ISSUES_POLLER_HOSTS="$(hostname -s)" \
+  RUN_ISSUES_POLLER_HOSTS="$(runner_host)" \
   RUN_ISSUES_LOG_DIR="$WORK/logs2" \
   RUN_ISSUES_WATCHLIST="$WORK/wl2.json"
 rc=$?

@@ -105,6 +105,10 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
+# Sourced before any other library because they all read jq output (lib/jq-binary.sh).
+# shellcheck source=lib/jq-binary.sh
+. "$HERE/lib/jq-binary.sh"
 RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 
 # ---- machine config: source poller.env, the LaunchAgent config channel ----

@@ -18,6 +18,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 STATUS="$ROOT/status.sh"
 
 # Preconditions. jq is the hard dependency of status.sh; git is needed to plant
@@ -35,7 +42,7 @@ check(){ if [ "$2" = "$3" ]; then ok "$1 ($2)"; else bad "$1: got=[$2] expected=
 
 FX="$(mktemp -d "${TMPDIR:-/tmp}/status-github-test.XXXXXX")"
 trap 'rm -rf "$FX"' EXIT
-HOST="$(hostname -s 2>/dev/null || echo unknown)"
+HOST="$(runner_host)"
 
 # ---- two fake repos with GitHub remotes (owner-resolution reads these) ----
 REPO_A="$FX/repo-a"; mkdir -p "$REPO_A"

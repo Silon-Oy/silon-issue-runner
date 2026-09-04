@@ -25,6 +25,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 SELF_UPDATE="$ROOT/self-update.sh"
 FAIL=0
 
@@ -223,7 +230,7 @@ else
   # A watched repo carrying a live run.json for THIS host.
   WREPO="$WORK/watched"
   mkdir -p "$WREPO/.claude/run-issues/run-abc"
-  THIS_HOST=$(hostname -s)
+  THIS_HOST=$(runner_host)
   cat > "$WREPO/.claude/run-issues/run-abc/run.json" <<JSON
 {"status":"initialized","host":"$THIS_HOST","issue_number":7}
 JSON

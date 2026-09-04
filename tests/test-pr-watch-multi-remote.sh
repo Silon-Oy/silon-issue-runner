@@ -22,6 +22,13 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 PRWATCH="$HERE/../pr-watch.sh"
 STATE_LIB="$HERE/../lib/state.sh"
 
@@ -80,7 +87,7 @@ make_run() {
   [ "$remote" != "-" ] && state_set "$rd" "remote" "$remote"
   [ "$owner"  != "-" ] && state_set "$rd" "owner_repo" "$owner"
   local host_val="some-other-host"
-  [ "$host" = "self" ] && host_val="$(hostname -s)"
+  [ "$host" = "self" ] && host_val="$(runner_host)"
   local tmp; tmp=$(mktemp); jq --arg h "$host_val" '.host = $h' "$rd/run.json" > "$tmp"; mv "$tmp" "$rd/run.json"
   state_finalize "$rd" "completed"
   set +e

@@ -176,15 +176,29 @@ poller_watchlist_pick_labels() {
     # One jq pass answers both questions, so a watchlist cannot be read as
     # "covered" by one filter and "not covered" by the other. Trailing slashes
     # are normalised on both sides: `/repo` and `/repo/` are one checkout.
-    found=$(jq -r --arg p "$repo_path" '
+    #
+    # The repo path travels through the ENVIRONMENT, not through `--arg`. Under
+    # Git Bash, jq is a native Windows program, so MSYS rewrites any argument
+    # that looks like an absolute POSIX path into its Windows form before jq
+    # ever sees it: `--arg p /c/src/repo` arrives as `C:/src/repo` while the
+    # watchlist FILE still says `/c/src/repo`, and every repo reads as
+    # uncovered — silently falling back to the default labels. Only arguments
+    # are rewritten, so `$ENV` sidesteps it. Same reason `_pick_filter_jq` in
+    # lib/issue.sh reads its labels from `$ENV` (there it is `gh api --jq`
+    # having no `--arg` at all); the two constraints meet at the same idiom.
+    found=$(
+      export RUN_ISSUES_WL_REPO_PATH="$repo_path"
+      jq -r '
       def norm: (. // "" | tostring) | sub("/+$"; "");
       def csv:  (. // []) | map(select(type == "string" and length > 0)) | join(",");
-      ([ .repos[]? | select((.path | norm) == ($p | norm)) ]) as $m
+      ($ENV.RUN_ISSUES_WL_REPO_PATH | norm) as $p
+      | ([ .repos[]? | select((.path | norm) == $p) ]) as $m
       | if ($m | length) == 0
         then "0"
         else "1\t" + ($m[0].labels | csv) + "\t" + (.default_labels | csv)
         end
-    ' "$watchlist" 2>/dev/null) || found=""
+      ' "$watchlist" 2>/dev/null
+    ) || found=""
   fi
 
   case "$found" in

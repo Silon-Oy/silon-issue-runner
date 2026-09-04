@@ -160,12 +160,9 @@ dispatch clean --repo "$FX/repo" >/dev/null 2>&1; check "clean without --issue -
 dispatch reset --repo "$FX/repo" >/dev/null 2>&1; check "reset without --issue -> exit 1" "$?" "1"
 dispatch reset --repo "$FX/repo" --issue abc >/dev/null 2>&1; check "reset with non-numeric --issue -> exit 1" "$?" "1"
 
-# ===========================================================================
-# B. lib/action-service.py — auth + CSRF + audit over HTTP
-# ===========================================================================
-PORT="$($PYBIN -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
-TOKEN="deadbeefcafe1234567890abcdef00000000000000000000000000000000cafe"
-TOKFILE="$FX/token"; printf '%s\n' "$TOKEN" > "$TOKFILE"; chmod 600 "$TOKFILE"
+# Shared with Part C, so it lives OUTSIDE part_b: the config cases below use
+# the same tailscale shim and audit directory, and part_b returns early on a
+# platform that cannot run its stubs.
 ORIGIN="http://localhost:8080"
 AUDIT_DIR="$FX/logs"; mkdir -p "$AUDIT_DIR"
 AUDIT_LOG="$AUDIT_DIR/run-issues-action.audit.log"
@@ -187,6 +184,34 @@ esac
 exit 0
 SH
 chmod +x "$TS_SHIM"
+
+# ===========================================================================
+# B. lib/action-service.py — auth + CSRF + audit over HTTP
+# ===========================================================================
+# The service EXECs the tailscale shim and the dispatch stub, and it does so
+# from Python rather than from a shell. Windows CreateProcess cannot start a
+# file whose only claim to being a program is a `#!` line, so on Git Bash every
+# whois fails and every case below reads 403 — a report about the runtime, not
+# about the auth model. The cockpit is not a Windows target either (epic #211
+# scopes it out with the pollers and launchd), so this part says so and stops.
+# Probed, never platform-named: a Python that CAN start a shebang script runs
+# the whole part, wherever it lives.
+#
+# Held in a function purely so the skip can `return` past 180 lines. The body
+# is deliberately NOT indented into it: several cases carry heredocs whose
+# terminators must stay at column 0, and re-indenting them would change what is
+# under test to make a wrapper look tidy.
+part_b() {
+local probe="$FX/probe-shebang.sh"
+printf '#!/usr/bin/env bash\nprintf ok\n' > "$probe"; chmod +x "$probe"
+if ! "$PYBIN" -c 'import subprocess,sys; r=subprocess.run([sys.argv[1]],capture_output=True); sys.exit(0 if r.stdout==b"ok" else 1)' "$probe" 2>/dev/null; then
+  echo "SKIP: Part B — this python cannot exec a #!-script (Git Bash on Windows), so the tailscale and dispatch stubs are unreachable"
+  return 0
+fi
+
+PORT="$($PYBIN -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+TOKEN="deadbeefcafe1234567890abcdef00000000000000000000000000000000cafe"
+TOKFILE="$FX/token"; printf '%s\n' "$TOKEN" > "$TOKFILE"; chmod 600 "$TOKFILE"
 
 # stub dispatch the service exec's: records argv, returns a controllable rc.
 DISP_ARGS="$FX/disp-args.txt"; : > "$DISP_ARGS"
@@ -343,6 +368,9 @@ curl -sS -o /dev/null -X POST "$base2/action" -H "Origin: $ORIGIN" -H "Content-T
   --data '{"action":"clean","issue_number":5}' >/dev/null 2>&1
 if [ -f "$ROT_LOG.1" ]; then ok "audit log rotates to .1 past the size cap"; else bad "audit log did not rotate"; fi
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=""
+}
+
+part_b
 
 # ===========================================================================
 # C. action-server.sh — config resolution, host gate, structural invariants

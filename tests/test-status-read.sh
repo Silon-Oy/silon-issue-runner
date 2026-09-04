@@ -15,6 +15,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+# The host name comes from the SAME primitive the code under test uses.
+# `hostname -s` is not portable — Windows' hostname has no -s — and issue #213
+# moved the four-step fallback into runner_host for exactly that reason. A test
+# that re-derives it by hand disagrees with the code on any machine where the
+# short flag fails, and then reports a host mismatch that does not exist.
+# shellcheck source=../lib/host.sh
+. "$HERE/../lib/host.sh"
 STATUS="$ROOT/status.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -30,7 +37,7 @@ check(){ if [ "$2" = "$3" ]; then ok "$1 ($2)"; else bad "$1: got=[$2] expected=
 
 FX="$(mktemp -d "${TMPDIR:-/tmp}/status-read-test.XXXXXX")"
 trap 'rm -rf "$FX"' EXIT
-HOST="$(hostname -s 2>/dev/null || echo unknown)"
+HOST="$(runner_host)"
 
 REPO="$FX/repo-a"
 RUNS="$REPO/.claude/run-issues"

@@ -68,6 +68,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
+# Sourced before any other library because they all read jq output (lib/jq-binary.sh).
+# shellcheck source=lib/jq-binary.sh
+. "$SCRIPT_DIR/lib/jq-binary.sh"
 # shellcheck source=lib/git-remote.sh
 # Multi-remote routing (issue #33): resolve_remote_to_owner_repo is the fallback
 # owner/repo derivation for a non-origin run whose run.json predates the

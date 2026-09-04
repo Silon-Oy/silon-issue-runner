@@ -58,7 +58,7 @@ tuota virhettä vaan hiljaisuutta.
 |---|---|
 | `git` | `brew install git` |
 | `gh` | `brew install gh` |
-| `jq` | `brew install jq` |
+| `jq` | `brew install jq` (**Windows: 1.7 tai uudempi**, ks. osio 3.2) |
 | `npx` / node | `brew install node` (tai `nvm install --lts`) |
 | Claude CLI | `npm i -g @anthropic-ai/claude-code` |
 | `gh`-kirjautuminen | `gh auth login` |
@@ -225,6 +225,103 @@ ei tarvitse eikä pidä avata: se hakee bind-osoitteen komennolla `tailscale ip 
 **kieltäytyy käynnistymästä** ilman sitä sen sijaan että putoaisi wildcardiin (osio 7.9).
 Tailscale on siksi luonteva myös ssh:lle, jolloin portti 22 voi olla kiinni julkisesta
 verkosta.
+
+### 3.2 Windows (interaktiivinen käyttö)
+
+> **Tila: todennettu CI:ssä.** Paketin testipaketti ajetaan `windows-latest`-koneella
+> Git Bashissa **pakollisena** PR-porttina siinä missä macOS-ajokin
+> ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)). Tämä osio ei siis kanna
+> §3.1:n varoitusta. Se, mitä CI ei todenna, on nimetty alla kohdassa "Mitä ei tueta".
+
+Windowsilla tuetaan **interaktiivinen ajo**: Claude Code ajaa paketin skriptit omalla
+Bash-työkalullaan, joka Windowsissa on Git Bash. Slash-komennot (`/issue-runner:run-issue`,
+`/issue-runner:new-issue`, `/issue-runner:new-epic`, `/issue-runner:pr-watch`) toimivat
+samoin kuin macOS:llä. WSL:ää ei tarvita eikä käytetä — kohde on natiivi Claude Code +
+Git Bash.
+
+**Esiehdot**
+
+| Vaatimus | Miksi |
+|---|---|
+| Windows 10 1809+ (tai Windows 11) | Kehittäjätila ja natiivit symlinkit ilman järjestelmänvalvojan oikeuksia |
+| [Git for Windows](https://git-scm.com/download/win) | Toimittaa Git Bashin, jonka Claude Code valitsee Bash-työkalukseen |
+| Kehittäjätila päälle **ja** `MSYS=winsymlinks:nativestrict` | Ilman näitä `ln -s` tekee hiljaa kopion; asentaja kieltäytyy (exit 2) |
+| `gh`, `jq`, Node | `winget install GitHub.cli jqlang.jq OpenJS.NodeJS.LTS` |
+| **`jq` 1.7 tai uudempi** | Vain siinä on `--binary`; ks. alla |
+| Claude Code | Natiiviasennin tai `npm i -g @anthropic-ai/claude-code` |
+| `gh auth login` | S0-portti tarkistaa sen komennolla `gh auth token` |
+
+`jq`-versio on aito vaatimus, ei suositus. Windowsin `jq` on natiivi ohjelma, joka avaa
+stdoutin C-ajonaikaisen tekstitilaan: jokainen rivinvaihto lähtee muodossa `\r\n`, ja
+`$(...)` poistaa lopun rivinvaihdon mutta **ei** vaunupalautusta. Silloin olemassa oleva
+polku testautuu puuttuvaksi ja kelvollinen luku ei-numeeriseksi. Paketti antaa `jq`:lle
+`--binary`-lipun ([`lib/jq-binary.sh`](lib/jq-binary.sh)), mutta lippu on jq 1.7:stä alkaen —
+sitä vanhempi jq on S0-portille sama asia kuin puuttuva riippuvuus.
+
+**Asennus Git Bashissa** (ei PowerShellissä, ei CMD:ssä)
+
+```bash
+git clone https://github.com/Silon-Oy/claude-issue-runner.git
+cd claude-issue-runner
+MSYS=winsymlinks:nativestrict bash install.sh --dry-run   # tulostaa suunnitelman
+MSYS=winsymlinks:nativestrict bash install.sh             # soveltaa sen
+```
+
+`--dry-run` tulostaa rivin `symlink capability: ok`, kun kehittäjätila ja `MSYS`-asetus ovat
+kunnossa. Jos ne eivät ole, asentaja kieltäytyy **ennen ainuttakaan kirjoitusta** (exit 2);
+perustelu on osiossa "Asentimen exit-koodit" yllä.
+
+Asetuksen saa pysyväksi lisäämällä sen Git Bashin profiiliin, jolloin `MSYS=`-etuliitettä ei
+tarvitse toistaa:
+
+```bash
+echo 'export MSYS=winsymlinks:nativestrict' >> ~/.bash_profile
+```
+
+**Mihin asennus linkittää.** Git Bashin `$HOME` on `%USERPROFILE%` (esim.
+`C:\Users\<sinä>`), joten kohde on `%USERPROFILE%\.claude` — sama puu, josta Claude Code
+lukee komennot ja skillit Windowsissa:
+
+| Polku | Sisältö |
+|---|---|
+| `%USERPROFILE%\.claude\commands\issue-runner\` | slash-komennot, per tiedosto |
+| `%USERPROFILE%\.claude\skills\` | skillit, per hakemisto |
+| `%USERPROFILE%\.claude\scripts\run-issues` | symlink paketin juureen |
+
+Lukot ja lokit **eivät** mene `~/Library`-puuhun: `uname -s` osuu MINGW-haaraan, jolloin
+oletukset ovat `%USERPROFILE%\.local\state\run-issues\{locks,logs}`
+([`lib/paths.sh`](lib/paths.sh)). `RUN_ISSUES_LOCK_ROOT` ja `RUN_ISSUES_LOG_DIR` ohittavat
+yhä.
+
+**Claude CLI:n kutsu.** Oletus on `npx --no-install @anthropic-ai/claude-code`, eli se etsii
+**npm-pakettia**. Claude Coden natiiviasennin ei asenna npm-pakettia vaan `claude`-komennon
+polulle, jolloin oletus exittaa 127 ja S0-portti raportoi puuttuvan Claude CLI:n. Korjaus on
+yksi muuttuja:
+
+```bash
+export RUN_ISSUES_CLAUDE_CMD=claude
+```
+
+Saman muuttujan nimeää S0-portin virheilmoitus, joten vihje on siinä missä vika näkyy.
+Vakinaista se joko Git Bashin profiiliin tai koneen omaan env-tiedostoon
+(`$HOME/.config/run-issues/env`, osio 4).
+
+**Mitä ei tueta.** Windows-tuki koskee **vain** interaktiivista ajoa. Ulkopuolelle jäävät
+tarkoituksella:
+
+| Osa | Miksi ei |
+|---|---|
+| Pollerit (`poller.sh`, `pr-watch-poller.sh`) | Vaativat `tmux`in, jota Git Bashissa ei ole; ajastus tulee launchd:ltä tai systemd:ltä |
+| LaunchAgentit ja `--with-launchagents` | macOS-mekanismi; `plutil`ia ei ole |
+| `self-update.sh` | Ajastettu agentti, ks. edellinen rivi |
+| Ohjaamo (`action-server.sh`, statussivu) | Tailscale-sidonnainen daemon, ei interaktiivinen työkalu |
+
+Nämä eivät ole rikki Windowsissa vaan poissa: niiden testit ohittavat itsensä `SKIP`-rivillä
+ja kertovat syyn. **Jos tarvitset ajokoneen** — koneen, joka poimii issueita itsestään ja
+valvoo PR:iä — se ei ole Windows-kone. Lue osio 3.1 (Linux-ajokone) tai käytä macOS-konetta.
+Sama repo voi silti olla molempien käytössä: `run.json.host` erottaa koneet toisistaan, joten
+Windows-työasemalta ajettu interaktiivinen ajo ja Linux-ajokoneen poller eivät törmää
+(osio 6.4).
 
 ---
 
@@ -432,7 +529,7 @@ skriptin `# Env:`-otsikkokommentti.
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Salaisuustiedoston polku |
-| `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu |
+| `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu. Natiiviasennin (mm. Windows) ⇒ `claude`, ks. osio 3.2 |
 | `RUN_ISSUES_CLAUDE_TIMEOUT` | `3600` | Aikabudjetti per claude-kutsu |
 | `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle kopioitavat labelit (6.3) |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | Montako kertaa aikakatkaistu ajo yritetään uudelleen (6.6 d) |
@@ -1847,19 +1944,22 @@ Kaksi workflow'ta, joilla on eri tehtävä:
 
 | Workflow | Laukaisin | Alusta | Rooli |
 |---|---|---|---|
-| `.github/workflows/tests.yml` | jokainen pull request ja `main`-push | `macos-latest`, `brew install coreutils` | **portti** — PR:n ainoa check; punainen ajo estää mergen |
-| `.github/workflows/portability.yml` | `main`-push ja käsin (`workflow_dispatch`) | `windows-latest` (Git Bash, `MSYS=winsymlinks:nativestrict`) ja `ubuntu-latest` | **mittaus** — tulokset luetaan Actions-välilehdeltä |
+| `.github/workflows/tests.yml` | jokainen pull request ja `main`-push | `macos-latest` (+ `brew install coreutils`) ja `windows-latest` (Git Bash, `MSYS=winsymlinks:nativestrict`) | **portti** — PR:n ainoat checkit; punainen ajo estää mergen |
+| `.github/workflows/portability.yml` | `main`-push ja käsin (`workflow_dispatch`) | `ubuntu-latest` | **mittaus** — tulokset luetaan Actions-välilehdeltä |
 
-macOS on portti, koska se on alusta jolla pollerit ja LaunchAgentit ajavat. Windows- ja
-Ubuntu-ajot ovat toistaiseksi mittaus, eivät portti: niiden punaisuus on Windows-migraation
-työlista. Ne eivät ole PR-workflow'ssa neuvoa-antavina jobeina, koska PR-vahti lukee PR:n
-check-rollupin eikä koskaan mergeä punaisella tai keskeneräisellä rollupilla: job-tason
-`continue-on-error` **ei** tee epäonnistuneesta jobista `success`ia checks-API:ssa (vain
-workflow-ajo säästyy), ja hidas Git Bash -ajo pitäisi rollupin PENDING-tilassa koko kestonsa.
-Kumpikin parkkeeraisi jokaisen PR:n `WAIT_CI`-tilaan. Kun alusta on vihreä ja sen on määrä pysyä
-vihreänä, se siirretään `tests.yml`:ään pakolliseksi jobiksi — se on migraatioepicin
-viimeinen askel, ei lipun kääntö. Molemmilla workflow'illa on `timeout-minutes`, jottei jumiin
-jäänyt testi pidä ajoa kuutta tuntia.
+Portissa on kaksi alustaa, koska tuettuja ajotapoja on kaksi: macOS ajaa pollerit ja
+LaunchAgentit, Windows ajaa interaktiivisen polun (osio 3.2). Ubuntu on yhä mittaus, koska
+Linux-ajokoneen polkua ei ole ajettu läpi kertaakaan (osio 3.1) — siellä punainen rivi on
+löydös, ei regressio.
+
+**Neuvoa-antavaa jobia ei voi laittaa PR-workflow'hun.** PR-vahti lukee PR:n check-rollupin
+eikä koskaan mergeä punaisella tai keskeneräisellä rollupilla: job-tason `continue-on-error`
+**ei** tee epäonnistuneesta jobista `success`ia checks-API:ssa (vain workflow-ajo säästyy),
+ja hidas job pitäisi rollupin PENDING-tilassa koko kestonsa. Kumpikin parkkeeraisi jokaisen
+PR:n `WAIT_CI`-tilaan. Siksi alusta siirtyy `portability.yml`:stä `tests.yml`:ään vasta kun
+se on vihreä ja sen on määrä pysyä vihreänä — se on migraation viimeinen askel, ei lipun
+kääntö. Molemmilla workflow'illa on `timeout-minutes`, jottei jumiin jäänyt testi pidä ajoa
+kuutta tuntia.
 
 Repon juuren `.gitattributes` (`* text=auto eol=lf`) pitää työpuun rivinvaihdot LF:nä myös
 Windowsissa — CRLF rikkoisi `#!`-rivit ja jättäisi `\r`:n jokaiseen `$(...)`-kaappaukseen
