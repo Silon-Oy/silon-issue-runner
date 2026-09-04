@@ -344,9 +344,9 @@ palauttaa merkinnät, **bash vertaa** (`lib/poller-config.sh`). Tuloste ei muunn
 **Jokaisella suoritettavalla skriptillä on oma exit-koodiavaruutensa** — sama numero tarkoittaa
 eri asiaa eri skripteissä. Älä yhtenäistä niitä.
 
-Lähde on kunkin skriptin otsikkokommentti (`# Exit codes:`). `tests/test-readme.sh` **johtaa
-README:n odotukset suoraan näistä**, joten uusi koodi ilman README-riviä on punainen testi.
-Täydet taulukot: `docs/troubleshooting.md`. `README.md` §9 on ihmisen oirekartta, ei taulukoita.
+Lähde on kunkin skriptin otsikkokommentti (`# Exit codes:`), josta `tests/test-readme.sh`
+**johtaa odotukset suoraan**: uusi koodi ilman taulukkoriviä on punainen testi. Täydet
+taulukot: `docs/troubleshooting.md`; `README.md` §9 on oirekartta.
 
 Sanasto, joka toistuu avaruuksien yli: **0** onnistui tai siisti no-op · **1** käyttövirhe ·
 **2** kieltäydytty / ei kohdetta, mitään ei muutettu · korkeammat koodit = tilakohtainen
