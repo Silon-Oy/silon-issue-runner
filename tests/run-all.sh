@@ -51,31 +51,45 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # slowest single file rather than by the pool, so the cap is not a resource
 # limit but the point where another worker stops buying anything.
 #
-# Four probes, because no single one answers everywhere and a probe that answers
-# WRONG is the failure that hides: the first CI run of this pool asked `getconf`
-# first and ran two at a time on a four-core Windows runner — indistinguishable
-# from a small machine. Every answer is therefore validated as a number rather
-# than trusted, and $NUMBER_OF_PROCESSORS, which Windows sets itself, backstops
-# the three Unix tools.
+# Five probes, the HIGHEST valid answer wins, and the winner is reported. Both
+# halves are measured, not defensive: two CI runs of this pool ran two files at
+# a time on a four-core Windows runner, and since the merge commit under test
+# provably contained the probe chain, the probes there do not fail — they
+# UNDER-report, and a chain that takes the first answer takes the low one. Nor
+# does a wrong answer announce itself: the floor of 2 makes it look like a small
+# machine, which is why the summary line now names the source.
+#
+# Caveat the override exists for: under a CPU-quota'd container the highest
+# answer can exceed the quota, because /proc/cpuinfo counts the host's cores.
+# There RUN_ISSUES_TEST_JOBS is the answer; over-reporting has not been observed
+# on any platform this package is gated on.
+JOBS_DETECTED=0
+JOBS_SOURCE=floor
 detect_jobs() {
-  local n
-  for n in "$(nproc 2>/dev/null || true)" \
-           "$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)" \
-           "$(sysctl -n hw.ncpu 2>/dev/null || true)" \
-           "${NUMBER_OF_PROCESSORS:-}"; do
-    case "$n" in ''|*[!0-9]*) continue ;; esac
-    [ "$n" -ge 1 ] && break
+  local probe label value
+  for probe in "nproc:$(nproc 2>/dev/null || true)" \
+               "getconf:$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)" \
+               "sysctl:$(sysctl -n hw.ncpu 2>/dev/null || true)" \
+               "cpuinfo:$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || true)" \
+               "env:${NUMBER_OF_PROCESSORS:-}"; do
+    label="${probe%%:*}"
+    value="${probe#*:}"
+    case "$value" in ''|*[!0-9]*) continue ;; esac
+    [ "$value" -gt "$JOBS_DETECTED" ] || continue
+    JOBS_DETECTED="$value"
+    JOBS_SOURCE="$label"
   done
-  case "$n" in ''|*[!0-9]*) n=2 ;; esac
-  [ "$n" -lt 2 ]  && n=2
-  [ "$n" -gt 16 ] && n=16
-  printf '%s\n' "$n"
 }
+detect_jobs
+[ "$JOBS_DETECTED" -lt 2 ]  && JOBS_DETECTED=2
+[ "$JOBS_DETECTED" -gt 16 ] && JOBS_DETECTED=16
 
-JOBS="${RUN_ISSUES_TEST_JOBS:-$(detect_jobs)}"
+JOBS="${RUN_ISSUES_TEST_JOBS:-$JOBS_DETECTED}"
 # An unreadable value must not silently pick a pool size for the operator: fall
 # back to the one mode that behaves exactly like no pool at all.
-case "$JOBS" in ''|*[!0-9]*|0) JOBS=1 ;; esac
+case "$JOBS" in ''|*[!0-9]*|0) JOBS=1; JOBS_SOURCE=fallback ;; esac
+[ -n "${RUN_ISSUES_TEST_JOBS:-}" ] && [ "$JOBS_SOURCE" != fallback ] \
+  && JOBS_SOURCE=RUN_ISSUES_TEST_JOBS
 
 # `wait -n` (bash >= 4.3) blocks until one worker finishes without spawning
 # anything. The macOS runner ships bash 3.2, which has no such builtin, so there
@@ -133,6 +147,11 @@ emit() {
   done
   header "$name"
   cat "$WORK/log/$name"
+  # A file whose last write has no newline would otherwise glue the footer onto
+  # it, and the footer is the line a reader greps for at the start of a line.
+  if [ -s "$WORK/log/$name" ] && [ "$(tail -c1 "$WORK/log/$name" | wc -l)" -eq 0 ]; then
+    echo
+  fi
   footer "$name" "$rc" "$secs"
   rmdir "$WORK/print.lock" 2>/dev/null
 }
@@ -201,7 +220,7 @@ for t in "${TESTS[@]}"; do
 done
 
 echo "----------------------------------------"
-printf '%s files, %ss wall, %s at a time\n' "$TOTAL" "$ELAPSED" "$JOBS"
+printf '%s files, %ss wall, %s at a time (%s)\n' "$TOTAL" "$ELAPSED" "$JOBS" "$JOBS_SOURCE"
 # The three that set the floor: with a pool, the wall clock cannot drop below
 # the slowest single file, so this line is where the next speedup is visible.
 printf 'slowest: %s\n' "$(printf '%s' "$SLOWEST" | sort -rn | head -3 \
