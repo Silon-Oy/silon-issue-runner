@@ -19,8 +19,10 @@
 # XDG_STATE_HOME, not XDG_DATA_HOME or XDG_CACHE_HOME: both the locks and the
 # poller logs are state that should survive a reboot but that a user would not
 # miss if it were lost, which is exactly what the base-directory spec reserves
-# the state directory for. The status cache already uses XDG_CACHE_HOME and is
-# untouched.
+# the state directory for. The status cache is a separate path and is untouched
+# here: it reads XDG_CACHE_HOME but still falls back to ~/Library/Caches
+# (lib/status-github.sh), so it carries the same macOS shape this file removes
+# for locks and logs — a sibling to fix, not a claim that it is already correct.
 #
 # macOS is unchanged, bit for bit: existing installations are not migrated, so
 # no run in flight loses its lock and no poller loses its log tail.

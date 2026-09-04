@@ -192,7 +192,7 @@ host-porttaa siivouksen, joten kaksi konetta voi pollata samoja repoja törmää
 | `stat -f` | Hoidettu — `uname -s` -haara GNU:n `stat -c`:hen |
 | Lukot | Hoidettu — `uname -s` -haara: oletus on `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/locks`. `RUN_ISSUES_LOCK_ROOT` yhä ohittaa |
 | Lokit | Hoidettu — sama haara: oletus on `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/logs`. `RUN_ISSUES_LOG_DIR` yhä ohittaa |
-| Status-välimuisti | Hoidettu — `XDG_CACHE_HOME` |
+| Status-välimuisti | Osittain — `XDG_CACHE_HOME` luetaan, mutta asettamattoman varapolku on yhä `$HOME/Library/Caches`. `RUN_ISSUES_STATUS_CACHE_FILE` ohittaa |
 | `gtimeout` / coreutils | Helpompi — `timeout` on natiivi |
 | **LaunchAgentit + `plutil`** | **Ainoa aito puute.** Korvataan systemd user -yksiköillä, ks. alla. `--with-launchagents` on macOS-polku; älä käytä sitä Linuxilla |
 
