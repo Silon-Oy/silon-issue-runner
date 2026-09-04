@@ -10,7 +10,7 @@
 # Config schema (subset of .claude/db-clone.json relevant here):
 #   {
 #     "type": "wordpress-mysql",
-#     "source_db": "wp_silon",                  # required
+#     "source_db": "wp_example",                  # required
 #     "wp_path": ".",                           # path of wp-cli root inside repo, default "."
 #     "mysql_user": "root",                     # default "root"
 #     "mysql_host": "127.0.0.1",                # default "127.0.0.1"

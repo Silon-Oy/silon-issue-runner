@@ -56,7 +56,7 @@ cat > "$FXA" <<'JSON'
 {
   "schema_version": 1,
   "generated_at": "2026-08-11T20:49:34Z",
-  "host": "host-a",
+  "host": "example-host",
   "totals": { "degraded": false },
   "runs": [
     {"run_id":"r92","repo_slug":"bar","issue_number":92,"issue_url":"https://github.com/Silon-Oy/bar/issues/92","pr_url":null,"pr_number":null,"age_seconds":6134400,"class":"attention","class_reason":"awaiting_clarification","current_state":"S6_CycleReview"},
@@ -137,7 +137,7 @@ cat > "$FXB" <<'JSON'
 {
   "schema_version": 1,
   "generated_at": "2026-08-11T21:00:00Z",
-  "host": "host-a",
+  "host": "example-host",
   "totals": { "degraded": false },
   "runs": [
     {"run_id":"r92","repo_slug":"bar","issue_number":92,"issue_url":"https://github.com/Silon-Oy/bar/issues/92","pr_url":null,"pr_number":null,"age_seconds":6220800,"class":"attention","class_reason":"awaiting_clarification","current_state":"S6_CycleReview"},
@@ -174,7 +174,7 @@ cat > "$FXE" <<'JSON'
 {
   "schema_version": 1,
   "generated_at": "2026-08-11T21:10:00Z",
-  "host": "host-a",
+  "host": "example-host",
   "totals": { "degraded": false },
   "runs": [
     {"run_id":"rc1","repo_slug":"baz","issue_number":21,"issue_url":null,"pr_url":null,"pr_number":null,"age_seconds":50,"class":"cleanup","class_reason":"pr_not_open","current_state":null},
@@ -209,7 +209,7 @@ cat > "$FXD" <<'JSON'
 {
   "schema_version": 1,
   "generated_at": "2026-08-11T21:20:00Z",
-  "host": "host-a",
+  "host": "example-host",
   "totals": { "degraded": true },
   "runs": [
     {"run_id":"rg1","repo_slug":"foo","issue_number":30,"issue_url":"https://github.com/Silon-Oy/foo/issues/30","pr_url":null,"pr_number":null,"age_seconds":100000,"class":"attention","class_reason":"blocked","current_state":"S5_DBClone","github":null}
@@ -225,7 +225,7 @@ if printf '%s' "$OUT" | grep -q "#30"; then ok "degraded: github:null run still 
 
 # ---- long list: > MAX_ROWS in one class_reason group -> cap + "…ja M muuta" ----
 FXL="$FX/long.json"
-jq -n '{schema_version:1, generated_at:"2026-08-11T22:00:00Z", host:"host-a",
+jq -n '{schema_version:1, generated_at:"2026-08-11T22:00:00Z", host:"example-host",
   totals:{degraded:false},
   runs: [range(0;12) | {run_id:"L\(.)", repo_slug:"foo", issue_number:(100+.),
     issue_url:"https://github.com/Silon-Oy/foo/issues/\(100+.)", pr_url:null, pr_number:null,
@@ -240,7 +240,7 @@ check "long list: capped at 10 rows" "$(printf '%s' "$OUT" | grep -c '    foo  #
 rm -f "$STATE"
 OUT="$(RUN_ISSUES_DIGEST_GWS="/nonexistent/gws" RUN_ISSUES_DIGEST_STATE_FILE="$STATE" \
        RUN_ISSUES_DIGEST_ENV_FILE="/nonexistent/digest.env" \
-       bash "$DIGEST" --from-file "$FXA" --to "maintainer@example.com" 2>/dev/null)"; RC=$?
+       bash "$DIGEST" --from-file "$FXA" --to "ops@example.com" 2>/dev/null)"; RC=$?
 check "no-gws + recipient -> exit 0" "$RC" "0"
 if [ -n "$OUT" ]; then ok "no-gws + recipient -> body on stdout"; else bad "no-gws + recipient -> no body"; fi
 
@@ -257,7 +257,7 @@ if printf '%s' "$OUT" | grep -q "#92"; then ok "stdin: body built from stdin"; e
 # pretty-printed document spun forever in ${INPUT// /}) ----
 if command -v timeout >/dev/null 2>&1; then
   FXBIG="$FX/big.json"
-  jq -n '{schema_version: 1, generated_at: "2026-08-11T20:49:34Z", host: "host-a",
+  jq -n '{schema_version: 1, generated_at: "2026-08-11T20:49:34Z", host: "example-host",
           totals: {degraded: false},
           runs: [range(400) | {run_id: "run-\(.)", repo_slug: "some-repo",
                  issue_number: ., issue_url: "https://example.invalid/\(.)",

@@ -20,7 +20,7 @@ Klooni nimetään muodossa `<prefix><run-id-sanitized>`, leikataan 32 merkkiin.
 ```json
 {
   "type": "wordpress-mysql",
-  "source_db": "wp_silon",
+  "source_db": "wp_example",
   "wp_path": ".",
   "mysql_user": "root",
   "mysql_host": "127.0.0.1",
@@ -62,7 +62,7 @@ Klooni nimetään muodossa `<prefix><run-id-sanitized>`, leikataan 32 merkkiin.
 {
   "type": "docker-compose",
   "compose_file": "docker-compose.yml",
-  "original_project": "silon",
+  "original_project": "example",
   "db_service": "db",
   "db_engine": "mysql",
   "db_user_env": "MYSQL_USER",

@@ -678,7 +678,7 @@ no-op, ei virhe.
 
 ## 11. LaunchAgent-migraatio
 
-Plistit nimettiin uudelleen `com.maintainer.*` → `com.claude-issue-runner.*`. **launchd tunnistaa
+Plistit nimettiin uudelleen `com.legacy.*` → `com.claude-issue-runner.*`. **launchd tunnistaa
 agentin labelista, ei tiedostonimestä**, joten uuden plistin lataaminen ei korvaa vanhaa: ilman
 bootoutia koneella ajaisi kaksi polleria samasta koodista. Ne lukisivat saman watchlistin ja
 kilpailisivat samasta `global_max_concurrent`-katosta.
@@ -687,10 +687,10 @@ Aja **kerran** koneella, jolla vanhat agentit ovat ladattuina — **ennen** uusi
 bootstrappaamista:
 
 ```bash
-launchctl bootout gui/$(id -u)/com.maintainer.run-issues-poller
-launchctl bootout gui/$(id -u)/com.maintainer.pr-watch-poller
-rm -f ~/Library/LaunchAgents/com.maintainer.run-issues-poller.plist
-rm -f ~/Library/LaunchAgents/com.maintainer.pr-watch-poller.plist
+launchctl bootout gui/$(id -u)/com.legacy.run-issues-poller
+launchctl bootout gui/$(id -u)/com.legacy.pr-watch-poller
+rm -f ~/Library/LaunchAgents/com.legacy.run-issues-poller.plist
+rm -f ~/Library/LaunchAgents/com.legacy.pr-watch-poller.plist
 # Poista lähdeplistit myös ~/dotfiles-juuresta, muuten sync.sh lataa ne takaisin.
 ```
 
@@ -740,7 +740,7 @@ ei ole, ja ohjelmapolku on `$HOME/.claude/scripts/run-issues/…`.
 päivittyvät sen mukana) ja tulostaa `launchctl`-komennot ajettaviksi. Se **ei kutsu
 `launchctl`ia itse**, kolmesta syystä: launchd mutatoi elävää käyttäjäsessiota; se ei ole
 idempotentti uudelleenohjatun `$HOME`:n alla, joten kutsua ei voisi testata; ja yllä kuvattu
-`com.maintainer.*` → `com.claude-issue-runner.*` -migraatio vaatii kertaluontoisen harkitun bootoutin,
+`com.legacy.*` → `com.claude-issue-runner.*` -migraatio vaatii kertaluontoisen harkitun bootoutin,
 jota skripti ei voi päättää käyttäjän puolesta.
 
 Ennen deployta asentaja lukee plistin `ProgramArguments`-taulukon viimeisen alkion, laajentaa
@@ -879,7 +879,7 @@ jälkeen ohjelmapolku on oikeasti suoritettavissa.
   pysyvästi). Vanhoja rate-limit-episodin aikana kirjattuja vääriä `SKIP_CLOSED`-rivejä ei
   korjata takautuvasti: `pr_last_decision` lukee hännästä, joten ensimmäinen onnistunut
   luokittelu korjaa historian itsestään.
-- **"maintainer" on kovakoodattu prompteihin ja komentoihin.** Nimi esiintyy seitsemässä tiedostossa
+- **Ylläpitäjän etunimi on kovakoodattu prompteihin ja komentoihin.** Nimi esiintyy seitsemässä tiedostossa
   (`prompts/`, `commands/`, `agents/`). Parametrisointi `{{HUMAN}}`-muuttujaksi kattaisi vain
   `prompts/`-hakemiston, koska `render_prompt` ei koske `commands/`- eikä `agents/`-tiedostoihin
   — ne lukee Claude Code suoraan levyltä. Puoliksi parametrisoitu järjestelmä olisi huonompi

@@ -13,7 +13,7 @@
 #   {
 #     "type": "docker-compose",
 #     "compose_file": "docker-compose.yml",       # default "docker-compose.yml"
-#     "original_project": "silon",                # required (compose -p value)
+#     "original_project": "example",                # required (compose -p value)
 #     "db_service": "db",                         # required
 #     "db_engine": "mysql",                       # required, "mysql" or "postgres"
 #     "db_user_env": "MYSQL_ROOT_PASSWORD_USER",  # env var containing the user

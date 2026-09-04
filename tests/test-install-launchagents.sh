@@ -13,7 +13,7 @@
 # without reporting anything.
 #
 # The installer must also never call launchctl. launchd mutates a live user
-# session, so a test could not undo it, and the com.maintainer ->
+# session, so a test could not undo it, and the com.legacy ->
 # com.claude-issue-runner rename needs a deliberate one-off bootout
 # (CLAUDE.md, section 11). Case 5 asserts this with a PATH shim rather than
 # trusting a code review.
