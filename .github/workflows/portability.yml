@@ -1,0 +1,61 @@
+# portability.yml — the same test suite on the platforms the package is being
+# ported to. Measurement, not a gate: it runs on main and on demand, never on a
+# pull request, so its result never enters a PR's check rollup (see tests.yml
+# for why that matters to the PR watcher). Read the results in the Actions tab;
+# a red job here is the Windows-migration epic's work list.
+#
+# When a platform is green and meant to stay green, it moves into tests.yml as
+# a required job — that is the epic's closing step, not a flag flip here.
+name: portability
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Git Bash spawns processes far slower than macOS; the suite may take many
+    # times its macOS duration on Windows. The cap keeps a wedged run from
+    # burning hours, not from finishing.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    defaults:
+      run:
+        # On windows-latest this selects Git Bash; on Ubuntu it is the system
+        # bash. The suite is plain bash either way.
+        shell: bash
+    env:
+      # Git Bash only: make `ln -s` create real symlinks instead of file copies,
+      # so the installer tests exercise the ownership predicate they are written
+      # against. Ignored on Linux.
+      MSYS: winsymlinks:nativestrict
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config --global init.defaultBranch main
+          git config --global user.name  "ci"
+          git config --global user.email "ci@example.invalid"
+
+      - name: Show toolchain
+        run: |
+          uname -s
+          bash --version | head -1
+          git --version
+          jq --version || echo "jq: not available"
+          timeout --version 2>/dev/null | head -1 || echo "timeout: not available or not GNU"
+
+      - name: Run the test suite
+        run: bash tests/run-all.sh

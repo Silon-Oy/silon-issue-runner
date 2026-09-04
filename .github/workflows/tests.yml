@@ -1,11 +1,14 @@
-# tests.yml — run the package test suite on the three platforms it is expected
-# to survive on.
+# tests.yml — the merge gate: the package test suite on macOS, the platform the
+# pollers and LaunchAgents run on.
 #
-# macOS is the gate: it is the platform the pollers and LaunchAgents run on, so
-# a red macOS job blocks the merge queue. Windows and Ubuntu are advisory for
-# now (continue-on-error) — they are the measurement that the Windows-migration
-# epic reads as its work list, and a red advisory job must not park the PR
-# watcher in WAIT_CI before the portability fixes have landed.
+# This workflow is deliberately the ONLY check a pull request carries. The PR
+# watcher (pr-watch.sh) reads the PR's check rollup, and it never merges on a
+# red or pending rollup: a job-level `continue-on-error` does NOT make a failing
+# job report success to the checks API (the job's own conclusion stays
+# `failure`, only the workflow run is spared), and a slow advisory job keeps the
+# rollup PENDING for as long as it runs. Either would park every PR in WAIT_CI.
+# The portability runs (Windows, Ubuntu) therefore live in portability.yml,
+# which runs on main and on demand and never enters a PR's rollup.
 name: tests
 
 on:
@@ -18,36 +21,23 @@ permissions:
 
 jobs:
   tests:
-    name: tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    # Advisory jobs report success to the checks API even when they fail, so the
-    # PR watcher's CI rollup stays green while Windows is still being ported.
-    continue-on-error: ${{ matrix.advisory }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            advisory: false
-          - os: windows-latest
-            advisory: true
-          - os: ubuntu-latest
-            advisory: true
-    defaults:
-      run:
-        # On windows-latest this selects Git Bash; elsewhere it is the system
-        # bash. The suite is plain bash either way.
-        shell: bash
-    env:
-      # Git Bash only: make `ln -s` create real symlinks instead of file copies,
-      # so the installer tests exercise the ownership predicate they are written
-      # against. Ignored on macOS and Linux.
-      MSYS: winsymlinks:nativestrict
+    name: tests (macos-latest)
+    runs-on: macos-latest
+    # A wedged test must not hold the rollup for the default six hours.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           # Some tests build repositories on top of this checkout's history.
           fetch-depth: 0
+
+      - name: Install coreutils
+        # The runner image ships without GNU coreutils, so `gtimeout` is absent
+        # and the implementer-timeout path (rc 124 -> exit 7) would be SKIPped
+        # rather than tested. README section 2 lists coreutils as the optional
+        # dependency that gives claude calls a time cap; CI installs it so that
+        # path is exercised on every run.
+        run: brew install coreutils
 
       - name: Configure git
         # The runners ship without an identity, and without an explicit default
@@ -63,6 +53,7 @@ jobs:
           bash --version | head -1
           git --version
           jq --version || echo "jq: not available"
+          gtimeout --version | head -1 || echo "gtimeout: not available"
 
       - name: Run the test suite
         run: bash tests/run-all.sh

@@ -1825,20 +1825,23 @@ testit voi ajaa samalla koneella jolla poller pyörii.
 
 ### CI-ajo
 
-`.github/workflows/tests.yml` ajaa saman `tests/run-all.sh`:n jokaisessa pull requestissa ja
-`main`iin pushattaessa kolmella käyttöjärjestelmällä:
+Kaksi workflow'ta, joilla on eri tehtävä:
 
-| Ajo | Kuori | Status |
-|---|---|---|
-| `macos-latest` | system bash | **pakollinen** — punainen ajo estää mergen |
-| `windows-latest` | Git Bash (`shell: bash`, `MSYS=winsymlinks:nativestrict`) | neuvoa-antava (`continue-on-error`) |
-| `ubuntu-latest` | system bash | neuvoa-antava (`continue-on-error`) |
+| Workflow | Laukaisin | Alusta | Rooli |
+|---|---|---|---|
+| `.github/workflows/tests.yml` | jokainen pull request ja `main`-push | `macos-latest`, `brew install coreutils` | **portti** — PR:n ainoa check; punainen ajo estää mergen |
+| `.github/workflows/portability.yml` | `main`-push ja käsin (`workflow_dispatch`) | `windows-latest` (Git Bash, `MSYS=winsymlinks:nativestrict`) ja `ubuntu-latest` | **mittaus** — tulokset luetaan Actions-välilehdeltä |
 
-macOS on ainoa portti, koska se on alusta jolla pollerit ja LaunchAgentit ajavat. Windows- ja
-Ubuntu-ajot ovat toistaiseksi **mittaus, ei portti**: niiden punaisuus on Windows-migraation
-työlista, ja pakollisena ne pysäyttäisivät PR-vahdin `WAIT_CI`-tilaan ennen kuin
-siirrettävyyskorjaukset ovat mainissa. Neuvoa-antava ajo raportoi checks-API:lle `success`in,
-joten tulokset luetaan Actions-välilehdeltä, ei rollupista.
+macOS on portti, koska se on alusta jolla pollerit ja LaunchAgentit ajavat. Windows- ja
+Ubuntu-ajot ovat toistaiseksi mittaus, eivät portti: niiden punaisuus on Windows-migraation
+työlista. Ne eivät ole PR-workflow'ssa neuvoa-antavina jobeina, koska PR-vahti lukee PR:n
+check-rollupin eikä koskaan mergeä punaisella tai keskeneräisellä rollupilla: job-tason
+`continue-on-error` **ei** tee epäonnistuneesta jobista `success`ia checks-API:ssa (vain
+workflow-ajo säästyy), ja hidas Git Bash -ajo pitäisi rollupin PENDING-tilassa koko kestonsa.
+Kumpikin parkkeeraisi jokaisen PR:n `WAIT_CI`-tilaan. Kun alusta on vihreä ja sen on määrä pysyä
+vihreänä, se siirretään `tests.yml`:ään pakolliseksi jobiksi — se on migraatioepicin
+viimeinen askel, ei lipun kääntö. Molemmilla workflow'illa on `timeout-minutes`, jottei jumiin
+jäänyt testi pidä ajoa kuutta tuntia.
 
 Repon juuren `.gitattributes` (`* text=auto eol=lf`) pitää työpuun rivinvaihdot LF:nä myös
 Windowsissa — CRLF rikkoisi `#!`-rivit ja jättäisi `\r`:n jokaiseen `$(...)`-kaappaukseen
