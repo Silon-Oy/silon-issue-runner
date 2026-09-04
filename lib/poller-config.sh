@@ -173,43 +173,61 @@ poller_watchlist_pick_labels() {
   local default_csv="" repo_csv="" found=""
 
   if [ -n "$watchlist" ] && [ -f "$watchlist" ] && [ -n "$repo_path" ]; then
-    # One jq pass answers both questions, so a watchlist cannot be read as
-    # "covered" by one filter and "not covered" by the other. Trailing slashes
-    # are normalised on both sides: `/repo` and `/repo/` are one checkout.
+    # THE PATH NEVER CROSSES INTO jq. Under Git Bash, jq is a native Windows
+    # program, and MSYS rewrites anything that looks like an absolute POSIX path
+    # on its way into one — measured on windows-latest, BOTH channels:
     #
-    # The repo path travels through the ENVIRONMENT, not through `--arg`. Under
-    # Git Bash, jq is a native Windows program, so MSYS rewrites any argument
-    # that looks like an absolute POSIX path into its Windows form before jq
-    # ever sees it: `--arg p /c/src/repo` arrives as `C:/src/repo` while the
-    # watchlist FILE still says `/c/src/repo`, and every repo reads as
-    # uncovered — silently falling back to the default labels. Only arguments
-    # are rewritten, so `$ENV` sidesteps it. Same reason `_pick_filter_jq` in
-    # lib/issue.sh reads its labels from `$ENV` (there it is `gh api --jq`
-    # having no `--arg` at all); the two constraints meet at the same idiom.
-    found=$(
-      export RUN_ISSUES_WL_REPO_PATH="$repo_path"
-      jq -r '
+    #   jq -rn --arg p /tmp/repo-a '$p'          -> C:/Users/.../Temp/repo-a
+    #   ( export P=/tmp/repo-a; jq -rn '$ENV.P' ) -> C:/Users/.../Temp/repo-a
+    #
+    # while the watchlist FILE still reads /tmp/repo-a, so the comparison never
+    # matched and every repo silently fell back to the default labels. `$ENV` is
+    # not an escape hatch: the environment is converted too. Nor is switching the
+    # conversion off, because the watchlist path is an operand on the same
+    # command line and jq.exe genuinely needs THAT one converted.
+    #
+    # So jq is asked only for what it can answer without seeing our path — the
+    # entries — and bash does the comparison, where both sides are bash strings.
+    # jq's OUTPUT is not rewritten (only argv and the environment are), so the
+    # paths come back exactly as the file spells them.
+    #
+    # Still one jq pass, for the original reason: a watchlist must not be able to
+    # read as "covered" by one filter and "not covered" by another. Line 1 is the
+    # default CSV; every further line is "<path>\t<that entry's CSV>". Trailing
+    # slashes are normalised on both sides — `/repo` and `/repo/` are one checkout.
+    local rows=""
+    rows=$(jq -r '
       def norm: (. // "" | tostring) | sub("/+$"; "");
       def csv:  (. // []) | map(select(type == "string" and length > 0)) | join(",");
-      ($ENV.RUN_ISSUES_WL_REPO_PATH | norm) as $p
-      | ([ .repos[]? | select((.path | norm) == $p) ]) as $m
-      | if ($m | length) == 0
-        then "0"
-        else "1\t" + ($m[0].labels | csv) + "\t" + (.default_labels | csv)
-        end
-      ' "$watchlist" 2>/dev/null
-    ) || found=""
+      (.default_labels | csv),
+      (.repos[]? | ((.path | norm) + "\t" + (.labels | csv)))
+    ' "$watchlist" 2>/dev/null) || rows=""
+
+    if [ -n "$rows" ]; then
+      local want="$repo_path"
+      while [ "${want%/}" != "$want" ]; do want="${want%/}"; done
+
+      local line first=1 entry_path
+      while IFS= read -r line; do
+        if [ "$first" -eq 1 ]; then
+          default_csv="$line"
+          first=0
+          continue
+        fi
+        entry_path="${line%%$'\t'*}"
+        if [ "$entry_path" = "$want" ]; then
+          repo_csv="${line#*$'\t'}"
+          found="1"
+          break
+        fi
+      done <<< "$rows"
+    fi
   fi
 
-  case "$found" in
-    1*)
-      repo_csv="${found#*$'\t'}"; default_csv="${repo_csv#*$'\t'}"; repo_csv="${repo_csv%%$'\t'*}"
-      poller_pick_labels "$repo_csv" "$default_csv"
-      return 0
-      ;;
-    *)
-      poller_pick_labels "" ""
-      return 1
-      ;;
-  esac
+  if [ "$found" = "1" ]; then
+    poller_pick_labels "$repo_csv" "$default_csv"
+    return 0
+  fi
+  poller_pick_labels "" ""
+  return 1
 }
