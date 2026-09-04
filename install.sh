@@ -819,7 +819,11 @@ main() {
   # coexist with a partial write.
   if [ "${#REFUSALS[@]}" -gt 0 ]; then
     print_refusals
-    err "refusing to modify a layout this package does not own — nothing was changed"
+    # Deliberately reasonless: the REFUSED lines above each name their own
+    # cause, and not every refusal is about ownership — the symlink-capability
+    # probe refuses about the machine. Naming one cause here would restate the
+    # very mistake this gate exists to avoid.
+    err "refusing — nothing was changed"
     exit 2
   fi
 

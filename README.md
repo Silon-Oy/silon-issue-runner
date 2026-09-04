@@ -1593,7 +1593,7 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 |---|---|
 | 0 | Onnistui (tai `--dry-run` valmis) |
 | 1 | Käyttövirhe |
-| 2 | Kieltäydytty — kohdepolku on jonkun muun omistama, mitään ei muutettu |
+| 2 | Kieltäydytty — kohdepolku on jonkun muun omistama, tai `ln -s` ei tuota tällä koneella aitoa symlinkkiä (ks. osio 3); mitään ei muutettu |
 | 3 | Apply epäonnistui odottamatta |
 | 4 | Valmis, mutta vieras tiedosto varjostaa paketin toimittamaa nimeä |
 
