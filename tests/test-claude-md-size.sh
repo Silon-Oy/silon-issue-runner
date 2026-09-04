@@ -19,6 +19,11 @@
 #      docs/troubleshooting.md)
 #   4. Env-var tables have not crept back in (they belong in docs/env-reference.md)
 #
+# The lib/ module table moved to docs/lib-reference.md for the same reason: it
+# is looked up by filename, not read start to finish, so it is a reference
+# manual and not per-session context. CLAUDE.md keeps only the invariant that
+# survives without the table -- which lib primitives must never be duplicated.
+#
 # Raising MAX_BYTES is a decision, not a fix: if the file legitimately needs to
 # grow, something else in it has become stale and should go first.
 #
@@ -57,7 +62,8 @@ fi
 # CLAUDE.md §0 promises these files. A dangling promise is worse than no
 # promise: the agent stops looking instead of reading the code.
 for target in README.md docs/env-reference.md docs/design-history.md \
-               docs/epic-orchestration.md docs/troubleshooting.md; do
+               docs/epic-orchestration.md docs/troubleshooting.md \
+               docs/lib-reference.md; do
   if grep -q "$(basename "$target")" "$CLAUDE_MD"; then
     if [ -f "$ROOT/$target" ]; then
       echo "PASS: delegated target exists: $target"
