@@ -9,7 +9,9 @@
 #      the exit-code lists live in separate spaces (orchestrator, installer, PR
 #      watcher, status, stop-run) that must never be conflated, and several have
 #      grown a code before (orchestrator gained 8 in #7). Adding a code to a
-#      script without documenting it turns this test red.
+#      script without documenting it turns this test red. The tables themselves
+#      live in docs/troubleshooting.md — a lookup reference read by script name,
+#      not front to back — so that is where the freshness check looks.
 #   c) every relative link resolves to a file that exists in the repo
 #   d) no personal absolute path or token shape leaks into a shared document
 #   e) the security model still names every consent surface it covers
@@ -21,7 +23,8 @@
 #   1. README.md exists and is non-empty
 #   2. Required sections are present as '## ' headings
 #   3. Exit-code freshness: every code in orchestrate.sh / install.sh /
-#      pr-watch.sh / status.sh has a table row, and four separate tables exist
+#      pr-watch.sh / status.sh has a table row in docs/troubleshooting.md, and
+#      four separate tables exist there
 #   4. Relative links resolve to existing paths
 #   5. No leaked absolute paths or token shapes
 #   6. Security-model identifiers are present
@@ -35,6 +38,9 @@ ROOT="$(cd "$HERE/.." && pwd)"
 FAIL=0
 
 README="$ROOT/README.md"
+# Exit-code tables were moved out of README §9 (#228): §9 keeps the symptom map
+# and the run states, the per-script tables live in their own lookup reference.
+TROUBLESHOOTING="$ROOT/docs/troubleshooting.md"
 
 # ---- Case 1: README exists ----
 # Exit immediately when it is missing: every later case would otherwise report a
@@ -75,7 +81,7 @@ assert_exit_codes() {
   local c missing=""
   while IFS= read -r c; do
     [ -n "$c" ] || continue
-    if grep -qE "^\| *$c *\|" "$README"; then
+    if grep -qE "^\| *$c *\|" "$TROUBLESHOOTING"; then
       : # documented
     else
       missing="$missing $c"
@@ -84,7 +90,7 @@ assert_exit_codes() {
   if [ -z "$missing" ]; then
     echo "PASS: $label exit codes documented ($(printf '%s' "$codes" | tr '\n' ' '))"
   else
-    echo "FAIL: $label exit codes missing from README:$missing (source: $file)"; FAIL=1
+    echo "FAIL: $label exit codes missing from docs/troubleshooting.md:$missing (source: $file)"; FAIL=1
   fi
 }
 
@@ -125,7 +131,7 @@ fi
 
 # The four spaces must stay four tables. One merged table would document the
 # codes but lose the fact that code 5 means something different in each script.
-TABLES=$(grep -c '^| *Koodi *|' "$README")
+TABLES=$(grep -c '^| *Koodi *|' "$TROUBLESHOOTING")
 if [ "$TABLES" -ge 4 ]; then
   echo "PASS: $TABLES separate exit-code tables (>= 4 required)"
 else

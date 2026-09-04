@@ -15,7 +15,8 @@
 # Cases:
 #   1. CLAUDE.md is within the size budget
 #   2. The files CLAUDE.md delegates to actually exist
-#   3. Exit-code tables have not crept back in (they belong in README §9)
+#   3. Exit-code tables have not crept back in (they belong in
+#      docs/troubleshooting.md)
 #   4. Env-var tables have not crept back in (they belong in docs/env-reference.md)
 #
 # Raising MAX_BYTES is a decision, not a fix: if the file legitimately needs to
@@ -31,7 +32,7 @@ CLAUDE_MD="$ROOT/CLAUDE.md"
 FAIL=0
 
 MAX_BYTES=40000        # ~10k tokens; the file sat at 29 KB after the 2026-09-01 compaction
-MAX_CODE_TABLES=0      # exit-code tables: README §9 is the guarded mirror
+MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 MAX_ENV_TABLES=0       # env-var tables: docs/env-reference.md is the mirror
 
 if [ ! -f "$CLAUDE_MD" ]; then
@@ -46,15 +47,17 @@ if [ "$BYTES" -le "$MAX_BYTES" ]; then
 else
   echo "FAIL: CLAUDE.md is $BYTES B, over the $MAX_BYTES B budget"
   echo "      It is loaded into every session. Before raising the budget, move"
-  echo "      reference material out: exit codes -> README.md §9, env vars ->"
-  echo "      docs/env-reference.md, per-issue rationale -> the issue's PR."
+  echo "      reference material out: exit codes -> docs/troubleshooting.md,"
+  echo "      env vars -> docs/env-reference.md, per-issue rationale -> the"
+  echo "      issue's PR."
   FAIL=1
 fi
 
 # ---- Case 2: delegated targets exist ----
 # CLAUDE.md §0 promises these files. A dangling promise is worse than no
 # promise: the agent stops looking instead of reading the code.
-for target in README.md docs/env-reference.md docs/design-history.md docs/epic-orchestration.md; do
+for target in README.md docs/env-reference.md docs/design-history.md \
+               docs/epic-orchestration.md docs/troubleshooting.md; do
   if grep -q "$(basename "$target")" "$CLAUDE_MD"; then
     if [ -f "$ROOT/$target" ]; then
       echo "PASS: delegated target exists: $target"
@@ -71,8 +74,9 @@ if [ "$CODE_TABLES" -le "$MAX_CODE_TABLES" ]; then
   echo "PASS: no exit-code tables in CLAUDE.md ($CODE_TABLES found)"
 else
   echo "FAIL: $CODE_TABLES exit-code table(s) in CLAUDE.md"
-  echo "      Source is the script's own '# Exit codes:' header; README §9 is the"
-  echo "      mirror that tests/test-readme.sh derives and guards. A third copy drifts."
+  echo "      Source is the script's own '# Exit codes:' header;"
+  echo "      docs/troubleshooting.md is the mirror that tests/test-readme.sh"
+  echo "      derives and guards. A third copy drifts."
   FAIL=1
 fi
 

@@ -9,7 +9,7 @@ koodista, ja ne rikkoutuisivat uudelleen ilman kirjausta.
 
 | Tieto | Lähde |
 |---|---|
-| Exit-koodit | Skriptin otsikkokommentti `# Exit codes:` — `README.md` §9 on `tests/test-readme.sh`:n vartioima peilaus |
+| Exit-koodit | Skriptin otsikkokommentti `# Exit codes:` — `docs/troubleshooting.md` on `tests/test-readme.sh`:n vartioima peilaus |
 | Ympäristömuuttujien nimet ja oletukset | Koodin `${VAR:-oletus}` + skriptin `# Env:` — `docs/env-reference.md` on täysi peilaus |
 | Miksi yksittäinen muutos tehtiin | Kyseisen issuen PR-kuvaus ja `git log` |
 | Kertynyt perusteluaineisto ennen 2026-09-01 | `docs/design-history.md` (historiallinen, ei ylläpidetty) |
@@ -345,7 +345,7 @@ eri asiaa eri skripteissä. Älä yhtenäistä niitä.
 
 Lähde on kunkin skriptin otsikkokommentti (`# Exit codes:`). `tests/test-readme.sh` **johtaa
 README:n odotukset suoraan näistä**, joten uusi koodi ilman README-riviä on punainen testi.
-Täydet taulukot: `README.md` §9.
+Täydet taulukot: `docs/troubleshooting.md`. `README.md` §9 on ihmisen oirekartta, ei taulukoita.
 
 Sanasto, joka toistuu avaruuksien yli: **0** onnistui tai siisti no-op · **1** käyttövirhe ·
 **2** kieltäydytty / ei kohdetta, mitään ei muutettu · korkeammat koodit = tilakohtainen
