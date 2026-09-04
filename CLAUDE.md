@@ -124,11 +124,9 @@ ei `refuse`a (exit 2). Kieltäytyminen on koko ajon laajuinen, ja `commands`-koh
 asentanut jotain, mihin kukaan ei yllä. Skill on lisätieto; refuse siellä kaataisi myös
 ydinasennuksen.
 
-**Perustelu on pinta, ei toiminta.** Aiempi sanamuoto väitti, ettei runner toimi ilman
-`agents/`- ja `commands/`-linkkejä. Se ei pidä paikkaansa kummastakaan: pollerit kutsuvat
-skriptejä suoraan, eikä yksikään ajo lue `~/.claude/commands`-hakemistoa. `agents/` oli
-sitäkin heikommalla pohjalla — sen neljä määrittelyä kuuluivat agenttitehtaalle, jota runner
-ei koskaan kutsunut, ja hakemisto poistettiin niiden mukana.
+**Perustelu on pinta, ei toiminta.** Runner toimii ilman `commands/`-linkkejä: pollerit
+kutsuvat skriptejä suoraan, eikä yksikään ajo lue `~/.claude/commands`-hakemistoa. Refuse
+suojaa siis ihmisen pintaa, ei ajoa. (`agents/` poistettiin kokonaan agenttitehtaan mukana.)
 
 Riippuvuustarkistus (`lib/preflight.sh`) on asentajassa **neuvoa-antava**, orkestraattorin
 S0-portissa fataali. Sama lähde, eri vakavuus.
@@ -319,6 +317,27 @@ mutta **ei koskaan kirjattava `state.jsonl`iin päätöksenä**. Tyhjä payload 
 epäonnistui, ei että PR on kiinni — ja väärä kirjaus opettaisi hännästä luettavaan historiaan
 päätöksen, joka pudottaisi PR:n ajosta pysyvästi.
 
+### 5.8 Windowsilla argumentti ja tuloste muuttuvat matkalla
+
+Kaksi mitattua muunnosta Git Bashissa, molemmat hiljaisia.
+
+**Tuloste.** Natiivi `jq` avaa stdoutin tekstitilaan ⇒ rivi päättyy `\r\n`, ja `$(...)`
+poistaa `\n`:n muttei `\r`:ää: olemassa oleva polku testautuu puuttuvaksi, watchlist-rivi
+lakkaa täsmäämästä omaan repoonsa, luku luokittuu ei-numeeriseksi. **12/20** Windowsin
+punaisesta testitiedostosta kaatui tähän. `lib/jq-binary.sh` varjostaa `jq`:n muotoon
+`command jq -b` MINGW-haarassa — **vain** jos jq on olemassa ja ottaa lipun, koska
+`command -v jq` on paketin asennustarkistus ja funktio vastaisi "kyllä" ilman jq:ta. Se
+**exportataan**, koska jq-luvut hajautuvat prosesseihin. ~700 kutsupaikkaa ei korjata yksi
+kerrallaan: seuraava lisätty jäisi hiljaa ulos, joten `tests/test-jq-binary.sh` johtaa entry
+point -joukon levyltä fail-closed.
+
+**Argumentti.** MSYS kirjoittaa absoluutin POSIX-polun Windows-muotoon ennen kuin natiivi
+ohjelma näkee sen: `jq --arg p /c/src/repo` saapuu muodossa `C:/src/repo`, kun luettu
+**tiedosto** sanoo yhä `/c/src/repo`. Tiedosto-operandi *tarvitsee* muunnoksen, `--arg`-arvo
+ei, eikä niitä erota etuliitteestä ⇒ globaalia kytkintä ei ole. Polkuarvo kulkee `$ENV`:n
+kautta (`lib/poller-config.sh`, sama idiomi kuin `_pick_filter_jq`). Vartija on
+`windows-latest` `tests.yml`:ssä — pakollinen siinä missä macOS — ei grep.
+
 ## 6. Exit-koodit
 
 **Jokaisella suoritettavalla skriptillä on oma exit-koodiavaruutensa** — sama numero tarkoittaa
@@ -350,6 +369,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `host.sh` | `runner_host`: koneen lyhyt konenimi yhdestä paikasta, nelivaiheisella varapolulla (`hostname -s` → `hostname` ensimmäiseen pisteeseen → `$COMPUTERNAME` → `unknown`). **Ei koskaan palauta tyhjää** — §5.6:n fail-closed-portit lukisivat tyhjän hostin vieraaksi koneeksi |
 | `host-gate-notice.sh` | Host-portin "muuttuja puuttuu" -rivin toimitus: stderr **ja** skriptin oma loki, kerran. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
+| `jq-binary.sh` | `jq --binary` Windowsissa (§5.8). Paketin ainoa exportattava funktio; entry pointit sourcettavat sen |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
 | `issue.sh` | GitHub-issue-operaatiot. Sisältää paketin **ainoan** poimintakyselyn (`pick_oldest_candidate`) ja lapsijoukon **ainoan** resolvoinnin (`list_epic_children`) |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |

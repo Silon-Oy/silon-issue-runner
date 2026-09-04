@@ -58,7 +58,7 @@ tuota virhettä vaan hiljaisuutta.
 |---|---|
 | `git` | `brew install git` |
 | `gh` | `brew install gh` |
-| `jq` | `brew install jq` |
+| `jq` | `brew install jq` (**Windows: 1.7 tai uudempi**, ks. osio 3.2) |
 | `npx` / node | `brew install node` (tai `nvm install --lts`) |
 | Claude CLI | `npm i -g @anthropic-ai/claude-code` |
 | `gh`-kirjautuminen | `gh auth login` |
@@ -529,7 +529,7 @@ skriptin `# Env:`-otsikkokommentti.
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Salaisuustiedoston polku |
-| `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu |
+| `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu. Natiiviasennin (mm. Windows) ⇒ `claude`, ks. osio 3.2 |
 | `RUN_ISSUES_CLAUDE_TIMEOUT` | `3600` | Aikabudjetti per claude-kutsu |
 | `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle kopioitavat labelit (6.3) |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | Montako kertaa aikakatkaistu ajo yritetään uudelleen (6.6 d) |
