@@ -138,6 +138,11 @@ if [ -n "$REMOTE" ] && [ "$REMOTE" != "origin" ]; then
   fi
 fi
 
+# runner_host (issue #213) — --stop compares against run.json.host, which
+# lib/state.sh wrote with this same resolver. Function-only; sets no shell mode.
+# shellcheck source=lib/host.sh
+. "$SCRIPT_DIR/lib/host.sh"
+
 # epic.sh pulls in issue.sh (fetch_issue_json / list_epic_children / list_blocked_by
 # / _epic_labels_have) and labels.sh (labels_add / labels_ensure), and defines the
 # shared propagate_run_labels. Source AFTER arg parsing so --help never needs gh.
@@ -290,7 +295,7 @@ _stop_scan_child_run() {
 }
 
 if [ "$STOP" -eq 1 ]; then
-  THIS_HOST="$(hostname -s 2>/dev/null || echo unknown)"
+  THIS_HOST="$(runner_host)"
   STOP_RUN="${RUN_EPIC_STOP_RUN:-$SCRIPT_DIR/stop-run.sh}"
   # The epic's own label set — its run labels are what we remove FIRST.
   EPIC_LABELS_CSV="$(jq -r '[.labels[]?.name] | join(",")' "$EPIC_JSON" 2>/dev/null || echo "")"

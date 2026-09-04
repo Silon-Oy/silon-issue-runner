@@ -430,7 +430,7 @@ skriptin `# Env:`-otsikkokommentti.
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | Konfiguraatiotiedoston polku |
-| `RUN_ISSUES_POLLER_HOSTS` | *(ei oletusta — pakollinen)* | Glob-kuviot, joita verrataan `hostname -s`:ään. `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0. Asettamatta poller ei aja millään koneella, ja kertoo siitä yhdellä rivillä |
+| `RUN_ISSUES_POLLER_HOSTS` | *(ei oletusta — pakollinen)* | Glob-kuviot, joita verrataan koneen lyhyeen konenimeen (`runner_host`, `lib/host.sh`). `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0. Asettamatta poller ei aja millään koneella, ja kertoo siitä yhdellä rivillä |
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku; asetettuna ainoa ehdokas |
 | `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Pollerien lokihakemisto |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee siivouksen |
@@ -1460,7 +1460,7 @@ Sama numero tarkoittaa eri asiaa orkestraattorissa, asentimessa ja PR-vahdissa. 
 
 ### Poller on host-portattu
 
-Poller vertaa `hostname -s`:ää muuttujaan `RUN_ISSUES_POLLER_HOSTS` ja **exittaa 0** jos
+Poller vertaa koneen lyhyttä konenimeä (`runner_host`) muuttujaan `RUN_ISSUES_POLLER_HOSTS` ja **exittaa 0** jos
 osumaa ei tule. Väärällä koneella se ei siis kerro mitään — se vain ei tee mitään. Sama
 hiljainen `exit 0` seuraa puuttuvasta `tmux`ista, puuttuvasta watchlististä ja viallisesta
 watchlist-JSONista.

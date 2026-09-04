@@ -18,7 +18,7 @@
 # `git pull --ff-only` — never a rebase or reset, so local work is never
 # discarded. Any guard failing skips the pull with a logged reason; that is not
 # an error. An idle port precedes the pull: if a live run exists on THIS host
-# (run.json, status=initialized, host==hostname -s) the WHOLE tick is skipped,
+# (run.json, status=initialized, host==runner_host) the WHOLE tick is skipped,
 # so code is never moved under a running orchestrator (same idea as the
 # dotfiles sync's own idle port).
 #
@@ -103,6 +103,8 @@ done
 . "${RUN_ISSUES_HOME}/lib/poller-config.sh"
 # shellcheck source=lib/log-rotate.sh
 . "${RUN_ISSUES_HOME}/lib/log-rotate.sh"
+# shellcheck source=lib/host.sh
+. "${RUN_ISSUES_HOME}/lib/host.sh"
 # shellcheck source=lib/version.sh
 . "${RUN_ISSUES_HOME}/lib/version.sh"
 # archive_sweep_repo (issue #128): move terminal, aged, PR-closed run-dirs out of
@@ -169,7 +171,7 @@ has_live_run() {
   [ -f "$watchlist" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   jq -e . "$watchlist" >/dev/null 2>&1 || return 1
-  this_host=$(hostname -s 2>/dev/null || echo "")
+  this_host=$(runner_host)
   shopt -s nullglob
   while IFS= read -r repo_path; do
     [ -n "$repo_path" ] || continue

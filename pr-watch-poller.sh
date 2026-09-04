@@ -44,6 +44,10 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/host-gate-notice.sh
 . "${RUN_ISSUES_HOME}/lib/host-gate-notice.sh"
 
+# runner_host (issue #213) — the gate below is its first caller.
+# shellcheck source=lib/host.sh
+. "${RUN_ISSUES_HOME}/lib/host.sh"
+
 # Machine configuration; the pollers' only channel under launchd, which hands
 # an agent no environment of its own. Sourced, so the FILE WINS over an
 # inherited environment variable. Deliberately not ~/.config/run-issues/env:
@@ -64,7 +68,7 @@ LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
 # make a log directory. No default list (#152); see poller.sh for why an unset
 # variable is loud, a non-matching one is not, and why the loud branch reports
 # through host_gate_notice instead of a bare `>&2`.
-HOST=$(hostname -s)
+HOST=$(runner_host)
 if [ -z "${RUN_ISSUES_POLLER_HOSTS:-}" ]; then
   host_gate_notice \
     "$(poller_host_unset_message RUN_ISSUES_POLLER_HOSTS "$POLLER_ENV_FILE" "$HOST")" \

@@ -51,6 +51,14 @@
 #
 # Requires: lib/locking.sh, lib/issue.sh (comment_issue), lib/labels.sh.
 
+# runner_host lives in lib/host.sh — TD_HOST is compared against run.json.host
+# by the callers' comment functions, so it has to come from the same resolver
+# that wrote the field. Path relative to this file; function-only, so
+# re-sourcing is harmless.
+_TEARDOWN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=host.sh
+. "$_TEARDOWN_LIB_DIR/host.sh"
+
 # teardown_log <message…> — one stderr line, prefixed with the verb so the two
 # verbs' lines never read as each other's in a shared tick log.
 teardown_log() {
@@ -133,7 +141,7 @@ teardown_run() {
   # shellcheck disable=SC2034
   {
     TD_ISSUE="$issue"; TD_REMOTE="$remote"
-    TD_HOST="$(hostname -s)"
+    TD_HOST="$(runner_host)"
     TD_TOTAL="$total"; TD_COMPLETED="$completed"; TD_BLOCKING=0
   }
 

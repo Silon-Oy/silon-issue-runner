@@ -50,6 +50,11 @@ PKG_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/poller-config.sh
 . "$PKG_ROOT/lib/poller-config.sh"
 
+# runner_host — the installer reports the host gate against the same name a
+# poller will compute at run time. Pure function file; safe to source here.
+# shellcheck source=lib/host.sh
+. "$PKG_ROOT/lib/host.sh"
+
 # Every filesystem location is derived from $HOME (or an explicit override) so
 # that the test suite can run against a throwaway home on the very machine
 # whose live $HOME/.claude the pollers use.
@@ -529,7 +534,8 @@ print_launchagent_instructions() {
   log ""
   log "The pollers are host-gated and the gate has no default: set"
   log "RUN_ISSUES_POLLER_HOSTS in $HOME/.config/run-issues/poller.env"
-  log "to a glob matching \`hostname -s\`, or they will no-op on every tick."
+  log "to a glob matching this machine's short hostname, or they will no-op"
+  log "on every tick."
 }
 
 print_plan() {
@@ -660,7 +666,7 @@ poller_env_values() {
 # report_preflight for that reason.
 report_host_gate() {
   local host poller_hosts="" action_hosts="" action_base="" key value
-  host="$(hostname -s 2>/dev/null || echo unknown)"
+  host="$(runner_host)"
 
   while IFS='=' read -r key value; do
     case "$key" in

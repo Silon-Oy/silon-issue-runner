@@ -80,6 +80,8 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 #   normalisation, classification, _iso_to_epoch.
 # shellcheck source=lib/poller-config.sh
 . "$RUN_ISSUES_HOME/lib/poller-config.sh"
+# shellcheck source=lib/host.sh
+. "$RUN_ISSUES_HOME/lib/host.sh"
 # shellcheck source=lib/git-remote.sh
 . "$RUN_ISSUES_HOME/lib/git-remote.sh"
 # shellcheck source=lib/locking.sh
@@ -118,7 +120,7 @@ set +e
 
 STATUS_TAIL="${RUN_ISSUES_STATUS_TAIL_LINES:-40}"
 STALE_AFTER="${RUN_ISSUES_STALE_AFTER:-3600}"
-THIS_HOST="$(hostname -s 2>/dev/null || echo unknown)"
+THIS_HOST="$(runner_host)"
 
 # ---- argument parsing ----
 OUT_MODE=""          # "", json, human

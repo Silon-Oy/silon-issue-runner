@@ -10,6 +10,14 @@
 
 set -euo pipefail
 
+# runner_host lives in lib/host.sh: run.json.host is the field every ownership
+# gate reads, so it is written with the same resolver the gates compare against.
+# The path is resolved relative to this file so a caller that has cd'd elsewhere
+# still finds it; the file is function-only, so re-sourcing is harmless.
+_STATE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=host.sh
+. "$_STATE_LIB_DIR/host.sh"
+
 # _state_now: ISO-8601 UTC timestamp on stdout.
 _state_now() {
   date -u +%FT%TZ
@@ -33,7 +41,7 @@ state_init() {
     --arg repo "$repo" \
     --arg issue_num "$issue_num" \
     --arg ts "$(_state_now)" \
-    --arg host "$(hostname -s)" \
+    --arg host "$(runner_host)" \
     '{
       run_id: $run_id,
       repo: $repo,
