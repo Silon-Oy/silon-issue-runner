@@ -172,10 +172,15 @@ done
 # Windows it does so silently. Deleting .gitattributes, or loosening its rule,
 # would reintroduce that failure without touching a single script — so the file
 # is guarded here alongside the other invariants no other test can reach.
+#
+# Comment lines are stripped before the match: the file's own comment block
+# names the eol=lf rule it documents, so grepping the whole file would let a
+# deleted rule pass on the strength of the prose describing it.
 GITATTRIBUTES="$ROOT/.gitattributes"
 if [ -f "$GITATTRIBUTES" ]; then
   echo "PASS: .gitattributes present at the package root"
-  if grep -qE '(^|[[:space:]])eol=lf([[:space:]]|$)' "$GITATTRIBUTES"; then
+  if grep -vE '^[[:space:]]*#' "$GITATTRIBUTES" \
+     | grep -qE '(^|[[:space:]])eol=lf([[:space:]]|$)'; then
     echo "PASS: .gitattributes pins eol=lf"
   else
     echo "FAIL: .gitattributes carries no eol=lf rule — a Windows checkout would"
