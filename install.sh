@@ -37,6 +37,10 @@
 set -euo pipefail
 
 PKG_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
+# Sourced before any other library because they all read jq output (lib/jq-binary.sh).
+# shellcheck source=lib/jq-binary.sh
+. "$PKG_ROOT/lib/jq-binary.sh"
 
 # shellcheck source=lib/preflight.sh
 . "$PKG_ROOT/lib/preflight.sh"

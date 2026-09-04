@@ -19,10 +19,26 @@
 # must never gate a run. Pure functions, no top-level work — safe to source.
 
 # _runner_file_mtime <path> — file mtime as Unix epoch seconds, or empty on
-# failure. macOS `stat -f %m`; GNU `stat -c %Y` is the Linux fallback (the
-# tests run on either).
+# failure. The `stat` format flag is not portable and the two spellings are NOT
+# safely chainable: BSD/macOS reads `-f` as the output format, GNU coreutils
+# reads it as --file-system and answers a `stat -f %m <path>` call by printing a
+# whole filesystem report on stdout AND failing — so a `||` fallback appends the
+# real mtime to that report instead of replacing it, and the caller's arithmetic
+# then dies on `File: unbound variable`. Branch on `uname -s` like every sibling
+# call site (lib/locking.sh:_lock_mtime, lib/machine-env.sh, lib/paths.sh).
 _runner_file_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || printf ''
+  local mtime
+  if [ "$(uname -s)" = "Darwin" ]; then
+    mtime=$(stat -f %m "$1" 2>/dev/null) || return 0
+  else
+    mtime=$(stat -c %Y "$1" 2>/dev/null) || return 0
+  fi
+  # A successful stat that yields non-numeric output is treated as a failure:
+  # the callers feed this straight into $(( )).
+  case "$mtime" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  printf '%s' "$mtime"
 }
 
 # runner_version <dir> — short HEAD sha of <dir>'s git repo, or "?".

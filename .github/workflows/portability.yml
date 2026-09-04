@@ -1,11 +1,14 @@
-# portability.yml — the same test suite on the platforms the package is being
-# ported to. Measurement, not a gate: it runs on main and on demand, never on a
-# pull request, so its result never enters a PR's check rollup (see tests.yml
-# for why that matters to the PR watcher). Read the results in the Actions tab;
-# a red job here is the Windows-migration epic's work list.
+# portability.yml — the test suite on a platform that is measured, not gated.
 #
-# When a platform is green and meant to stay green, it moves into tests.yml as
-# a required job — that is the epic's closing step, not a flag flip here.
+# Measurement, not a gate: it runs on main and on demand, never on a pull
+# request, so its result never enters a PR's check rollup (see tests.yml for why
+# that matters to the PR watcher). Read the results in the Actions tab.
+#
+# Ubuntu is here because the package is USED on Linux run-boxes (README section
+# 3.1) but that path has never been run through end to end, so a red row is a
+# finding rather than a regression. Windows left this file when it went green:
+# a platform that is meant to stay green belongs in tests.yml as a required job,
+# and moving it there is the only way a regression on it can stop a merge.
 name: portability
 
 on:
@@ -20,24 +23,14 @@ jobs:
   tests:
     name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Git Bash spawns processes far slower than macOS; the suite may take many
-    # times its macOS duration on Windows. The cap keeps a wedged run from
-    # burning hours, not from finishing.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [ubuntu-latest]
     defaults:
       run:
-        # On windows-latest this selects Git Bash; on Ubuntu it is the system
-        # bash. The suite is plain bash either way.
         shell: bash
-    env:
-      # Git Bash only: make `ln -s` create real symlinks instead of file copies,
-      # so the installer tests exercise the ownership predicate they are written
-      # against. Ignored on Linux.
-      MSYS: winsymlinks:nativestrict
     steps:
       - uses: actions/checkout@v4
         with:

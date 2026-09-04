@@ -113,6 +113,11 @@ GWS_CMD="${RUN_ISSUES_DIGEST_GWS:-gws}"
 STATE_FILE="${RUN_ISSUES_DIGEST_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha}"
 
 # ---- hard dependency: jq ----
+# Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
+# This script has no other library, so it resolves the shim from its own path.
+_DIGEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/jq-binary.sh
+. "$_DIGEST_DIR/lib/jq-binary.sh"
 if ! command -v jq >/dev/null 2>&1; then
   printf 'status-digest.sh: jq is required but not installed (brew install jq)\n' >&2
   exit 1

@@ -79,7 +79,8 @@ preflight_report_tool() {
 }
 
 # preflight_install_hint <key> — echo the fix command for a dependency.
-#   key = git | gh | jq | npx | claude | gh-auth | timeout | tmux | python3
+#   key = git | gh | jq | jq-binary | npx | claude | gh-auth | timeout | tmux |
+#         python3
 # Returns 1 without output for an unknown key.
 # Single source of truth for fix commands: install.sh reports them advisorily
 # and the orchestrator's S0 gate prints them fatally, so a wording change must
@@ -93,6 +94,7 @@ preflight_install_hint() {
     npx)     printf 'brew install node (or nvm install --lts)\n' ;;
     claude)  printf 'npm i -g @anthropic-ai/claude-code\n' ;;
     gh-auth) printf 'gh auth login\n' ;;
+    jq-binary) printf 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)\n' ;;
     timeout) printf 'brew install coreutils (Git Bash on Windows: scoop install coreutils)\n' ;;
     tmux)    printf 'brew install tmux\n' ;;
     python3) printf 'xcode-select --install\n' ;;
@@ -119,6 +121,27 @@ preflight_probe_claude() {
   else
     "$@" --version >/dev/null 2>&1 </dev/null
   fi
+}
+
+# preflight_jq_binary_ok — 0 when jq's output on THIS platform is safe to read.
+# Everywhere but the Windows shells that is unconditionally true and the probe
+# is skipped. Under Git Bash it is not: jq is a native Windows executable whose
+# stdout is opened in the C runtime's text mode, so every `\n` it writes leaves
+# as `\r\n` and every value the package reads out of jq ends in an invisible
+# carriage return (lib/jq-binary.sh has the measurement). `jq --binary`, added
+# in jq 1.7, is the fix, so a jq that does not take the flag is a dependency
+# that cannot do this job — named here rather than left to surface later as a
+# path that does not exist or a count that is not a number.
+#
+# EXECUTES jq, the third exception to this file's no-side-effects rule and for
+# the same reason as the other two: a name on PATH does not tell us whether the
+# binary honours the contract. `-n` supplies its own input so nothing is read
+# from stdin, and the output is discarded.
+preflight_jq_binary_ok() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) command jq -b -n 1 >/dev/null 2>&1 ;;
+    *) return 0 ;;
+  esac
 }
 
 # preflight_gate_report <mode> <claude-cmd-token...>
@@ -152,6 +175,14 @@ preflight_gate_report() {
       fatal=1
     fi
   done
+
+  # A jq that is present but too old to read from is still a missing dependency:
+  # on Git Bash without `--binary` every value it hands back carries a trailing
+  # carriage return, and the resulting failures name innocent code.
+  if preflight_have jq && ! preflight_jq_binary_ok; then
+    printf 'MISSING (required): jq --binary — %s\n' "$(preflight_install_hint jq-binary)"
+    fatal=1
+  fi
 
   if [ "$mode" = "probe" ]; then
     if ! preflight_have npx; then

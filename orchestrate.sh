@@ -223,6 +223,10 @@ PR_LABELS_CSV="${RUN_ISSUES_PR_LABELS_CSV:-auto-merge}"
 
 # ---------- library loading ----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
+# Sourced before any other library because they all read jq output (lib/jq-binary.sh).
+# shellcheck source=lib/jq-binary.sh
+. "$SCRIPT_DIR/lib/jq-binary.sh"
 # shellcheck source=lib/git-remote.sh
 source "$SCRIPT_DIR/lib/git-remote.sh"
 # shellcheck source=lib/locking.sh

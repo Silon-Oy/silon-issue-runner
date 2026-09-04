@@ -8,6 +8,17 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Windows/Git Bash: jq's output is CRLF unless it is given --binary, and the
+# tests read jq output as heavily as the code does — both directly and through
+# the `gh` shims they write and then execute. The shim exports itself on that
+# platform, so sourcing it once here reaches every test process and every
+# process a test spawns. On macOS and Linux this line defines nothing.
+# A single test run BY HAND on Windows (`bash tests/test-x.sh`) does not pass
+# through here; run it as `bash tests/run-all.sh` or source the shim first.
+# shellcheck source=../lib/jq-binary.sh
+. "$HERE/../lib/jq-binary.sh"
+
 FAIL=0
 
 for t in "$HERE"/test-*.sh; do
