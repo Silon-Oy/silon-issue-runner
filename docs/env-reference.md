@@ -166,6 +166,13 @@ jotka `orchestrate.sh` ja `pr-watch.sh` sourceavat itse. Poller ei tarvitse niis
 lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
 `tests/test-poller-config.sh` vartioi tätä.
 
+### Epic-ajo (`run-epic.sh`)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_EPIC_ORCHESTRATE` | *(pakettijuuren `orchestrate.sh`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio |
+| `RUN_EPIC_STOP_RUN` | *(pakettijuuren `stop-run.sh`)* | **Testien injektiopiste** `--stop`-polulle, ei käyttäjäkonfiguraatio |
+
 ### Self-update (`self-update.sh`, #112)
 
 LaunchAgent (StartInterval 3600), joka pitää asennetun paketin ajan tasalla: kehittäjäkoneella
