@@ -10,7 +10,10 @@
 # Cases:
 #   1. preflight_have: PATH shim -> 0, unknown command -> 1, never prints
 #   2. preflight_timeout_bin: reports timeout|gtimeout|"", empty PATH is not an
-#      error (an unset variable here would abort a caller running `set -u`)
+#      error (an unset variable here would abort a caller running `set -u`),
+#      and acceptance is a `--version` probe rather than a name on PATH — the
+#      name `timeout` belongs to a Windows delay tool that Git Bash puts on
+#      PATH via System32, so an existence check would wrap claude calls in it
 #   3. preflight_report_tool: line format and the 0/1/2 return-code contract
 #   4. preflight_install_hint: exact fix commands (install.sh and the S0 gate
 #      both quote these, so the strings are part of the module's contract)
@@ -88,6 +91,31 @@ else
   echo "FAIL: case2 empty PATH: rc=$rc out='$tb_empty' err='$(cat "$WORK/tb.err")'"; FAIL=1
 fi
 
+# A binary that merely carries the name is not enough. The absolute interpreter
+# path is required for the same reason as in case 6: PATH holds only the shim
+# dir, so `env bash` would not resolve.
+mkdir -p "$WORK/gnu"
+printf '#!/bin/bash\nexit 1\n' > "$WORK/gnu/timeout"
+chmod +x "$WORK/gnu/timeout"
+
+tb_bad=$(PATH="$WORK/gnu" preflight_timeout_bin)
+if [ -z "$tb_bad" ]; then
+  echo "PASS: case2 a 'timeout' that rejects --version is not accepted"
+else
+  echo "FAIL: case2 accepted a non-GNU 'timeout' as '$tb_bad'"; FAIL=1
+fi
+
+printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "timeout (GNU coreutils) 9.9"; exit 0; }\nshift\nexec "$@"\n' \
+  > "$WORK/gnu/gtimeout"
+chmod +x "$WORK/gnu/gtimeout"
+
+tb_fallback=$(PATH="$WORK/gnu" preflight_timeout_bin)
+if [ "$tb_fallback" = "gtimeout" ]; then
+  echo "PASS: case2 falls through a rejecting 'timeout' to a GNU 'gtimeout'"
+else
+  echo "FAIL: case2 reported '$tb_fallback' (expected 'gtimeout')"; FAIL=1
+fi
+
 # ---- Case 3: preflight_report_tool ----
 line=$(preflight_report_tool faketool required "should not matter")
 rc=$?
@@ -146,7 +174,7 @@ check_hint() {
 check_hint jq 'brew install jq'
 check_hint claude 'npm i -g @anthropic-ai/claude-code'
 check_hint gh-auth 'gh auth login'
-check_hint timeout 'brew install coreutils'
+check_hint timeout 'brew install coreutils (Git Bash on Windows: scoop install coreutils)'
 
 out=$(preflight_install_hint run-issues-no-such-key 2>&1)
 rc=$?
@@ -198,8 +226,12 @@ for tool in git gh jq; do
   chmod +x "$WORK/probe/$tool"
 done
 # A real timeout must forward the probed command's exit code, otherwise the
-# stub would mask the very 127 under test.
-printf '#!/bin/bash\nshift\nexec "$@"\n' > "$WORK/probe/timeout"
+# stub would mask the very 127 under test. It must also answer `--version`
+# explicitly: preflight_timeout_bin only accepts a GNU binary, and leaving that
+# to `shift; exec` with no arguments (which returns 0 by accident) would make
+# case 6's subject depend on a coincidence.
+printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "timeout (GNU coreutils) 9.9"; exit 0; }\nshift\nexec "$@"\n' \
+  > "$WORK/probe/timeout"
 chmod +x "$WORK/probe/timeout"
 # npx present but the package absent: exactly the silent 127 that a
 # `command -v npx` check cannot detect.
