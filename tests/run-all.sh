@@ -47,12 +47,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------------------
 # Pool size
 # ---------------------------------------------------------------------------
-# Default to TWICE the machine's cores, because the work is waiting rather than
-# computing: a worker blocked in fork()/exec() leaves its core idle, so one
-# worker per core leaves the machine half asleep. Measured on a 14-core machine,
-# same 92 files: 7 workers 40 s, 14 workers 34 s, 28 workers 30 s. The cap of 32
-# is a guard rather than a measured optimum — past it the wall clock is bounded
-# by the slowest single file anyway, which the summary line names.
+# Default to TWICE the machine's cores. The multiplier is measured, and what it
+# buys depends on what the waiting IS: where a blocked worker leaves its core
+# idle it pays (macOS runner 111 s -> 74 s, 3 cores -> 6 workers; a 14-core
+# machine 34 s -> 30 s), and where the "waiting" is itself CPU work it does not
+# (Windows runner 1015 s -> 1020 s, because MSYS emulates fork() by copying
+# process state — that is compute, and two cores cannot do more of it). Kept as
+# the default because it wins on two platforms and is inside the variance on the
+# third. The cap of 32 is a guard rather than a measured optimum.
 #
 # Five probes, the HIGHEST valid answer wins, and the winner is named in the
 # summary line. The naming is the part that earns its keep: the pool ran two

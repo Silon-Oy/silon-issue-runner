@@ -320,9 +320,11 @@ ympäristöä: asentavan shellin muuttuja olisi väärä puhtaan paperin lupaus.
 |---|---|---|
 | `RUN_ISSUES_TEST_JOBS` | 2 × koneen ytimet, rajattuna välille 2–32 | Montako testitiedostoa ajetaan yhtä aikaa. `1` palauttaa sarja-ajon **ja** live-tulosteen (rinnakkaisajossa tiedoston tuloste odottaa lohkona sen valmistumista) |
 
-Kerroin kaksi on mitattu: prosessin käynnistystä odottava työntekijä jättää ytimensä
-tyhjäkäynnille, joten yksi per ydin nukuttaa koneesta puolet (14-ytimisellä koneella 7/14/28
-työntekijää → 40/34/30 s). Katto 32 on vartija eikä mitattu optimi.
+Kerroin kaksi on mitattu, ja se maksaa itsensä takaisin vain siellä missä estynyt työntekijä
+jättää ytimensä tyhjäkäynnille: macOS-runner 111 s → 74 s ja 14-ytiminen kone 34 s → 30 s,
+mutta Windows-runner 1015 s → 1020 s, koska `fork()`:in emulointi on itsessään
+prosessorityötä. Oletus pidetään, koska se voittaa kahdella alustalla ja mahtuu kolmannen
+hajontaan. Katto 32 on vartija eikä mitattu optimi.
 
 Ydinluku otetaan **suurimpana** viidestä mittarista (`nproc`, `getconf`, `sysctl`,
 `/proc/cpuinfo`, `%NUMBER_OF_PROCESSORS%`), ja yhteenvetorivi nimeää vastanneen mittarin.

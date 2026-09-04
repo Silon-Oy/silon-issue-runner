@@ -1737,9 +1737,11 @@ exittaa **0** — paketti on siis testattavissa ilman alkuperäisen ylläpitäj�
 ### Rinnakkaisajo
 
 Ajuri ajaa testitiedostot rinnakkain, oletuksena **kaksi kertaa ytimien verran** (katto 32).
-Kerroin kaksi on mitattu: työntekijä joka odottaa prosessin käynnistymistä jättää ytimensä
-tyhjäkäynnille, joten yksi työntekijä per ydin nukuttaa koneesta puolet — 14-ytimisellä
-koneella samat 92 tiedostoa veivät 7 työntekijällä 40 s, 14:llä 34 s ja 28:lla 30 s. Myös
+Kerroin kaksi on mitattu, ja sen hyöty riippuu siitä mitä odottaminen on: siellä missä
+estynyt työntekijä jättää ytimensä tyhjäkäynnille se maksaa itsensä takaisin (macOS-runner
+111 s → 74 s, 14-ytiminen kone 34 s → 30 s), ja siellä missä "odottaminen" on itse
+prosessorityötä se ei tee mitään (Windows-runner 1015 s → 1020 s, koska MSYS emuloi
+`fork()`:in kopioimalla prosessitilan — kaksi ydintä ei voi tehdä sitä enempää). Myös
 rinnakkaisuuden syy on mitattu: paketti ei kuormita prosessoria vaan käynnistää prosesseja
 — samat 92 tiedostoa veivät yhdessä CI-ajossa macOS:llä 4,1 min ja Windowsissa 20,3 min, ja
 ne 63 tiedostoa jotka macOS suoritti alle sekunnissa veivät Git Bashissa keskimäärin 6,3 s.
