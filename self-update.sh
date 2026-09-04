@@ -74,7 +74,8 @@ Environment:
   RUN_ISSUES_ARCHIVE_AFTER_DAYS age at which a terminal, PR-closed run-dir is
                                moved to .claude/run-issues-archive/. Default 30;
                                0 or below disables archiving.
-  RUN_ISSUES_LOG_DIR           log directory. Default $HOME/Library/Logs.
+  RUN_ISSUES_LOG_DIR           log directory. The default is platform-dependent;
+                               lib/paths.sh:default_log_dir owns both branches.
   RUN_ISSUES_LOG_MAX_BYTES     rotation threshold. Default 10485760 (0 disables).
 
 Exit codes:
@@ -107,6 +108,8 @@ done
 . "${RUN_ISSUES_HOME}/lib/host.sh"
 # shellcheck source=lib/version.sh
 . "${RUN_ISSUES_HOME}/lib/version.sh"
+# shellcheck source=lib/paths.sh
+. "${RUN_ISSUES_HOME}/lib/paths.sh"
 # archive_sweep_repo (issue #128): move terminal, aged, PR-closed run-dirs out of
 # the hot active directory. self-update is its home (decision 5) — an hourly,
 # already idle-ported tick, NOT the poller's quota-critical path.
@@ -128,7 +131,7 @@ if [ -f "$POLLER_ENV_FILE" ]; then
 fi
 
 # --- Logging -----------------------------------------------------------------
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/run-issues-self-update.log"
 

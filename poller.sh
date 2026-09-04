@@ -30,6 +30,12 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/poller-config.sh
 . "${RUN_ISSUES_HOME}/lib/poller-config.sh"
 
+# default_log_dir (issue #216). Sourced here because LOG_DIR is resolved above
+# the host gate, which is above everything else. Functions only; no top-level
+# work, so sourcing it on a foreign machine still creates nothing.
+# shellcheck source=lib/paths.sh
+. "${RUN_ISSUES_HOME}/lib/paths.sh"
+
 # rotate_log_if_big (issue #65). Sourced here — before the exec redirect below —
 # because rotating .stdout.log/.stderr.log AFTER their fds are opened would leave
 # the fd writing to the moved inode. Defines one function; no top-level work.
@@ -72,7 +78,7 @@ fi
 # Resolved above the gate, created below it. Reading a variable makes nothing,
 # so the foreign-machine branch still leaves no trace on disk — but the unset
 # branch needs the path to report itself into.
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 
 # Host gate. Bail out silently on a machine that was never configured to run
 # the pollers, so that deploying the LaunchAgent somewhere else does nothing.

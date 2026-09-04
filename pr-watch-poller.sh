@@ -48,6 +48,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/host.sh
 . "${RUN_ISSUES_HOME}/lib/host.sh"
 
+# default_log_dir (issue #216). See poller.sh: LOG_DIR is resolved above the
+# host gate. Functions only; no top-level work.
+# shellcheck source=lib/paths.sh
+. "${RUN_ISSUES_HOME}/lib/paths.sh"
+
 # Machine configuration; the pollers' only channel under launchd, which hands
 # an agent no environment of its own. Sourced, so the FILE WINS over an
 # inherited environment variable. Deliberately not ~/.config/run-issues/env:
@@ -61,7 +66,7 @@ if [ -f "$POLLER_ENV_FILE" ]; then
 fi
 
 # Resolved above the gate, created below it — see poller.sh.
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-${HOME}/Library/Logs}"
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 
 # Host gate. Bail out silently on a machine that was never configured to run
 # the pollers, before any path is created — an unknown host must not so much as

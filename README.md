@@ -190,9 +190,9 @@ host-porttaa siivouksen, joten kaksi konetta voi pollata samoja repoja törmää
 | Sidos | Linuxilla |
 |---|---|
 | `stat -f` | Hoidettu — `uname -s` -haara GNU:n `stat -c`:hen |
-| Lukot `~/Library/Application Support/` | `RUN_ISSUES_LOCK_ROOT` |
-| Lokit `~/Library/Logs/` | `RUN_ISSUES_LOG_DIR` |
-| Status-välimuisti | Hoidettu — `XDG_CACHE_HOME` |
+| Lukot | Hoidettu — `uname -s` -haara: oletus on `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/locks`. `RUN_ISSUES_LOCK_ROOT` yhä ohittaa |
+| Lokit | Hoidettu — sama haara: oletus on `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/logs`. `RUN_ISSUES_LOG_DIR` yhä ohittaa |
+| Status-välimuisti | Osittain — `XDG_CACHE_HOME` luetaan, mutta asettamattoman varapolku on yhä `$HOME/Library/Caches`. `RUN_ISSUES_STATUS_CACHE_FILE` ohittaa |
 | `gtimeout` / coreutils | Helpompi — `timeout` on natiivi |
 | **LaunchAgentit + `plutil`** | **Ainoa aito puute.** Korvataan systemd user -yksiköillä, ks. alla. `--with-launchagents` on macOS-polku; älä käytä sitä Linuxilla |
 
@@ -447,7 +447,7 @@ skriptin `# Env:`-otsikkokommentti.
 | `RUN_ISSUES_POLLER_ENV_FILE` | `$HOME/.config/run-issues/poller.env` | Konfiguraatiotiedoston polku |
 | `RUN_ISSUES_POLLER_HOSTS` | *(ei oletusta — pakollinen)* | Glob-kuviot, joita verrataan koneen lyhyeen konenimeen (`runner_host`, `lib/host.sh`). `*` sallii kaikki. Ei osumaa ⇒ poller exittaa 0. Asettamatta poller ei aja millään koneella, ja kertoo siitä yhdellä rivillä |
 | `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin polku; asetettuna ainoa ehdokas |
-| `RUN_ISSUES_LOG_DIR` | `$HOME/Library/Logs` | Pollerien lokihakemisto |
+| `RUN_ISSUES_LOG_DIR` | macOS: `$HOME/Library/Logs`; muut: `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/logs` | Pollerien lokihakemisto. Oletus haarautuu `uname -s`:llä (`lib/paths.sh`) |
 | `RUN_ISSUES_CLEAN_LABEL` | `auto-clean` | Label, joka laukaisee siivouksen |
 | `RUN_ISSUES_RESET_LABEL` | `auto-reset` | Label, joka laukaisee nollauksen: sama purku kuin siivouksessa, mutta issue jää auki |
 | `RUN_ISSUES_PICK_BLOCKED_PROBES` | `20` | Montako poimintaehdokasta enintään tarkistetaan estojen varalta per tikki (#133) |
@@ -1770,14 +1770,17 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 
 ### Mistä lokit löytyvät
 
-- **Pollerit:** `$RUN_ISSUES_LOG_DIR` (oletus `$HOME/Library/Logs`), neljä tiedostoa per
+- **Pollerit:** `$RUN_ISSUES_LOG_DIR` (oletus macOS:llä `$HOME/Library/Logs`, muualla
+  `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/logs`), neljä tiedostoa per
   poller: `.log`, `.runs.log`, `.stdout.log`, `.stderr.log`. Tiedostojen etuliitteet ovat
   `run-issues-poller` ja `pr-watch-poller`.
 - **Self-update:** sama `$RUN_ISSUES_LOG_DIR`, etuliite `run-issues-self-update` (`.log`,
   `.stdout.log`, `.stderr.log`). Rotatoituu `RUN_ISSUES_LOG_MAX_BYTES`illa kuten pollerit.
 - **Yksittäinen ajo:** `<kohderepo>/.claude/run-issues/<run-id>/` — `run.json` (tilan
   tilannekuva) ja `state.jsonl` (append-only tapahtumaloki).
-- **Lukot:** `$HOME/Library/Application Support/run-issues/locks`.
+- **Lukot:** `$RUN_ISSUES_LOCK_ROOT` — oletus macOS:llä
+  `$HOME/Library/Application Support/run-issues/locks`, muualla
+  `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/locks`.
 
 ### Siivous
 

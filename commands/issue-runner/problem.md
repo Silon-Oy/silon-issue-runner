@@ -53,7 +53,9 @@ Kohderepo on **nykyinen työhakemisto**. Selvitä koodista, mikä oireen aiheutt
 2. **Ne tiedostot, joihin oire osuu.** Etsi se koodipolku, joka tuottaa kuvatun käytöksen — älä
    tyydy siihen, että löysit aiheeseen liittyvän tiedoston.
 3. **Lokit, jos ne ovat luettavissa.** Kohderepon omat lokit, ja jos raportoitu ongelma koskee
-   runneria itseään, myös sen lokit hakemistossa `${RUN_ISSUES_LOG_DIR:-$HOME/Library/Logs}`
+   runneria itseään, myös sen lokit hakemistossa `$RUN_ISSUES_LOG_DIR` — jonka oletus on
+   alustakohtainen: macOS:llä `$HOME/Library/Logs`, muualla
+   `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/logs`
    (`.log`, `.runs.log`, `.stdout.log`, `.stderr.log` per poller). Ajokohtainen tila on
    `status.sh`:lla — se on puhtaasti lukeva.
 

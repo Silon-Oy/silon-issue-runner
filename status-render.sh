@@ -95,7 +95,7 @@
 #                              0 (default) = plain local read. Only affects the
 #                              no --input path; ignored when --input is given.
 #   RUN_ISSUES_LOG_DIR         stdout/stderr under launchd go here (default:
-#                              $HOME/Library/Logs). The LaunchAgent plist carries
+#                              platform-dependent, see lib/paths.sh). The plist carries
 #                              no StandardOutPath/StandardErrorPath keys (launchd
 #                              expands no $HOME in them), so — like the pollers —
 #                              this script owns its own log paths.
@@ -137,6 +137,11 @@ SCHEMA_VERSION=1
 # for where status.sh lives and may point at a fixture with no lib/.
 # shellcheck source=lib/action-token.sh
 . "$HERE/lib/action-token.sh"
+
+# default_log_dir — the platform default for the log directory (issue #216).
+# Sourced from HERE for the same reason action-token.sh is. Functions only.
+# shellcheck source=lib/paths.sh
+. "$HERE/lib/paths.sh"
 
 ACTION_BASE="${RUN_ISSUES_ACTION_BASE:-}"
 ACTION_TOKEN=""
@@ -180,7 +185,7 @@ fi
 # there), so redirect our own streams when not on a TTY. A manual run still
 # prints. Usage errors above happen before this point, so they always reach the
 # real terminal.
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-$HOME/Library/Logs}"
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 if [ ! -t 1 ]; then
   mkdir -p "$LOG_DIR" 2>/dev/null || true
   exec >>"$LOG_DIR/status-render.stdout.log" 2>>"$LOG_DIR/status-render.stderr.log"
