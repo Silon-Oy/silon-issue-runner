@@ -57,7 +57,10 @@ ROOT="$(cd "$HERE/.." && pwd)"
 PUB="$ROOT/publish-release.sh"
 
 command -v git >/dev/null 2>&1 || { echo "SKIP: git not installed"; exit 0; }
-[ -x "$PUB" ] || { echo "FAIL: publish-release.sh missing or not executable"; exit 1; }
+# The maintainer tool is deliberately absent from the public mirror (it carries
+# the denylist); this test ships with the mirror, so absence is a SKIP there.
+[ -e "$PUB" ] || { echo "SKIP: publish-release.sh not shipped in this tree (public mirror)"; exit 0; }
+[ -x "$PUB" ] || { echo "FAIL: publish-release.sh present but not executable"; exit 1; }
 
 WORK="$(mktemp -d -t publish-release-test.XXXXXX)" || { echo "SKIP: mktemp failed"; exit 0; }
 trap 'rm -rf "$WORK"' EXIT
