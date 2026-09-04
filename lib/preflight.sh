@@ -8,7 +8,11 @@
 # encoding severity in the return code lets both share one source of truth
 # instead of drifting apart in two copies.
 #
-# Every function is side-effect free: no writes, no exits, no globals.
+# Every function is free of persistent side effects: no writes, no exits, no
+# globals. Two functions — preflight_probe_claude and preflight_timeout_bin —
+# EXECUTE the command they are asked about, because for those two a name on
+# PATH does not imply the contract we need. Each names that exception in its
+# own header.
 
 set -euo pipefail
 
@@ -18,20 +22,36 @@ preflight_have() {
   command -v "$1" >/dev/null 2>&1
 }
 
-# preflight_timeout_bin — echo the name of the available timeout binary:
+# preflight_timeout_bin — echo the name of the available GNU timeout binary:
 #   timeout   — GNU coreutils, the Linux default
 #   gtimeout  — Homebrew coreutils on macOS
 #   ""        — neither; the caller must decide what an unbounded call means
 # An empty result is a legitimate answer, not an error, so the return code
 # stays 0. Callers assigning this under `set -u` therefore never see an unbound
 # variable.
+#
+# EXECUTES each candidate as `<bin> --version`, and that is the point: on
+# Windows the name `timeout` is taken by C:\Windows\System32\timeout.exe, a
+# delay tool that shares nothing but the name, and Git Bash puts System32 on
+# PATH. `command -v` cannot tell the two apart, so a mere existence check would
+# let the wrapper wrap a claude call in the wrong program. GNU timeout answers
+# `--version`; the Windows one rejects the flag. stdin is closed for the same
+# reason as in preflight_probe_claude: a candidate that decides to read must
+# not hang the caller.
+#
+# Limitation: `command -v` resolves only the FIRST PATH match per name. A
+# Windows machine with coreutils installed as `timeout` but System32 earlier on
+# PATH therefore yields "" even though a usable binary exists. The outcome is
+# safe (an unbounded call, not a wrong one); iterating `type -a` is a separate
+# change.
 preflight_timeout_bin() {
-  local bin=""
-  if preflight_have timeout; then
-    bin="timeout"
-  elif preflight_have gtimeout; then
-    bin="gtimeout"
-  fi
+  local bin="" c
+  for c in timeout gtimeout; do
+    if preflight_have "$c" && "$c" --version >/dev/null 2>&1 </dev/null; then
+      bin="$c"
+      break
+    fi
+  done
   printf '%s' "$bin"
 }
 
@@ -73,7 +93,7 @@ preflight_install_hint() {
     npx)     printf 'brew install node (or nvm install --lts)\n' ;;
     claude)  printf 'npm i -g @anthropic-ai/claude-code\n' ;;
     gh-auth) printf 'gh auth login\n' ;;
-    timeout) printf 'brew install coreutils\n' ;;
+    timeout) printf 'brew install coreutils (Git Bash on Windows: scoop install coreutils)\n' ;;
     tmux)    printf 'brew install tmux\n' ;;
     python3) printf 'xcode-select --install\n' ;;
     git-filter-repo) printf 'brew install git-filter-repo\n' ;;
@@ -84,8 +104,9 @@ preflight_install_hint() {
 # preflight_probe_claude <cmd-token...> — run `<cmd-token...> --version` and
 # return its exit code (0 usable, 127 missing, 124 wedged). Prints nothing.
 #
-# The only function in this module that EXECUTES the probed command, and it
-# earns that exception: the default invocation `npx --no-install
+# One of the two functions in this module that EXECUTE the probed command
+# (preflight_timeout_bin is the other), and it earns that exception: the
+# default invocation `npx --no-install
 # @anthropic-ai/claude-code` exits 127 when the package is not installed even
 # though `npx` itself is on PATH, so `command -v` cannot see the failure that
 # actually breaks a run. stdin is closed so a CLI that decides to prompt cannot

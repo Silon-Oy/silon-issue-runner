@@ -23,16 +23,20 @@
 
 set -uo pipefail
 
-# Resolve a timeout binary the same way claude-call.sh does.
-TIMEOUT_BIN=""
-if command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
-elif command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-fi
+# Resolve a timeout binary through the same function claude-call.sh uses, so
+# this test cannot assert the invariants against a binary production would
+# reject: preflight_timeout_bin requires a `--version` answer, and a copy of
+# the old existence check would pick up the Windows delay tool of that name.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/preflight.sh
+. "$HERE/../lib/preflight.sh"
+# The lib sets -e for its production callers; a test must collect every failure.
+set +e
+
+TIMEOUT_BIN="$(preflight_timeout_bin)"
 
 if [ -z "$TIMEOUT_BIN" ]; then
-  echo "SKIP test-timeout-detection: no timeout/gtimeout binary (brew install coreutils)"
+  echo "SKIP test-timeout-detection: no GNU timeout/gtimeout binary ($(preflight_install_hint timeout))"
   exit 0
 fi
 
