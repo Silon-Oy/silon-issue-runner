@@ -9,9 +9,14 @@
 #      the exit-code lists live in separate spaces (orchestrator, installer, PR
 #      watcher, status, stop-run) that must never be conflated, and several have
 #      grown a code before (orchestrator gained 8 in #7). Adding a code to a
-#      script without documenting it turns this test red.
+#      script without documenting it turns this test red. The tables themselves
+#      live in docs/troubleshooting.md — a lookup reference read by script name,
+#      not front to back — so that is where the freshness check looks.
 #   c) every relative link resolves to a file that exists in the repo
 #   d) no personal absolute path or token shape leaks into a shared document
+#
+# (c) and (d) cover docs/troubleshooting.md as well: that text used to live in
+# README §9 and must not lose its guards by having been moved out of it.
 #   e) the security model still names every consent surface it covers
 #
 # This test WRITES NOTHING: no temp dirs, no $HOME access. It only reads files
@@ -21,7 +26,8 @@
 #   1. README.md exists and is non-empty
 #   2. Required sections are present as '## ' headings
 #   3. Exit-code freshness: every code in orchestrate.sh / install.sh /
-#      pr-watch.sh / status.sh has a table row, and four separate tables exist
+#      pr-watch.sh / status.sh has a table row in docs/troubleshooting.md, and
+#      four separate tables exist there
 #   4. Relative links resolve to existing paths
 #   5. No leaked absolute paths or token shapes
 #   6. Security-model identifiers are present
@@ -35,6 +41,9 @@ ROOT="$(cd "$HERE/.." && pwd)"
 FAIL=0
 
 README="$ROOT/README.md"
+# Exit-code tables were moved out of README §9 (#228): §9 keeps the symptom map
+# and the run states, the per-script tables live in their own lookup reference.
+TROUBLESHOOTING="$ROOT/docs/troubleshooting.md"
 
 # ---- Case 1: README exists ----
 # Exit immediately when it is missing: every later case would otherwise report a
@@ -46,6 +55,16 @@ if [ ! -s "$README" ]; then
   exit 1
 fi
 echo "PASS: README.md exists and is non-empty"
+
+# Same reasoning for the lookup reference: cases 3, 4 and 5 all read it, and a
+# missing file would report three unrelated-looking failures with one cause.
+if [ ! -s "$TROUBLESHOOTING" ]; then
+  echo "FAIL: docs/troubleshooting.md missing or empty at $TROUBLESHOOTING"
+  echo "----------------------------------------"
+  echo "readme: FAILURES"
+  exit 1
+fi
+echo "PASS: docs/troubleshooting.md exists and is non-empty"
 
 # ---- Case 2: required sections ----
 # Only heading lines are searched. A section name mentioned in prose must not
@@ -75,7 +94,7 @@ assert_exit_codes() {
   local c missing=""
   while IFS= read -r c; do
     [ -n "$c" ] || continue
-    if grep -qE "^\| *$c *\|" "$README"; then
+    if grep -qE "^\| *$c *\|" "$TROUBLESHOOTING"; then
       : # documented
     else
       missing="$missing $c"
@@ -84,7 +103,7 @@ assert_exit_codes() {
   if [ -z "$missing" ]; then
     echo "PASS: $label exit codes documented ($(printf '%s' "$codes" | tr '\n' ' '))"
   else
-    echo "FAIL: $label exit codes missing from README:$missing (source: $file)"; FAIL=1
+    echo "FAIL: $label exit codes missing from docs/troubleshooting.md:$missing (source: $file)"; FAIL=1
   fi
 }
 
@@ -125,7 +144,7 @@ fi
 
 # The four spaces must stay four tables. One merged table would document the
 # codes but lose the fact that code 5 means something different in each script.
-TABLES=$(grep -c '^| *Koodi *|' "$README")
+TABLES=$(grep -c '^| *Koodi *|' "$TROUBLESHOOTING")
 if [ "$TABLES" -ge 4 ]; then
   echo "PASS: $TABLES separate exit-code tables (>= 4 required)"
 else
@@ -133,28 +152,42 @@ else
 fi
 
 # ---- Case 4: relative links resolve ----
-while IFS= read -r target; do
-  [ -n "$target" ] || continue
-  case "$target" in
-    http*|mailto:*|'#'*) continue ;;
-  esac
-  target="${target%%#*}"
-  [ -n "$target" ] || continue
-  if [ -e "$ROOT/$target" ]; then
-    echo "PASS: link resolves: $target"
-  else
-    echo "FAIL: link target does not exist: $target"; FAIL=1
-  fi
-done < <(grep -o '](\([^)]*\))' "$README" | sed 's/^](//; s/)$//')
+# Link targets are relative to the document, not to the repo root, so each file
+# is checked against its own directory.
+assert_links() {
+  local doc="$1" base="$2" label="$3" target
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    case "$target" in
+      http*|mailto:*|'#'*) continue ;;
+    esac
+    target="${target%%#*}"
+    [ -n "$target" ] || continue
+    if [ -e "$base/$target" ]; then
+      echo "PASS: $label link resolves: $target"
+    else
+      echo "FAIL: $label link target does not exist: $target"; FAIL=1
+    fi
+  done < <(grep -o '](\([^)]*\))' "$doc" | sed 's/^](//; s/)$//')
+}
+
+assert_links "$README" "$ROOT" "README"
+assert_links "$TROUBLESHOOTING" "$ROOT/docs" "troubleshooting"
 
 # ---- Case 5: no leaks ----
-for pat in '/Users/' 'ghp_' 'github_pat_'; do
-  if grep -q -- "$pat" "$README"; then
-    echo "FAIL: README contains '$pat' (personal path or token leak)"; FAIL=1
-  else
-    echo "PASS: no '$pat' in README"
-  fi
-done
+assert_no_leaks() {
+  local doc="$1" label="$2" pat
+  for pat in '/Users/' 'ghp_' 'github_pat_'; do
+    if grep -q -- "$pat" "$doc"; then
+      echo "FAIL: $label contains '$pat' (personal path or token leak)"; FAIL=1
+    else
+      echo "PASS: no '$pat' in $label"
+    fi
+  done
+}
+
+assert_no_leaks "$README" "README"
+assert_no_leaks "$TROUBLESHOOTING" "troubleshooting"
 
 # ---- Case 6: security-model identifiers ----
 # Each identifier stands for one consent surface described in the security
