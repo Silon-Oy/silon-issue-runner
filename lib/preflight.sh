@@ -76,6 +76,7 @@ preflight_install_hint() {
     timeout) printf 'brew install coreutils\n' ;;
     tmux)    printf 'brew install tmux\n' ;;
     python3) printf 'xcode-select --install\n' ;;
+    git-filter-repo) printf 'brew install git-filter-repo\n' ;;
     *)       return 1 ;;
   esac
 }

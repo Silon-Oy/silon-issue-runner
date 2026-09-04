@@ -26,7 +26,7 @@ FAIL=0
 EXPECTED_FILES=(
   orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh
   cleanup-run.sh auto-clean.sh install.sh status.sh status-render.sh
-  action-server.sh action-dispatch.sh self-update.sh publish-release.sh
+  action-server.sh action-dispatch.sh self-update.sh
   .gitignore CLAUDE.md README.md
 )
 EXPECTED_DIRS=(lib prompts tests db-clone commands skills docs/diagrams examples)
@@ -45,13 +45,26 @@ for d in "${EXPECTED_DIRS[@]}"; do
     echo "FAIL: root dir missing: $d"; FAIL=1
   fi
 done
-for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh install.sh status.sh status-render.sh action-server.sh action-dispatch.sh self-update.sh publish-release.sh; do
+for s in orchestrate.sh poller.sh pr-watch.sh pr-watch-poller.sh cleanup-run.sh auto-clean.sh install.sh status.sh status-render.sh action-server.sh action-dispatch.sh self-update.sh; do
   if [ -x "$ROOT/$s" ]; then
     echo "PASS: executable: $s"
   else
     echo "FAIL: not executable: $s"; FAIL=1
   fi
 done
+
+# publish-release.sh is the maintainer tool: present in the upstream, deliberately
+# absent from the public mirror it produces (it carries the denylist). Its absence
+# is therefore a SKIP, not a failure — the same tests must pass in both trees.
+if [ -f "$ROOT/publish-release.sh" ]; then
+  if [ -x "$ROOT/publish-release.sh" ]; then
+    echo "PASS: executable: publish-release.sh"
+  else
+    echo "FAIL: not executable: publish-release.sh"; FAIL=1
+  fi
+else
+  echo "SKIP: publish-release.sh not shipped in this tree (public mirror)"
+fi
 
 # ---- Case 2: nesting guard ----
 # A submodule mounts this repo's ROOT at dotfiles' claude/scripts/run-issues.

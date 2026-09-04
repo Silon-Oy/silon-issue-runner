@@ -39,6 +39,11 @@ Kaksi käyttötapaa:
 Paketti ei sisällä henkilökohtaista konfiguraatiota: ei watchlistiä (vain skeemaesimerkki
 [`examples/`](examples)-hakemistossa), ei koneistokohtaisia env-tiedostoja, ei salaisuuksia.
 
+Paketin lisenssi on **Apache-2.0** ([`LICENSE`](LICENSE), tekijänoikeus Silon Oy, [`NOTICE`](NOTICE)).
+Kehitys tapahtuu yksityisessä repossa, jonka issuet ja PR:t nimeävät asiakkaita; julkinen repo on
+sen **yksisuuntainen peili**, jonka historia on uudelleenkirjoitettu ilman noita nimiä (osio 6.11).
+Peiliin avattu issue on tervetullut; peiliin avattu PR siirretään upstreamiin käsin.
+
 ---
 
 ## 2. Riippuvuudet
@@ -911,7 +916,7 @@ käytettävissä.
 | `poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin issue-automaatio |
 | `pr-watch-poller.sh` | *(LaunchAgent, 300 s)* | Watchlistin PR-automaatio |
 | `install.sh` | `bash install.sh --dry-run` | Asennus (osio 3) |
-| `publish-release.sh` | `publish-release.sh --target <git-url> --customer <nimi> --dry-run` | Historiaton julkaisu asiakasrepoon: vuotoportti + vanhemmaton commit (ks. 6.11). `--repo`, `--yes` |
+| `publish-release.sh` | `publish-release.sh --target <git-url> --dry-run` | Julkaisu julkiseen peiliin: historia uudelleenkirjoitettuna filter-repolla, kaksi vuotoporttia (ks. 6.11). `--repo`, `--yes`, `--force` |
 
 Kaksi asiaa kannattaa muistaa ajaessa käsin:
 
@@ -1068,76 +1073,87 @@ olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman 
 johti kerran väärään "5 vuorokautta jäljessä" -diagnoosiin ja aikeeseen tehdä käsin checkout elävän ajon
 alta (#32). Skeema ja tekninen referenssi: [`docs/design-history.md`](docs/design-history.md).
 
-### 6.11 Julkaisu asiakasrepoon (`publish-release.sh`)
+### 6.11 Julkaisu julkiseen peiliin (`publish-release.sh`)
 
-Kun paketti luovutetaan asiakasorganisaatiolle, joka ajaa sitä itse, luovutus tehdään **ilman
-git-historiaa**: commit-viestit sisältävät asiakkaiden nimiä, eikä historiaa voi siivota ilman
-`git filter-repo`-ajoa, joka kirjoittaisi kaikki sha:t uusiksi ja rikkoisi dotfiles-submodulen
-pinnin. `publish-release.sh` tuottaa siksi kohderepoon **yhden vanhemmattoman commitin** HEADin
-puusta.
+Paketti julkaistaan **julkiseen peilirepoon** (Apache-2.0, osio 1) historioineen. Upstreamin
+historia ei kelpaa sellaisenaan: commit-viestit, diffit ja polut nimeävät asiakkaita, koneita ja
+ylläpitäjän tunnuksia. `publish-release.sh` kirjoittaa siksi historian uusiksi **julkaisuputkessa**
+`git filter-repo`lla, tuoreessa kloonissa `mktemp`-hakemistossa. Upstreamia ei kosketa: sen SHA:t,
+dotfiles-submodulen pinni ja kaikki kloonit pysyvät ennallaan.
 
 ```bash
-publish-release.sh --target git@github.com:asiakas/paketti.git \
-                   --customer "Asiakas Oy" --dry-run   # katso mitä julkaistaisiin
-publish-release.sh --target git@github.com:asiakas/paketti.git \
-                   --customer "Asiakas Oy"             # julkaise (kysyy vahvistuksen)
+publish-release.sh --target git@github.com:org/peili.git --dry-run   # kaikki portit ja uudelleenkirjoitus paikallisesti
+publish-release.sh --target git@github.com:org/peili.git             # julkaise (kysyy vahvistuksen)
+publish-release.sh --target git@github.com:org/peili.git --force     # säännöt muuttuneet: korvaa peilin historia
 ```
 
-Yksisuuntaisuus on **rakenteellinen sivutuote**: yhteistä esivanhempaa ei ole, joten asiakkaan
-kopiosta ei voi vahingossa tulla kaksisuuntaista synkkaa — mergepohjaa ei ole olemassa. Kohteen
-`main` pakotetaan (`--force`) uusimpaan julkaisuun, ja jokainen ajo jättää pysyvän
-`release/<UTC-aikaleima>`-tagin, joten kohteen historia on **julkaisujen jono**, ei upstreamin
-historia. Julkaisucommitin identiteetti on kiinteä ja neutraali (`release
-<release@example.invalid>`): commit-metadata luovutetaan siinä missä tiedostotkin.
+**Uudelleenkirjoitus on deterministinen.** Commitin SHA on tiiviste sisällöstä, vanhemmista ja
+metatiedosta, eikä putki lisää mitään ajankohtaista, joten sama lähde ja samat säännöt tuottavat
+aina täsmälleen saman historian (mitattu: kaksi riippumatonta ajoa tästä reposta antoivat saman
+HEAD-SHA:n). Siitä seuraa kolme asiaa. Toistuva julkaisu samasta lähteestä on no-op: ei pushia,
+ei tagia. Uuden upstream-commitin julkaisu on **fast-forward**, joten peilin kloonaaja voi pullata
+ja `self-update.sh` toimii peiliä vasten. Sääntöjen (denylist, mailmap, rajaukset) muutos kirjoittaa
+koko historian uusiksi, jolloin push ei ole fast-forward ja vaatii `--force` — tarkoituksella, koska
+sääntömuutos on tietoinen päätös eikä sivuvaikutus. Yksisuuntaisuus on rakenteellinen: peilin
+commitit eivät ole upstreamin committeja, joten yhteistä esivanhempaa ei ole eikä kaksisuuntaista
+synkkaa voi vahingossa syntyä. Peiliin tuleva kontribuutio siirretään upstreamiin käsin
+(cherry-pick; puut ovat nimiä lukuun ottamatta identtiset).
 
-**Skriptin tärkein osa on vuotoportti, ei julkaisu.** Se skannaa julkaistavan puun kiellettyjen
-merkkijonojen listaa vasten (asiakas-, henkilö- ja konenimet, domainit) ja **kieltäytyy**, jos
-yksikin osuu — osumat raportoidaan `tiedosto:rivi`-muodossa. Kertaluontoinen siivous vanhenee heti
-kun nimi palaa puuhun; portti tekee siitä pysyvän. Osuma etsitään **sanan alusta** ja kirjainkoosta
-riippumatta. Sanaraja vaaditaan vain termin *edeltä*, ei perästä, ja tämä epäsymmetria on
-tarkoituksellinen: edeltävä raja karsii väärät osumat (`polling`, `pakollinen`), kun taas perässä
-vaadittu raja päästäisi läpi juuri sen luokan vuotoja, jonka portti on olemassa estämään — suomi
-taivuttaa päätteellä (`Nimen`, `Nimelle`) ja tunnisteet ketjuttavat (`nimi_lock`, `wp_nimi`).
-Listalle riittää siis nimen perusmuoto. Lista on skriptin oma vakio, ei konfiguraatiotiedosto: sen
-ylläpito on hyväksyttyä toistoa.
+**Skriptin tärkein osa on kaksi vuotoporttia, ei julkaisu.** Portti työpuuhun kertoo kehittäjälle
+`tiedosto:rivi`-muodossa, mitä korjata, ja ajetaan ennen hitaampaa uudelleenkirjoitusta.
+Historiaportti tarkistaa **lopputuloksen** — jokaisen commit-viestin, polun ja blobin — samalla
+skannerilla eikä luota korvaussääntöihin, joten rikkinäinen tai ohitettu työkalu ei voi tuottaa
+vuotoa. Osuma etsitään **sanan alusta** ja kirjainkoosta riippumatta. Sanaraja vaaditaan vain
+termin *edeltä*, ei perästä, ja tämä epäsymmetria on tarkoituksellinen: edeltävä raja karsii väärät
+osumat (`polling`, `pakollinen`), kun taas perässä vaadittu raja päästäisi läpi juuri sen luokan
+vuotoja, jonka portti on olemassa estämään — suomi taivuttaa päätteellä (`Nimen`, `Nimelle`) ja
+tunnisteet ketjuttavat (`nimi_lock`, `wp_nimi`). Denylist-rivi on `termi` tai `termi==>korvaus`:
+portit lukevat termin, ja uudelleenkirjoitus korvaa osumat **pisimmästä termistä lyhimpään**,
+jottei tunnuksen puolikas jää jäljelle. Sama sääntöjoukko ajetaan viesteihin, blobeihin ja
+tiedostonimiin, koska tiedosto nimeltä `<nimi>-notes.md` vuotaa nimen sisältämättä sitä. Lista on
+skriptin oma vakio, ei konfiguraatiotiedosto. Julkaisijan oma nimi ei ole listalla: peili on
+julkaisijan organisaation alla omalla nimellään, joten nimi on julkaisija eikä vuoto.
 
-Portteja on neljä ja kaikki ovat fail-closed, plan-then-apply -järjestyksessä kuten
-[`install.sh`](install.sh)ssa — **yksikin kieltäytyminen ⇒ nolla kirjoitusta**:
+Portteja on viisi ja kaikki ovat fail-closed, plan-then-apply -järjestyksessä kuten
+[`install.sh`](install.sh)ssa — **yksikin kieltäytyminen ⇒ nolla kirjoitusta**, eikä yksikään
+portti ota yhteyttä kohteeseen:
 
 | Portti | Vaatimus | Exit |
 |---|---|---|
-| Lähdepuu | git-repo, puhdas työpuu, `HEAD == origin/main` (paikallinen ref, ei fetchiä) | 2 |
-| Lisenssipohja | `LICENSE.customer-grant.template` on olemassa ja sisältää `{{CUSTOMER}}` | 4 |
-| Vuotoportti | yksikään kielletty merkkijono ei esiinny julkaistavassa puussa | 3 |
-| Denylist | lista on luettavissa ja epätyhjä — tyhjä lista = porttia ei voitu ajaa | 3 |
+| Lähdepuu | git-repo, puhdas työpuu, `HEAD == origin/main` (paikallinen ref, ei fetchiä), `LICENSE` seurattuna HEADissä | 2 |
+| Denylist | luettavissa ja epätyhjä; yksikään korvaus ei sisällä kiellettyä termiä | 3 |
+| Vuotoportti | yksikään kielletty termi ei esiinny HEADin puussa eikä sen poluissa | 3 |
+| Työkalu | `git filter-repo` on käytettävissä ja uudelleenkirjoitus onnistuu | 6 |
+| Historiaportti | uudelleenkirjoitetun historian yksikään viesti, polku tai blob ei sisällä kiellettyä termiä | 4 |
 
 Kolme asiaa, jotka on helppo ymmärtää väärin:
 
-- **Nimiluettelon kantavat tiedostot eivät mene julkaisuun eivätkä skannaukseen.** Tiedosto, jonka
-  *tehtävä* on luetella kiellettyjä nimiä, osuu määritelmällisesti omaan listaansa: ilman rajausta
-  portti kieltäytyisi ikuisesti eikä nolla-osumatilaa saavuttaisi millään puun siivouksella. Sama
-  piirre tekee tiedostosta myös itsessään vuodon, jos se päätyy asiakkaalle. Rajattuja on kaksi:
-  `publish-release.sh` (ylläpitäjän työkalu, jonka denylist on lista *muiden* asiakkaiden nimiä) ja
-  `tests/test-principles-neutrality.sh` (`principles/coding.md`:n neutraaliusvartija, jonka
-  kielletty sanasto sisältää ylläpitäjän ja koneiden nimet hakukuvioina). Lista on skriptin
-  `EXCLUDED_FROM_RELEASE` ja se on eksplisiittinen, ei tiedostosta johdettu: johdettu rajaus tekisi
-  vuotoportista ohitettavan yhdellä kommenttirivillä.
-- **Skannaus kohdistuu upstreamin sisältöön, ei renderöityyn `LICENSE`-tiedostoon.** Asiakkaan oma
-  nimi on tyypillisesti itse listalla (hän on asiakas), joten renderöidyn lisenssin skannaus
-  kieltäytyisi jokaisesta julkaisusta. Portti estää upstream-vuodon, ei operaattorin tietoisesti
-  antamaa nimeä.
-- **Lisenssitekstiä ei generoida.** `LICENSE` renderöidään ylläpitäjän kirjoittamasta pohjasta
-  (`--customer` täyttää `{{CUSTOMER}}`-paikanpitäjän); pohjan puuttuminen on kieltäytyminen, ei
-  oletusarvo. Upstreamin puussa ei ole `LICENSE`-tiedostoa.
+- **Nimiluettelon kantavat tiedostot poistetaan koko historiasta eivätkä mene skannaukseen.**
+  Tiedosto, jonka *tehtävä* on luetella kiellettyjä nimiä, osuu määritelmällisesti omaan listaansa:
+  ilman rajausta portti kieltäytyisi ikuisesti. Sama piirre tekee tiedostosta itsessään vuodon, jos
+  se päätyy peiliin. Rajattuja on kaksi: `publish-release.sh` (ylläpitäjän työkalu, jonka denylist on
+  lista asiakkaiden nimiä) ja `tests/test-principles-neutrality.sh` (`principles/coding.md`:n
+  neutraaliusvartija, jonka kielletty sanasto sisältää ylläpitäjän ja koneiden nimet hakukuvioina).
+  Lista on skriptin `EXCLUDED_FROM_RELEASE` ja se on eksplisiittinen, ei tiedostosta johdettu:
+  johdettu rajaus tekisi vuotoportista ohitettavan yhdellä kommenttirivillä. Poisto koko historiasta
+  tehdään filter-repon `--invert-paths`-valinnalla, joten peilissä ei ole yhtäkään committia, jossa
+  tiedosto olisi ollut.
+- **Tekijäidentiteetit eivät kuulu porttien piiriin.** Julkisen repon tekijä on julkinen, ja
+  attribuutio on lisenssin tarkoitus. Henkilökohtaiset sähköpostiosoitteet normalisoidaan sen sijaan
+  `--mailmap`illa (sisäänrakennettu lista), ja `--dry-run`in suunnitelma listaa uudelleenkirjoitetun
+  historian identiteetit, jotta ne näkee ennen julkaisua.
+- **Lisenssiä ei generoida.** Peili saa upstreamin seuratun `LICENSE`-tiedoston sellaisenaan; sen
+  puuttuminen HEADistä on kieltäytyminen, ei oletusarvo.
 
-Skripti **ei koske paikalliseen repoon**: lähdepuussa ajetaan vain lukevia git-komentoja, ja koko
-julkaisu rakennetaan `mktemp`-hakemistossa omana git-reponaan (siivotaan trapilla myös
-virhepolulla). `--dry-run` raportoi kohteen, tiedostomäärän ja portin tuloksen **ottamatta yhteyttä
-kohteeseen** — julkaisu on siis suunniteltavissa verkotta. Kohderepon on oltava olemassa ennen ajoa;
-skripti ei luo sitä eikä konfiguroi sen asetuksia. Ajastusta ei ole: julkaisu on tietoinen ihmisen
-toimenpide.
-
----
+Skripti **ei koske paikalliseen repoon**: lähdepuussa ajetaan vain lukevia git-komentoja, ja klooni,
+uudelleenkirjoitus ja push tapahtuvat `mktemp`-hakemistossa (siivotaan trapilla myös virhepolulla).
+`--dry-run` ajaa kaikki viisi porttia ja uudelleenkirjoituksen paikallisesti ja tulostaa suunnitelman
+**ottamatta yhteyttä kohteeseen** — julkaisu on siis todennettavissa verkotta, ja suunnitelman SHA on
+täsmälleen se, joka pushattaisiin. Ensimmäinen yhteys kohteeseen on apply-vaiheen `ls-remote`, joka
+päättää, onko kyseessä no-op, fast-forward vai `--force`a vaativa sääntömuutos. Kun peilin `main`
+liikkuu, kohteeseen jää pysyvä `release/<UTC-aikaleima>`-tagi. Kohderepon on oltava olemassa ennen
+ajoa; skripti ei luo sitä eikä konfiguroi sen asetuksia. Ajastusta ei ole: julkaisu on tietoinen
+ihmisen toimenpide.
 
 ## 7. Turvamalli
 
@@ -1672,20 +1688,22 @@ ensimmäisen ajokelpoisen alaissueen heti. `--stop` **keskeyttää** epicin: se 
 lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla ajolabelit
 **ensin epiciltä, sitten avoimilta lapsilta** (järjestys estää pollerin re-propagoinnin).
 
-### Julkaisu asiakasrepoon (`publish-release.sh`)
+### Julkaisu julkiseen peiliin (`publish-release.sh`)
 
 | Koodi | Merkitys |
 |---|---|
-| 0 | Julkaistu, tai `--dry-run` tulosti suunnitelman, tai vahvistus peruttiin |
-| 1 | Käyttövirhe (tuntematon lippu / puuttuva `--target` tai `--customer`) |
-| 2 | Lähdepuu ei ole julkaistavissa: ei git-repo, likainen työpuu, puuttuva `origin/main` tai `HEAD != origin/main`. Mitään ei kirjoitettu |
-| 3 | Vuotoportti kieltäytyi: kielletty merkkijono löytyi (osumat `tiedosto:rivi`-muodossa) tai denylist oli tyhjä/lukukelvoton. Mitään ei kirjoitettu |
-| 4 | `LICENSE`-pohja puuttuu tai siitä puuttuu `{{CUSTOMER}}`-paikanpitäjä |
-| 5 | Julkaisu epäonnistui: kohteeseen ei saatu yhteyttä tai push torjuttiin. Paikallinen repo on silti muuttumaton |
+| 0 | Julkaistu tai ajan tasalla, tai `--dry-run` tulosti suunnitelman, tai vahvistus peruttiin |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva `--target`) |
+| 2 | Lähdepuu ei ole julkaistavissa: ei git-repo, likainen työpuu, puuttuva `origin/main`, `HEAD != origin/main` tai `LICENSE` puuttuu. Mitään ei kirjoitettu |
+| 3 | Vuotoportti kieltäytyi: kielletty termi löytyi työpuusta (osumat `tiedosto:rivi`-muodossa), denylist oli tyhjä/lukukelvoton tai korvaus sisältää kielletyn termin. Mitään ei kirjoitettu |
+| 4 | Historiaportti kieltäytyi: uudelleenkirjoitettu historia sisältää yhä kielletyn termin viestissä, polussa tai blobissa. Mitään ei kirjoitettu |
+| 5 | Julkaisu epäonnistui: kohteeseen ei saatu yhteyttä, tai push ei ollut fast-forward eikä `--force` annettu. Paikallinen repo on silti muuttumaton |
+| 6 | `git filter-repo` puuttuu tai uudelleenkirjoitus kaatui — työkaluvirhe, ei sisällön kieltäytyminen |
 
-`publish-release.sh` luovuttaa paketin asiakasorganisaatiolle **ilman git-historiaa** (osio 6.11).
-Neljä fail-closed-porttia ajetaan ennen mitään kirjoitusta; tärkein niistä on vuotoportti, joka
-kieltäytyy jos julkaistavassa puussa esiintyy kielletty asiakas-, henkilö- tai konenimi.
+`publish-release.sh` julkaisee paketin julkiseen peiliin **historia uudelleenkirjoitettuna** (osio
+6.11). Viisi fail-closed-porttia ajetaan ennen mitään kirjoitusta; kaksi niistä on vuotoportteja,
+joista toinen tarkistaa työpuun ja toinen uudelleenkirjoitetun historian jokaisen viestin, polun ja
+blobin.
 
 ### Self-update (`self-update.sh`)
 
