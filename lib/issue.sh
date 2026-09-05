@@ -214,6 +214,24 @@ _labels_query_csv() {
 # test the set is strictly safer than it was: an unknown NEGATIVE qualifier does
 # not error on GitHub, it silently matches everything, so a typo used to leak
 # excluded issues into pickup. A typo here yields no match instead.
+#
+# The assignee term is the one filter here that NARROWS rather than excludes,
+# and it is opt-in per repo (watchlist key `assignees`, issue #238). An empty
+# RUN_ISSUES_PICK_ASSIGNEES filters nothing at all — the fail-safe direction,
+# because the alternative reading ("an empty allow-list allows no one") would
+# make a repo stop picking up silently and forever.
+#
+# When the list is set, an issue qualifies if any of its assignees is on it —
+# or, when it has NO assignee, if its author is. The author fallback is what
+# keeps a hand-written issue runnable without anyone assigning it first; the
+# assignee field is then the override that moves the work to another machine.
+# Note the direction of the fallback: it applies only to an UNASSIGNED issue,
+# so assigning an issue to someone outside the list keeps it out of pickup even
+# when a listed login opened it. That is a human opt-out ("I will do this one
+# myself"), and it only exists in repos that set the key.
+#
+# `.assignees` and `.user.login` are already in the REST payload, so none of
+# this costs an extra call.
 _pick_filter_jq() {
   printf '%s' '[ .[]
      | select(.pull_request == null)
@@ -224,6 +242,16 @@ _pick_filter_jq() {
               and ($l | index("epic")) == null
               and ($l | index($ENV.RUN_ISSUES_PICK_CLEAN)) == null
               and ($l | index($ENV.RUN_ISSUES_PICK_RESET)) == null)
+     | select(
+         (($ENV.RUN_ISSUES_PICK_ASSIGNEES // "")
+          | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $want
+         | [ (.assignees // [])[] | .login // empty ] as $has
+         | (.user.login // "") as $author
+         | ($want | length) == 0
+           or (if ($has | length) == 0
+               then ($want | index($author)) != null
+               else ($has | any(. as $login | ($want | index($login)) != null))
+               end))
      | .number ] | .[]'
 }
 
@@ -232,6 +260,11 @@ pick_oldest_candidate() {
   local labels_csv="${2:-}"
   local owner_repo="${3:-}"
   local remote="${4:-}"
+  # The optional per-repo assignee allow-list (watchlist key `assignees`).
+  # It is an ARGUMENT, like the labels, because it is per-repo configuration
+  # the caller resolves; only the jq boundary below needs it in the
+  # environment. Empty (the default) means no assignee filtering at all.
+  local assignees_csv="${5:-}"
   # auto-clean and auto-reset issues are teardown signals handled by the poller's
   # teardown scans, never development candidates. For auto-reset the exclusion is
   # a CORRECTNESS condition rather than an optimisation: the whole point of a
@@ -257,6 +290,7 @@ pick_oldest_candidate() {
     # teardown labels are passed through the environment and read with jq's $ENV.
     export RUN_ISSUES_PICK_CLEAN="$clean_label"
     export RUN_ISSUES_PICK_RESET="$reset_label"
+    export RUN_ISSUES_PICK_ASSIGNEES="$assignees_csv"
     _issue_gh --remote "$remote" -- api "$(_rest_issues_path "$owner_repo" "$qs")" \
       --jq "$(_pick_filter_jq)" 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ); then

@@ -126,7 +126,7 @@ ydinasennuksen.
 
 **Perustelu on pinta, ei toiminta.** Runner toimii ilman `commands/`-linkkejä: pollerit
 kutsuvat skriptejä suoraan, eikä yksikään ajo lue `~/.claude/commands`-hakemistoa. Refuse
-suojaa siis ihmisen pintaa, ei ajoa. (`agents/` poistettiin kokonaan agenttitehtaan mukana.)
+suojaa siis ihmisen pintaa, ei ajoa.
 
 Riippuvuustarkistus (`lib/preflight.sh`) on asentajassa **neuvoa-antava**, orkestraattorin
 S0-portissa fataali. Sama lähde, eri vakavuus.
@@ -162,8 +162,8 @@ valinta joka portissa, ei sattumaa.
   se tarkoittaa "lisää `auto-run` epicin avoimille alaissueille". Jos epic poimittaisiin,
   implementer polttaisi koko timeout-budjetin tehtävään jota ei ole.
 - **Nimetyn ajon voi aina pakottaa `--force`illa.** Fail-closed-portti ei saa olla syy siihen,
-  ettei ajo käynnisty toimivalla koneella. Sama periaate: `RUN_ISSUES_SKIP_PREFLIGHT`,
-  `RUN_ISSUES_RATE_LIMIT_BACKOFF=0`, `RUN_ISSUES_SELF_UPDATE=0`, `RUN_ISSUES_ARCHIVE_AFTER_DAYS=0`.
+  ettei ajo käynnisty toimivalla koneella. Sama periaate koskee muidenkin porttien
+  ohitusmuuttujia (`docs/env-reference.md`).
 
 ### Claimin jälkeinen esto labeloidaan aina
 
@@ -173,13 +173,15 @@ suodatettava**, joten jumiin jäänyt ajo näytti GitHubissa samalta kuin normaa
 yksi hiljainen esto pysäytti kuuden issuen riippuvuusketjun yön yli. `cleanup-run.sh` poistaa
 labelin, joten elinkaari on suljettu.
 
-### Varaus on label, ei assignaatio (#99)
+### Varaus on label, ei assignaatio (#99) — reititys on (#238)
 
-`claim_issue` assignoi saman tilin jolla ihminenkin assignoi, joten "ihmisen assignaatio" ja
-"runnerin varaus" eivät olleet erotettavissa. Varaus on nyt **vain automaation kirjoittama**
-`auto-claimed`-label, ja poiminta suodattaa sillä (`no:assignee` poistui) — käsin assignattu
-issue lähtee ajoon. `verify_claim`in sääntö: **assignee-joukko claimin jälkeen == joukko ennen
-∪ {@me}**. Etukäteen tehty assignaatio ei kaada ajoa, kilpaileva toinen tili huomataan yhä.
+`claim_issue` assignoi saman tilin jolla ihminenkin assignoi, joten ihmisen assignaatio ja
+runnerin varaus eivät olleet erotettavissa. Varaus on **vain automaation kirjoittama**
+`auto-claimed`-label (`no:assignee` poistui); `verify_claim`in sääntö on **joukko claimin
+jälkeen == joukko ennen ∪ {@me}**, joten kilpaileva tili huomataan yhä. Kenttä palasi
+poimintaan **reitityksenä**: per-repo `assignees` ANDataan labeleihin — **opt-in, ja tyhjä
+lista ei suodata mitään**; vastakkainen luenta pysäyttäisi repon hiljaa ja ikuisesti, kuten
+`auto-clean` poimintalabelina.
 
 Label sidotaan `claim_issue`/`unclaim_issue`iin **rakenteellisesti**. Blocked/stalled-finalisoinnit
 **eivät** poista sitä: estynyt ajo pysyy varattuna siivoukseen asti.
@@ -304,7 +306,6 @@ Pollerin `scan_finished` päättää nyt **mitkä** ajot ovat valmiita ja delego
   ja **pushaamattomat commitit haaralla** (`git branch -D` on tuhoava; S10:n `--set-upstream`
   tekee "onko pushattu" paikallisesti ratkaistavaksi).
 
-Takautuva 166,9 GB:n purku on erillinen valvottu kertaoperaatio.
 
 ### 5.7 Lokikohina vaimennetaan tarkoituksella
 
@@ -378,7 +379,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `log-rotate.sh` | Kokoon perustuva lokirotaatio. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `paths.sh` | Lukkojuuren ja lokihakemiston **alustakohtaiset oletukset** (`uname -s`: Darwin ⇒ macOS-polut, kaikki muu ⇒ XDG state). Haara on tarkoituksella ei-valkolista, jotta `MINGW64_NT-*` osuu XDG-haaraan |
 | `machine-env.sh` | Koneen env-tiedoston sourceaus **kutsujan etuoikeudella** (§5.5). Jaettu `orchestrate.sh`:n ja `pr-watch.sh`:n kesken, jotta sääntö on yhdessä paikassa |
-| `poller-config.sh` | Host-portti, watchlistin resolvointi ja repon poimintalabelit. Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa. Kirjoittaa levylle ei koskaan; ainoa ulkoinen komento on watchlistin `jq`-luku |
+| `poller-config.sh` | Host-portti, watchlistin resolvointi ja repon poimintaehdot (labelit, valinnainen `assignees`). Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa. Kirjoittaa levylle ei koskaan; ainoa ulkoinen komento on watchlistin `jq`-luku |
 | `pr-watch-lib.sh` | PR:n luokittelu ja merge-päätös irrotettuna testattavaksi |
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
 | `rate-limit.sh` | Rate-limitin **tekstuaalinen** tunnistus ja jaettu perääntyminen (§5.1) |

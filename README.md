@@ -628,8 +628,9 @@ Issue lähtee siis ajoon **täsmälleen kun kaikki nämä pätevät**:
 
 1. Issue on **avoin**.
 2. Issuella **ei ole `auto-claimed`-labelia** — se on automaation oma varaus käynnissä olevalle
-   tai siivoamattomalle ajolle (ks. 6.4). **Assignaatio ei ole poimintaehto:** käsin assignattu
-   issue lähtee ajoon normaalisti.
+   tai siivoamattomalle ajolle (ks. 6.4). **Assignaatio ei ole varaus:** käsin assignattu issue
+   lähtee ajoon normaalisti, ellei repo ole ottanut käyttöön watchlistin valinnaista
+   `assignees`-rajausta (alempana tässä osiossa).
 3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa — poiminta lukee graafin
    suoraan riippuvuusrajapinnasta ehdokas kerrallaan (ks. 6.5).
 4. Issuella **ei ole** labelia `waiting`, `wip`, `epic`, `auto-clean` eikä `auto-reset`.
@@ -649,7 +650,29 @@ voisi varata issuen ennen purkua, ja purku törmäisi issuekohtaiseen lukkoon jo
 
 Poimintalabelit tulevat konfiguraatiosta kolmessa portaassa: watchlistin repokohtainen
 `labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. **Mikään
-labelin nimi ei ole kovakoodattu poimintaan** — `auto-run` on pelkkä konventio. Poiminta on
+labelin nimi ei ole kovakoodattu poimintaan** — `auto-run` on pelkkä konventio.
+
+**Valinnainen assignee-rajaus (watchlistin `assignees`).** Kun repon merkintä asettaa
+`assignees`-listan, poiminta ottaa vain issuet, jotka on reititetty jollekin listatuista
+GitHub-tunnuksista. Avaimen puuttuessa — oletus — assigneita ei katsota lainkaan ja poiminta on
+täsmälleen entisellään. Ehto **ANDataan** poimintalabelien kanssa, se ei korvaa niitä.
+
+Issue kelpaa, jos jokin sen assigneista on listalla — **tai**, jos issuella ei ole assigneeta
+lainkaan, jos sen **avaaja** on listalla. Avaajafallback on se, jonka ansiosta käsin kirjoitettu
+issue lähtee ajoon ilman erillistä assignaatiota; assignee-kenttä on silloin se, jolla työ
+siirretään toiselle koneelle. Fallback koskee **vain** assignoimatonta issueta, joten sillä on
+tarkoituksellinen kääntöpuoli: **listan ulkopuoliselle assignattu issue jää poimimatta**,
+vaikka listalla oleva tunnus olisi sen avannut. Se on ihmisen opt-out ("teen tämän itse") ja
+pätee vain niissä repoissa, joissa avain on asetettu. Tyhjä lista tarkoittaa samaa kuin puuttuva
+avain: ei suodatusta — ei siis "nolla osumaa ikuisesti".
+
+Tämä on työnjaon **toinen akseli**. Labelit ANDataan, joten työn jakaminen usealle koneelle
+labeleilla vaatii koneelle oman labelin (`auto-run-<kone>`) ja työn siirto on labelin vaihto.
+Kun ajokone tunnistautuu omalla machine user -tilillään, assignee nimeää koneen suoraan
+GitHubin omassa käyttöliittymässä. Assignaatio ei silti ole **varaus** — varaus on yhä
+`auto-claimed`-label (6.4). Sekä `poller.sh` että `drain-queue.sh` lukevat avaimen samalla
+resolvoijalla, joten ne eivät voi olla eri mieltä siitä, mitä tämä kone poimii. Uusia
+API-kutsuja ei synny: assignee- ja avaajatieto on jo poiminnan REST-vastauksessa. Poiminta on
 **pollerin** tehtävä: orkestraattori ei enää poimi (ei `poll`-tilaa, ei `RUN_ISSUES_LABELS_CSV`ää),
 joten koko paketissa on yksi poimintakysely.
 
@@ -1626,6 +1649,7 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | — sama, mutta assigneeta ei ole | Jokin estolabeli päällä: `waiting`, `wip`, `auto-clean` | Poista label |
 | — sama, eikä estolabeleita ole | Issue on estetty natiivilla "blocked by" -riippuvuudella — esto ei näy labeleissa (6.5) | Sulje edeltäjä tai poista riippuvuus issuen näkymästä |
 | — sama, eikä riippuvuuksia ole | Repo ei ole watchlistissä, tai poimintalabelien JA-ehto ei täyty (6.2) | Tarkista watchlist ja repon `labels`-lista |
+| Yksittäinen issue ei lähde ajoon, vaikka labelit ovat oikein | Repolla on watchlistin `assignees`-rajaus, ja issue on assignattu listan ulkopuoliselle tunnukselle (6.2) | Assignaa listatulle tunnukselle, poista assignee kokonaan tai laajenna `assignees`-listaa |
 | Kokonainen repo ei koskaan poimi mitään | `auto-clean` on listattu poimintalabeliksi ⇒ haku on itsensä kanssa ristiriidassa | Poista se watchlistin `labels`-listasta |
 | Poller ei tee mitään eikä kerro miksi | Väärä konenimi, puuttuva `tmux`, puuttuva tai viallinen watchlist — kaikki exittaavat hiljaa nollalla | Lue pollerin loki; ks. "Mistä lokit löytyvät" |
 | Ajo alkoi mutta mitään ei tapahdu | Rinnakkaisuuskatto täynnä | Lokissa `at cap (n/m)`; nosta `global_max_concurrent` tai odota |

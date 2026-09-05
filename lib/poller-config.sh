@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # lib/poller-config.sh — configuration resolution for poller.sh,
-# pr-watch-poller.sh and /issue-runner:new-epic: the host gate, the watchlist
-# lookup and the pickup labels a repo's issues must carry.
+# pr-watch-poller.sh, drain-queue.sh and /issue-runner:new-epic: the host gate,
+# the watchlist lookup and the conditions a repo's issues must meet to be picked
+# up (labels, and the optional per-repo assignee allow-list).
 #
 # Both pollers make the same two decisions before they do anything else, and
 # both must be able to make them on a machine that has no ~/dotfiles. Keeping
@@ -12,8 +13,8 @@
 #
 # Writes nothing, mutates nothing, never exits — that is the guarantee a poller
 # sourcing this at startup depends on. Everything here is also free of external
-# commands except poller_watchlist_pick_labels, which reads the watchlist with
-# jq; it is documented at its own definition.
+# commands except _poller_watchlist_repo_csv, which reads the watchlist with jq
+# for the two lookups built on it; it is documented at its own definition.
 
 set -euo pipefail
 
@@ -146,33 +147,41 @@ poller_pick_labels() {
   fi
 }
 
-# poller_watchlist_pick_labels <watchlist-path> <repo-path> — echo the pickup
-# labels a watchlist records for one repo checkout, and return 0 when the
-# watchlist actually covers that repo, 1 when it does not.
+# _poller_watchlist_repo_csv <watchlist-path> <repo-path> <repo-key> <default-key>
+# — read one string-array key out of the watchlist for one repo checkout.
 #
-# The labels are printed in BOTH cases: rc 1 means "what you got is the built-in
-# default, say so out loud", never "no answer". A caller that swallows the rc
-# still gets a working label set; a caller that reports it
-# (/issue-runner:new-epic) can tell the human that nothing configured this,
-# which is the difference between a considered default and a label that will
-# never be picked up.
+# This is the generic half of the two lookups below. Both of them answer the
+# same question about a different key ("labels", "assignees"), and the half
+# that is hard to get right — the Windows-safe path comparison — must exist
+# once: a second copy could drift into matching repos the other one does not,
+# and a watchlist must not be able to read as "covered" by one lookup and
+# "not covered" by another.
 #
-# Not covered means any of: no path given, no watchlist, an unreadable or
-# unparseable watchlist, or no `.repos[]` entry whose `path` is this checkout.
-# They collapse into one rc AND one label set on purpose. In particular an
-# uncovered repo does NOT inherit the watchlist's `default_labels`: that key is
-# the default for the repos the watchlist lists, and applying it to a repo the
-# watchlist does not list would quietly impose one machine's convention on a
-# checkout no poller here will ever look at.
+# Prints ONE tab-separated line: "<found>\t<default-csv>\t<repo-csv>", where
+# <found> is 1 when a `.repos[]` entry matched this checkout and 0 when none
+# did — including no path given, no watchlist, and an unreadable or
+# unparseable one. <default-csv> is empty when <default-key> is empty or
+# absent, <repo-csv> when nothing matched. The feature-specific half (what an
+# empty answer MEANS, and whether a default applies) belongs to the callers.
+#
+# One line rather than three, and a found FLAG rather than an rc, because both
+# are read through `$(...)`: command substitution eats trailing newlines, so an
+# empty last field would silently merge into the one before it, and a non-zero
+# rc would abort a caller running under `set -e`. Tab is already the separator
+# the entry rows use, so it is already assumed absent from a label.
+#
+# The two key names are package constants interpolated into the jq program,
+# never watchlist data, so nothing a hand-edited file contains reaches jq as
+# program text.
 #
 # Unlike the rest of this file this reads a file and shells out to jq. It still
 # writes nothing, mutates nothing and never exits: the guarantee that matters
 # for a poller sourcing this at startup is intact.
-poller_watchlist_pick_labels() {
-  local watchlist="${1-}" repo_path="${2-}"
+_poller_watchlist_repo_csv() {
+  local watchlist="${1-}" repo_path="${2-}" repo_key="${3-}" default_key="${4-}"
   local default_csv="" repo_csv="" found=""
 
-  if [ -n "$watchlist" ] && [ -f "$watchlist" ] && [ -n "$repo_path" ]; then
+  if [ -n "$watchlist" ] && [ -f "$watchlist" ] && [ -n "$repo_path" ] && [ -n "$repo_key" ]; then
     # THE PATH NEVER CROSSES INTO jq. Under Git Bash, jq is a native Windows
     # program, and MSYS rewrites anything that looks like an absolute POSIX path
     # on its way into one — measured on windows-latest, BOTH channels:
@@ -195,13 +204,17 @@ poller_watchlist_pick_labels() {
     # read as "covered" by one filter and "not covered" by another. Line 1 is the
     # default CSV; every further line is "<path>\t<that entry's CSV>". Trailing
     # slashes are normalised on both sides — `/repo` and `/repo/` are one checkout.
+    local default_expr='""'
+    [ -n "$default_key" ] && default_expr=".${default_key} | csv"
+
+    local prog
+    prog='def norm: (. // "" | tostring) | sub("/+$"; "");
+          def csv:  (. // []) | map(select(type == "string" and length > 0)) | join(",");
+          ('"$default_expr"'),
+          (.repos[]? | ((.path | norm) + "\t" + (.'"$repo_key"' | csv)))'
+
     local rows=""
-    rows=$(jq -r '
-      def norm: (. // "" | tostring) | sub("/+$"; "");
-      def csv:  (. // []) | map(select(type == "string" and length > 0)) | join(",");
-      (.default_labels | csv),
-      (.repos[]? | ((.path | norm) + "\t" + (.labels | csv)))
-    ' "$watchlist" 2>/dev/null) || rows=""
+    rows=$(jq -r "$prog" "$watchlist" 2>/dev/null) || rows=""
 
     if [ -n "$rows" ]; then
       local want="$repo_path"
@@ -224,10 +237,70 @@ poller_watchlist_pick_labels() {
     fi
   fi
 
+  printf '%s\t%s\t%s\n' "${found:-0}" "$default_csv" "$repo_csv"
+}
+
+# poller_watchlist_pick_labels <watchlist-path> <repo-path> — echo the pickup
+# labels a watchlist records for one repo checkout, and return 0 when the
+# watchlist actually covers that repo, 1 when it does not.
+#
+# The labels are printed in BOTH cases: rc 1 means "what you got is the built-in
+# default, say so out loud", never "no answer". A caller that swallows the rc
+# still gets a working label set; a caller that reports it
+# (/issue-runner:new-epic) can tell the human that nothing configured this,
+# which is the difference between a considered default and a label that will
+# never be picked up.
+#
+# Not covered means any of: no path given, no watchlist, an unreadable or
+# unparseable watchlist, or no `.repos[]` entry whose `path` is this checkout.
+# They collapse into one rc AND one label set on purpose. In particular an
+# uncovered repo does NOT inherit the watchlist's `default_labels`: that key is
+# the default for the repos the watchlist lists, and applying it to a repo the
+# watchlist does not list would quietly impose one machine's convention on a
+# checkout no poller here will ever look at.
+poller_watchlist_pick_labels() {
+  local out rest found default_csv repo_csv
+  out=$(_poller_watchlist_repo_csv "${1-}" "${2-}" labels default_labels)
+  found="${out%%$'\t'*}"
+  rest="${out#*$'\t'}"
+  default_csv="${rest%%$'\t'*}"
+  repo_csv="${rest#*$'\t'}"
+
   if [ "$found" = "1" ]; then
     poller_pick_labels "$repo_csv" "$default_csv"
     return 0
   fi
   poller_pick_labels "" ""
   return 1
+}
+
+# poller_watchlist_pick_assignees <watchlist-path> <repo-path> — echo the
+# per-repo `assignees` allow-list as a comma-separated list of GitHub logins,
+# or nothing when the repo entry does not set one. Always returns 0.
+#
+# This is the OTHER routing axis. Pickup labels are ANDed, so splitting work
+# across machines by label needs one label per machine (`auto-run-<host>`) and
+# moving a piece of work means editing the label set. When a runner
+# authenticates as its own machine user, the assignee field names the machine
+# directly: it shows up in GitHub's own UI without anyone memorising a label
+# vocabulary, and work moves by reassigning it.
+#
+# Three deliberate differences from poller_watchlist_pick_labels:
+#
+#   - Empty is a LEGAL answer and means "do not filter by assignee". The label
+#     set can never be empty, because an empty `labels=` term matches every open
+#     issue in the repo; an empty assignee list simply leaves pickup as it was.
+#   - There is therefore no default step and no built-in fallback. A key nobody
+#     set must not turn into a filter nobody asked for.
+#   - The rc carries no information (an uncovered repo and a covered repo
+#     without the key mean exactly the same thing here), so it is always 0 —
+#     callers under `set -e` can assign the result directly.
+poller_watchlist_pick_assignees() {
+  local out repo_csv
+  out=$(_poller_watchlist_repo_csv "${1-}" "${2-}" assignees "")
+  # The third field is the entry's own CSV; the second is the (always empty)
+  # default this key does not have.
+  repo_csv="${out##*$'\t'}"
+  _poller_trim_csv "$repo_csv"
+  return 0
 }

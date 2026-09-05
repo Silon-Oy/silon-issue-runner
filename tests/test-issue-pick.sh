@@ -205,6 +205,67 @@ out="$(pick_oldest_candidate "$REPO" "auto-run" "o/r")"; rc=$?
 check "no matches => empty stdout" "$out" ""
 check "no matches => rc 0" "$rc" "0"
 
+# --- 9b. the optional assignee allow-list (issue #238) ---------------------
+# The one filter here that NARROWS pickup, so every case below is about a way
+# it could narrow too much. The fixture keeps ONE variable per issue:
+#
+#   20  assigned to a listed login              -> picked
+#   21  no assignee, author listed              -> picked (the author fallback)
+#   22  no assignee, author NOT listed          -> not picked
+#   23  assigned OUTSIDE the list, author listed -> not picked (human opt-out)
+#
+# 23 is the case that proves the fallback's direction: it applies only to an
+# unassigned issue, so an explicit assignment wins over authorship.
+cat > "$ISSUES" <<'JSON'
+[
+ {"number":20,"labels":[{"name":"auto-run"}],"assignees":[{"login":"runner-a"}],"user":{"login":"outsider"}},
+ {"number":21,"labels":[{"name":"auto-run"}],"assignees":[],"user":{"login":"author-x"}},
+ {"number":22,"labels":[{"name":"auto-run"}],"assignees":[],"user":{"login":"outsider"}},
+ {"number":23,"labels":[{"name":"auto-run"}],"assignees":[{"login":"outsider"}],"user":{"login":"author-x"}}
+]
+JSON
+
+# Absent and empty must both mean "do not filter": the alternative reading of an
+# empty allow-list ("allow nobody") would make a repo stop picking up silently
+# and forever — the same failure class as listing auto-clean as a pickup label.
+check "no assignee list => unchanged pickup" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r")" "20"
+check "empty assignee list => no filtering" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "")" "20"
+check "whitespace-only assignee list => no filtering" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" " , ")" "20"
+
+check "an assignee on the list is picked" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "runner-a")" "20"
+
+# Hide 20: the next match must be 21 (author fallback), never 22 or 23.
+jq 'map(select(.number != 20))' "$ISSUES" > "$WORK/no20.json" && mv "$WORK/no20.json" "$ISSUES"
+check "an unassigned issue falls back to its author" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "author-x")" "21"
+check "an unassigned issue by an unlisted author is skipped" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "runner-a")" ""
+check "an assignee outside the list wins over a listed author" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "author-x,runner-a")" "21"
+
+# Surrounding whitespace in the CSV must not turn a login into a non-match:
+# the watchlist is hand-edited JSON.
+check "logins are trimmed before matching" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" " author-x , runner-a ")" "21"
+
+# The list must not cost an extra call or change the query: .assignees and
+# .user.login are already in the REST payload.
+: > "$ARGV"
+pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "author-x" >/dev/null
+check "assignee filtering issues exactly one listing call" \
+  "$(grep -c 'repos/o/r/issues?' "$ARGV")" "1"
+# The allow-list belongs in the LOCAL jq filter, never in the query string:
+# a server-side assignee term would change the query shape #133 pinned to REST,
+# and REST has no way to express "unassigned OR assigned to one of these".
+if grep -E '^repos/.*(assignee|creator)' "$ARGV" >/dev/null; then
+  fail "the assignee list leaked into the REST query string"
+fi
+ok "assignee filtering is local: same query, same call count"
+
 # --- 10. poller.sh still delegates; no second pickup query ------------------
 # Issue #99 converged the two pickup searches into one. This guards that
 # convergence AND the #133 move: an inline pickup in poller.sh would be both a
