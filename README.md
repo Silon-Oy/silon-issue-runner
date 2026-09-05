@@ -340,6 +340,13 @@ mihinkään eikä upottaa plistiin.
 **Pollerit eivät lue tätä tiedostoa koskaan.** Ne lokittavat runsaasti, joten salaisuudet
 pidetään niiden prosessin ulkopuolella.
 
+**Etuoikeus on päinvastainen kuin `poller.env`issä.** Nimiavaruuksissa `RUN_ISSUES_*` ja
+`PR_WATCH_*` **kutsujan** jo asettama arvo voittaa tiedoston (tyhjäksi asettaminen lasketaan
+asettamiseksi); muualla — eli salaisuuksissa, joita kukaan ei aseta käsin — tiedosto voittaa.
+"Kutsuja" tarkoittaa prosessin ympäristöä sillä hetkellä, kun skripti käynnistyi, ei paketin
+omia oletuksia: siksi tiedostosta voi asettaa myös `RUN_ISSUES_CLAUDE_CMD`in,
+`RUN_ISSUES_CLAUDE_MODEL`in ja `RUN_ISSUES_CLAUDE_TIMEOUT`in.
+
 ### `$HOME/.config/run-issues/poller.env` — koneen konfiguraatio
 
 LaunchAgent ei peri interaktiivisen shellin ympäristöä, joten tämä tiedosto on ainoa kanava,

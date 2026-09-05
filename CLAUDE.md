@@ -277,10 +277,13 @@ oikean CLI:n `tests/run-all.sh` **käynnisti oikeita, laskutettavia 3600 s agent
 väliaikaisrepoa vasten (mitattu 2026-08-31), eikä mikään tuloste kertonut siitä.
 
 Korjaus on `lib/machine-env.sh`:n **nimiavaruussääntö, ei poikkeuslista:** `RUN_ISSUES_*` ja
-`PR_WATCH_*` ⇒ kutsujan jo asettama arvo voittaa tiedoston (asetettu tyhjäksi = asetettu);
-kaikki muu (salaisuudet, joita kukaan ei aseta käsin) säilyttää `tiedosto voittaa` -semantiikan.
-**Poikkeuslista olisi väärä muoto** — se jättäisi seuraavan lisätyn muuttujan kattamatta, mikä
-on täsmälleen se tapa jolla tämä vika säilyi.
+`PR_WATCH_*` ⇒ kutsujan jo asettama arvo voittaa tiedoston (tyhjäksi asettaminen = asetettu);
+muualla (salaisuudet, joita kukaan ei aseta käsin) tiedosto voittaa. **Poikkeuslista olisi
+väärä muoto** — se jättäisi seuraavan lisätyn muuttujan kattamatta, mikä on täsmälleen se tapa
+jolla tämä vika säilyi. **Ja sääntö kaatuu ajoitukseen:** kutsujan arvot luetaan
+`machine_env_capture`illa ennen kirjastolatauksia, koska kirjaston source-hetken
+`${VAR:-oletus}` näyttäisi muuten kutsujan valinnalta — npx-oletus voitti env-tiedoston
+`RUN_ISSUES_CLAUDE_CMD`in kahdella koneella.
 
 ### 5.6 Havainto sidotaan tilaan, ei tekoon
 

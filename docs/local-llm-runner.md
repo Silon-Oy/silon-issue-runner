@@ -235,8 +235,8 @@ export RUN_ISSUES_CLAUDE_MODEL=""      # malli valitaan kääreessä /v1/models-
 export TOSHLLM_URL="http://127.0.0.1:8080"
 ```
 
-**Tämä ei kuitenkaan vielä riitä, ks. sudenkuoppa 3:** `RUN_ISSUES_CLAUDE_CMD` on annettava
-lisäksi prosessin ympäristössä, kunnes runnerin vika on korjattu.
+Tämä riittää #200:n jälkeen. **Vanhemmalla runnerilla** `RUN_ISSUES_CLAUDE_CMD` on annettava
+lisäksi prosessin ympäristössä, ks. sudenkuoppa 3.
 
 ## Ajon käynnistys
 
@@ -247,7 +247,7 @@ S6:n jälkeen review-porttiin (exit 10), mikä on mittauspiste ennen kalleinta v
 cat > ~/run-issue.sh <<'EOF'
 #!/usr/bin/env bash
 export PATH=/usr/local/bin:$HOME/.local/bin:$PATH
-export RUN_ISSUES_CLAUDE_CMD="$HOME/.local/bin/claude-toshllm"   # sudenkuoppa 3
+export RUN_ISSUES_CLAUDE_CMD="$HOME/.local/bin/claude-toshllm"   # vanhemmalla runnerilla pakollinen, ks. sudenkuoppa 3
 export TOSHLLM_URL="http://127.0.0.1:8080"
 "$HOME/.claude/scripts/run-issues/orchestrate.sh" "$HOME/projektit/<kohde>" "$1" 2>&1 | tee -a "$HOME/run-issue-$1.log"
 echo "EXIT=${PIPESTATUS[0]}" | tee -a "$HOME/run-issue-$1.log"
@@ -257,11 +257,11 @@ tmux new -d -s issue-63 "bash ~/run-issue.sh 63"
 tail -f ~/run-issue-63.log
 ```
 
-Jatko porttin jälkeen samalla ympäristöllä — muuten implementer lähtisi paketin oletusajurille:
+Jatko portin jälkeen. Env-tiedosto pätee myös `--resume`-polulla, joten ajuria ei tarvitse
+toistaa; vanhemmalla runnerilla (sudenkuoppa 3) se on annettava:
 
 ```bash
-RUN_ISSUES_CLAUDE_CMD="$HOME/.local/bin/claude-toshllm" \
-  ~/.claude/scripts/run-issues/orchestrate.sh --resume <run-dir> --decision PROCEED
+~/.claude/scripts/run-issues/orchestrate.sh --resume <run-dir> --decision PROCEED
 ```
 
 Run-dir on kohderepon `.claude/run-issues/<run-id>`; `01-cycle-review.out` ja `state.jsonl`
@@ -301,22 +301,23 @@ lämmin alle 1,5 min.
 2. **Avainnippu ja ssh.** Ks. pystytys 3. Sama koskee LaunchAgent-polleria: ilman
    `--insecure-storage` poller jumittuisi hiljaa samaan lupakyselyyn.
 
-3. **Env-tiedoston `RUN_ISSUES_CLAUDE_CMD` ei tule voimaan — runnerin vika.**
-   `lib/claude-call.sh` antaa `RUN_ISSUES_CLAUDE_CMD`:lle, `RUN_ISSUES_CLAUDE_MODEL`ille ja
+3. **Env-tiedoston `RUN_ISSUES_CLAUDE_CMD` ei tullut voimaan — korjattu #200:ssa.**
+   `lib/claude-call.sh` antoi `RUN_ISSUES_CLAUDE_CMD`:lle, `RUN_ISSUES_CLAUDE_MODEL`ille ja
    `RUN_ISSUES_CLAUDE_TIMEOUT`ille oletuksen jo source-hetkellä, ja `lib/machine-env.sh`:n
-   snapshot (#144, kutsujan etuoikeus) pitää tuota oletusta kutsujan valintana ja palauttaa sen
-   env-tiedoston arvon päälle. Sama trap on dokumentoitu samassa tiedostossa
-   `RUN_ISSUES_PRINCIPLES_FILE`n kohdalla, mutta korjaus rajattiin siihen. Oire: S0-preflight
-   kaatuu riviin `MISSING (required): @anthropic-ai/claude-code` vaikka env-tiedosto nimeää
-   ajurin. Toistuu yhdellä komennolla paketin juuressa:
+   snapshot (#144, kutsujan etuoikeus) piti tuota oletusta kutsujan valintana ja palautti sen
+   env-tiedoston arvon päälle. Oire oli S0-preflightin rivi
+   `MISSING (required): @anthropic-ai/claude-code` vaikka env-tiedosto nimesi ajurin.
+   Tilannekuva otetaan nyt `machine_env_capture`illa ennen kirjastojen latausta, joten
+   env-tiedosto riittää yksin. **Jos ajat vanhempaa runneria**, kierto on antaa muuttuja
+   prosessin ympäristössä (`export` ennen `orchestrate.sh`-kutsua). Vian palaamisen huomaa
+   yhdellä komennolla paketin juuressa:
    ```bash
-   bash -c '. lib/preflight.sh; . lib/claude-call.sh; . lib/machine-env.sh; log(){ :; }
+   bash -c '. lib/preflight.sh; . lib/machine-env.sh; machine_env_capture
+     . lib/claude-call.sh; log(){ :; }
      RUN_ISSUES_ENV_FILE=$(mktemp); echo "export RUN_ISSUES_CLAUDE_CMD=/from/file" > "$RUN_ISSUES_ENV_FILE"
-     source_machine_env; echo "$RUN_ISSUES_CLAUDE_CMD"'      # tulostaa npx-oletuksen, ei /from/file
+     source_machine_env; echo "$RUN_ISSUES_CLAUDE_CMD"'      # odotus: /from/file
    ```
-   Kierto: muuttuja prosessin ympäristössä (`export` ennen `orchestrate.sh`-kutsua), jossa
-   kutsujan etuoikeus toimii oikein. Pollerimallissa vika ei näy, koska poller exporttaa
-   `poller.env`in muuttujat ympäristöön.
+   Pollerimallissa vika ei näkynyt, koska poller exporttaa `poller.env`in muuttujat ympäristöön.
 
 4. **"unrecognized_model"-varoitus on vaaraton.** CLI kirjoittaa
    `[claude-code:unrecognized_model]`-rivin stderriin jokaisesta kutsusta, koska gguf-polku ei

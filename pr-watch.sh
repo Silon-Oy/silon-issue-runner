@@ -68,8 +68,29 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The watcher uses the same env file (~/.config/run-issues/env) as the
+# orchestrator: it's a LaunchAgent that does not inherit the interactive shell.
+#
+# Issue #144 factored this into lib/machine-env.sh, which the orchestrator also
+# uses. The comment that used to stand here justified the duplication by the two
+# copies' different logging — but the duplication is what let the precedence bug
+# exist in two places at once, and _machine_env_log resolves the logging
+# difference by discovering the caller's `log` (the lib/run-terminate.sh pattern).
+# The rule the shared helper enforces: inside RUN_ISSUES_*/PR_WATCH_* the
+# caller's already-set value WINS over the file; secrets keep file-wins.
+#
+# Sourced and captured FIRST (issue #200), before every other library, because
+# "already set" has to mean the process environment as this script was invoked.
+# Taken any later it also covered lib/claude-call.sh's own `${VAR:-default}`
+# assignments, so the package's npx default was restored over the env file's
+# RUN_ISSUES_CLAUDE_CMD and the file could not name the CLI at all. Pure function
+# definitions; source_machine_env still runs at its old place below.
+# shellcheck source=lib/machine-env.sh
+. "$SCRIPT_DIR/lib/machine-env.sh"
+machine_env_capture
 # Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
-# Sourced before any other library because they all read jq output (lib/jq-binary.sh).
+# Sourced before every library that reads jq output (lib/jq-binary.sh); only
+# lib/machine-env.sh above precedes it, and it never calls jq.
 # shellcheck source=lib/jq-binary.sh
 . "$SCRIPT_DIR/lib/jq-binary.sh"
 # shellcheck source=lib/git-remote.sh
@@ -112,19 +133,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # is a pass-through when App mode is off, so wrapping every gh call here is
 # regression-free for repos that don't configure the App.
 #
-# The watcher uses the same env file (~/.config/run-issues/env) as the
-# orchestrator: it's a LaunchAgent that does not inherit the interactive shell.
-#
-# Issue #144 factored this into lib/machine-env.sh, which the orchestrator also
-# uses. The comment that used to stand here justified the duplication by the two
-# copies' different logging — but the duplication is what let the precedence bug
-# exist in two places at once, and _machine_env_log resolves the logging
-# difference by discovering the caller's `log` (the lib/run-terminate.sh pattern).
-# The rule the shared helper enforces: inside RUN_ISSUES_*/PR_WATCH_* the
-# caller's already-set value WINS over the file; secrets keep file-wins.
-# shellcheck source=lib/machine-env.sh
-. "$SCRIPT_DIR/lib/machine-env.sh"
-RUN_ISSUES_ENV_FILE="${RUN_ISSUES_ENV_FILE:-$HOME/.config/run-issues/env}"
+# lib/machine-env.sh is sourced and captured at the TOP of this section, before
+# every other library — see the comment there. Only the injection happens here.
 source_machine_env
 # shellcheck source=lib/github-app-auth.sh
 . "$SCRIPT_DIR/lib/github-app-auth.sh"
