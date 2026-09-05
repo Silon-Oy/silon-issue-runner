@@ -92,7 +92,6 @@ cat > "$BIN/gh" <<'SH'
 # Only the create call reaches this stub; record its stdin, answer via --jq.
 cat >> "$GH_PAYLOADS"
 echo "1" >> "$GH_CALLS"
-login=$(jq -r '(.assignees // []) | join(",")' "$GH_PAYLOADS")
 # Mirror GitHub: the response lists the assignees that were actually set.
 printf '{"number":7,"id":901,"assignees":%s}\n' \
   "$(jq -c '[(.assignees // [])[] | {login: .}]' "$GH_PAYLOADS")" \
@@ -135,7 +134,7 @@ for spec in "$NEW_ISSUE|CREATED=\$(jq -n" "$NEW_EPIC|create_issue() {"; do
 
   if run_create "$file" "$marker" "octocat"; then
     check "$(wc -l < "$WORK/calls" | tr -d ' ')" 1 "case3 $b creates the issue with one call"
-    check "$(jq -r '.assignees | join(",")' "$WORK/payload.json")" "octocat" \
+    check "$(jq -r '(.assignees // []) | join(",")' "$WORK/payload.json")" "octocat" \
       "case3 $b payload assigns the authenticated login"
   fi
 
