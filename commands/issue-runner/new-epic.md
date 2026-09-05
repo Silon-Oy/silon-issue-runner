@@ -303,11 +303,11 @@ lopputulokseen: tunnusta ei saatu (osio 1) tai GitHub pudotti sen oikeuksien puu
 Kumpikaan ei estä ketjun ajoa tänään, mutta reititys jää näkymättömäksi eikä siirrettäväksi, ja
 sen huomaa vain tästä raportista.
 
-**Assignee on reitityksen kahva.** Ajokoneen watchlist voi rajata poiminnan nimetyille
-tunnuksille, ja silloin issuen assigneen vaihtaminen siirtää työn sille koneelle, jonka watchlist
-tuon tunnuksen nimeää — vaihto tehdään GitHubin käyttöliittymästä, ei tällä komennolla. Ilman
-tuota rajausta assignee on merkintä, joka ei vielä ohjaa poimintaa: poimintahaku suodattaa
-labeleilla eikä assigneella (`lib/issue.sh`, `_pick_filter_jq`).
+**Assignee on reitityksen kahva.** Tänään se on merkintä, joka ei vielä ohjaa poimintaa:
+poimintahaku suodattaa labeleilla eikä assigneella (`lib/issue.sh`, `_pick_filter_jq`), eikä
+watchlistissä ole tunnusrajausta. Kun sellainen tulee, issuen assigneen vaihtaminen siirtää työn
+sille koneelle, jonka watchlist tuon tunnuksen nimeää — vaihto tehdään GitHubin
+käyttöliittymästä, ei tällä komennolla.
 
 Jokaisesta epäonnistuneesta kirjoituksesta kerrotaan **komento, jolla ihminen tekee sen käsin** —
 yllä olevat `gh api` -kutsut kelpaavat sellaisenaan. Lopuksi:
