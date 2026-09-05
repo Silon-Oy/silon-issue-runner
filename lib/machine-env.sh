@@ -32,6 +32,26 @@
 # "Set to empty" counts as SET: the caller chose it, so the file does not
 # overwrite it.
 #
+# WHEN "ALREADY SET" IS MEASURED (issue #200). The rule above is only as good as
+# the moment it reads the environment. Taking the snapshot inside
+# source_machine_env made every `${VAR:-default}` that any module had already
+# materialised look like a deliberate caller choice: lib/claude-call.sh is
+# sourced first and assigns RUN_ISSUES_CLAUDE_CMD/_MODEL/_TIMEOUT at source
+# time, so the package's own npx default was restored OVER the env file's value
+# and ~/.config/run-issues/env could no longer name the CLI at all. Measured on
+# two machines: S0 preflight failed with "MISSING (required):
+# @anthropic-ai/claude-code" while the env file named an installed driver.
+#
+# The snapshot is therefore taken by machine_env_capture, which entry points
+# call BEFORE loading any library. "The caller" then means what it says: the
+# process environment as the script was invoked, not whatever the package had
+# assigned to itself in between.
+#
+# `compgen -e` (exported variables only) was considered and rejected: orchestrate.sh
+# exports RUN_ISSUES_AUTO — and, on the repo-config path, RUN_ISSUES_CLAUDE_TIMEOUT —
+# before source_machine_env runs, so export-ness does not separate the caller
+# from the package either.
+#
 # Pure function definitions — sourcing this file has no side effects.
 
 # _machine_env_log <message> — logs through the caller's `log` when it has one
@@ -54,6 +74,24 @@ _machine_env_snapshot() {
   for n in $(compgen -v 2>/dev/null | grep -E '^(RUN_ISSUES_|PR_WATCH_)' || true); do
     printf '%s=%q\n' "$n" "${!n}"
   done
+}
+
+# The captured caller environment, and whether it was captured at all. Both are
+# read through `${VAR:-}` on load so that sourcing this file twice (orchestrate.sh
+# has guards of this shape elsewhere) cannot discard a capture already taken.
+_MACHINE_ENV_CAPTURED="${_MACHINE_ENV_CAPTURED:-}"
+_MACHINE_ENV_CAPTURED_VALUES="${_MACHINE_ENV_CAPTURED_VALUES:-}"
+
+# machine_env_capture — record the caller's RUN_ISSUES_*/PR_WATCH_* values NOW.
+#
+# Call it as early as an entry point can: after resolving SCRIPT_DIR and before
+# sourcing any other library, so that no module's own `${VAR:-default}` has run
+# yet (see the header). Idempotent — a second call keeps the first capture, so
+# the earliest caller wins and a re-source cannot widen the snapshot.
+machine_env_capture() {
+  [ -z "$_MACHINE_ENV_CAPTURED" ] || return 0
+  _MACHINE_ENV_CAPTURED_VALUES=$(_machine_env_snapshot)
+  _MACHINE_ENV_CAPTURED=1
 }
 
 # source_machine_env — source $RUN_ISSUES_ENV_FILE, then restore the caller's
@@ -80,8 +118,17 @@ source_machine_env() {
     *) _machine_env_log "WARNING: env file $f has permissions $perm — recommend 'chmod 600 $f' (it holds secrets)" ;;
   esac
 
+  # Prefer the early capture. Falling back to a snapshot taken here keeps the
+  # function usable on its own (unit tests, a future caller that never calls
+  # machine_env_capture): the precedence rule still holds, only the definition of
+  # "the caller" degrades to "whatever is set right now". Fail-soft on purpose —
+  # a public function that silently depends on call order would be its own trap.
   local caller_values
-  caller_values=$(_machine_env_snapshot)
+  if [ -n "$_MACHINE_ENV_CAPTURED" ]; then
+    caller_values="$_MACHINE_ENV_CAPTURED_VALUES"
+  else
+    caller_values=$(_machine_env_snapshot)
+  fi
 
   _machine_env_log "sourcing machine-local env file: $f"
   # The file is hand-written shell, not authored for `set -euo pipefail`, so

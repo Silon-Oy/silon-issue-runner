@@ -25,9 +25,28 @@ fi
 # Hard wall-clock budget per claude invocation. 60 minutes accommodates
 # implementer cycles in slower repos (e.g. pnpm monorepos whose verification
 # step builds + runs tests) that otherwise time out on the first attempt and
-# only succeed after the restart ramp. A repo can still override this via
-# .claude/run-issues.json (claude_timeout_seconds) or the env var.
-RUN_ISSUES_CLAUDE_TIMEOUT="${RUN_ISSUES_CLAUDE_TIMEOUT:-3600}"
+# only succeed after the restart ramp.
+#
+# A named constant rather than `RUN_ISSUES_CLAUDE_TIMEOUT="${VAR:-3600}"`, for
+# the same reason RUN_ISSUES_PRINCIPLES_FILE is left untouched below: this module
+# is sourced before the target repo's .claude/run-issues.json is read, and
+# load_repo_timeout's "did anyone override this?" test cannot tell a repo-level
+# value it should apply from a default we assigned ourselves a moment earlier.
+# Materialising it here made claude_timeout_seconds dead configuration.
+# Resolution therefore happens at call time, through claude_call_timeout:
+#   1. RUN_ISSUES_CLAUDE_TIMEOUT from the environment / machine env file
+#   2. claude_timeout_seconds in the target repo's .claude/run-issues.json
+#      (applied by orchestrate.sh's load_repo_timeout, which yields to 1)
+#   3. this default
+RUN_ISSUES_CLAUDE_TIMEOUT_DEFAULT=3600
+
+# claude_call_timeout — the effective per-call budget in seconds. The one place
+# the default is applied, so the ramp in orchestrate.sh's restart path and the
+# `timeout` prefix below cannot disagree about the base (they used to: 1800 vs
+# 3600).
+claude_call_timeout() {
+  printf '%s\n' "${RUN_ISSUES_CLAUDE_TIMEOUT:-$RUN_ISSUES_CLAUDE_TIMEOUT_DEFAULT}"
+}
 
 # The CLI invocation used for every claude call. Defaults to the globally
 # installed npm package via npx, which routes usage through the Claude plan
@@ -90,12 +109,14 @@ RUN_ISSUES_CONTRACT_FILE_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pw
 #     unset = use the packaged standard, empty = send no coding standard at all
 #     (the contract above is unaffected either way).
 #     Presence (${VAR+x}), not emptiness, is therefore the test everywhere below.
-#  2. lib/machine-env.sh snapshots every ALREADY-SET RUN_ISSUES_* name and
-#     restores it over the machine env file. Anything this module materialises at
-#     source time (claude-call.sh is sourced before source_machine_env runs) can
-#     consequently never be set from ~/.config/run-issues/env again. Leaving the
-#     variable untouched keeps that delivery channel open and keeps "nobody
-#     configured this" decidable for the whole run.
+#  2. "nobody configured this" has to stay decidable for the whole run, because
+#     the repo-level lookup (load_repo_principles_file) runs long after this file
+#     is sourced and must be able to tell an unconfigured run from an overridden
+#     one. A default assigned here would answer "configured" to every later
+#     question. This is the same trap that made claude_timeout_seconds dead
+#     configuration (see RUN_ISSUES_CLAUDE_TIMEOUT_DEFAULT above) — and, until
+#     issue #200 moved lib/machine-env.sh's snapshot to machine_env_capture, it
+#     also locked ~/.config/run-issues/env out of RUN_ISSUES_CLAUDE_CMD/_MODEL.
 #
 # Resolution therefore happens lazily, at call time:
 #   1. RUN_ISSUES_PRINCIPLES_FILE from the environment / machine env file
@@ -255,7 +276,7 @@ _resolve_timeout() {
   local tb
   tb=$(preflight_timeout_bin)
   if [ -n "$tb" ]; then
-    printf '%s --kill-after=60 %s' "$tb" "$RUN_ISSUES_CLAUDE_TIMEOUT"
+    printf '%s --kill-after=60 %s' "$tb" "$(claude_call_timeout)"
   else
     printf '' # no-op
   fi

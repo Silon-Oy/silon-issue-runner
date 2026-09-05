@@ -18,7 +18,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_BASE_BRANCH` | *(repon oletushaara)* | Pakotettu base-haara |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | `--restart`-budjetti timeoutin jälkeen |
 | `RUN_ISSUES_MAX_CLARIFICATIONS` | `3` | Tarkennussilmukan katto |
-| `RUN_ISSUES_CLAUDE_TIMEOUT` | `3600` (claude-call.sh oletus 1800) | Perusaikabudjetti per claude-kutsu |
+| `RUN_ISSUES_CLAUDE_TIMEOUT` | *(asettamatta)* = `RUN_ISSUES_CLAUDE_TIMEOUT_DEFAULT` (`3600`) | Perusaikabudjetti per claude-kutsu. **Asettamatta jättäminen on merkitsevää:** `lib/claude-call.sh` ei materialisoi oletusta source-hetkellä, koska `load_repo_timeout` lukee juuri tämän muuttujan asetettuna olon merkkinä siitä, ohittiko joku sen — materialisoitu oletus teki kohderepon `claude_timeout_seconds`istä kuolleen konfiguraation. Oletus sovelletaan kutsuhetkellä (`claude_call_timeout`) |
 | `RUN_ISSUES_CLAUDE_TIMEOUT_MAX` | `3600` | Ramppaavan timeoutin katto |
 | `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu. **Windows:** Claude Coden natiiviasennin ei asenna npm-pakettia vaan `claude`-komennon polulle, jolloin oletus exittaa 127 ja S0-portti raportoi puuttuvan Claude CLI:n — aseta `RUN_ISSUES_CLAUDE_CMD=claude`. Saman nimen kertoo portin virheilmoituksen vihje. Ohitettu arvo vaihtaa S0:n `probe`-moodin `have`-moodiin: omalle ajurille ei arvata `--version`-semantiikkaa (README §3.2) |
 | `RUN_ISSUES_CLAUDE_MODEL` | *(tyhjä)* | Mallin ohitus |
@@ -165,6 +165,14 @@ LaunchAgentit, ja `RUN_ISSUES_RENDER_GITHUB` luetaan sitä kautta LaunchAgent-po
 jotka `orchestrate.sh` ja `pr-watch.sh` sourceavat itse. Poller ei tarvitse niistä yhtäkään ja
 lokittaa runsaasti, joten salaisuudet pidetään sen prosessin ulkopuolella.
 `tests/test-poller-config.sh` vartioi tätä.
+
+**`env`-tiedoston etuoikeus on `poller.env`in vastakohta** (`lib/machine-env.sh`, #144):
+nimiavaruuksissa `RUN_ISSUES_*` ja `PR_WATCH_*` **kutsuja voittaa tiedoston**, muualla tiedosto
+voittaa. Ratkaisevaa on, *milloin* "kutsujan asettama" luetaan: `machine_env_capture` ottaa
+tilannekuvan prosessin ympäristöstä ennen kuin yhtäkään kirjastoa on ladattu (#200), joten
+paketin omat `${VAR:-oletus}`-materialisoinnit eivät kelpaa kutsujan valinnaksi. Ennen tätä
+`lib/claude-call.sh`:n npx-oletus palautui env-tiedoston arvon päälle, eikä tiedostosta voinut
+asettaa `RUN_ISSUES_CLAUDE_CMD`ia lainkaan.
 
 ### Self-update (`self-update.sh`, #112)
 

@@ -223,8 +223,32 @@ PR_LABELS_CSV="${RUN_ISSUES_PR_LABELS_CSV:-auto-merge}"
 
 # ---------- library loading ----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/machine-env.sh
+# source_machine_env with CALLER PRECEDENCE (issue #144). Shared with pr-watch.sh
+# so the precedence rule exists once; the copy that used to live here silently
+# overwrote a caller's RUN_ISSUES_* choice, which let the test suite run the real
+# claude CLI against its own stub.
+#
+# Loaded FIRST and captured immediately (issue #200): machine_env_capture defines
+# "what the caller set" as the process environment at startup. Every library below
+# materialises its own `${VAR:-default}` at source time, and the snapshot used to
+# be taken after all of them — so lib/claude-call.sh's npx default counted as a
+# caller choice and was restored over whatever ~/.config/run-issues/env said,
+# making RUN_ISSUES_CLAUDE_CMD/_MODEL unsettable from the machine's only config
+# channel for a hand-started run. Pure function definitions, so an early source
+# has no side effects; source_machine_env itself still runs at its old place,
+# after ensure_node_runtime and before the S0 gate.
+source "$SCRIPT_DIR/lib/machine-env.sh"
+machine_env_capture
+# NOTE the deliberate asymmetry with RUN_ISSUES_AUTO/RUN_ISSUES_REVIEW_GATE
+# above: those are resolved BEFORE this point and are therefore part of the
+# capture, so the env file cannot flip a run into auto mode. Whether a run is
+# interactive is a property of how it was invoked, not of the machine it runs on
+# — and RUN_ISSUES_REVIEW_GATE is derived from RUN_ISSUES_AUTO right there, so a
+# later change to one would leave the other stale.
 # Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
-# Sourced before any other library because they all read jq output (lib/jq-binary.sh).
+# Sourced before every library that reads jq output (lib/jq-binary.sh); only
+# lib/machine-env.sh above precedes it, and it never calls jq.
 # shellcheck source=lib/jq-binary.sh
 . "$SCRIPT_DIR/lib/jq-binary.sh"
 # shellcheck source=lib/git-remote.sh
@@ -260,12 +284,8 @@ source "$SCRIPT_DIR/lib/labels.sh"
 # Runner-version visibility (issue #32): read by _post_situation_to_issue so a
 # hand-off report names the code version that produced it, and by --version.
 source "$SCRIPT_DIR/lib/version.sh"
-# shellcheck source=lib/machine-env.sh
-# source_machine_env with CALLER PRECEDENCE (issue #144). Shared with pr-watch.sh
-# so the precedence rule exists once; the copy that used to live here silently
-# overwrote a caller's RUN_ISSUES_* choice, which let the test suite run the real
-# claude CLI against its own stub.
-source "$SCRIPT_DIR/lib/machine-env.sh"
+# lib/machine-env.sh is sourced at the TOP of this section, before every other
+# library — see the comment there.
 # shellcheck source=lib/github-app-auth.sh
 # Sourced AFTER source_machine_env (below) populates env vars. We require the
 # file to exist; the helper guards every side effect on gha_enabled, so loading
@@ -277,10 +297,16 @@ export RUN_ISSUES_AUTO
 
 # ---------- claude timeout configuration ----------
 # Base wall-clock budget per claude invocation. Resolution order:
-#   1. RUN_ISSUES_CLAUDE_TIMEOUT already set in the environment (explicit override)
+#   1. RUN_ISSUES_CLAUDE_TIMEOUT already set in the environment or the machine
+#      env file (explicit override)
 #   2. claude_timeout_seconds in the target repo's .claude/run-issues.json (opt-in,
 #      same convention as .claude/db-clone.json)
-#   3. claude-call.sh's own default (1800s)
+#   3. claude-call.sh's own default (RUN_ISSUES_CLAUDE_TIMEOUT_DEFAULT, 3600s),
+#      applied by claude_call_timeout at call time
+# Step 2 was dead until issue #200: claude-call.sh materialised the default at
+# source time, so the "already set?" test below was true on every run and no
+# repo config ever applied. The variable is now left UNSET unless someone
+# actually configured it, which is what makes that test mean what it says.
 # On restart we ramp the budget up per retry; see restart_load_state.
 RUN_ISSUES_CLAUDE_TIMEOUT_MAX="${RUN_ISSUES_CLAUDE_TIMEOUT_MAX:-3600}"
 
@@ -457,7 +483,12 @@ ensure_node_runtime
 # code that gets sourced, so it must be user-owned with chmod 600 — we warn (but
 # do not fail) on laxer permissions. When the file is absent the behaviour is
 # unchanged from before (one log line, no secrets injected) — no regression.
-RUN_ISSUES_ENV_FILE="${RUN_ISSUES_ENV_FILE:-$HOME/.config/run-issues/env}"
+# The default path is applied by source_machine_env itself, not restated here:
+# a second `${RUN_ISSUES_ENV_FILE:-...}` would be a copy of the same decision,
+# and after issue #200 it would also materialise the variable AFTER the caller
+# snapshot was taken — leaving the process pointing at a path the env file could
+# then redirect, with nothing left to source.
+#
 # lib/machine-env.sh owns the sourcing and the precedence rule: inside the
 # package's own RUN_ISSUES_*/PR_WATCH_* namespaces the caller's already-set value
 # WINS over the file; everything else (secrets) keeps file-wins. Running this once
@@ -1280,7 +1311,11 @@ restart_load_state() {
   # base (env override > repo config > claude-call default).
   load_repo_timeout "$REPO_ROOT"
   load_repo_principles_file "$REPO_ROOT"
-  local base="${RUN_ISSUES_CLAUDE_TIMEOUT:-1800}"
+  # claude_call_timeout, not a second `:-` default: this line used to say 1800
+  # while claude-call.sh said 3600, so an unconfigured run ramped from a base it
+  # never actually used.
+  local base
+  base=$(claude_call_timeout)
   local ramped=$(( base * (1 + new_retry) ))
   if [ "$ramped" -gt "$RUN_ISSUES_CLAUDE_TIMEOUT_MAX" ]; then
     ramped="$RUN_ISSUES_CLAUDE_TIMEOUT_MAX"

@@ -274,18 +274,20 @@ kasvun `.runs.log`ista (mitattu 190 MB).
 
 ### 5.5 Testien on tehtävä kahdella koneella sama asia
 
-`orchestrate.sh` ja `pr-watch.sh` sourceavat koneen env-tiedoston prosessin sisällä. Tiedosto
-on käsin kirjoitettua shelliä täynnä `export FOO=bar` -rivejä, ja **`export` voittaa
-komentoetuliitteen** — joten sourceaus ylikirjoitti kutsujan tietoisen valinnan. Testit
-stubbaavat agentin `RUN_ISSUES_CLAUDE_CMD`illa, joten koneella jonka env-tiedosto exporttaa
-oikean CLI:n `tests/run-all.sh` **käynnisti oikeita, laskutettavia 3600 s agenttiajoja**
-väliaikaisrepoa vasten (mitattu 2026-08-31). Mikään tuloste ei kertonut siitä.
+`orchestrate.sh` ja `pr-watch.sh` sourceavat koneen env-tiedoston prosessin sisällä. Se on
+käsin kirjoitettua shelliä täynnä `export FOO=bar` -rivejä, ja **`export` voittaa
+komentoetuliitteen** — joten sourceaus ylikirjoitti kutsujan valinnan. Testit stubbaavat
+agentin `RUN_ISSUES_CLAUDE_CMD`illa, joten koneella jonka env-tiedosto exporttaa oikean CLI:n
+`tests/run-all.sh` **käynnisti oikeita, laskutettavia agenttiajoja** hiljaa (2026-08-31).
 
 Korjaus on `lib/machine-env.sh`:n **nimiavaruussääntö, ei poikkeuslista:** `RUN_ISSUES_*` ja
-`PR_WATCH_*` ⇒ kutsujan jo asettama arvo voittaa tiedoston (asetettu tyhjäksi = asetettu);
-kaikki muu (salaisuudet, joita kukaan ei aseta käsin) säilyttää `tiedosto voittaa` -semantiikan.
-**Poikkeuslista olisi väärä muoto** — se jättäisi seuraavan lisätyn muuttujan kattamatta, mikä
-on täsmälleen se tapa jolla tämä vika säilyi.
+`PR_WATCH_*` ⇒ kutsujan jo asettama arvo voittaa tiedoston (tyhjäksi asettaminen = asetettu);
+muualla (salaisuudet, joita kukaan ei aseta käsin) tiedosto voittaa. **Poikkeuslista olisi
+väärä muoto** — se jättäisi seuraavan lisätyn muuttujan kattamatta, mikä on täsmälleen se tapa
+jolla tämä vika säilyi. **Ja sääntö kaatuu ajoitukseen:** kutsujan arvot luetaan
+`machine_env_capture`illa ennen kirjastolatauksia, koska kirjaston source-hetken
+`${VAR:-oletus}` näyttäisi muuten kutsujan valinnalta — npx-oletus voitti env-tiedoston
+`RUN_ISSUES_CLAUDE_CMD`in kahdella koneella.
 
 ### 5.6 Havainto sidotaan tilaan, ei tekoon
 
@@ -377,7 +379,7 @@ Yksi rivi per moduuli. Jos tarvitset funktiotason yksityiskohtia, lue tiedosto.
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
 | `log-rotate.sh` | Kokoon perustuva lokirotaatio. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `paths.sh` | Lukkojuuren ja lokihakemiston **alustakohtaiset oletukset** (`uname -s`: Darwin ⇒ macOS-polut, kaikki muu ⇒ XDG state). Haara on tarkoituksella ei-valkolista, jotta `MINGW64_NT-*` osuu XDG-haaraan |
-| `machine-env.sh` | Koneen env-tiedoston sourceaus **kutsujan etuoikeudella** (§5.5). Jaettu `orchestrate.sh`:n ja `pr-watch.sh`:n kesken, jotta sääntö on yhdessä paikassa |
+| `machine-env.sh` | Koneen env-tiedoston sourceaus **kutsujan etuoikeudella** (§5.5) |
 | `poller-config.sh` | Host-portti, watchlistin resolvointi ja repon poimintalabelit. Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa. Kirjoittaa levylle ei koskaan; ainoa ulkoinen komento on watchlistin `jq`-luku |
 | `pr-watch-lib.sh` | PR:n luokittelu ja merge-päätös irrotettuna testattavaksi |
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
@@ -418,8 +420,8 @@ on siis ainoa kanava, jolla kone voi konfiguroida itsensä. Se **sourcetaan**, j
 voittaa ympäristömuuttujan**. Poikkeuksia kaksi, molemmat rakenteellisia: `RUN_ISSUES_HOME` ja
 `RUN_ISSUES_POLLER_ENV_FILE` resolvoidaan ennen sourcea.
 
-Saman `poller.env`in lukevat kaikki LaunchAgentit: molemmat pollerit, `status-render.sh`,
-`self-update.sh` ja `action-server.sh`. Yksi konekohtainen tiedosto konfiguroi kaikki.
+Yksi konekohtainen tiedosto konfiguroi kaikki LaunchAgentit; lukijat luettelee
+`docs/env-reference.md`.
 
 **Kaksi env-tiedostoa, vastakkaiset etuoikeudet.** Tämä on helppo sekoittaa, ja sekoittaminen
 maksoi kerran oikeita agenttiajoja (§5.5):
