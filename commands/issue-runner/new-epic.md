@@ -18,6 +18,8 @@ kokonaisuudessaan: [`docs/epic-orchestration.md`](../../docs/epic-orchestration.
 - **Ei cross-repo-epicejä.** Kaikki lapset syntyvät samaan repoon kuin epic. (Lukupuoli tukee
   cross-repoa, luonti ei.)
 - Komento **ei koskaan kirjoita `auto-claimed`-labelia** — se on automaation oma varaus.
+- **Assignee ei ole valinta.** Sekä epic että jokainen alaissue assignataan sille tunnukselle,
+  jolla `gh` on autentikoitu; vaihtaminen tapahtuu jälkikäteen GitHubissa.
 
 ## 0. Ilman argumenttia: usage
 
@@ -51,10 +53,19 @@ set -e
 
 OWNER_REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
+# Assignee = se tunnus, jolla gh on autentikoitu. Paljas gh tarkoituksella:
+# App-identiteetti palauttaisi Appin, eivätkä GitHub Appit voi olla assigneita.
+RUNNER_LOGIN=$(gh api user --jq .login 2>/dev/null) || RUNNER_LOGIN=""
+
+# Tyhjä tunnus => kenttä jätetään pois payloadista, ei lähetetä tyhjää listaa.
+ASSIGNEES_JSON=$(jq -cn --arg login "${RUNNER_LOGIN:-}" \
+  'if ($login | length) > 0 then [$login] else [] end')
+
 echo "OWNER_REPO=$OWNER_REPO"
 echo "WATCHLIST=${WATCHLIST:-<ei löytynyt>}"
 echo "PICK_LABELS=$PICK_LABELS"
 echo "WATCHLIST_COVERS_REPO=$COVERED"
+echo "RUNNER_LOGIN=${RUNNER_LOGIN:-<ei tunnusta>}"
 ```
 
 **`COVERED=1` on kerrottava käyttäjälle suunnitelmassa sanallisesti**, esim.: *"Watchlist ei kata
@@ -67,6 +78,15 @@ kuin väärä label: molemmissa issue ei lähde ajoon eikä mikään kerro miksi
 `auto-clean`, `waiting`, `wip`, `needs-human`, `auto-claimed` — **älä jatka**. Poimintahaku
 sulkee ne pois, joten vaadittuna ne tuottavat nolla osumaa ikuisesti. Kerro käyttäjälle, mikä
 label on kyseessä ja että watchlistin `labels`/`default_labels` on korjattava ensin.
+
+**Tunnus haetaan kerran, tässä** — sekä epic että jokainen alaissue saa saman assigneen osion 3
+jaetun `create_issue`n kautta. Kutsu on **paljas `gh`** eikä kulje `gha_with_token`in kautta
+samasta syystä kuin `verify_claim`in oma `gh api user` -lookup (`lib/issue.sh`): GitHub App ei
+voi olla issuen assignee.
+
+**Tyhjä tunnus ei ole este.** Jos `gh api user` epäonnistuu, issuet luodaan ilman assigneeta ja
+osion 4 raportti **sanoo sen ääneen**. Hiljaa pudotettu assignee on juuri se vika, jota nämä
+komennot ovat estämässä.
 
 ## 2. Pilko kokonaisuus — suunnitelma
 
@@ -181,21 +201,30 @@ Se on osion 4 raportin ainoa lähde.
 LEDGER=$(mktemp)
 echo "LEDGER=$LEDGER"
 
-# Luo yksi issue ja tulosta "<numero> <id>". Runko tulee tiedostosta, jotta
-# markdown, rivinvaihdot ja backtickit säilyvät koskemattomina.
+# Luo yksi issue ja tulosta "<numero> <id> <assigneet>". Runko tulee tiedostosta,
+# jotta markdown, rivinvaihdot ja backtickit säilyvät koskemattomina. Assignee
+# menee samaan payloadiin (osio 1): yksi kutsu per issue, ei erillistä
+# assignauskutsua, joka epäonnistuessaan jättäisi issuen ilman assigneeta.
 create_issue() {   # <otsikko> <runkotiedosto>
-  jq -n --arg t "$1" --rawfile b "$2" '{title: $t, body: $b}' \
-    | gh api "repos/$OWNER_REPO/issues" --input - --jq '[.number, .id] | @tsv'
+  jq -n --arg t "$1" --rawfile b "$2" --argjson a "$ASSIGNEES_JSON" \
+    '{title: $t, body: $b} + (if ($a | length) > 0 then {assignees: $a} else {} end)' \
+    | gh api "repos/$OWNER_REPO/issues" --input - \
+        --jq '[.number, .id, ([.assignees[].login] | join(","))] | @tsv'
 }
 ```
+
+**Assignee luetaan vastauksesta, ei oleteta.** GitHub **pudottaa hiljaa** assigneen, jolla ei ole
+repoon kirjoitusoikeutta: kutsu onnistuu, mutta issue jää assignaamatta. Sama funktio palauttaa
+siis todellisen assignee-joukon, ja se kirjataan `$LEDGER`iin muun tuotoksen tapaan.
 
 ### 3.0 Epic-issue (ilman labeleita)
 
 ```bash
 EPIC_LINE=$(create_issue "$EPIC_TITLE" "$EPIC_BODY_FILE") \
   || { echo "FAIL: epicin luonti epäonnistui — mitään ei ole vielä kirjoitettu"; exit 1; }
-IFS=$'\t' read -r EPIC_NUM EPIC_ID <<<"$EPIC_LINE"   # erotin on tabi, ei väli
-echo "epic #$EPIC_NUM (id $EPIC_ID) luotu" | tee -a "$LEDGER"
+IFS=$'\t' read -r EPIC_NUM EPIC_ID EPIC_ASSIGNEES <<<"$EPIC_LINE"   # erotin on tabi, ei väli
+echo "epic #$EPIC_NUM (id $EPIC_ID) luotu, assignee: ${EPIC_ASSIGNEES:-<ei yhtään>}" \
+  | tee -a "$LEDGER"
 ```
 
 Jos epicin luonti epäonnistuu, **lopeta heti** — mitään ei ole vielä kirjoitettu, joten tila on
@@ -203,7 +232,8 @@ puhdas.
 
 ### 3.1 Alaissueet
 
-Luo jokainen lapsi samalla `create_issue`lla ja kirjaa numero + id. Yhden lapsen epäonnistuminen
+Luo jokainen lapsi samalla `create_issue`lla ja kirjaa numero + id + assignee. Yhden lapsen
+epäonnistuminen
 **ei** lopeta ajoa: jatka lopuilla ja raportoi puuttuvat osiossa 4 — puolivalmis epic, josta ei
 kerrota, on tämän komennon pahin vikatila.
 
@@ -264,9 +294,21 @@ käsin:
 | Alaissueet | mitkä syntyivät (numero + otsikko) ja **mitkä eivät** |
 | Sub-issue-linkit | mitkä kirjautuivat ja mitkä eivät |
 | Riippuvuudet | mitkä kirjautuivat ja mitkä eivät |
+| Assignee | kenelle epic ja lapset assignattiin — tai **että ne jäivät assignaamatta ja miksi** |
 | Labelit | lisättiinkö ja mitkä — vai jätettiinkö tarkoituksella lisäämättä (3.3) |
 | Watchlist | osion 1 huomio, jos `COVERED=1` |
 | Kielimäärittely | kirjattiinko se `CLAUDE.md`:hen (osio 2.1) — ja että muutos on committaamatta |
+
+**Assignaamatta jäänyt issue on kerrottava ääneen, ei ohitettava.** Kaksi syytä johtaa samaan
+lopputulokseen: tunnusta ei saatu (osio 1) tai GitHub pudotti sen oikeuksien puutteessa (osio 3).
+Kumpikaan ei estä ketjun ajoa tänään, mutta reititys jää näkymättömäksi eikä siirrettäväksi, ja
+sen huomaa vain tästä raportista.
+
+**Assignee on reitityksen kahva.** Ajokoneen watchlist voi rajata poiminnan nimetyille
+tunnuksille, ja silloin issuen assigneen vaihtaminen siirtää työn sille koneelle, jonka watchlist
+tuon tunnuksen nimeää — vaihto tehdään GitHubin käyttöliittymästä, ei tällä komennolla. Ilman
+tuota rajausta assignee on merkintä, joka ei vielä ohjaa poimintaa: poimintahaku suodattaa
+labeleilla eikä assigneella (`lib/issue.sh`, `_pick_filter_jq`).
 
 Jokaisesta epäonnistuneesta kirjoituksesta kerrotaan **komento, jolla ihminen tekee sen käsin** —
 yllä olevat `gh api` -kutsut kelpaavat sellaisenaan. Lopuksi:
