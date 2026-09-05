@@ -190,7 +190,10 @@ log() { printf '%s pr-watch: %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 # mocks (which switch on `$1 $2`) unaffected.
 gh_route() {
   local repo_args=()
-  [ -n "$PR_OWNER_REPO" ] && repo_args=(--repo "$PR_OWNER_REPO")
+  # `gh api` carries the repository in the PATH, not in a flag, and rejects
+  # --repo outright — so the routing that every other subcommand needs would
+  # break the one call that addresses the repo by name.
+  [ -n "$PR_OWNER_REPO" ] && [ "${1:-}" != "api" ] && repo_args=(--repo "$PR_OWNER_REPO")
   # ${repo_args[@]+"${repo_args[@]}"} expands to nothing when the array is empty
   # WITHOUT tripping `set -u` on bash 3.2 (macOS), which otherwise errors
   # "unbound variable" on a bare "${repo_args[@]}" for an empty array.
@@ -524,16 +527,54 @@ watch_one() {
   # commit, which GitHub accepts for such branches. gh's own error text is
   # captured and logged so a genuine failure names its cause instead of the
   # opaque "merge failed" that made every merge block look identical.
+  #
+  # NO --delete-branch (issue #123). gh's flag deletes the LOCAL branch as well,
+  # and here the run's own worktree still holds it — the teardown that frees it
+  # is P9, three phases further on. git refused, gh exited non-zero, and a merge
+  # that had ALREADY succeeded was read as a failure: rc=5, needs-human, and
+  # P7..P9 skipped — so the worktree that caused it was never removed and every
+  # auto-merge run left another one behind. The remote branch is deleted on its
+  # own in P6b; the local one dies in P9, where cleanup-run.sh removes the
+  # worktree first — the order that script has documented all along.
   local merge_out
-  log "merging PR #$pr_num (--rebase --delete-branch)"
-  if ! merge_out=$(gh_route pr merge "$pr_num" --rebase --delete-branch 2>&1); then
-    log "PR #$pr_num: rebase merge failed (merge commit on branch?) — retrying with --merge: ${merge_out:-<no output>}"
-    if ! merge_out=$(gh_route pr merge "$pr_num" --merge --delete-branch 2>&1); then
-      log "merge failed for PR #$pr_num: ${merge_out:-<no output>}"
-      [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
-        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=merge_failed"
-      _release
-      return 5
+  log "merging PR #$pr_num (--rebase)"
+  if ! merge_out=$(gh_route pr merge "$pr_num" --rebase 2>&1); then
+    # A merge that reports failure may still have happened, and the fallback is
+    # for a branch GitHub will not rebase (issue #41) — firing it at a merged PR
+    # only yields "was already merged", a second wrong diagnosis on top of the
+    # first. So ask what the PR actually is before retrying.
+    local post_state
+    post_state=$(gh_route pr view "$pr_num" --json state --jq '.state' 2>/dev/null || true)
+    if [ "$post_state" = "MERGED" ]; then
+      log "PR #$pr_num: gh reported an error but the PR is MERGED — continuing: ${merge_out:-<no output>}"
+    else
+      log "PR #$pr_num: rebase merge failed (merge commit on branch?) — retrying with --merge: ${merge_out:-<no output>}"
+      if ! merge_out=$(gh_route pr merge "$pr_num" --merge 2>&1); then
+        log "merge failed for PR #$pr_num: ${merge_out:-<no output>}"
+        [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+          state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=merge_failed"
+        _release
+        return 5
+      fi
+    fi
+  fi
+
+  # ----- P6b: delete the REMOTE head branch -------------------------------
+  # The half of --delete-branch that has no local ordering problem. Best effort
+  # by design and never fatal: the branch may already be gone (a repo with
+  # GitHub's "automatically delete head branches" on), and a merged PR must not
+  # be reported as failed over a branch that no longer matters. The repo goes in
+  # the API path through the same helper the label writes use, so an empty
+  # PR_OWNER_REPO keeps gh's cwd inference.
+  local head_ref
+  head_ref=$(jq -r '.headRefName // empty' <<<"$pr_json" 2>/dev/null || true)
+  if [ -n "$head_ref" ]; then
+    if gh_route api --method DELETE \
+         "repos/$(_labels_repo_path "$PR_OWNER_REPO")/git/refs/heads/$head_ref" \
+         >/dev/null 2>&1; then
+      log "deleted remote branch $head_ref"
+    else
+      log "remote branch $head_ref not deleted (already gone, or deleted on merge by the repo)"
     fi
   fi
 

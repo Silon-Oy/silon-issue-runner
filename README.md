@@ -971,11 +971,20 @@ omassa worktreessä, ja CI on ajettava uudelleen vihreäksi ennen mergeä (osio 
 CI:n voi pollerin ajama vahti myös yrittää korjata AI-agentilla samassa worktreessä — mutta
 vain todellista virhettä korjaten, ei testiä poistaen, ja CI on aina revalidoitava vihreäksi
 ennen mergeä (osio 7.5). Itse merge yritetään ensin rebasena
-(`gh pr merge --rebase --delete-branch`); jos GitHub torjuu sen — näin käy aina, kun
+(`gh pr merge --rebase`); jos GitHub torjuu sen — näin käy aina, kun
 feature-haaralla on merge-commit, esimerkiksi konfliktin ratkaisusta — vahti tekee
 merge-commitin (`--merge`). Ilman tätä varapolkua PR ei mergeytyisi koskaan, koska haaran muoto
-ei muutu itsestään. Molempien yritysten virheteksti kirjataan lokiin, joten aito merge-esto
-kertoo syynsä. Mergen
+ei muutu itsestään. Jos ensimmäinen yritys virheestä huolimatta mergesi PR:n, vahti huomaa sen
+ja jatkaa eteenpäin varapolkua laukaisematta. Molempien yritysten virheteksti kirjataan lokiin,
+joten aito merge-esto kertoo syynsä.
+
+**Merge-kutsussa ei ole `--delete-branch`ia.** Lippu poistaisi myös *paikallisen* haaran, jota
+ajon oma worktree pitää tässä vaiheessa yhä varattuna — worktree puretaan vasta siivousvaiheessa.
+Git kieltäytyisi, `gh` palauttaisi virheen, ja jo tapahtunut merge luettaisiin epäonnistuneeksi:
+ajo jäisi `needs-human`-tilaan eikä mergen jälkeisiä vaiheita ajettaisi lainkaan, joten juuri se
+worktree jäisi levylle. Remote-haara poistetaan siksi erikseen heti mergen jälkeen
+(`gh api --method DELETE …/git/refs/heads/<haara>`, best-effort) ja paikallinen vasta siivouksessa,
+jossa worktree puretaan ensin. Mergen
 jälkeen vahti ajaa repon valinnaisen `.claude/post-merge-migrate.sh`-skriptin ja siivoaa
 ajojäänteet — mutta **vain saman koneen ajot**; muille koneille se tulostaa lokiin valmiin
 siivouskomennon.
