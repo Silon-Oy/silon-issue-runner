@@ -25,7 +25,7 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 1 | Fataali — virheellinen käyttö tai puuttuva `run.json` resumessa. **Myös `poll`-argumentti** (issue #99): automaattinen poiminta on pollerin tehtävä, ei orkestraattorin. Koodi 2 (ei ehdokasta) poistui käytöstä |
 | 3 | Lukko-/claim-kilpajuoksu hävitty |
 | 4 | Katselmointi esti ajon (vain auto-tila) |
-| 5 | Estynyt ennen implementeriä tai implementerissä — worktreen luonti (S4), db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED. Tarkan syyn ja sen korjauksen kertoo `run.json`-statuksen syykenttä, ks. [`README.md`](../README.md) osio 6.6 (e) |
+| 5 | Estynyt ennen implementeriä tai implementerissä — worktreen luonti (S4), db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED. Tarkan syyn ja sen korjauksen kertoo `run.json`-statuksen syykenttä, ks. [`usage-reference.md`](usage-reference.md#käyttötapaukset) käyttötapaus (e) |
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) aikakatkaistiin — ajo on `--restart`-kelpoinen |
 | 8 | **Puuttuva pakollinen riippuvuus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon |
@@ -168,7 +168,7 @@ lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla
 | 6 | `git filter-repo` puuttuu tai uudelleenkirjoitus kaatui — työkaluvirhe, ei sisällön kieltäytyminen |
 
 `publish-release.sh` julkaisee paketin julkiseen peiliin **historia uudelleenkirjoitettuna**
-([`README.md`](../README.md) osio 6.11). Viisi fail-closed-porttia ajetaan ennen mitään
+([`usage-reference.md`](usage-reference.md#julkaisu-julkiseen-peiliin-publish-releasesh)). Viisi fail-closed-porttia ajetaan ennen mitään
 kirjoitusta; kaksi niistä on vuotoportteja, joista toinen tarkistaa työpuun ja toinen
 uudelleenkirjoitetun historian jokaisen viestin, polun ja blobin.
 
