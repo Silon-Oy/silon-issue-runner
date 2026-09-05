@@ -157,8 +157,8 @@ joka portissa, ei sattumaa.
   "lisää `auto-run` epicin avoimille alaissueille". Poimittuna implementer polttaisi koko
   timeout-budjetin tehtävään jota ei ole.
 - **Nimetyn ajon voi aina pakottaa `--force`illa.** Fail-closed-portti ei saa olla syy siihen,
-  ettei ajo käynnisty toimivalla koneella. Sama periaate: `RUN_ISSUES_SKIP_PREFLIGHT`,
-  `RUN_ISSUES_RATE_LIMIT_BACKOFF=0`, `RUN_ISSUES_SELF_UPDATE=0`, `RUN_ISSUES_ARCHIVE_AFTER_DAYS=0`.
+  ettei ajo käynnisty toimivalla koneella. Sama periaate koskee muidenkin porttien
+  ohitusmuuttujia (`docs/env-reference.md`).
 
 ### Claimin jälkeinen esto labeloidaan aina
 
@@ -168,16 +168,21 @@ suodatettava**, joten jumiin jäänyt ajo näytti GitHubissa samalta kuin normaa
 yksi hiljainen esto pysäytti kuuden issuen riippuvuusketjun yön yli. `cleanup-run.sh` poistaa
 labelin, joten elinkaari on suljettu.
 
-### Varaus on label, ei assignaatio (#99)
+### Varaus on label, ei assignaatio (#99) — reititys on (#238)
 
 `claim_issue` assignoi saman tilin jolla ihminenkin assignoi, joten ihmisen assignaatio ja
-runnerin varaus eivät olleet erotettavissa. Varaus on nyt **vain automaation kirjoittama**
+`claim_issue` assignoi saman tilin jolla ihminenkin assignoi, joten "ihmisen assignaatio" ja
+"runnerin varaus" eivät olleet erotettavissa. Varaus on nyt **vain automaation kirjoittama**
 `auto-claimed`-label, ja poiminta suodattaa sillä (`no:assignee` poistui) — käsin assignattu
 issue lähtee ajoon. `verify_claim`in sääntö: **assignee-joukko claimin jälkeen == joukko ennen
-∪ {@me}**, joten etukäteen tehty assignaatio ei kaada ajoa mutta kilpaileva toinen tili
-huomataan yhä. Label sidotaan `claim_issue`/`unclaim_issue`iin **rakenteellisesti**;
-blocked/stalled-finalisoinnit **eivät** poista sitä, vaan estynyt ajo pysyy varattuna
-siivoukseen asti.
+∪ {@me}**. Etukäteen tehty assignaatio ei kaada ajoa, kilpaileva toinen tili huomataan yhä.
+
+Assignee palasi poimintaan **reitityksenä** (#238): per-repo `assignees` ANDataan labeleihin —
+**opt-in, ja tyhjä lista ei suodata mitään**; vastakkainen luenta pysäyttäisi repon hiljaa ja
+ikuisesti, kuten `auto-clean` poimintalabelina.
+
+Label sidotaan `claim_issue`/`unclaim_issue`iin **rakenteellisesti**. Blocked/stalled-finalisoinnit
+**eivät** poista sitä: estynyt ajo pysyy varattuna siivoukseen asti.
 
 ### Vastattavat kommentit ja jatkomoodit
 
@@ -292,8 +297,6 @@ Mitattu: 331 ajoa, 314 luokassa `cleanup`, **309 worktreetä levyllä = 166,9 GB
 - **Viisi fail-closed-porttia:** elävä ajo, vieras host, issue ei varmistetusti kiinni, avoin PR,
   ja **pushaamattomat commitit haaralla** (`git branch -D` on tuhoava; S10:n `--set-upstream`
   tekee "onko pushattu" paikallisesti ratkaistavaksi).
-
-Takautuva 166,9 GB:n purku on erillinen valvottu kertaoperaatio.
 
 ### 5.7 Lokikohina vaimennetaan tarkoituksella
 

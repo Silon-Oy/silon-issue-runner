@@ -13,6 +13,9 @@
 #   3. A repo not in the watchlist falls back to the built-in default label
 #   4. No arguments and no watchlist: refuses rather than draining nothing
 #   5. Shipped files name no project, person or host — this package is generic
+#   6. The optional per-repo `assignees` list reaches the pickup call, and an
+#      entry without the key passes nothing — the drain must not narrow pickup
+#      in a repo that never opted in
 #
 # Run: bash tests/test-drain-queue.sh
 
@@ -38,12 +41,20 @@ mkdir -p "$FAKE/lib"
 cp "$PKG/lib/poller-config.sh" "$FAKE/lib/poller-config.sh"
 cp "$PKG/lib/jq-binary.sh"     "$FAKE/lib/jq-binary.sh"
 cat > "$FAKE/lib/issue.sh" <<'STUB'
-pick_oldest_candidate() { printf ''; }   # queue always empty: no orchestrator call
+# Queue always empty, so no orchestrator is ever launched. The arguments are
+# recorded so case 6 can assert what the drain actually asked for rather than
+# inferring it from a log line.
+pick_oldest_candidate() {
+  # One bracketed field per argument: an empty argument has to be visible, and
+  # `$*` would collapse three empty trailing ones into whitespace.
+  [ -n "${DRAIN_TEST_PICK_ARGS:-}" ] && { printf '[%s]' "$@"; printf '\n'; } >> "$DRAIN_TEST_PICK_ARGS"
+  printf ''
+}
 STUB
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE/orchestrate.sh"
 chmod +x "$FAKE/orchestrate.sh"
 
-mkdir -p "$TMP/repo-a" "$TMP/repo-b" "$TMP/repo-outside"
+mkdir -p "$TMP/repo-a" "$TMP/repo-b" "$TMP/repo-c" "$TMP/repo-outside"
 WL="$TMP/watchlist.json"
 # Written by bash, NOT by `jq --arg`. Under Git Bash jq is a native Windows
 # program and MSYS rewrites a POSIX path on its way into argv, so `--arg a
@@ -58,7 +69,8 @@ cat > "$WL" <<JSON
   "global_max_concurrent": 1,
   "repos": [
     { "path": "$TMP/repo-a", "labels": ["label-a"], "remotes": ["origin"] },
-    { "path": "$TMP/repo-b", "labels": ["label-b"], "remotes": ["origin"] }
+    { "path": "$TMP/repo-b", "labels": ["label-b"], "remotes": ["origin"] },
+    { "path": "$TMP/repo-c", "labels": ["label-c"], "assignees": ["runner-a"], "remotes": ["origin"] }
   ]
 }
 JSON
@@ -70,7 +82,8 @@ run_drain() {
 # --- 1. no args: both watchlist repos, each under its own labels -------------
 out=$(run_drain)
 if grep -q "draining $TMP/repo-a (labels: label-a)" <<<"$out" \
-   && grep -q "draining $TMP/repo-b (labels: label-b)" <<<"$out"; then
+   && grep -q "draining $TMP/repo-b (labels: label-b)" <<<"$out" \
+   && grep -q "draining $TMP/repo-c (labels: label-c, assignees: runner-a)" <<<"$out"; then
   ok "no args drains every watchlist repo under its own labels"
 else
   bad "no args did not drain both repos with per-repo labels"
@@ -93,6 +106,38 @@ if grep -q "draining $TMP/repo-outside (labels: auto-run)" <<<"$out"; then
 else
   bad "uncovered repo did not fall back to auto-run"
   printf '%s\n' "$out" | sed 's/^/       /'
+fi
+
+# --- 6. the assignee allow-list reaches the pickup call ---------------------
+# Argument 5 of pick_oldest_candidate. Asserting the argument rather than the
+# log line is the point: the log is cosmetic, the argument is what decides
+# which issues this host takes.
+PICKARGS="$TMP/pick-args.txt"
+: > "$PICKARGS"
+DRAIN_TEST_PICK_ARGS="$PICKARGS" run_drain >/dev/null
+if grep -qxF "[$TMP/repo-c][label-c][][][runner-a]" "$PICKARGS"; then
+  ok "a repo with an assignees list passes it to the pickup call"
+else
+  bad "the assignees list did not reach pick_oldest_candidate"
+  sed 's/^/       /' "$PICKARGS"
+fi
+# The repos that did not opt in must pass an EMPTY list. An allow-list invented
+# for them would narrow pickup in a repo nobody configured, and the narrowing
+# would be invisible: no error, no log line, just issues that stop running.
+if grep -qxF "[$TMP/repo-a][label-a][][][]" "$PICKARGS"; then
+  ok "a repo without the key passes an empty assignee list"
+else
+  bad "a repo without an assignees key did not pass an empty list"
+  sed 's/^/       /' "$PICKARGS"
+fi
+# An uncovered repo is the same case, reached by a different route.
+: > "$PICKARGS"
+DRAIN_TEST_PICK_ARGS="$PICKARGS" run_drain "$TMP/repo-outside" >/dev/null
+if grep -qxF "[$TMP/repo-outside][auto-run][][][]" "$PICKARGS"; then
+  ok "an uncovered repo passes an empty assignee list"
+else
+  bad "an uncovered repo did not pass an empty assignee list"
+  sed 's/^/       /' "$PICKARGS"
 fi
 
 # --- 4. no args and no watchlist: refuse ------------------------------------

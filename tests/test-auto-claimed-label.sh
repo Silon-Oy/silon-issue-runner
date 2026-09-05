@@ -2,6 +2,10 @@
 # test-auto-claimed-label.sh — structural guard for the auto-claimed reservation
 # label (issue #99).
 #
+# Issue #238 later added an OPT-IN assignee allow-list to pickup; case 1 guards
+# that it stayed opt-in, because an ungated assignee term would make assignment
+# a reservation again.
+#
 # Issue #99 moved the run reservation from `no:assignee` to the automation-owned
 # `auto-claimed` label. The label's lifecycle MUST be EXACTLY the assignment's
 # lifecycle: added wherever the run claims, removed wherever the run un-assigns,
@@ -52,8 +56,21 @@ else
     *'"auto-claimed"'*) pass "pickup excludes auto-claimed" ;;
     *) fail "pickup filter no longer excludes auto-claimed" ;;
   esac
+  # Issue #238 gave the filter an OPT-IN assignee term (the watchlist
+  # `assignees` allow-list), so "no assignee condition at all" is no longer the
+  # invariant. What #99 established still is: assignment is not a reservation,
+  # so an assignee condition may never be unconditional. Every assignee term
+  # therefore has to sit behind RUN_ISSUES_PICK_ASSIGNEES, which is empty in
+  # every repo that did not ask for it. That the empty value filters NOTHING is
+  # the behavioural half, pinned in tests/test-issue-pick.sh.
   case "$FILTER_BODY" in
-    *'assignee'*) fail "pickup filter reintroduced an assignee condition — issue #99 removed it" ;;
+    *'assignee'*)
+      if printf '%s' "$FILTER_BODY" | grep -q 'RUN_ISSUES_PICK_ASSIGNEES'; then
+        pass "the assignee term is gated on the opt-in allow-list"
+      else
+        fail "pickup filter has an UNGATED assignee condition — issue #99 removed it"
+      fi
+      ;;
     *) pass "pickup does not filter on assignee" ;;
   esac
 fi
