@@ -632,12 +632,15 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
         while IFS=$'\t' read -r _ e_issue e_pn e_owner; do
           [ "$e_owner" = "$owner" ] || continue
           [ -n "$e_issue" ] || continue
-          # Already resolved (a duplicate issue across two runs)? Skip the 2nd read.
-          if printf '%s' "$issue_details" | jq -e --arg k "$e_issue" 'has($k)' >/dev/null 2>&1; then
-            continue
-          fi
-          # In the open map => definitely open, no read needed.
-          if printf '%s' "$openmap" | jq -e --arg k "$e_issue" 'has($k)' >/dev/null 2>&1; then
+          # Two skip conditions, one jq: already resolved (a duplicate issue
+          # across two runs), or in the open map (definitely open, no read
+          # needed). Both are membership tests on the same key, and this runs
+          # once per enumerated run — the second spawn bought nothing. A jq
+          # failure (an unreadable map) falls through to the read, exactly as
+          # two separate failing checks did.
+          if printf '%s' "$issue_details" \
+            | jq -e --arg k "$e_issue" --argjson om "$openmap" \
+                'has($k) or ($om | has($k))' >/dev/null 2>&1; then
             continue
           fi
           det="$(status_github_issue_detail "$owner" "$e_issue")"
@@ -749,20 +752,48 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   # issue-only object — and each gets issue_title + issue_state + issue_state_reason
   # joined in from the per-owner issue-meta map by issue_number (issue #78/#96/#103).
   GHMAP_FILE="$TMPD/ghmap.jsonl"; : > "$GHMAP_FILE"
+  # The awk below reads all three files positionally, so each must exist even
+  # when nothing wrote to it — an absent file would shift every FILENAME after it.
+  [ -f "$FAILED_FILE" ] || : > "$FAILED_FILE"
+  [ -f "$OWNER_META" ] || : > "$OWNER_META"
+  [ -f "$TMPD/gh_owner_fetched.tsv" ] || : > "$TMPD/gh_owner_fetched.tsv"
+  memo_owner=''; memo_failed=0; memo_pmi=''; memo_page=''; memo_fetched=''
   while IFS=$'\t' read -r idx issue pn owner; do
     [ -n "$idx" ] || continue
     [ "$pn" = "-" ] && pn=""   # sentinel back to empty (no PR)
+    # Owner lookups are memoised, because they are per OWNER and the loop is per
+    # RUN. Three files were searched with a grep/head/cut chain on every lap —
+    # eight processes to answer a question whose answer changes only when the
+    # owner does, and a repo's runs commonly outnumber its owners ten to one. One
+    # awk over all three files answers it once per owner instead, and the memo is
+    # a plain string compare because the macOS runner's bash 3.2 has no
+    # associative arrays.
+    if [ "$owner" != "$memo_owner" ]; then
+      # Reset before the read: a failed awk leaves `read` with nothing, and stale
+      # values from the previous owner would be worse than no values at all.
+      memo_owner="$owner"; memo_failed=0; memo_pmi=''; memo_page=''; memo_fetched=''
+      # Files are told apart by FILENAME, not by counting them: an EMPTY file
+      # yields no records at all, so a counter would silently shift every file
+      # after it — and "no failed repos" is the normal case, not the rare one.
+      IFS=$'\t' read -r memo_failed memo_pmi memo_page memo_fetched <<EOF
+$(awk -F'\t' -v o="$owner" -v f1="$FAILED_FILE" -v f2="$OWNER_META" \
+      -v f3="$TMPD/gh_owner_fetched.tsv" '
+        FILENAME == f1 { if ($0 == o) failed = 1; next }
+        FILENAME == f2 { if ($1 == o && pmi == "") { pmi = $2; page = $3 } next }
+        FILENAME == f3 { if ($1 == o && fa  == "") { fa = $2 } next }
+        END { printf "%s\t%s\t%s\t%s\n", (failed ? 1 : 0), pmi, page, fa }
+      ' "$FAILED_FILE" "$OWNER_META" "$TMPD/gh_owner_fetched.tsv" 2>/dev/null)
+EOF
+    fi
     # Failed repo?
-    if grep -Fxq "$owner" "$FAILED_FILE" 2>/dev/null; then
+    if [ "${memo_failed:-0}" = "1" ]; then
       jq -nc --arg i "$idx" '{($i): {failed:true}}' >> "$GHMAP_FILE"
       continue
     fi
-    # Look up this owner's prmap/issuemeta index + age.
-    meta="$(grep -F "$owner"$'\t' "$OWNER_META" 2>/dev/null | head -n1 || true)"
-    [ -n "$meta" ] || continue
-    pmi="$(printf '%s' "$meta" | cut -f2)"
-    page="$(printf '%s' "$meta" | cut -f3)"
-    fetched_at="$(grep -F "$owner"$'\t' "$TMPD/gh_owner_fetched.tsv" 2>/dev/null | head -n1 | cut -f2 || true)"
+    pmi="$memo_pmi"
+    page="$memo_page"
+    fetched_at="$memo_fetched"
+    [ -n "$pmi" ] || continue
     obj=""
     if [ -n "$pn" ]; then
       obj="$(jq -c --arg k "$pn" '.[$k] // empty' "$TMPD/gh/$pmi.prmap.json" 2>/dev/null || true)"

@@ -85,21 +85,28 @@ pr_decide() {
   # Checks .state's VALUE (non-empty string) but the others' KEY PRESENCE: an
   # OPEN PR legitimately has labels:[] / statusCheckRollup:[] (present but empty),
   # which is a complete payload, not a partial one.
-  local complete
-  complete=$(jq -r '
-    if type != "object" then "0"
-    elif ((.state | type) != "string") or ((.state | length) == 0) then "0"
-    elif (has("mergeable") | not) or (has("mergeStateStatus") | not) then "0"
-    elif (has("labels") | not) or (has("statusCheckRollup") | not) then "0"
-    else "1" end' <<<"$json" 2>/dev/null) || complete=0
-  if [ "$complete" != "1" ]; then
+  # ONE jq for the whole payload, not one per field. Five reads of the same
+  # document cost five process spawns, and this function runs once per open PR
+  # per tick in pr-watch.sh and once per open PR per render in status.sh — on
+  # Git Bash, where a spawn is ~25 ms instead of ~1 ms, that is the difference
+  # the suite feels. Every field here is a pure read, so reading them eagerly
+  # cannot change a decision; the ORDER of the gates below is what carries the
+  # semantics, and that is unchanged.
+  local complete fields
+  fields=$(jq -r --arg L "$merge_label" '
+    def bad: ["0", "", "", "", "0"];
+    if type != "object" then bad
+    elif ((.state | type) != "string") or ((.state | length) == 0) then bad
+    elif (has("mergeable") | not) or (has("mergeStateStatus") | not) then bad
+    elif (has("labels") | not) or (has("statusCheckRollup") | not) then bad
+    else ["1", (.state // ""), (.mergeable // ""), (.mergeStateStatus // ""),
+          ([.labels[]?.name] | index($L) | if . == null then "0" else "1" end)]
+    end | @tsv' <<<"$json" 2>/dev/null) || fields=""
+  IFS=$'\t' read -r complete state mergeable merge_state has_label <<<"$fields"
+  if [ "${complete:-0}" != "1" ]; then
     echo "SKIP_UNKNOWN"
     return 0
   fi
-
-  state=$(jq -r '.state // empty' <<<"$json")
-  mergeable=$(jq -r '.mergeable // empty' <<<"$json")
-  merge_state=$(jq -r '.mergeStateStatus // empty' <<<"$json")
 
   # PR must be open to be actionable. (A blank state was already caught above as
   # SKIP_UNKNOWN, so a non-OPEN state here is a genuine merged/closed PR.)
@@ -108,8 +115,6 @@ pr_decide() {
     return 0
   fi
 
-  has_label=$(jq -r --arg L "$merge_label" \
-    '[.labels[]?.name] | index($L) | if . == null then "0" else "1" end' <<<"$json")
   if [ "$has_label" != "1" ]; then
     echo "SKIP_NO_LABEL"
     return 0
