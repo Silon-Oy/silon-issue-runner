@@ -22,6 +22,8 @@ riippuvuudet. Tämä komento tekee **yhden issuen**.
 - Komento **luo vain yhden uuden issuen**. Se ei muokkaa eikä sulje olemassa olevia.
 - **Ei riippuvuuksia eikä sub-issue-linkkejä.** Ketjut kuuluvat `/issue-runner:new-epic`ille.
 - Komento **ei koskaan kirjoita `auto-claimed`-labelia** — se on automaation oma varaus.
+- **Assignee ei ole valinta.** Issue assignataan aina sille tunnukselle, jolla `gh` on
+  autentikoitu; vaihtaminen tapahtuu jälkikäteen GitHubissa.
 - Komento **ei eskaloi epiciksi omin päin.** Se ehdottaa; päätöksen tekee käyttäjä.
 
 ## 0. Ilman argumenttia: usage
@@ -70,10 +72,15 @@ set -e
 
 OWNER_REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
+# Assignee = se tunnus, jolla gh on autentikoitu. Paljas gh tarkoituksella:
+# App-identiteetti palauttaisi Appin, eivätkä GitHub Appit voi olla assigneita.
+RUNNER_LOGIN=$(gh api user --jq .login 2>/dev/null) || RUNNER_LOGIN=""
+
 echo "OWNER_REPO=$OWNER_REPO"
 echo "WATCHLIST=${WATCHLIST:-<ei löytynyt>}"
 echo "PICK_LABELS=$PICK_LABELS"
 echo "WATCHLIST_COVERS_REPO=$COVERED"
+echo "RUNNER_LOGIN=${RUNNER_LOGIN:-<ei tunnusta>}"
 ```
 
 **Jos jaettu funktio puuttuu, lopeta.** Asennus voi olla pinnattu mainia vanhempaan committiin
@@ -91,6 +98,15 @@ label: kummassakin issue ei lähde ajoon eikä mikään kerro miksi.
 `auto-clean`, `waiting`, `wip`, `needs-human`, `auto-claimed`, `epic` — **älä jatka**. Poimintahaku
 sulkee ne pois, joten vaadittuna ne tuottavat nolla osumaa ikuisesti. Kerro käyttäjälle, mikä
 label on kyseessä ja että watchlistin `labels`/`default_labels` on korjattava ensin.
+
+**Tunnus haetaan kerran, tässä.** Assignee ei ole valinta vaan seuraus: se on aina se tunnus,
+jolla `gh` on autentikoitu. Kutsu on **paljas `gh`** eikä kulje `gha_with_token`in kautta samasta
+syystä kuin `verify_claim`in oma `gh api user` -lookup (`lib/issue.sh`): GitHub App ei voi olla
+issuen assignee, joten App-identiteetin alla haettu tunnus olisi kelvoton assigneeksi.
+
+**Tyhjä tunnus ei ole este.** Jos `gh api user` epäonnistuu, issue luodaan ilman assigneeta ja
+osion 6 raportti **sanoo sen ääneen**. Kesken jäänyt assignaatio ei saa estää issuen syntymistä,
+mutta hiljaa pudotettu assignee on juuri se vika, jota tämä komento on estämässä.
 
 ### 1.1 Jokaisen poimintalabelin on oltava repossa olemassa
 
@@ -275,7 +291,7 @@ done
 Labelin luonnin epäonnistuminen **lopettaa ajon**: issue ilman poimintalabelia ei koskaan lähde
 ajoon.
 
-Issue luodaan **yhdellä kutsulla, labelit mukana samassa payloadissa**:
+Issue luodaan **yhdellä kutsulla, labelit ja assignee mukana samassa payloadissa**:
 
 ```bash
 BODY_FILE=$(mktemp)   # runko tiedostoon, jotta markdown, rivinvaihdot ja backtickit säilyvät
@@ -283,14 +299,30 @@ BODY_FILE=$(mktemp)   # runko tiedostoon, jotta markdown, rivinvaihdot ja backti
 LABELS_JSON=$(jq -cn --arg csv "$PICK_LABELS" \
   '$csv | split(",") | map(select(length > 0))')
 
-jq -n --arg t "$ISSUE_TITLE" --rawfile b "$BODY_FILE" --argjson l "$LABELS_JSON" \
-     '{title: $t, body: $b, labels: $l}' \
-  | gh api "repos/$OWNER_REPO/issues" --input - --jq '.number'
+# Tyhjä tunnus (osio 1) => kenttä jätetään pois, ei lähetetä tyhjää listaa.
+ASSIGNEES_JSON=$(jq -cn --arg login "${RUNNER_LOGIN:-}" \
+  'if ($login | length) > 0 then [$login] else [] end')
+
+# Vastauksesta luetaan numero ja TODELLINEN assignee-joukko, ei lähetetty toive.
+CREATED=$(jq -n --arg t "$ISSUE_TITLE" --rawfile b "$BODY_FILE" \
+     --argjson l "$LABELS_JSON" --argjson a "$ASSIGNEES_JSON" \
+     '{title: $t, body: $b, labels: $l}
+      + (if ($a | length) > 0 then {assignees: $a} else {} end)' \
+  | gh api "repos/$OWNER_REPO/issues" --input - \
+      --jq '[.number, ([.assignees[].login] | join(","))] | @tsv')
+
+IFS=$'\t' read -r ISSUE_NUM ISSUE_ASSIGNEES <<<"$CREATED"   # erotin on tabi, ei väli
+echo "issue #$ISSUE_NUM luotu, assignee: ${ISSUE_ASSIGNEES:-<ei yhtään>}"
 ```
 
-**Yksi kutsu, ei kahta.** Erillinen labelointikutsu jättäisi epäonnistuessaan jälkeensä issuen,
-joka ei koskaan lähde ajoon — täsmälleen se hiljainen vika, jonka estämiseksi tämä komento on
-olemassa. Yhdellä kutsulla lopputulos on joko poimittava issue tai ei issueta lainkaan.
+**Yksi kutsu, ei kahta.** Erillinen labelointi- tai assignauskutsu jättäisi epäonnistuessaan
+jälkeensä issuen, joka ei koskaan lähde ajoon tai jonka reititys ei näy missään — täsmälleen se
+hiljainen vika, jonka estämiseksi tämä komento on olemassa. Yhdellä kutsulla lopputulos on joko
+poimittava, reititetty issue tai ei issueta lainkaan.
+
+**Tarkista assignee vastauksesta, älä oleta sitä.** GitHub **pudottaa hiljaa** assigneen, jolla ei
+ole repoon kirjoitusoikeutta: kutsu onnistuu, mutta issue jää assignaamatta. Lue siis luodun
+issuen `assignees` samasta vastauksesta ja raportoi todellinen tila, älä lähetettyä toivetta.
 
 ## 6. Raportoi — ja kerro mitä tapahtuu seuraavaksi
 
@@ -300,9 +332,21 @@ Tulosta aina, myös epäonnistumisessa:
 |---|---|
 | Issue | numero + URL + otsikko |
 | Labelit | mitkä lisättiin |
+| Assignee | kenelle issue assignattiin (`ISSUE_ASSIGNEES`) — tai **että se jäi assignaamatta ja miksi** |
 | Luodut labelit | jos osio 5 loi puuttuvia labeleita, mitkä |
 | Watchlist | osion 1 huomio, jos `COVERED=1` |
 | Kielimäärittely | kirjattiinko se `CLAUDE.md`:hen (osio 4.1) — ja että muutos on committaamatta |
+
+**Assignaamatta jäänyt issue on kerrottava ääneen, ei ohitettava.** Kaksi syytä johtaa samaan
+lopputulokseen: tunnusta ei saatu (osio 1) tai GitHub pudotti sen oikeuksien puutteessa (osio 5).
+Kumpikaan ei estä issuen ajoa tänään, mutta reititys jää näkymättömäksi eikä siirrettäväksi, ja
+sen huomaa vain tästä raportista.
+
+**Assignee on reitityksen kahva.** Tänään se on merkintä, joka ei vielä ohjaa poimintaa:
+poimintahaku suodattaa labeleilla eikä assigneella (`lib/issue.sh`, `_pick_filter_jq`), eikä
+watchlistissä ole tunnusrajausta. Kun sellainen tulee, issuen assigneen vaihtaminen siirtää työn
+sille koneelle, jonka watchlist tuon tunnuksen nimeää — vaihto tehdään GitHubin
+käyttöliittymästä, ei tällä komennolla.
 
 Jos kirjoitus epäonnistui, kerro **komento, jolla ihminen tekee sen käsin** — yllä oleva `gh api`
 -kutsu kelpaa sellaisenaan. Lopuksi:
