@@ -36,6 +36,7 @@ FAIL=0
 # --- Build a repo whose HEAD is 2 commits behind origin/main ---------------
 REPO="$WORK/repo"
 git init -q "$REPO"
+git -C "$REPO" symbolic-ref HEAD refs/heads/main
 (
   cd "$REPO"
   git config user.email t@t; git config user.name t
@@ -68,6 +69,7 @@ BEHIND0=$(runner_behind_origin "$REPO")
 # No upstream ref at all -> "?".
 NOUP="$WORK/noup"
 git init -q "$NOUP"
+git -C "$NOUP" symbolic-ref HEAD refs/heads/main
 ( cd "$NOUP" && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m only )
 BEHIND_Q=$(runner_behind_origin "$NOUP")
 [ "$BEHIND_Q" = "?" ] || { echo "FAIL: runner_behind_origin (no upstream) != '?' (got '$BEHIND_Q')"; FAIL=1; }
@@ -102,11 +104,18 @@ printf '%s' "$SUM_Q" | grep -q 'up to date' && { echo "FAIL: summary (unknown) c
 # (CVE-2022-39253), so allow them locally for the fixture only.
 SUBSRC="$WORK/subsrc"
 git init -q "$SUBSRC"
+# Force `main` regardless of the machine's init.defaultBranch. `git submodule
+# add` clones this repo, so its branch name becomes the clone's
+# refs/remotes/origin/HEAD -- and _runner_base_ref reads origin/HEAD BEFORE it
+# falls back to origin/main. A `master` here would silently base the behind-count
+# on origin/master, which the cases below never move.
+git -C "$SUBSRC" symbolic-ref HEAD refs/heads/main
 ( cd "$SUBSRC" && git config user.email t@t && git config user.name t \
   && git commit -q --allow-empty -m s1 && git commit -q --allow-empty -m s2 )
 
 SUPER="$WORK/super"
 git init -q "$SUPER"
+git -C "$SUPER" symbolic-ref HEAD refs/heads/main
 ( cd "$SUPER" && git config user.email t@t && git config user.name t \
   && git commit -q --allow-empty -m super1 \
   && git -c protocol.file.allow=always submodule add -q "$SUBSRC" sub 2>/dev/null \
@@ -166,6 +175,7 @@ if [ -e "$SUBWT/.git" ] && [ -n "$(git -C "$SUPER" rev-parse HEAD:sub 2>/dev/nul
   # while the submodule linkage (via gitdir) still resolves the superproject.
   SUPER2="$WORK/super2"
   git init -q "$SUPER2"
+  git -C "$SUPER2" symbolic-ref HEAD refs/heads/main
   ( cd "$SUPER2" && git config user.email t@t && git config user.name t \
     && git commit -q --allow-empty -m super1 \
     && git -c protocol.file.allow=always submodule add -q "$SUBSRC" sub 2>/dev/null \
