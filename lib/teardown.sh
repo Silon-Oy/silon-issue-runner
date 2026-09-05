@@ -240,13 +240,10 @@ teardown_run() {
   # The lock was already removed by cleanup-run.sh's teardown — see the IMPORTANT
   # note above. We do NOT call unlock_issue here.
   if [ "$dry" = "1" ]; then
-    # Release the lock we took at gate 1: cleanup-run.sh did not, and a preview
-    # must not leave state behind. Leaking it here was the worst kind of state
-    # change — the next REAL teardown of this issue refused with rc 3, and since
-    # the lock has no live owner it would not expire until
-    # RUN_ISSUES_LOCK_STALE_SECS (24 h by default). Measured: 129 previewed
-    # issues left 129 locks, and the cleanup they were previewing refused on all
-    # 129. unlock_issue is idempotent, so this is safe regardless.
+    # The exception noted at gate 1: cleanup-run.sh released nothing under
+    # --dry-run, so this branch releases the lock we took there. A preview that
+    # leaves a lock behind blocks the very teardown it was rehearsing (rc 3)
+    # until the lock goes stale.
     unlock_issue "$issue" "$remote" "$repo_slug"
     if [ "${TEARDOWN_CLOSE_ISSUE:-0}" = "1" ]; then
       teardown_log "[dry] would close issue #$issue, post summary, remove label $TEARDOWN_TRIGGER_LABEL"
