@@ -168,6 +168,7 @@ _labels_query_csv() {
 }
 
 # pick_oldest_candidate <repo-root> <labels-csv> [<owner/repo>] [<remote>]
+#                       [<assignees-csv>]
 # Prints the issue number of the oldest runnable candidate, or nothing.
 #
 # The list read routes through _issue_gh (issue #127): with App mode on and an

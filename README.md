@@ -672,8 +672,9 @@ Kun ajokone tunnistautuu omalla machine user -tilillään, assignee nimeää kon
 GitHubin omassa käyttöliittymässä. Assignaatio ei silti ole **varaus** — varaus on yhä
 `auto-claimed`-label (6.4). Sekä `poller.sh` että `drain-queue.sh` lukevat avaimen samalla
 resolvoijalla, joten ne eivät voi olla eri mieltä siitä, mitä tämä kone poimii. Uusia
-API-kutsuja ei synny: assignee- ja avaajatieto on jo poiminnan REST-vastauksessa. Poiminta on
-**pollerin** tehtävä: orkestraattori ei enää poimi (ei `poll`-tilaa, ei `RUN_ISSUES_LABELS_CSV`ää),
+API-kutsuja ei synny: assignee- ja avaajatieto on jo poiminnan REST-vastauksessa.
+
+Poiminta on **pollerin** tehtävä: orkestraattori ei enää poimi (ei `poll`-tilaa, ei `RUN_ISSUES_LABELS_CSV`ää),
 joten koko paketissa on yksi poimintakysely.
 
 **Nimetty ajo ohittaa poimintaehdot.** `/issue-runner:run-issue #N` ja `orchestrate.sh <repo> <N>` eivät

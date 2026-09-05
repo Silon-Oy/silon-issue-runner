@@ -306,7 +306,6 @@ Pollerin `scan_finished` päättää nyt **mitkä** ajot ovat valmiita ja delego
   ja **pushaamattomat commitit haaralla** (`git branch -D` on tuhoava; S10:n `--set-upstream`
   tekee "onko pushattu" paikallisesti ratkaistavaksi).
 
-
 ### 5.7 Lokikohina vaimennetaan tarkoituksella
 
 Yksi rivi per ohitettu tikki, ei per kutsu. Alkuperäinen häiriö kirjoitti **1754 identtistä
