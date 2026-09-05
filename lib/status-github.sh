@@ -235,19 +235,23 @@ status_github_pr_object() {
 # runs once per open PR regardless of how many runs reference it.
 status_github_build_pr_map() {
   local prs="$1" fetched_at="$2" age="$3" label="${4:-auto-merge}" res="${5:-1}" repair="${6:-1}"
-  local n i pr num obj out='{}'
-  n="$(jq 'length' <<<"$prs" 2>/dev/null || echo 0)"
-  i=0
-  while [ "$i" -lt "$n" ]; do
-    pr="$(jq -c ".[$i]" <<<"$prs")"
-    num="$(jq -r '.number // empty' <<<"$pr")"
-    if [ -n "$num" ]; then
-      obj="$(status_github_pr_object "$pr" "$fetched_at" "$age" "$label" "$res" "$repair")"
-      out="$(jq -c --arg k "$num" --argjson o "$obj" '. + {($k): $o}' <<<"$out")"
-    fi
-    i=$((i + 1))
-  done
-  printf '%s' "$out"
+  local num pr obj entries=''
+  # One jq to split the array, one to merge the result — not three per PR. The
+  # index walk spawned a jq to slice `.[i]`, another to read `.number` and a
+  # third to fold the entry into an accumulator that was re-parsed every lap
+  # (O(n^2) in the map's own size). Splitting emits two lines per PR, the number
+  # then the object as compact JSON, so the pairing needs no delimiter that a
+  # field could contain: `tojson` escapes newlines, so an object is always
+  # exactly one line.
+  while IFS= read -r num && IFS= read -r pr; do
+    [ -n "$num" ] && [ -n "$pr" ] || continue
+    obj="$(status_github_pr_object "$pr" "$fetched_at" "$age" "$label" "$res" "$repair")"
+    [ -n "$obj" ] || continue
+    entries="$entries{\"$num\":$obj}"$'\n'
+  done < <(jq -r '.[]? | select(.number != null) | (.number | tostring), tojson' \
+             <<<"$prs" 2>/dev/null)
+  [ -n "$entries" ] || { printf '{}'; return 0; }
+  jq -sc 'add // {}' <<<"$entries" 2>/dev/null || printf '{}'
 }
 
 # status_github_not_open_object <fetched_at> <cache_age> [<closed_as>]
