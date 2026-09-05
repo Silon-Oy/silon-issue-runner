@@ -233,9 +233,8 @@ puhdas.
 ### 3.1 Alaissueet
 
 Luo jokainen lapsi samalla `create_issue`lla ja kirjaa numero + id + assignee. Yhden lapsen
-epäonnistuminen
-**ei** lopeta ajoa: jatka lopuilla ja raportoi puuttuvat osiossa 4 — puolivalmis epic, josta ei
-kerrota, on tämän komennon pahin vikatila.
+epäonnistuminen **ei** lopeta ajoa: jatka lopuilla ja raportoi puuttuvat osiossa 4 — puolivalmis
+epic, josta ei kerrota, on tämän komennon pahin vikatila.
 
 ### 3.2 Sub-issue-linkitys
 
