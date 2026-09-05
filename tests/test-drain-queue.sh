@@ -45,14 +45,23 @@ chmod +x "$FAKE/orchestrate.sh"
 
 mkdir -p "$TMP/repo-a" "$TMP/repo-b" "$TMP/repo-outside"
 WL="$TMP/watchlist.json"
-jq -n --arg a "$TMP/repo-a" --arg b "$TMP/repo-b" '{
-  default_labels: ["fallback-label"],
-  global_max_concurrent: 1,
-  repos: [
-    { path: $a, labels: ["label-a"], remotes: ["origin"] },
-    { path: $b, labels: ["label-b"], remotes: ["origin"] }
+# Written by bash, NOT by `jq --arg`. Under Git Bash jq is a native Windows
+# program and MSYS rewrites a POSIX path on its way into argv, so `--arg a
+# /tmp/x` stores C:/Users/.../Temp/x in the watchlist while this test still
+# greps for /tmp/x — the drain looked broken on windows-latest when it was
+# doing exactly the right thing. jq's OUTPUT is not rewritten, so a path bash
+# puts in the file comes back out of the drain unchanged. Same trap that
+# lib/poller-config.sh documents at length.
+cat > "$WL" <<JSON
+{
+  "default_labels": ["fallback-label"],
+  "global_max_concurrent": 1,
+  "repos": [
+    { "path": "$TMP/repo-a", "labels": ["label-a"], "remotes": ["origin"] },
+    { "path": "$TMP/repo-b", "labels": ["label-b"], "remotes": ["origin"] }
   ]
-}' > "$WL"
+}
+JSON
 
 run_drain() {
   RUNNER_DIR="$FAKE" RUN_ISSUES_WATCHLIST="$WL" "$DRAIN" "$@" 2>&1
