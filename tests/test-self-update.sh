@@ -67,6 +67,13 @@ make_home() {
   )
 }
 
+# fixture_fail <what> — abort the run: a fixture step did not do what the case
+# assumes. Deliberately fatal, unlike the assertions below, which only set FAIL
+# and keep going (§12). A broken fixture invalidates the premise of the case, so
+# its assertions would report on a scenario that was never built — the failure
+# mode that hid the case 5 bug for as long as it did.
+fixture_fail() { echo "FAIL: fixture: $1"; exit 1; }
+
 # recording install stub: appends its args to $1 and exits with ${2:-0}.
 make_install_stub() {
   local path="$1" record="$2" code="${3:-0}"
@@ -108,7 +115,11 @@ reset_log
 H1="$WORK/home1"; make_home "$H1"
 ORIGIN1="$WORK/origin1.git"
 git init -q --bare "$ORIGIN1"
-( cd "$H1" && git remote add origin "$ORIGIN1" && git push -q -u origin main )
+# Force `main` regardless of the machine's init.defaultBranch, exactly as
+# make_home does for the work trees.
+git -C "$ORIGIN1" symbolic-ref HEAD refs/heads/main
+( cd "$H1" && git remote add origin "$ORIGIN1" && git push -q -u origin main ) \
+  || fixture_fail "case1: could not seed origin from H1"
 REC1="$WORK/rec1.txt"; : > "$REC1"
 make_install_stub "$WORK/install-stub.sh" "$REC1" 0
 run_self_update "$H1" "$REC1"
@@ -196,14 +207,30 @@ reset_log
 H5="$WORK/home5"; make_home "$H5"
 ORIGIN5="$WORK/origin5.git"
 git init -q --bare "$ORIGIN5"
-( cd "$H5" && git remote add origin "$ORIGIN5" && git push -q -u origin main )
+# Force `main` regardless of the machine's init.defaultBranch. A bare HEAD left
+# at refs/heads/master points at a branch nobody ever creates, so the clone below
+# checks nothing out and its `push origin main` fails -- origin never advances and
+# the divergence this whole case rests on silently does not happen.
+git -C "$ORIGIN5" symbolic-ref HEAD refs/heads/main
+( cd "$H5" && git remote add origin "$ORIGIN5" && git push -q -u origin main ) \
+  || fixture_fail "case5: could not seed origin from H5"
 # origin advances by one commit; local advances by a DIFFERENT commit -> diverge.
 CLONE5="$WORK/clone5"
-git clone -q "$ORIGIN5" "$CLONE5"
+git clone -q "$ORIGIN5" "$CLONE5" || fixture_fail "case5: could not clone origin"
 ( cd "$CLONE5" && git config user.email t@t && git config user.name t \
-  && git commit -q --allow-empty -m origin-side && git push -q origin main )
-( cd "$H5" && git commit -q --allow-empty -m local-side )
+  && git commit -q --allow-empty -m origin-side && git push -q origin main ) \
+  || fixture_fail "case5: the origin side did not advance"
+( cd "$H5" && git commit -q --allow-empty -m local-side ) \
+  || fixture_fail "case5: the local side did not advance"
 LOCAL_SHA=$( cd "$H5" && git rev-parse HEAD )
+# The premise, asserted as an outcome rather than as a chain of return codes:
+# unless the two sides really diverged, `pull --ff-only` succeeds and the
+# fail-soft NOTE under test is never reached -- a green that means nothing.
+( cd "$H5" && git fetch -q origin ) || fixture_fail "case5: could not fetch origin into H5"
+H5_AHEAD=$( cd "$H5" && git rev-list --count origin/main..HEAD )
+H5_BEHIND=$( cd "$H5" && git rev-list --count HEAD..origin/main )
+[ "${H5_AHEAD:-0}" -gt 0 ] 2>/dev/null && [ "${H5_BEHIND:-0}" -gt 0 ] 2>/dev/null \
+  || fixture_fail "case5: H5 and origin did not diverge (ahead=$H5_AHEAD behind=$H5_BEHIND)"
 REC5="$WORK/rec5.txt"; : > "$REC5"
 make_install_stub "$WORK/install-stub.sh" "$REC5" 0
 run_self_update "$H5" "$REC5"

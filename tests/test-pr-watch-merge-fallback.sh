@@ -33,14 +33,16 @@ trap 'rm -rf "$WORK"' EXIT
 ORIGIN="$WORK/origin.git"
 REPO="$WORK/repo"
 git init -q --bare "$ORIGIN"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$ORIGIN" symbolic-ref HEAD refs/heads/main
 git init -q "$REPO"
+git -C "$REPO" symbolic-ref HEAD refs/heads/main
 (
   cd "$REPO"
   git config user.email t@t.t; git config user.name t
   git remote add origin "$ORIGIN"
   echo v0 > f.txt
   git add f.txt; git commit -qm init
-  git branch -M main
   git push -q origin main
 )
 

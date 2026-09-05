@@ -78,6 +78,8 @@ npx_exits() {  # npx_exits <code>
 # because gh is stubbed.
 REPO="$WORK/repo"
 git init -q "$REPO"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$REPO" symbolic-ref HEAD refs/heads/main
 
 export HOME="$WORK/home"
 mkdir -p "$HOME"

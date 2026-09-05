@@ -32,13 +32,15 @@ FAIL=0
 ORIGIN="$WORK/origin.git"
 SRC="$WORK/src"
 git init -q --bare "$ORIGIN"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$ORIGIN" symbolic-ref HEAD refs/heads/main
 git init -q "$SRC"
+git -C "$SRC" symbolic-ref HEAD refs/heads/main
 (
   cd "$SRC"
   git config user.email t@t.t; git config user.name t
   git remote add origin "$ORIGIN"
   echo "v0" > f.txt; git add f.txt; git commit -qm init
-  git branch -M main
   git push -q origin main
 )
 REPO="$WORK/repo"
