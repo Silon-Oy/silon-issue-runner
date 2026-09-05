@@ -252,16 +252,22 @@ issuen normaalisti.
 
 ### 5. Ajuriskripti ja herätyskäärä
 
-`drain-queue.sh` ei kuulu runner-pakettiin (se asuu ylläpitäjän dotfileissa), joten se
-kopioidaan Spriteen:
+`drain-queue.sh` **kuuluu pakettiin** ja on siis jo Spritessä asennuksen mukana — sitä ei
+kopioida erikseen. Se on `poller.sh`:n vertainen: sama `pick_oldest_candidate`, sama
+watchlist, eri elinkaari. Repot ja poimintalabelit se lukee
+`~/.config/run-issues/watchlist.json`:sta, joten niitä ei luetella herätyskäärässä.
+
+Herätyskäärä sen sijaan on **konekohtainen** — palvelut, jotka on käynnistettävä ikkunan
+alussa, riippuvat kohderepoista. Kopioi malli ja muokkaa:
 
 ```bash
-sprite file push -s claude-issue-runner ~/.dotfiles/bin/drain-queue.sh \
-  /home/sprite/bin/drain-queue.sh
-sprite exec -s claude-issue-runner -- bash -lc 'chmod +x ~/bin/drain-queue.sh'
+sprite file push -s <sprite> \
+  ~/.claude/scripts/run-issues/examples/wake-run.example.sh \
+  /home/sprite/bin/wake-run.sh
+sprite exec -s <sprite> -- bash -lc 'chmod +x ~/bin/wake-run.sh'
 ```
 
-Sen rinnalle `~/bin/wake-run.sh`, joka tekee yhden ajoikkunan:
+Malli tekee yhden ajoikkunan — merge, drain, merge uudelleen — ja sen runko on:
 
 ```bash
 #!/usr/bin/env bash
