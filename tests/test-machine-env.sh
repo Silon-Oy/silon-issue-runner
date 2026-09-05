@@ -325,7 +325,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "=== Case X: both entry points capture BEFORE their first other library ==="
+echo "=== Case X: every source_machine_env caller captures BEFORE its first other library ==="
 # Case Y covers orchestrate.sh behaviourally; pr-watch.sh has no equally cheap
 # end-to-end fixture, and the property is positional anyway. Reordering two
 # source lines is a one-character-looking edit that reintroduces the whole bug
@@ -333,7 +333,27 @@ echo "=== Case X: both entry points capture BEFORE their first other library ===
 #
 # Fail-closed in both directions: an entry point that stops sourcing libraries
 # through "$SCRIPT_DIR/lib/..." fails here rather than passing on zero matches.
-for entry in orchestrate.sh pr-watch.sh; do
+#
+# The entry-point set is DERIVED FROM DISK, the way tests/test-jq-binary.sh
+# derives its own (CLAUDE.md section 5.8): whoever calls source_machine_env owns
+# this property, and a hand-written list would leave the next such caller
+# silently uncovered — which is the shape of the bug this case exists for.
+ENTRIES=()
+while IFS= read -r f; do
+  ENTRIES+=("$f")
+done < <(cd "$ROOT" && grep -lE '^[^#]*(^|[^[:alnum:]_])source_machine_env([^[:alnum:]_]|$)' \
+         ./*.sh 2>/dev/null | sed 's|^\./||' | sort)
+
+# Plausibility floor: the orchestrator and the watcher have both sourced the
+# machine env file since #144. A collapse below that means the derivation broke,
+# and an empty set must not pass silently.
+if [ "${#ENTRIES[@]}" -ge 2 ]; then
+  pass "X derived ${#ENTRIES[@]} source_machine_env callers from disk (${ENTRIES[*]})"
+else
+  fail "X entry-point derivation collapsed to ${#ENTRIES[@]} — the pattern is broken, not the package"
+fi
+
+for entry in ${ENTRIES[@]+"${ENTRIES[@]}"}; do
   f="$ROOT/$entry"
   if [ ! -f "$f" ]; then fail "X $entry not found"; continue; fi
   # Only the top-level library-loading section counts: orchestrate.sh's
