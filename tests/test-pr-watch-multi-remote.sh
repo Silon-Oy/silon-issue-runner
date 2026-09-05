@@ -42,6 +42,8 @@ setup_repo() {
   local work="$1"
   REPO="$work/repo"
   git init -q "$REPO"
+  # Force `main` regardless of the machine's init.defaultBranch.
+  git -C "$REPO" symbolic-ref HEAD refs/heads/main
   (
     cd "$REPO" || exit 1
     git config user.email t@t.t; git config user.name t
