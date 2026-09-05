@@ -112,6 +112,14 @@ teardown_run() {
   # it on the success path, the lock is already gone and we must not treat a
   # later unlock as meaningful. unlock_issue is idempotent, but we simply never
   # call it on the success path; every early return below releases it explicitly.
+  #
+  # ONE EXCEPTION, and it is the whole of issue #142: under --dry-run that
+  # hand-off tears nothing down — cleanup-run.sh only prints its plan. The
+  # premise of the paragraph above ("the lock is already gone") is therefore
+  # false in a preview, so the dry-run success branch releases the lock itself.
+  # The exception lives in the dry-run branch and NOT in the real path, because
+  # the real path's ownership rule is correct as written and a second unlock
+  # there would only make it read as though it were not.
 
   # ---------- 2. run-dir inventory ----------
   # Count run-dirs whose run.json .issue_number matches AND whose .remote matches
@@ -232,6 +240,11 @@ teardown_run() {
   # The lock was already removed by cleanup-run.sh's teardown — see the IMPORTANT
   # note above. We do NOT call unlock_issue here.
   if [ "$dry" = "1" ]; then
+    # The exception noted at gate 1: cleanup-run.sh released nothing under
+    # --dry-run, so this branch releases the lock we took there. A preview that
+    # leaves a lock behind blocks the very teardown it was rehearsing (rc 3)
+    # until the lock goes stale.
+    unlock_issue "$issue" "$remote" "$repo_slug"
     if [ "${TEARDOWN_CLOSE_ISSUE:-0}" = "1" ]; then
       teardown_log "[dry] would close issue #$issue, post summary, remove label $TEARDOWN_TRIGGER_LABEL"
     else
