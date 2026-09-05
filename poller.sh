@@ -1147,6 +1147,14 @@ while IFS= read -r repo_json; do
   # poller would never pick up.
   LABELS_CSV=$(poller_pick_labels "$REPO_LABELS" "$DEFAULT_LABELS")
 
+  # Optional per-repo assignee allow-list (watchlist key `assignees`, issue
+  # #238). Empty — the normal case — means pickup is unchanged. Resolved
+  # through poller_watchlist_pick_assignees rather than off the $repo_json we
+  # already hold, because drain-queue.sh resolves it the same way: the poller
+  # and the window model must not be able to disagree about what this host
+  # picks up. The cost is one local jq read per repo per tick, not an API call.
+  ASSIGNEES_CSV=$(poller_watchlist_pick_assignees "$WATCHLIST" "$REPO_PATH")
+
   # remotes array (default ["origin"]) — newline-separated for the inner loop.
   # A bad/empty array (missing field, non-array, empty) is treated as ["origin"]
   # so the entry keeps working unchanged. We tolerate stringly-typed values to
@@ -1328,7 +1336,7 @@ while IFS= read -r repo_json; do
     # never drift from the library. pick_oldest_candidate is testable by sourcing;
     # this inline call site is not (the poller exits at source time on a foreign
     # host), which is the other half of the reason to move it into the library.
-    ISSUE_NUM=$(pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" "$REMOTE" 2>>"$GH_ERR" || true)
+    ISSUE_NUM=$(pick_oldest_candidate "$REPO_PATH" "$LABELS_CSV" "$OWNER_REPO" "$REMOTE" "$ASSIGNEES_CSV" 2>>"$GH_ERR" || true)
 
     if _rl_hit; then break 2; fi
 

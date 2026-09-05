@@ -80,13 +80,15 @@ OUT_C=$(RUN_ISSUES_BASE_BRANCH=other load_repo_base_branch "$CFGREPO")
 ORIGIN="$WORK/origin.git"
 SRC="$WORK/src"
 git init -q --bare "$ORIGIN"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$ORIGIN" symbolic-ref HEAD refs/heads/main
 git init -q "$SRC"
+git -C "$SRC" symbolic-ref HEAD refs/heads/main
 (
   cd "$SRC"
   git config user.email t@t.t; git config user.name t
   git remote add origin "$ORIGIN"
   echo "v0" > f.txt; git add f.txt; git commit -qm init
-  git branch -M main
   git push -q origin main
   git checkout -q -b twenty
   echo "twenty" > f.txt; git commit -qam "twenty work"
@@ -165,6 +167,7 @@ grep -q "git remote set-head other -a" "$H_ERR" || { echo "FAIL (h): error did n
 # ===========================================================================
 NLREPO="$WORK/nolocal-remote"
 git init -q "$NLREPO"
+git -C "$NLREPO" symbolic-ref HEAD refs/heads/main
 (
   cd "$NLREPO"
   git config user.email t@t.t; git config user.name t
@@ -216,13 +219,14 @@ RC_K=$?
 G_ORIGIN="$WORK/g-origin.git"
 G_REPO="$WORK/g-repo"
 git init -q --bare "$G_ORIGIN"
+git -C "$G_ORIGIN" symbolic-ref HEAD refs/heads/main
 git init -q "$G_REPO"
+git -C "$G_REPO" symbolic-ref HEAD refs/heads/main
 (
   cd "$G_REPO"
   git config user.email t@t.t; git config user.name t
   git remote add origin "$G_ORIGIN"
   echo "v0" > f.txt; git add f.txt; git commit -qm init
-  git branch -M main
   git push -q origin main
   # integration branch "twenty"
   git checkout -q -b twenty

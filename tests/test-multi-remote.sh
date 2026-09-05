@@ -68,10 +68,14 @@ assert_parse "git@github.com:owner-only" ""                                     
 ORIGIN_BARE="$WORK/origin.git"
 PARTNER_BARE="$WORK/partner.git"
 git init -q --bare "$ORIGIN_BARE"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$ORIGIN_BARE" symbolic-ref HEAD refs/heads/main
 git init -q --bare "$PARTNER_BARE"
+git -C "$PARTNER_BARE" symbolic-ref HEAD refs/heads/main
 
 CLONE="$WORK/clone"
 git init -q "$CLONE"
+git -C "$CLONE" symbolic-ref HEAD refs/heads/main
 (
   cd "$CLONE"
   git config user.email t@t.t
@@ -79,7 +83,6 @@ git init -q "$CLONE"
   echo "v0" > f.txt
   git add f.txt
   git commit -qm init
-  git branch -M main
   # Use scp-like SSH URL for origin (most common GitHub clone shape) and an
   # https URL for the secondary remote so both code paths get exercised.
   git remote add origin "git@github.com:Silon-Oy/map-api.git"

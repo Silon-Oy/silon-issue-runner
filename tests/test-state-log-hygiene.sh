@@ -129,6 +129,8 @@ run_watch() {
 
 REPO="$WORK/repo"
 git init -q "$REPO"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$REPO" symbolic-ref HEAD refs/heads/main
 ( cd "$REPO" && git config user.email t@t.t && git config user.name t \
     && echo x > f && git add f && git commit -qm init )
 

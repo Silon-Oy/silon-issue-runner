@@ -56,7 +56,10 @@ THIS_HOST="test-host"
 REMOTE_GIT="$WORK/remote.git"
 REPO="$WORK/repo"
 git init -q --bare "$REMOTE_GIT"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$REMOTE_GIT" symbolic-ref HEAD refs/heads/main
 git init -q "$REPO"
+git -C "$REPO" symbolic-ref HEAD refs/heads/main
 git -C "$REPO" config user.email t@example.com
 git -C "$REPO" config user.name  Test
 git -C "$REPO" config commit.gpgsign false

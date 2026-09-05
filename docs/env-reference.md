@@ -174,6 +174,13 @@ paketin omat `${VAR:-oletus}`-materialisoinnit eivät kelpaa kutsujan valinnaksi
 `lib/claude-call.sh`:n npx-oletus palautui env-tiedoston arvon päälle, eikä tiedostosta voinut
 asettaa `RUN_ISSUES_CLAUDE_CMD`ia lainkaan.
 
+### Epic-ajo (`run-epic.sh`)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_EPIC_ORCHESTRATE` | *(pakettijuuren `orchestrate.sh`)* | **Testien injektiopiste**, ei käyttäjäkonfiguraatio |
+| `RUN_EPIC_STOP_RUN` | *(pakettijuuren `stop-run.sh`)* | **Testien injektiopiste** `--stop`-polulle, ei käyttäjäkonfiguraatio |
+
 ### Self-update (`self-update.sh`, #112)
 
 LaunchAgent (StartInterval 3600), joka pitää asennetun paketin ajan tasalla: kehittäjäkoneella

@@ -74,17 +74,21 @@ liittämistä, ja automaatio luo vain omat labelinsa. Kolme kallista sekaannusta
 
 Poiminta on **yksi REST-listaus GitHubista** ja sen päälle paikallinen suodatus (#133:
 suodatettu `gh issue list` kulkee hakuyhteyden kautta, joka voi olla estetty muun API:n
-vastatessa). Issue lähtee ajoon täsmälleen kun **kaikki kuusi** pätevät:
+vastatessa). Issue lähtee ajoon täsmälleen kun **kaikki kuusi** pätevät (ja, jos repo on
+ottanut käyttöön valinnaisen assignee-rajauksen, myös seitsemäs):
 
 1. Issue on **avoin**.
 2. Issuella **ei ole `auto-claimed`-labelia** — se on automaation oma varausmerkintä käynnissä
    olevalle tai siivoamattomalle ajolle. **Käsin assignattu issue lähtee ajoon normaalisti**:
-   assignaatio ei estä poimintaa.
+   assignaatio ei ole varaus (poikkeus kohdassa 7).
 3. Issue **ei ole estetty** GitHubin natiivissa riippuvuusgraafissa ("Mark as blocked by").
    Graafi luetaan suoraan riippuvuusrajapinnasta ehdokas kerrallaan, vanhimmasta alkaen.
 4. Issuella **ei ole** labelia `waiting`, `wip`, `epic`, `auto-clean` eikä `auto-reset`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: yksi label, `auto-run`).
 6. Se on vanhin ehdot täyttävä issue — yksi issue per tikki per remote.
+7. **Vain jos repolla on watchlistin valinnainen `assignees`-lista:** issue on assignattu
+   jollekin listatuista tunnuksista — tai sillä ei ole assigneeta lainkaan ja sen **avaaja** on
+   listalla. Ilman avainta assigneita ei katsota lainkaan.
 
 Viides kohta yllättää useimmin: **poimintalabelit yhdistyvät JA-ehdolla, eivät TAI-ehdolla.**
 Jos poimintalabeleita on kaksi, issue tarvitsee molemmat.
@@ -102,7 +106,9 @@ poistaa sen perääntyessään tai siivouksessa; assignaatio jää pelkäksi kir
 seurausta:
 
 - **Käsin assignattu issue lähtee ajoon normaalisti.** Jos haluat tehdä issuen itse, käytä
-  **`wip`-labelia** — se on ainoa "teen tämän itse" -opt-out.
+  **`wip`-labelia** — se on "teen tämän itse" -opt-out kaikkialla. Repossa, jolla on
+  `assignees`-rajaus (kohta 7), myös listan ulkopuoliselle assignaaminen pitää issuen poissa
+  ajosta; siellä assignee on samalla se kenttä, jolla työ reititetään koneiden välillä.
 - **Epäonnistunut ajo jättää issuen varatuksi `auto-claimed`illa**, ja issue palaa automaatioon
   vasta siivouksen jälkeen: poller ei poimi samaa issueta yhä uudelleen samaan seinään. **Älä
   poista `auto-claimed`ia käsin** — se palauttaisi keskeneräisen ajon poimintaan.

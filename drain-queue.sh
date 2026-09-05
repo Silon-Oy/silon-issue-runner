@@ -82,6 +82,8 @@ command -v pick_oldest_candidate >/dev/null 2>&1 \
   || die "pick_oldest_candidate not found after sourcing $ISSUE_LIB — package layout changed?"
 command -v poller_watchlist_pick_labels >/dev/null 2>&1 \
   || die "poller_watchlist_pick_labels not found after sourcing $CONFIG_LIB — package layout changed?"
+command -v poller_watchlist_pick_assignees >/dev/null 2>&1 \
+  || die "poller_watchlist_pick_assignees not found after sourcing $CONFIG_LIB — package layout changed?"
 
 WATCHLIST=$(poller_resolve_watchlist \
   "${RUN_ISSUES_WATCHLIST:-}" \
@@ -130,7 +132,13 @@ for repo in "${REPOS[@]}"; do
   # something is broken rather than unconfigured.
   [ -n "$LABELS" ] || die "resolved an empty pickup label set for $repo — refusing to run"
 
-  log "draining $repo (labels: $LABELS)"
+  # The optional per-repo assignee allow-list, through the SAME resolver the
+  # poller uses. Empty is the normal case and means no assignee filtering —
+  # unlike the label set above, an empty value here needs no defence, because
+  # it widens rather than narrows.
+  ASSIGNEES=$(poller_watchlist_pick_assignees "$WATCHLIST" "$repo")
+
+  log "draining $repo (labels: $LABELS${ASSIGNEES:+, assignees: $ASSIGNEES})"
 
   # Exit 9 (blocked by an open dependency) is the one code that can repeat
   # forever: it refuses BEFORE the claim, so the issue never gets the
@@ -150,7 +158,7 @@ for repo in "${REPOS[@]}"; do
 
     # The single pickup search, shared with the poller. Empty = queue empty:
     # this replaces the decommissioned exit code 2.
-    issue=$(pick_oldest_candidate "$repo" "$LABELS" "" || true)
+    issue=$(pick_oldest_candidate "$repo" "$LABELS" "" "" "$ASSIGNEES" || true)
     if [ -z "$issue" ]; then
       log "queue empty"
       break

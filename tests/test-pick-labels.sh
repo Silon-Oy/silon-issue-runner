@@ -25,6 +25,8 @@
 #      default AND reports rc 1, so the caller can say so out loud
 #   7. poller_watchlist_pick_labels: missing / unparseable watchlist, no path
 #   8. poller.sh resolves its pickup labels through the shared function
+#   9. poller_watchlist_pick_assignees: the optional per-repo allow-list
+#  10. poller.sh and drain-queue.sh resolve assignees through that one function
 #
 # Run: bash tests/test-pick-labels.sh
 
@@ -58,7 +60,7 @@ else
   bad "case1 lib/poller-config.sh does not parse:"
   sed 's/^/      /' "$WORK/syntax.err"
 fi
-for fn in poller_pick_labels poller_watchlist_pick_labels; do
+for fn in poller_pick_labels poller_watchlist_pick_labels poller_watchlist_pick_assignees; do
   if declare -f "$fn" >/dev/null 2>&1; then
     ok "case1 $fn is defined"
   else
@@ -151,6 +153,66 @@ JSON
   wl_case "case7 an empty repo path still yields a working set"       1 'auto-run' "$WL" ''
 fi
 
+# ---- Case 9: poller_watchlist_pick_assignees ----
+# The sibling of the lookup above, with the opposite empty-set semantics.
+# Empty is a LEGAL answer here and means "do not filter by assignee": an empty
+# label set would match every open issue, but an empty allow-list must simply
+# leave pickup as it was. So there is no default step, no built-in fallback,
+# and the rc carries no information — an uncovered repo and a covered repo
+# without the key mean exactly the same thing, and callers under `set -e` must
+# be able to assign the result directly.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "SKIP: jq not in PATH — assignee cases (9) skipped"
+else
+  AWL="$WORK/assignees.json"
+  cat > "$AWL" <<'JSON'
+{
+  "default_labels": ["auto-run"],
+  "repos": [
+    { "path": "/tmp/repo-a", "labels": ["auto-run"], "assignees": ["runner-a", "runner-b"] },
+    { "path": "/tmp/repo-b/", "labels": ["auto-run"] },
+    { "path": "/tmp/repo-c", "labels": ["auto-run"], "assignees": [] },
+    { "path": "/tmp/repo-d", "labels": ["auto-run"], "assignees": [" spaced ", "", "  "] }
+  ]
+}
+JSON
+
+  as_case() {
+    local desc="$1" want="$2" wl="$3" path="$4" got rc
+    got=$(poller_watchlist_pick_assignees "$wl" "$path"); rc=$?
+    if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+      ok "$desc"
+    else
+      bad "$desc (rc=$rc/0, got '$got', expected '$want')"
+    fi
+  }
+
+  as_case "case9 a repo with the key gets its own list"        'runner-a,runner-b' "$AWL" '/tmp/repo-a'
+  as_case "case9 a trailing slash still matches the entry"     'runner-a,runner-b' "$AWL" '/tmp/repo-a/'
+  as_case "case9 no key means no assignee filtering"           ''                   "$AWL" '/tmp/repo-b'
+  as_case "case9 an entry's own trailing slash is normalised"  ''                   "$AWL" '/tmp/repo-b/'
+  as_case "case9 an empty array means no assignee filtering"   ''                   "$AWL" '/tmp/repo-c'
+  as_case "case9 whitespace is trimmed and blanks are dropped" 'spaced'             "$AWL" '/tmp/repo-d'
+  # An uncovered repo must NOT inherit anything: unlike labels there is no
+  # default to inherit, and inventing one would filter a checkout nobody
+  # configured.
+  as_case "case9 an uncovered repo gets no list"               ''                   "$AWL" '/tmp/repo-unknown'
+  as_case "case9 an unparseable watchlist yields no list"      ''                   "$BAD" '/tmp/repo-a'
+  as_case "case9 a missing watchlist yields no list"           ''                   "$WORK/nope.json" '/tmp/repo-a'
+  as_case "case9 an empty watchlist path yields no list"       ''                   '' '/tmp/repo-a'
+  as_case "case9 an empty repo path yields no list"            ''                   "$AWL" ''
+
+  # The labels lookup must be untouched by a watchlist that also carries
+  # assignees — the two keys are independent, and the assignee list must never
+  # leak into the label set that goes into the REST `labels=` term.
+  got=$(poller_watchlist_pick_labels "$AWL" '/tmp/repo-a')
+  if [ "$got" = "auto-run" ]; then
+    ok "case9 the assignee key does not disturb the label lookup"
+  else
+    bad "case9 the assignee key leaked into the labels (got '$got')"
+  fi
+fi
+
 # ---- Case 8: poller.sh goes through the shared function ----
 # The chain must not grow a second implementation: a poller that resolved its
 # own labels could pick up a different set than /issue-runner:new-epic writes,
@@ -167,6 +229,25 @@ if hits=$(grep -n 'LABELS_CSV="\$REPO_LABELS"\|default_labels // \["auto-run"\]'
 else
   ok "case8 poller.sh has no inline pickup-label fallback left"
 fi
+
+# ---- Case 10: both pickup entry points share the assignee resolver ----
+# The poller and the window model must not be able to disagree about what this
+# host picks up. drain-queue.sh already reads the labels through the shared
+# lookup; the assignee list has to travel the same way, or a drain could take
+# an issue the poller would never touch.
+DRAIN="$ROOT/drain-queue.sh"
+for f in "$POLLER" "$DRAIN"; do
+  if grep -q 'poller_watchlist_pick_assignees' "$f"; then
+    ok "case10 $(basename "$f") resolves assignees through the shared function"
+  else
+    bad "case10 $(basename "$f") does not call poller_watchlist_pick_assignees"
+  fi
+  if grep -vE '^\s*#' "$f" | grep -qE '\.assignees|jq[^|]*assignees'; then
+    bad "case10 $(basename "$f") reads the assignees key inline"
+  else
+    ok "case10 $(basename "$f") has no inline assignees read"
+  fi
+done
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "pick-labels: all passed" || echo "pick-labels: FAILURES"

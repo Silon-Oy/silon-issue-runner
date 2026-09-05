@@ -71,6 +71,8 @@ eq "$(RUN_ISSUES_REPO_SLUG_MAX=10 slugify_repo_component 'abcdefghi-jklmno')" "a
 # repo_slug against a real clone with two remotes.
 CLONE="$WORK/clone"
 git init -q "$CLONE"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$CLONE" symbolic-ref HEAD refs/heads/main
 (
   cd "$CLONE"
   git config user.email t@t.t
@@ -78,7 +80,6 @@ git init -q "$CLONE"
   echo v0 > f.txt
   git add f.txt
   git commit -qm init
-  git branch -M main
   git remote add origin "git@github.com:Silon-Oy/map-api.git"
   git remote add partner "https://github.com/partner-org/map-api.git"
 )

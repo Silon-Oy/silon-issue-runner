@@ -36,14 +36,16 @@ build_repo() {
   local work="$1"
   local origin="$work/origin.git" repo="$work/repo"
   git init -q --bare "$origin"
+  # Force `main` regardless of the machine's init.defaultBranch.
+  git -C "$origin" symbolic-ref HEAD refs/heads/main
   git init -q "$repo"
+  git -C "$repo" symbolic-ref HEAD refs/heads/main
   (
     cd "$repo"
     git config user.email t@t.t; git config user.name t
     git remote add origin "$origin"
     echo "v0" > f.txt
     git add f.txt; git commit -qm init
-    git branch -M main
     git push -q origin main
     git checkout -q -b feature/x
     echo "feature (buggy)" > f.txt

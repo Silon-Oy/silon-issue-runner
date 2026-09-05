@@ -128,7 +128,10 @@ gitf -C "$SRC" add -A
 gitf -C "$SRC" commit -q -m "tidy"
 
 git init --bare -q "$ORIGIN"
+# Force `main` regardless of the machine's init.defaultBranch.
+git -C "$ORIGIN" symbolic-ref HEAD refs/heads/main
 git init --bare -q "$TARGET"
+git -C "$TARGET" symbolic-ref HEAD refs/heads/main
 gitf -C "$SRC" remote add origin "$ORIGIN"
 gitf -C "$SRC" push -q origin main
 gitf -C "$SRC" fetch -q origin
