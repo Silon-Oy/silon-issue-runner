@@ -153,16 +153,53 @@ fi
 # A package that names one operator's projects cannot be handed to the next
 # person setting up a runner — which is exactly how this script reached the
 # package in the first place.
-leaks=0
-for f in "$PKG/drain-queue.sh" "$PKG/examples/wake-run.example.sh"; do
-  [ -f "$f" ] || { bad "missing shipped file: $f"; continue; }
-  if hit=$(grep -nEi 'customer-a|putkiwelho|customer-d|/Users/[a-z]|/home/[a-z]' "$f"); then
-    bad "project/host name in $(basename "$f"):"
-    printf '%s\n' "$hit" | sed 's/^/       /'
-    leaks=1
+#
+# The names are NOT spelled out here. publish-release.sh's builtin_denylist is
+# the one place they exist, and a copy in this file failed twice over: it drifted
+# from that list (this case guarded a name the denylist never carried, and missed
+# every name added to the denylist since), and a test that enumerates customer
+# names is itself the leak the release pipeline refuses to publish — its gate
+# found this very line. The terms are therefore derived from the denylist, and
+# the match is anchored the way SCAN_AWK anchors it: case-insensitive, starting
+# at a word start, no trailing boundary. The pipeline strips publish-release.sh
+# from the mirror, so the case SKIPs there rather than silently guarding nothing.
+DENY_SRC="$PKG/publish-release.sh"
+if [ ! -f "$DENY_SRC" ]; then
+  echo "  SKIP case 5: publish-release.sh not in this tree, no denylist to derive from"
+else
+  # builtin_denylist is a quoted heredoc of `term` / `term==>replacement` lines.
+  terms=$(awk '
+    /^builtin_denylist\(\)/ { in_fn = 1; next }
+    !in_fn                  { next }
+    !in_body && /<<.TERMS/  { in_body = 1; next }
+    !in_body                { next }
+    /^TERMS$/               { exit }
+    {
+      sub(/#.*/, ""); sub(/==>.*/, ""); sub(/[[:space:]]+$/, "")
+      if ($0 != "") print
+    }
+  ' "$DENY_SRC")
+  term_count=$(printf '%s\n' "$terms" | grep -c .)
+  if [ "$term_count" -lt 10 ]; then
+    # Fail closed. A parse that quietly yields a short list turns this case into
+    # a green no-op — the exact failure it exists to catch.
+    bad "denylist parse yielded only $term_count terms; refusing to guard on it"
+  else
+    # (^|non-word) before the term == SCAN_AWK's isword(before) test, so `maintainer`
+    # does not fire on `collision` here either.
+    deny_re="(^|[^A-Za-z0-9])($(printf '%s\n' "$terms" | paste -sd'|' -))"
+    leaks=0
+    for f in "$PKG/drain-queue.sh" "$PKG/examples/wake-run.example.sh"; do
+      [ -f "$f" ] || { bad "missing shipped file: $f"; continue; }
+      if hit=$(grep -nEi "$deny_re|/Users/[a-z]|/home/[a-z]" "$f"); then
+        bad "project/host name in $(basename "$f"):"
+        printf '%s\n' "$hit" | sed 's/^/       /'
+        leaks=1
+      fi
+    done
+    [ "$leaks" -eq 0 ] && ok "shipped files name no project or host ($term_count denylist terms)"
   fi
-done
-[ "$leaks" -eq 0 ] && ok "shipped files name no project or host"
+fi
 
 if [ "$fails" -eq 0 ]; then
   echo "PASS: test-drain-queue.sh"
