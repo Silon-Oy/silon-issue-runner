@@ -1,7 +1,7 @@
 # Ajokone Fly.io Spritessä — ikkunamalli
 
 > **Tila:** todennettu käytännössä kahdella Spritellä — `claude-issue-runner` (27.8.2026) ja
-> `customer-d-oy` (5.–6.9.2026, Ubuntu 26.04 LTS). Kaikki tämän dokumentin komennot on ajettu
+> `sprite-b` (5.–6.9.2026, Ubuntu 26.04 LTS). Kaikki tämän dokumentin komennot on ajettu
 > oikeaa Spriteä vasten, ei suunniteltu paperilla. **Ympäristö eroaa koneiden välillä** —
 > valmiustaulukko on kahden koneen otos, ei ehdoton lupaus (ks. alla).
 
@@ -19,10 +19,10 @@ heti** sen sijaan että jäätäisiin odottamaan seuraavaa kierrosta.
 
 **Tämä taulukko on kahden koneen otos, ei ehdoton lupaus.** Sprite-imaget eroavat
 toisistaan, ja sama työkalu voi olla toisessa valmiina ja puuttua toisesta kokonaan.
-Todettu kahdesta Spritestä: `claude-issue-runner` (27.8.2026) ja `customer-d-oy`
+Todettu kahdesta Spritestä: `claude-issue-runner` (27.8.2026) ja `sprite-b`
 (5.–6.9.2026, Ubuntu 26.04 LTS).
 
-| | `claude-issue-runner` (27.8.2026) | `customer-d-oy` (5.–6.9.2026) |
+| | `claude-issue-runner` (27.8.2026) | `sprite-b` (5.–6.9.2026) |
 |---|---|---|
 | `node` | ✅ v24.18.0 | ✅ v24.18.0 |
 | Node-paketinhallinta | ✅ `pnpm` 11.23.0 | ⚠️ ei `pnpm`:ää; `npm` 12.0.2 |
@@ -41,7 +41,7 @@ Todettu kahdesta Spritestä: `claude-issue-runner` (27.8.2026) ja `customer-d-oy
 Docker ja PostgreSQL ovat ne, jotka yllättävät, ja ne eroavat koneiden välillä.
 `claude-issue-runner`issa Docker oli asennettu mutta daemon ei ollut käynnissä —
 ensimmäinen versio tästä dokumentista luki `docker run hello-world`in kaatumisen "Docker ei
-toimi Spritessä" -tulokseksi, vaikka syy oli vain käynnistämätön daemon. `customer-d-oy`stä
+toimi Spritessä" -tulokseksi, vaikka syy oli vain käynnistämätön daemon. `sprite-b`stä
 Docker puuttui kokonaan (`sudo apt-get install docker.io` asentaa sen). **Ja vaikka daemon
 käynnistetään, `docker exec` ei toimi Spriten hiekkalaatikossa** — seuraus (Testcontainers-
 pohjaiset testit eivät aja) on laajempi kuin miltä näyttää, ks. Docker-osio. Postgres taas
