@@ -65,6 +65,19 @@ gh auth login          # GitHub-tunnistautuminen
 bash -lc 'node -v'     # ≥ 22.13, koska pnpm vaatii sen
 ```
 
+**`gh auth login` ei pyydä `workflow`-scopea, ja sen puute näkyy vasta S8:ssa.**
+Oletusscopet (`repo`, `read:org`, `gist`, `admin:public_key`) riittävät kaikkeen muuhun,
+mutta push, joka koskee `.github/workflows/`-tiedostoja, torjutaan rivillä `refusing to
+allow an OAuth App to create or update workflow`. Silloin implementer on jo tehnyt työnsä
+ja ajo kaatuu vasta työntövaiheessa. Lisää scope heti pystytyksessä, jos kohderepossa on
+työnkulkuja:
+
+```bash
+gh auth refresh -h github.com -s workflow
+```
+
+Tarkista tulos `gh auth status`illa — scope-rivin on sisällettävä `workflow`.
+
 Kaikki tämän dokumentin komennot voi ajaa myös ulkopuolelta ilman konsolia:
 
 ```bash
