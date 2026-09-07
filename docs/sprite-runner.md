@@ -1,10 +1,11 @@
 # Ajokone Fly.io Spritessä — ikkunamalli
 
-> **Tila:** todennettu käytännössä 27.8.2026 pystyttämällä `claude-issue-runner`-niminen
-> Sprite ajamaan kohderepoa. Kaikki tämän dokumentin komennot on ajettu oikeaa Spriteä
-> vasten, ei suunniteltu paperilla.
+> **Tila:** todennettu käytännössä kahdella Spritellä — `claude-issue-runner` (27.8.2026) ja
+> `customer-d-oy` (5.–6.9.2026, Ubuntu 26.04 LTS). Kaikki tämän dokumentin komennot on ajettu
+> oikeaa Spriteä vasten, ei suunniteltu paperilla. **Ympäristö eroaa koneiden välillä** —
+> valmiustaulukko on kahden koneen otos, ei ehdoton lupaus (ks. alla).
 
-Sprite on ~8 CPU / 8 GB / 100 GB Firecracker-VM, joka **nukahtaa noin 30 sekunnin
+Sprite on ~8 CPU / 8–15 GB / ~100 GB Firecracker-VM, joka **nukahtaa noin 30 sekunnin
 käyttämättömyyden jälkeen** ja maksaa nukkuvana käytännössä nolla. Se sopii ajokoneeksi
 hyvin, mutta **ei pollerimallilla**: runnerin 300 s poller herättäisi koneen ikuisesti,
 jolloin maksaisi jatkuvasti päällä olevasta koneesta.
@@ -16,25 +17,36 @@ heti** sen sijaan että jäätäisiin odottamaan seuraavaa kierrosta.
 
 ## Mitä Spritessä on valmiina ja mitä ei
 
-Todettu tuoreesta Spritestä:
+**Tämä taulukko on kahden koneen otos, ei ehdoton lupaus.** Sprite-imaget eroavat
+toisistaan, ja sama työkalu voi olla toisessa valmiina ja puuttua toisesta kokonaan.
+Todettu kahdesta Spritestä: `claude-issue-runner` (27.8.2026) ja `customer-d-oy`
+(5.–6.9.2026, Ubuntu 26.04 LTS).
 
-| | Tila |
-|---|---|
-| `node` | ✅ v24.18.0 |
-| `pnpm` | ✅ 11.23.0 |
-| `claude` | ✅ `~/.local/bin/claude` — **autentikointi tehtävä erikseen** |
-| `gh` | ✅ `/.sprite/bin/gh` — **autentikointi tehtävä erikseen** |
-| Playwright-selaimet | ⚠️ asennettuina (`~/.cache/ms-playwright`), mutta **Chromium kaatuu** — E2E ei aja, ks. alla |
-| `sudo` | ✅ ilman salasanaa |
-| `apt-get` | ✅ |
-| **Docker** | ⚠️ Docker 29 + Compose 2.40 asennettuina, mutta **daemon ei ole käynnissä** — `docker run` kaatuu puuttuvaan `/var/run/docker.sock`iin kunnes `sudo dockerd` on käynnistetty, ks. alla |
-| **PostgreSQL-palvelin** | ❌ vain `postgresql-client-18`, ei `postgres`-binääriä |
+| | `claude-issue-runner` (27.8.2026) | `customer-d-oy` (5.–6.9.2026) |
+|---|---|---|
+| `node` | ✅ v24.18.0 | ✅ v24.18.0 |
+| Node-paketinhallinta | ✅ `pnpm` 11.23.0 | ⚠️ ei `pnpm`:ää; `npm` 12.0.2 |
+| `claude` | ✅ `~/.local/bin/claude` — **autentikointi erikseen** | ✅ (sama) |
+| `gh` | ✅ `/.sprite/bin/gh` — **autentikointi erikseen** | ✅ (sama) |
+| `git` | (ei mitattu) | ✅ 2.53.0 |
+| `jq` | (ei mitattu) | ✅ 1.8.1 |
+| `sudo` | ✅ ilman salasanaa | ✅ ilman salasanaa |
+| `apt-get` | ✅ | ✅ |
+| Playwright-selaimet | ⚠️ asennettuina (`~/.cache/ms-playwright`), **Chromium kaatuu** — E2E ei aja, ks. alla | (ei mitattu) |
+| **Docker** | ⚠️ Docker 29 + Compose 2.40 asennettuina, **daemon ei käynnissä** (ks. alla); lisäksi `docker exec` ei toimi hiekkalaatikossa (ks. alla) | ❌ **ei asennettu lainkaan** — `sudo apt-get install docker.io` |
+| **PostgreSQL** | ❌ vain `postgresql-client-18`, ei `postgres`-binääriä | ❌ ei clienttiä eikä palvelinta |
+| RAM | ~8 GB | 15 GB |
+| CPU / levy | ~8 CPU / ~100 GB | 8 CPU / 99 GB |
 
-Kaksi viimeistä ovat ne, jotka yllättävät. **Docker toimii, kunhan daemon käynnistetään
-ikkunan alussa** (ks. alla) — ensimmäinen versio tästä dokumentista luki `docker run
-hello-world`in kaatumisen "Docker ei toimi Spritessä" -tulokseksi, vaikka syy oli vain
-käynnistämätön daemon. Postgres sen sijaan on asennettava käsin, jos kohderepo tarvitsee
-tietokannan.
+Docker ja PostgreSQL ovat ne, jotka yllättävät, ja ne eroavat koneiden välillä.
+`claude-issue-runner`issa Docker oli asennettu mutta daemon ei ollut käynnissä —
+ensimmäinen versio tästä dokumentista luki `docker run hello-world`in kaatumisen "Docker ei
+toimi Spritessä" -tulokseksi, vaikka syy oli vain käynnistämätön daemon. `customer-d-oy`stä
+Docker puuttui kokonaan (`sudo apt-get install docker.io` asentaa sen). **Ja vaikka daemon
+käynnistetään, `docker exec` ei toimi Spriten hiekkalaatikossa** — seuraus (Testcontainers-
+pohjaiset testit eivät aja) on laajempi kuin miltä näyttää, ks. Docker-osio. Postgres taas
+on molemmissa asennettava käsin, jos kohderepo tarvitsee tietokannan — eikä `localhost` osu
+oletus-`pg_hba.conf`iin (ks. osio 4).
 
 ## Pystytys
 
@@ -57,8 +69,10 @@ Kaikki tämän dokumentin komennot voi ajaa myös ulkopuolelta ilman konsolia:
 
 ```bash
 sprite exec -s claude-issue-runner -- bash -lc '<komento>'
-sprite file push -s claude-issue-runner ./paikallinen /home/sprite/kohde
+sprite file push -p -s claude-issue-runner ./paikallinen /home/sprite/kohde
 ```
+
+**`sprite file push` vaatii `-p`-lipun** (ks. osio 5:n perustelu).
 
 **Käytä `bash -lc`:tä.** Login-shell lataa `nvm`:n ja projektin `node_modules/.bin`in;
 ilman sitä osuu helposti väärään Node-versioon.
@@ -150,6 +164,25 @@ käsin.
 **TCP:n yli käyttäjänä, jonka `PGUSER`/`PGPASSWORD` nimeävät** — paikallinen
 `sudo -u postgres` -yhteys ei todista mitään hookin polusta.
 
+**`localhost` resolvoituu Spritessä IPv6:ksi `fdf::1`, joka ei osu oletus-`pg_hba.conf`iin.**
+Oletustiedosto kattaa vain `127.0.0.1/32` ja `::1/128`, joten jokainen `localhost`-yhteys
+kaatuu heti riviin
+
+```
+FATAL: no pg_hba.conf entry for host "fdf::1", user "...", database "...", SSL encryption
+```
+
+Runnerin oma `env` käyttää yllä `127.0.0.1`:tä eikä siksi osu tähän, mutta **Compose-pohjaisen
+kohderepon `DATABASE_URL` käyttää tyypillisesti `localhost`ia** — ja silloin osuma on
+välitön. Korjaus on yksi rivi `/etc/postgresql/18/main/pg_hba.conf`iin, jonka jälkeen
+klusteri uudelleenladataan:
+
+```bash
+echo 'host    all             all             fdf::/16                scram-sha-256' \
+  | sudo tee -a /etc/postgresql/18/main/pg_hba.conf
+sudo pg_ctlcluster 18 main reload
+```
+
 #### Docker: daemon käynnistetään ikkunan alussa
 
 Spritessä on Docker 29 ja Compose 2.40 valmiina, mutta **`dockerd` ei käynnisty koneen
@@ -172,6 +205,25 @@ Konttien ajo, kuvien lataus, `-p`-porttijulkaisu ja `curl localhost:<portti>` to
 siis kaikki, mitä Compose-pohjaisen repon savutesti tarvitsee. Vartija kuuluu
 `wake-run.sh`:ään Postgres-vartijan rinnalle (ks. osio 5): jos `docker info` ei vastaa,
 käynnistä `sudo dockerd` taustalle ja odota enintään 30 s ennen kuin drain alkaa.
+
+**`docker exec` ei kuitenkaan toimi Spriten hiekkalaatikossa** — `docker run`, kuvien lataus
+ja `-p`-porttijulkaisu toimivat yllä todetusti, mutta exec kaatuu:
+
+```
+OCI runtime exec failed: error executing setns process: exit status 1;
+runc init error(s): nsexec-1: failed to open /proc/<pid>/ns/ipc: Permission denied
+```
+
+Seuraus on laajempi kuin miltä näyttää: **Dockerin health checkit toteutetaan
+`docker exec`illä**, joten yksikään health check ei koskaan muutu `healthy`ksi.
+Testcontainers-pohjaiset testit odottavat juuri sitä ja kaatuvat riviin `Health check not
+healthy after 120000ms` — mikä näyttää rikkinäiseltä testiltä eikä puuttuvalta
+ympäristöltä. Todennettu ajamalla kontti käsin `--health-cmd`illä: kontti on `running`,
+health `unhealthy`, ja health-lokissa on pelkkiä exec-virheitä.
+
+Kiertotie on kohderepon testien wait-strategian vaihto (`Wait.forListeningPorts()`), mutta se
+on muutos kohderepoon, ei ajokoneeseen. Testcontainers-testit kuuluvat siis samaan luokkaan
+kuin E2E: vaihe, joka varmistuu vasta CI:ssä (ks. "Ajaako Spritessä" -taulukko alla).
 
 Kohderepon hookin ei silti kannata **olettaa** Dockeria: kestävästi kirjoitettu
 `.claude/provision-test-env.sh` yrittää **TCP:tä ensin** ja `docker exec`-yhteyttä vasta
@@ -199,7 +251,8 @@ Käytännön seuraus ajokoneen valintaan:
 |---|---|
 | `pnpm typecheck` | ✅ |
 | `pnpm test` (unit, kaikki paketit) | ✅ |
-| `pnpm test:e2e` (Playwright) | ❌ |
+| `pnpm test:e2e` (Playwright) | ❌ (Chromium kaatuu) |
+| Testcontainers-pohjaiset integraatiotestit | ❌ (`docker exec` ei toimi → health check jää `unhealthy`) |
 
 **Tämä on syy, miksi CI on laatuportti eikä muodollisuus.** Ajokoneen testit ovat
 implementerin palautesykli, eivät hyväksymiskriteeri: E2E-kattavuus todennetaan vasta
@@ -261,11 +314,15 @@ Herätyskäärä sen sijaan on **konekohtainen** — palvelut, jotka on käynnis
 alussa, riippuvat kohderepoista. Kopioi malli ja muokkaa:
 
 ```bash
-sprite file push -s <sprite> \
+sprite file push -p -s <sprite> \
   ~/.claude/scripts/run-issues/examples/wake-run.example.sh \
   /home/sprite/bin/wake-run.sh
 sprite exec -s <sprite> -- bash -lc 'chmod +x ~/bin/wake-run.sh'
 ```
+
+**`-p` (`--parents`) on pakollinen.** Ilman sitä `sprite file push` torjuu siirron viestillä
+`Error: directory /home/sprite/bin does not exist` **vaikka hakemisto olisi olemassa** —
+todennettu samassa istunnossa `ls -ld`:llä. `-p` luo puuttuvat vanhemmat ja korjaa asian.
 
 Malli tekee yhden ajoikkunan — merge, drain, merge uudelleen — ja sen runko on:
 
@@ -472,3 +529,14 @@ kilpailevat samasta työstä.
    (rc 127) — ei "composer install epäonnistui". Asenna työkaluketju etukäteen (osio 4b) ja
    muista, että `needs-human`-tilan purku on Spritessä käsityötä: `cleanup-run.sh --force`
    ja uusi herätys.
+
+9. **`localhost` on IPv6 `fdf::1`, ei `127.0.0.1`.** `localhost`iin yhdistävä kohderepo
+   kaatuu Postgresissa riviin `FATAL: no pg_hba.conf entry for host "fdf::1"`, koska
+   oletus-`pg_hba.conf` kattaa vain `127.0.0.1/32` ja `::1/128`. Näyttää sovellusvirheeltä,
+   on ympäristö. Yhden rivin korjaus `pg_hba.conf`iin, ks. osio 4.
+
+10. **`docker exec` ei toimi Spriten hiekkalaatikossa.** `docker run` ja `-p`-porttijulkaisu
+    toimivat, mutta exec kaatuu (`nsexec: … Permission denied`). Koska Dockerin health
+    checkit ajetaan `docker exec`illä, ne jäävät ikuisesti `unhealthy`ksi ja
+    Testcontainers-testit kaatuvat riviin `Health check not healthy after 120000ms` — mikä
+    näyttää rikkinäiseltä testiltä. Kuten E2E, tämä varmistuu vasta CI:ssä. Ks. Docker-osio.
