@@ -185,8 +185,10 @@ else
     # a green no-op — the exact failure it exists to catch.
     bad "denylist parse yielded only $term_count terms; refusing to guard on it"
   else
-    # (^|non-word) before the term == SCAN_AWK's isword(before) test, so `maintainer`
-    # does not fire on `collision` here either.
+    # (^|non-word) before the term == SCAN_AWK's isword(before) test, so a short
+    # term does not fire on the middle of an unrelated word. The illustrative
+    # pair is not written out: a comment naming a denylist term is the same leak
+    # this case exists to catch, and the release gate reads comments too.
     deny_re="(^|[^A-Za-z0-9])($(printf '%s\n' "$terms" | paste -sd'|' -))"
     leaks=0
     for f in "$PKG/drain-queue.sh" "$PKG/examples/wake-run.example.sh"; do
