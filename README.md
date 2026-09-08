@@ -59,7 +59,7 @@ tuota virhettä vaan hiljaisuutta.
 | `git` | `brew install git` |
 | `gh` | `brew install gh` |
 | `jq` | `brew install jq` (**Windows: 1.7 tai uudempi**, ks. osio 3.2) |
-| Claude CLI (`claude`) | Claude Coden natiiviasennin (asentaa `claude`-komennon polulle) — oletus. npm-paketti on vaihtoehto, ks. osio 3.2 |
+| Claude CLI (`claude`) | Claude Coden natiiviasennin; npm-paketti vaihtoehtona, ks. osio 3.2 |
 | `gh`-kirjautuminen | `gh auth login` |
 
 Nämä tarkistaa orkestraattorin **S0-preflight-portti** (`lib/preflight.sh`,
@@ -68,10 +68,9 @@ kaikkia sivuvaikutuksia: mitään ei lukita, claimata eikä luoda. Virheilmoitus
 puuttuvan työkalun että sen korjauskomennon. Kaavio:
 [`docs/diagrams/preflight-gate-failure-map.mmd`](docs/diagrams/preflight-gate-failure-map.mmd).
 
-Claude CLI:tä ei tarkisteta `command -v`:llä vaan aidolla `--version`-kutsulla, koska komento
-voi resolvoitua polulta ja silti exitata 127 kutsuhetkellä — näin käy koneella, jolla on
-npm-paketti mutta ei `claude`-komentoa polulla. `gh`-kirjautuminen tarkistetaan komennolla
-`gh auth token` eikä `gh auth status`:lla
+Claude CLI:tä ei tarkisteta `command -v`:llä vaan aidolla `--version`-kutsulla: komento voi
+resolvoitua polulta ja silti exitata 127 kutsuhetkellä (osio 3.2). `gh`-kirjautuminen
+tarkistetaan komennolla `gh auth token` eikä `gh auth status`:lla
 — jälkimmäinen kutsuu API:a, jolloin verkkokatkosta tulisi uusi tapa estää ajon käynnistyminen.
 
 ### Valinnainen
@@ -287,20 +286,17 @@ oletukset ovat `%USERPROFILE%\.local\state\run-issues\{locks,logs}`
 ([`lib/paths.sh`](lib/paths.sh)). `RUN_ISSUES_LOCK_ROOT` ja `RUN_ISSUES_LOG_DIR` ohittavat
 yhä.
 
-**Claude CLI:n kutsu.** Oletus on `claude`, eli paljas natiiviasennuksen tuoma komento.
-Claude Coden natiiviasennin on nykyään yleisin tapa asentaa CLI, ja se laittaa juuri
-`claude`-komennon polulle. Ansa on olemassa yhä, mutta se osuu **harvinaisempaan suuntaan:**
-kone, jolla on npm-paketti (`@anthropic-ai/claude-code`) mutta ei `claude`-komentoa polulla.
-Silloin oletus exittaa 127 ja S0-portti raportoi puuttuvan Claude CLI:n. Korjaus on yksi
-muuttuja, joka osoittaa npm-paketin npx-kutsuun:
+**Claude CLI:n kutsu.** Oletus on `claude`, jonka natiiviasennin laittaa polulle. Ansa on
+yhä olemassa, mutta osuu **harvinaisempaan suuntaan:** kone, jolla on npm-paketti mutta ei
+`claude`-komentoa polulla, saa 127:n ja S0-portin ilmoituksen puuttuvasta CLI:stä. Korjaus on
+yksi muuttuja:
 
 ```bash
 export RUN_ISSUES_CLAUDE_CMD='npx --no-install @anthropic-ai/claude-code'
 ```
 
-Saman korjauksen nimeää S0-portin virheilmoituksen vihje, joten se on siinä missä vika näkyy.
-Vakinaista se joko Git Bashin profiiliin tai koneen omaan env-tiedostoon
-(`$HOME/.config/run-issues/env`, osio 4).
+Saman korjauksen nimeää S0-portin vihje, joten se on siinä missä vika näkyy. Vakinaista se
+Git Bashin profiiliin tai koneen env-tiedostoon (`$HOME/.config/run-issues/env`, osio 4).
 
 **Mitä ei tueta.** Windows-tuki koskee **vain** interaktiivista ajoa. Ulkopuolelle jäävät
 tarkoituksella:
@@ -532,7 +528,7 @@ skriptin `# Env:`-otsikkokommentti.
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Salaisuustiedoston polku |
-| `RUN_ISSUES_CLAUDE_CMD` | `claude` | Claude-CLI:n kutsu (natiiviasennuksen komento). npm-paketti ilman `claude`-komentoa ⇒ `npx --no-install @anthropic-ai/claude-code`, ks. osio 3.2 |
+| `RUN_ISSUES_CLAUDE_CMD` | `claude` | Claude-CLI:n kutsu. npm-paketti ⇒ npx-kutsu, ks. osio 3.2 |
 | `RUN_ISSUES_CLAUDE_TIMEOUT` | `3600` | Aikabudjetti per claude-kutsu |
 | `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle kopioitavat labelit (6.3) |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | Montako kertaa aikakatkaistu ajo yritetään uudelleen (6.6 d) |
@@ -956,9 +952,8 @@ Turvamalli:
 - `UNSTABLE`-tila (vaaditut checkit vihreitä, vain ei-vaadittu punainen) ei laukaise korjausta,
   eikä estä mergeä. `DIRTY`+punainen rebasetaan ensin.
 - **Agentin käynnistyvyys tarkistetaan ennen korjausyritystä.** Jos claude-CLI ei ole
-  käytettävissä — tyypillisesti oletuksen `claude`-komento puuttuu polulta koneelta, jolla on
-  vain npm-paketti — korjauspäätös alennetaan pelkäksi CI-odotukseksi. Yrityskatto
-  ei siis kulu agenttiin joka ei koskaan käynnisty, ja PR palaa tarkasteluun seuraavalla tikillä.
+  käytettävissä (osio 3.2), korjauspäätös alennetaan pelkäksi CI-odotukseksi. Yrityskatto ei
+  siis kulu agenttiin joka ei koskaan käynnisty, ja PR palaa tarkasteluun seuraavalla tikillä.
 - **Käynnistysvirhe raportoidaan käynnistysvirheenä.** Jos agenttikutsu silti epäonnistuu
   käynnistyksessä, PR-kommentti kertoo ettei agenttia voitu käynnistää — ei harhaanjohtavasti,
   että agentti tutki CI-virheen eikä löytänyt korjausta.
