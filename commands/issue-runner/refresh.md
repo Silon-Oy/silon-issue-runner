@@ -46,6 +46,35 @@ jää arvaamaan porttia ajosta toiseen.
      tarkoittaa joko turhaa 45 s health-pollia tai väärää "jo käynnissä" -päätöstä
      PHASE 4:ssä.
 
+3. Päättele pakettimanageri lockfilesta. Tämä ajetaan **aina** — myös kun konfig on jo
+   olemassa — koska PHASE 3:n buildit ja PHASE 3a:n migraatiot ajetaan tällä, eivät
+   kovakoodatulla `pnpm`:llä. Sama lockfile→manageri-mäppäys kuin PHASE 0b:n taulukon
+   `Lockfile`-rivillä; yksi kanoninen mäppäys, ei kahta erillistä.
+
+   ```bash
+   if   [ -f "$REPO_ROOT/pnpm-lock.yaml" ];    then PM=pnpm
+   elif [ -f "$REPO_ROOT/yarn.lock" ];         then PM=yarn
+   elif [ -f "$REPO_ROOT/package-lock.json" ]; then PM=npm
+   elif [ -f "$REPO_ROOT/bun.lock" ] || [ -f "$REPO_ROOT/bun.lockb" ]; then PM=bun
+   else PM=npm  # ei lockfileä → npm on turvallisin oletus (npx aina saatavilla)
+   fi
+
+   # PMX = pakettimanagerin exec-muoto lokaalille CLI-binäärille (esim. prisma). Skriptit
+   # ajetaan muodossa "$PM run <script>", lokaalit binäärit muodossa "$PMX <binääri>":
+   # "npm <bin>" ei aja lokaalia binääriä, joten npm:llä käytetään npx:ää.
+   case "$PM" in
+     pnpm) PMX="pnpm exec" ;;
+     yarn) PMX="yarn exec" ;;
+     bun)  PMX="bunx" ;;
+     *)    PMX="npx" ;;
+   esac
+   echo "PM=$PM PMX=$PMX"
+   ```
+
+   Käytä tästä eteenpäin `$PM install` / `$PM run <script>` skripteille ja `$PMX <binääri>`
+   lokaaleille CLI-työkaluille (Prisma) — älä kovakoodaa `pnpm`:ää. Pnpm-repossa `$PM`=`pnpm`,
+   `$PMX`=`pnpm exec`, joten käytös säilyy ennallaan.
+
 **Konfigin olemassaolo ratkaistaan tässä, ennen kuin mikään muu vaihe ajaa.** Olemassa
 olevaa konfigia **ei koskaan ylikirjoiteta** — luonti on kertaluontoinen teko puuttuvalle
 tiedostolle, ja toinen ajo lukee sen tästä samasta kohdasta eikä palaa PHASE 0b:hen.
@@ -245,14 +274,15 @@ git -C "$REPO_ROOT" diff --name-only "$BEFORE..$AFTER"
 ```
 
 Sovella CONFIG.buildHints + yleissäännöt **päätöspuuna** muuttuneeseen tiedostolistaan.
-Aja kukin build vain kerran (älä toista `pnpm install`:ia jos useampi hint osuu siihen).
-Aja komennot repo-juuressa, esim. `(cd "$REPO_ROOT" && pnpm install)`.
+Aja kukin build vain kerran (älä toista `$PM install`:ia jos useampi hint osuu siihen).
+Aja komennot repo-juuressa PHASE 0:ssa päätellyllä pakettimanagerilla, esim.
+`(cd "$REPO_ROOT" && $PM install)` — älä kovakoodaa `pnpm`:ää.
 
 | Muuttui | Toimenpide |
 |---|---|
-| `pnpm-lock.yaml` | `pnpm install` |
-| `apps/*/package.json` | `pnpm install` (jos ei jo ajettu lockfilen takia) |
-| `prisma/schema.prisma` | `pnpm db:generate` (regeneroi Prisma Client) — aseta `SCHEMA_CHANGED=1` |
+| `pnpm-lock.yaml` | `pnpm install` (ehto on lockfile ⇒ manageri on varmasti pnpm) |
+| `apps/*/package.json` | `$PM install` (jos ei jo ajettu lockfilen takia) |
+| `prisma/schema.prisma` | `$PM run db:generate` (regeneroi Prisma Client) — aseta `SCHEMA_CHANGED=1` |
 | vain `.ts` / `.tsx` (lähdekoodi) | ei buildia — dev-server (Vite/tsx watch) hoitaa hot-reloadin |
 
 Jos `CONFIG.buildHints` puuttuu tai on tyhjä (tyypillistä juuri luodulle konfigille) →
@@ -308,7 +338,7 @@ hyväksytty rajaus, samoin kuin PHASE 3:n yleissäännöt olettavat juuritason l
 Kun skeema löytyi, tarkista kannan tila. Aja **`migrate status`** repo-juuressa:
 
 ```bash
-MIGRATE_STATUS=$(cd "$REPO_ROOT" && pnpm prisma migrate status --schema=./prisma/schema.prisma 2>&1)
+MIGRATE_STATUS=$(cd "$REPO_ROOT" && $PMX prisma migrate status --schema=./prisma/schema.prisma 2>&1)
 MIGRATE_RC=$?
 printf '%s\n' "$MIGRATE_STATUS"
 echo "MIGRATE_RC=$MIGRATE_RC"
@@ -320,17 +350,20 @@ että yhteysvirheestä, joten teksti ratkaisee):
 - Tuloste sisältää **`Database schema is up to date`** → kanta on ajan tasalla, **ei
   toimenpiteitä**. Etene PHASE 3b:hen (`SCHEMA_CHANGED` jää asettamatta).
 - Tuloste viittaa **yhteysvirheeseen** (kanta alhaalla — esim. `Can't reach database
-  server`, `P1001`, `ECONNREFUSED`) → tulosta virhe, huomauta että **`pnpm db:up`**
-  käynnistää PostgreSQL-kontin, ja **STOP**. Älä käynnistä dev-serveriä migratoimattoman
-  kannan päälle (sama käytös kuin PHASE 3:n aiemmalla db-down-ohjeella).
+  server`, `P1001`, `ECONNREFUSED`) → tulosta virhe, huomauta että kanta pitää käynnistää
+  projektin omalla skriptillä ennen kuin migraatiot voi ajaa, ja **STOP**. Skriptin nimi on
+  projektikohtainen — katso `package.json`:n `scripts` tai CONFIG; esim. jos repo tarjoaa
+  `db:up`-skriptin, se ajetaan `$PM run db:up` (PostgreSQL-kontin käynnistys). Älä käynnistä
+  dev-serveriä migratoimattoman kannan päälle (sama käytös kuin PHASE 3:n aiemmalla
+  db-down-ohjeella).
 - Muuten (**pending-migraatioita on** — esim. `Following migrations have not yet been
   applied`) → sovella ne, ks. alla.
 
 ### Migraatiot — `migrate deploy`, ei `migrate dev`
 
 Migraatio on jo *luotu* originissa ja paikallisesti pitää vain *soveltaa* se. Aja
-**`prisma migrate deploy`** — ei `pnpm db:migrate` (= `prisma migrate dev`). Ero on
-kriittinen:
+**`prisma migrate deploy`** — ei `db:migrate`-skriptiä (`$PM run db:migrate` = `prisma migrate
+dev`). Ero on kriittinen:
 
 - `migrate deploy` soveltaa vain pending-migraatiot non-interaktiivisesti. Ei koskaan
   resetoi kantaa, ei kysy, ei luo uusia migraatioita. Tämä on automaattiajolle turvallinen.
@@ -341,8 +374,8 @@ Aja `migrate deploy`, sitten `db:generate` (tässä järjestyksessä — `migrat
 regeneroi Prisma Clientiä), ja aseta `SCHEMA_CHANGED=1`:
 
 ```bash
-(cd "$REPO_ROOT" && pnpm prisma migrate deploy --schema=./prisma/schema.prisma) \
-  && (cd "$REPO_ROOT" && pnpm db:generate)
+(cd "$REPO_ROOT" && $PMX prisma migrate deploy --schema=./prisma/schema.prisma) \
+  && (cd "$REPO_ROOT" && $PM run db:generate)
 SCHEMA_CHANGED=1
 ```
 
@@ -465,7 +498,9 @@ fi
 **Jos `apply` failaa** (rc ≠ 0 — esim. dev-kanta alhaalla always-apply-tilassa, tai varsinainen
 migraatiovirhe) → tulosta komennon stderr ja **STOP ennen PHASE 5:tä**, täsmälleen kuten
 PHASE 3:n build-fail-käytäntö. Älä käynnistä dev-serveriä migratoimattoman kannan päälle.
-Neuvo tarkistamaan että kanta on pystyssä (Postgres: `pnpm db:up`; SQLite: tiedosto-oikeudet).
+Neuvo tarkistamaan että kanta on pystyssä (Postgres: käynnistä se projektin omalla skriptillä —
+nimi on projektikohtainen, katso `package.json`:n `scripts` / CONFIG; esim. `$PM run db:up` jos
+repo tarjoaa `db:up`-skriptin; SQLite: tiedosto-oikeudet).
 
 **Jos migraatioita sovellettiin, aseta `SCHEMA_CHANGED=1`** — sama signaali kuin PHASE 3a:lla,
 jotta PHASE 4b käynnistää jo pyörivän dev-serverin uudelleen eikä se jää vanhentuneen
@@ -973,11 +1008,13 @@ varmista että kukin pätee yhä:
    `prisma migrate status`in **aina** kun `prisma/schema.prisma` on repo-juuressa — myös
    kun `BEHIND == 0` eikä mitään pullattu. Jos kanta ei ole ajan tasalla — vaikka migraatio
    olisi tullut repoon aiemmassa commitissa eikä näy tämän ajon diffissä — komento ajaa
-   `prisma migrate deploy` (**ei** `migrate dev`) ja `pnpm db:generate`, asettaa
+   `prisma migrate deploy` (**ei** `migrate dev`) PHASE 0:ssa päätellyllä pakettimanagerilla
+   (`$PMX prisma migrate deploy`) ja `$PM run db:generate`, asettaa
    `SCHEMA_CHANGED=1`, ja jos dev-server pyöri jo tästä reposta, käynnistää sen uudelleen
    (PHASE 4b), jottei jää vanhentuneen Prisma Clientin varaan. Migraatio sovelletaan
    **kerran** (PHASE 3 ei enää aja `migrate deploy`ta). Jos dev-kanta on alhaalla, komento
-   pysähtyy ja neuvoo `pnpm db:up`. Repo ilman `prisma/schema.prisma` — tai repo jolla on
+   pysähtyy ja neuvoo käynnistämään kannan projektin omalla skriptillä (esim. `$PM run db:up`,
+   jos repo tarjoaa sen). Repo ilman `prisma/schema.prisma` — tai repo jolla on
    `CONFIG.migrations` (silloin PHASE 3c omistaa migraatiot, ks. skenaario 10) — ohittaa
    PHASE 3a:n hiljaa: ei virhettä eikä mainintaa raportissa.
 8. **gitignore-huolto on idempotentti.** PHASE 3b varmistaa että `.claude/refresh-dev.log`
