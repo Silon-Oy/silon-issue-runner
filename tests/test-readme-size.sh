@@ -32,10 +32,12 @@ ROOT="$(cd "$HERE/.." && pwd)"
 README="$ROOT/README.md"
 FAIL=0
 
-# README measured 86533 B after sub-issues 1 and 2. The budget sits just above
-# that -- ~1 KB of headroom for minor edits, not a round number with room for a
-# whole section to sneak back in.
-MAX_BYTES=87500
+# README measured 81538 B after issue #268 moved the pick-mechanism reference
+# (the internals of README section 6.2 -- REST rationale, label resolution,
+# assignee routing, poller ordering) out to docs/usage-reference.md. The budget
+# sits just above that -- ~1 KB of headroom for minor edits, not a round number
+# with room for a whole section to sneak back in.
+MAX_BYTES=82500
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

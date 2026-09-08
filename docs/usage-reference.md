@@ -5,11 +5,105 @@ silloin kun tiettyä työkalua tai tilannetta käyttää. Perehtyjän luettava k
 miksi* ajo lähtee liikkeelle (elinkaari, poimintaehdot, labelit, varaus, riippuvuudet) — on
 [`README.md`](../README.md) osiossa 6, joka linkittää tänne.
 
-Tämä osio kattaa epicit, käyttötapaukset (mitä ihminen näkee ja tekee kussakin tilanteessa),
+Tämä osio kattaa poiminnan koneiston, epicit, käyttötapaukset (mitä ihminen näkee ja tekee kussakin tilanteessa),
 slash-komennot, skriptit ja apuvälineet, `claude-issue-runner`-skillin, `status.sh`:n
 kokonaistilanäkymän ja `publish-release.sh`:n julkaisun.
 
 ---
+
+## Poiminnan koneisto ja työnjako
+
+Poiminnan *ydinsäännöt* — milloin issue lähtee ajoon — ovat [`README.md`](../README.md)
+osiossa 6.2. Tämä osio kokoaa saman poiminnan **koneiston ja työnjaon**: miksi kysely on
+REST-listaus, poimintalabelien resolvointi, valinnainen assignee-reititys ja pollerin
+sisäinen järjestys.
+
+### Miksi REST eikä `gh issue list`
+
+**Miksi REST eikä `gh issue list`?** `--label`-suodatettu `gh issue list` kulkee GitHubin
+GraphQL-hakuyhteyden kautta, ja **se yhteys voi olla estetty vaikka muu API vastaa
+normaalisti** — näin kävi 27 tunnin ajan 2026-08-28/29, jolloin poiminta ei voinut ajaa
+lainkaan (#133). REST-listaus ei koske hakuyhteyteen. Sivuhyöty: poissulkuehdot ovat nyt
+paikallisia jäsenyystestejä, jotka epäonnistuvat **umpeen** — vanha `-label:x` epäonnistui
+auki, eli kirjoitusvirhe vuoti poissuljettuja issueita poimintaan. Mittaus ja
+kontrollikoe: CLAUDE.md §5.2.
+
+### Poimintalabelien resolvointi ja `auto-reset`in poissulku
+
+Poimintalabelit tulevat konfiguraatiosta kolmessa portaassa: watchlistin repokohtainen
+`labels` → watchlistin `default_labels` → sisäänrakennettu oletus `["auto-run"]`. **Mikään
+labelin nimi ei ole kovakoodattu poimintaan** — `auto-run` on pelkkä konventio.
+
+`auto-reset`in poissulku ei ole optimointi vaan **korrektiusehto**: nollauksen koko idea on,
+että poiminta jatkuu vasta kun purku on ajettu ja label poistettu. Ilman suodatinta poller
+voisi varata issuen ennen purkua, ja purku törmäisi issuekohtaiseen lukkoon joka tikillä.
+
+### Valinnainen assignee-reititys (watchlistin `assignees`)
+
+**Valinnainen assignee-rajaus (watchlistin `assignees`).** Kun repon merkintä asettaa
+`assignees`-listan, poiminta ottaa vain issuet, jotka on reititetty jollekin listatuista
+GitHub-tunnuksista. Avaimen puuttuessa — oletus — assigneita ei katsota lainkaan ja poiminta on
+täsmälleen entisellään. Ehto **ANDataan** poimintalabelien kanssa, se ei korvaa niitä.
+
+Issue kelpaa, jos jokin sen assigneista on listalla — **tai**, jos issuella ei ole assigneeta
+lainkaan, jos sen **avaaja** on listalla. Avaajafallback on se, jonka ansiosta käsin kirjoitettu
+issue lähtee ajoon ilman erillistä assignaatiota; assignee-kenttä on silloin se, jolla työ
+siirretään toiselle koneelle. Fallback koskee **vain** assignoimatonta issueta, joten sillä on
+tarkoituksellinen kääntöpuoli: **listan ulkopuoliselle assignattu issue jää poimimatta**,
+vaikka listalla oleva tunnus olisi sen avannut. Se on ihmisen opt-out ("teen tämän itse") ja
+pätee vain niissä repoissa, joissa avain on asetettu. Tyhjä lista tarkoittaa samaa kuin puuttuva
+avain: ei suodatusta — ei siis "nolla osumaa ikuisesti".
+
+Tämä on työnjaon **toinen akseli**. Labelit ANDataan, joten työn jakaminen usealle koneelle
+labeleilla vaatii koneelle oman labelin (`auto-run-<kone>`) ja työn siirto on labelin vaihto.
+Kun ajokone tunnistautuu omalla machine user -tilillään, assignee nimeää koneen suoraan
+GitHubin omassa käyttöliittymässä. Assignaatio ei silti ole **varaus** — varaus on yhä
+`auto-claimed`-label (README §6.4). Sekä `poller.sh` että `drain-queue.sh` lukevat avaimen samalla
+resolvoijalla, joten ne eivät voi olla eri mieltä siitä, mitä tämä kone poimii. Uusia
+API-kutsuja ei synny: assignee- ja avaajatieto on jo poiminnan REST-vastauksessa.
+
+**Käänteinen määritys `not:<tunnus>` (issue #246).** Listan alkio on joko tunnus
+(`"maintainer"`, **ALLOW**) tai kielto (`"not:maintainer"`, **DENY**). Issue kelpaa, kun molemmat
+pätevät: (1) ALLOW on tyhjä **tai** kohde osuu johonkin ALLOW-tunnukseen, ja (2) kohde ei osu
+yhteenkään DENY-tunnukseen. **DENY voittaa ALLOW:n**, jos sama tunnus on molemmissa (fail-closed),
+ja useasta assigneesta riittää yksi DENY-osuma. Kohde on tässäkin assignee-joukko tai, sen
+puuttuessa, avaaja. `not:` vaatii kaksoispisteen — `notollisaari` on tavallinen ALLOW-tunnus.
+Muoto ratkaisee kahden koneen jaon ilman toista repo-oikeuksin varustettua tunnusta:
+`["maintainer"]` ja `["not:maintainer"]` osuu jokaiseen issueen täsmälleen kerran, **eikä
+DENY-tunnukselta vaadita repo-oikeutta**. **Varoitus:** liian laaja DENY tuottaa **nolla osumaa
+yhtä hiljaa kuin väärä poimintalabel** (README §6.2) — repo lakkaa poimimasta ilman virhettä ja lokia.
+
+### Pollerin sisäinen järjestys ja rinnakkaisuus
+
+**Rinnakkaisuus.** Poller ajaa kerrallaan enintään `global_max_concurrent` ajoa (watchlistin
+avain, oletus `2`) kaikkien repojen yli. Katon täyttyessä tikki kirjoittaa lokiin
+`at cap (n/m)` eikä käynnistä mitään. Sama issue ei koskaan saa kahta sessiota: duplikaatit
+karsitaan repo- ja remote-kohtaisella tmux-session nimellä.
+
+**PR-vahdin poller** (`pr-watch-poller.sh`) käyttää **rotaatiokursoria**, joka jatkaa joka
+tikillä siitä repoista mihin edellinen jäi, jotta koko watchlist tulee käytyä eikä hännän
+auto-merge-PR jää nälkiintymään. Sillä on myös oma, korkeampi rinnakkaisuuskatto: watchlistin
+valinnainen `pr_watch_max_concurrent` (oletus = `global_max_concurrent`) tai ympäristömuuttuja
+`PR_WATCH_GLOBAL_MAX`. PR-skannaus on sekuntien työ, joten se voi käydä korkeammalla katolla
+ilman että orkestraattoriajojen rinnakkaisuus kasvaa. `poller.sh` säilyttää entisen semantiikan
+sellaisenaan. Ks. [`env-reference.md`](env-reference.md).
+
+**Tikin sisäinen järjestys** (`poller.sh`, oletusväli 300 s eli 5 min): jumiutuneiden ajojen
+liveness-pyyhkäisy koko watchlistiin → `auto-clean`-siivoukset → **valmiiden ajojen sovitus**
+→ aikakatkaistujen ajojen `--restart` → vastattujen tarkennusten `--continue` → **vasta
+viimeisenä** uuden issuen poiminta. Keskeneräinen työ menee siis aina uuden edelle.
+
+**Valmiiden ajojen sovitus (`scan_finished`).** Poller purkaa **oman koneensa** ajon, kun sen
+issue on GitHubissa suljettu — ilman että sinun tarvitsee lisätä `auto-clean`-labelia. Se on eri
+verbi kuin `auto-clean`: sovitus **ei sulje issueta, ei kommentoi eikä lisää labeleita**, vaan
+purkaa pelkät jäänteet (worktree, haara, run-dir) — se reagoi sulkemiseen eikä aiheuta sitä.
+Tarpeen syy: PR-vahti siivoaa vain silloin kun se **itse** mergesi PR:n, joten käsin mergetty PR
+(tai toisen koneen mergeämä, tai PR:ttä vaille jäänyt ajo) jätti jäänteet ikuisesti ja hiljaa —
+mitattuna 309 worktreetä ja 166,9 GB. Purku tapahtuu vain kun **kaikki viisi** porttia sallivat:
+ajo ei ole käynnissä, se on tämän koneen, issue on varmistetusti kiinni, PR ei ole auki, eikä
+haaralla ole pushaamattomia committeja. Yksikin epävarmuus (verkkovirhe, lukukelvoton tila)
+estää purun — portit ovat fail-closed. Jokainen päätös, myös ohitus syineen, kirjataan pollerin
+lokiin.
 
 ## Epicit — usean issuen ketjun ajaminen `auto-run`illa
 
