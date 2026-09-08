@@ -93,7 +93,7 @@ preflight_install_hint() {
     gh)      printf 'brew install gh\n' ;;
     jq)      printf 'brew install jq\n' ;;
     npx)     printf 'brew install node (or nvm install --lts)\n' ;;
-    claude)  printf 'npm i -g @anthropic-ai/claude-code (native install: set RUN_ISSUES_CLAUDE_CMD=claude)\n' ;;
+    claude)  printf 'install Claude Code natively so `claude` is on PATH (npm-package alternative: npm i -g @anthropic-ai/claude-code and set RUN_ISSUES_CLAUDE_CMD to the npx invocation)\n' ;;
     gh-auth) printf 'gh auth login\n' ;;
     jq-binary) printf 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)\n' ;;
     timeout) printf 'brew install coreutils (Git Bash on Windows: scoop install coreutils)\n' ;;
@@ -108,12 +108,13 @@ preflight_install_hint() {
 # return its exit code (0 usable, 127 missing, 124 wedged). Prints nothing.
 #
 # One of the two functions in this module that EXECUTE the probed command
-# (preflight_timeout_bin is the other), and it earns that exception: the
-# default invocation `npx --no-install
-# @anthropic-ai/claude-code` exits 127 when the package is not installed even
-# though `npx` itself is on PATH, so `command -v` cannot see the failure that
-# actually breaks a run. stdin is closed so a CLI that decides to prompt cannot
-# hang the caller, and the timeout binary (when present) bounds the call.
+# (preflight_timeout_bin is the other), and it earns that exception: an
+# invocation can resolve on PATH yet still exit 127 at call time — the npx
+# override `npx --no-install @anthropic-ai/claude-code` does exactly that when
+# the package is not installed even though `npx` itself is on PATH — so
+# `command -v` cannot see the failure that actually breaks a run. stdin is
+# closed so a CLI that decides to prompt cannot hang the caller, and the
+# timeout binary (when present) bounds the call.
 preflight_probe_claude() {
   local tb
   tb=$(preflight_timeout_bin)
@@ -153,10 +154,12 @@ preflight_jq_binary_ok() {
 #   2 — at least one required dependency is missing
 #
 # The mode argument encodes who owns the claude command. `probe` is for the
-# default npx invocation, whose silent 127 is the failure this gate exists to
-# catch. `have` is for a user-supplied RUN_ISSUES_CLAUDE_CMD: an override is an
-# explicit claim about a private driver whose `--version` semantics we must not
-# guess (and must not execute — a mock would see an uninstrumented call).
+# default `claude` invocation: a machine with the npm package but no `claude`
+# on PATH gets a silent 127 that `command -v` would miss, which is the failure
+# this gate exists to catch. `have` is for a user-supplied RUN_ISSUES_CLAUDE_CMD
+# (e.g. the npx invocation): an override is an explicit claim about a private
+# driver whose `--version` semantics we must not guess (and must not execute —
+# a mock would see an uninstrumented call).
 #
 # Severity is a fact of the dependency, not of the caller: git/gh/jq/claude are
 # required because no run can complete without them, while a missing timeout
@@ -186,11 +189,8 @@ preflight_gate_report() {
   fi
 
   if [ "$mode" = "probe" ]; then
-    if ! preflight_have npx; then
-      printf 'MISSING (required): npx — %s\n' "$(preflight_install_hint npx)"
-      fatal=1
-    elif ! preflight_probe_claude "$@"; then
-      printf 'MISSING (required): @anthropic-ai/claude-code — %s\n' "$(preflight_install_hint claude)"
+    if ! preflight_probe_claude "$@"; then
+      printf 'MISSING (required): claude — %s\n' "$(preflight_install_hint claude)"
       fatal=1
     fi
   else

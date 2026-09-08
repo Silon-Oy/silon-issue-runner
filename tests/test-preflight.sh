@@ -18,8 +18,9 @@
 #   4. preflight_install_hint: exact fix commands (install.sh and the S0 gate
 #      both quote these, so the strings are part of the module's contract)
 #   5. preflight_gate_report have: every required miss is reported and fatal
-#   6. preflight_gate_report probe: a present npx with an absent package is the
-#      failure `command -v` cannot see, so it must still be fatal
+#   6. preflight_gate_report probe: a `claude` command that resolves on PATH yet
+#      exits 127 at call time is the failure `command -v` cannot see, so it must
+#      still be fatal
 #   7. preflight_gate_report: an absent timeout binary is a WARNING, never
 #      fatal — regression guard for the pre-gate behaviour (unbounded claude
 #      calls are allowed to keep running)
@@ -175,7 +176,7 @@ check_hint() {
   fi
 }
 check_hint jq 'brew install jq'
-check_hint claude 'npm i -g @anthropic-ai/claude-code (native install: set RUN_ISSUES_CLAUDE_CMD=claude)'
+check_hint claude 'install Claude Code natively so `claude` is on PATH (npm-package alternative: npm i -g @anthropic-ai/claude-code and set RUN_ISSUES_CLAUDE_CMD to the npx invocation)'
 check_hint jq-binary 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)'
 check_hint gh-auth 'gh auth login'
 check_hint timeout 'brew install coreutils (Git Bash on Windows: scoop install coreutils)'
@@ -242,15 +243,15 @@ done
 printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "timeout (GNU coreutils) 9.9"; exit 0; }\nshift\nexec "$@"\n' \
   > "$WORK/probe/timeout"
 chmod +x "$WORK/probe/timeout"
-# npx present but the package absent: exactly the silent 127 that a
-# `command -v npx` check cannot detect.
-printf '#!/bin/bash\nexit 127\n' > "$WORK/probe/npx"
-chmod +x "$WORK/probe/npx"
+# `claude` resolves on PATH but exits 127 at call time: exactly the silent 127
+# that a `command -v claude` check cannot detect.
+printf '#!/bin/bash\nexit 127\n' > "$WORK/probe/claude"
+chmod +x "$WORK/probe/claude"
 
-out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
+out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe claude)
 rc=$?
 if [ "$rc" -eq 2 ]; then
-  echo "PASS: case6 an installed npx with a missing package is still fatal"
+  echo "PASS: case6 a claude command that exits 127 at call time is still fatal"
 else
   echo "FAIL: case6 returned $rc (expected 2) — out: $out"; FAIL=1
 fi
@@ -260,9 +261,9 @@ else
   echo "FAIL: case6 did not name the package fix command — got: $out"; FAIL=1
 fi
 
-printf '#!/bin/bash\nexit 0\n' > "$WORK/probe/npx"
-chmod +x "$WORK/probe/npx"
-out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
+printf '#!/bin/bash\nexit 0\n' > "$WORK/probe/claude"
+chmod +x "$WORK/probe/claude"
+out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe claude)
 rc=$?
 if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
   echo "PASS: case6 a complete environment reports nothing and returns 0"
@@ -272,7 +273,7 @@ fi
 
 # ---- Case 7: a missing timeout binary warns but never blocks ----
 rm -f "$WORK/probe/timeout"
-out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe npx --no-install @anthropic-ai/claude-code)
+out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe claude)
 rc=$?
 if [ "$rc" -eq 0 ]; then
   echo "PASS: case7 a missing timeout binary is not fatal"

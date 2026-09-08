@@ -2,8 +2,8 @@
 # test-pr-watch-ci-repair-recovery.sh — issue #45 recovery behaviours for the
 # P5b CI-repair path. Three faults it pins down:
 #
-#   Symptom A — the CI-repair agent never launched (rc=127, the npx --no-install
-#     trap the orchestrator's S0 gate already catches), yet the PR comment read
+#   Symptom A — the CI-repair agent never launched (rc=127, the claude CLI's
+#     silent 127 the orchestrator's S0 gate already catches), yet the PR comment read
 #     "the agent produced no fix", so a human studied a CI error the agent never
 #     looked at. Fixes: a classify-time preflight downgrades FIX_CI to WAIT_CI
 #     when the CLI is unusable (E), and a rc=127 that slips past it is reported

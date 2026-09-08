@@ -48,12 +48,16 @@ claude_call_timeout() {
   printf '%s\n' "${RUN_ISSUES_CLAUDE_TIMEOUT:-$RUN_ISSUES_CLAUDE_TIMEOUT_DEFAULT}"
 }
 
-# The CLI invocation used for every claude call. Defaults to the globally
-# installed npm package via npx, which routes usage through the Claude plan
-# (cost control) instead of API billing. `--no-install` forces the already
-# installed package and never downloads from the registry, and the full
-# scoped package name avoids resolving an unrelated `claude` bin (typosquat
-# safety). Tests override this with a mock binary on PATH.
+# The CLI invocation used for every claude call. Defaults to the natively
+# installed `claude` command (Claude Code's native installer puts it on PATH),
+# which routes usage through the Claude plan (cost control) instead of API
+# billing. A machine that installed Claude Code as the npm package instead —
+# no `claude` on PATH — overrides this with the npx invocation, whose
+# `--no-install` forces the already installed package and never downloads from
+# the registry, and whose full scoped package name avoids resolving an
+# unrelated `claude` bin (typosquat safety):
+#   RUN_ISSUES_CLAUDE_CMD='npx --no-install @anthropic-ai/claude-code'
+# Tests override this with a mock binary on PATH.
 # NOTE: deliberately word-split at the call site (multi-token command), hence
 # the SC2086 disables below.
 #
@@ -61,7 +65,7 @@ claude_call_timeout() {
 # uses to tell "the user accepted our invocation" from "the user supplied their
 # own driver". Only the former may be probed with --version: an override is an
 # explicit claim about a private command whose flags we must not guess.
-RUN_ISSUES_CLAUDE_CMD_DEFAULT='npx --no-install @anthropic-ai/claude-code'
+RUN_ISSUES_CLAUDE_CMD_DEFAULT='claude'
 RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-$RUN_ISSUES_CLAUDE_CMD_DEFAULT}"
 
 # Optional model override. When set, passes --model <value> to the claude CLI.

@@ -37,10 +37,11 @@
 # source_machine_env made every `${VAR:-default}` that any module had already
 # materialised look like a deliberate caller choice: lib/claude-call.sh is
 # sourced first and assigns RUN_ISSUES_CLAUDE_CMD/_MODEL/_TIMEOUT at source
-# time, so the package's own npx default was restored OVER the env file's value
+# time, so the package's own default was restored OVER the env file's value
 # and ~/.config/run-issues/env could no longer name the CLI at all. Measured on
-# two machines: S0 preflight failed with "MISSING (required):
-# @anthropic-ai/claude-code" while the env file named an installed driver.
+# two machines (when that default was still the npx invocation): S0 preflight
+# failed with "MISSING (required): @anthropic-ai/claude-code" while the env file
+# named an installed driver.
 #
 # The snapshot is therefore taken by machine_env_capture, which entry points
 # call BEFORE loading any library. "The caller" then means what it says: the

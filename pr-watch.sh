@@ -82,7 +82,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Sourced and captured FIRST (issue #200), before every other library, because
 # "already set" has to mean the process environment as this script was invoked.
 # Taken any later it also covered lib/claude-call.sh's own `${VAR:-default}`
-# assignments, so the package's npx default was restored over the env file's
+# assignments, so the package's own default was restored over the env file's
 # RUN_ISSUES_CLAUDE_CMD and the file could not name the CLI at all. Pure function
 # definitions; source_machine_env still runs at its old place below.
 # shellcheck source=lib/machine-env.sh
@@ -117,8 +117,8 @@ machine_env_capture
 . "$SCRIPT_DIR/lib/claude-call.sh"
 # shellcheck source=lib/preflight.sh
 # Shared dependency probe. Reused for the CI-repair path's claude-CLI preflight
-# (issue #45): the orchestrator's S0 gate already catches the npx --no-install
-# 127 trap before a run starts, but the watcher's FIX_CI classification called
+# (issue #45): the orchestrator's S0 gate already catches the claude CLI's
+# silent 127 before a run starts, but the watcher's FIX_CI classification called
 # the same CLI with no such guard, so a missing agent produced rc=127, a
 # misleading "agent found no fix" comment, and a permanently blocked PR. This
 # gives the watcher the identical probe. RUN_ISSUES_CLAUDE_CMD{,_DEFAULT} come
@@ -433,7 +433,7 @@ watch_one() {
 
   # S0-style CI-repair preflight (issue #45, symptom A): FIX_CI is only a useful
   # classification if the claude CLI can actually launch. If it cannot (the
-  # npx --no-install 127 trap the orchestrator's S0 gate catches), downgrade to
+  # claude CLI's silent 127 the orchestrator's S0 gate catches), downgrade to
   # WAIT_CI BEFORE dispatching to pr_fix_ci — so the red PR is re-examined next
   # poll instead of burning a repair attempt (and its pr_ci_repair_attempted
   # event) on an agent that never starts, and is never left permanently blocked.
@@ -1021,18 +1021,19 @@ _pr_force_push() {
 
 # pr_ci_repair_preflight — is the claude CLI usable for a CI-repair call?
 # (issue #45, symptom A). Mirrors the orchestrator's S0 gate (lib/preflight.sh):
-# the DEFAULT invocation `npx --no-install @anthropic-ai/claude-code` exits 127
-# when the package is absent even though npx itself is on PATH, so `command -v`
-# cannot see the failure — only an actual `--version` probe can. An overridden
-# RUN_ISSUES_CLAUDE_CMD is the user's own driver whose --version we must neither
-# guess nor fire, so we only verify its first token is callable (same policy as
-# S0's `have` mode). Logs the reason once on failure. Returns 0 usable, 1 not.
+# the DEFAULT invocation `claude` can resolve on PATH yet still exit 127 at call
+# time (a machine with the npm package but no `claude` command hits exactly
+# this), so `command -v` cannot see the failure — only an actual `--version`
+# probe can. An overridden RUN_ISSUES_CLAUDE_CMD is the user's own driver whose
+# --version we must neither guess nor fire, so we only verify its first token is
+# callable (same policy as S0's `have` mode). Logs the reason once on failure.
+# Returns 0 usable, 1 not.
 pr_ci_repair_preflight() {
   local reason=""
   if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
     # shellcheck disable=SC2086
     if ! preflight_probe_claude $RUN_ISSUES_CLAUDE_CMD; then
-      reason="claude CLI probe failed (\`$RUN_ISSUES_CLAUDE_CMD --version\` returned non-zero — likely the npx --no-install 127 trap; fix: $(preflight_install_hint claude))"
+      reason="claude CLI probe failed (\`$RUN_ISSUES_CLAUDE_CMD --version\` returned non-zero — the \`claude\` command is not usable; fix: $(preflight_install_hint claude))"
     fi
   else
     local first="${RUN_ISSUES_CLAUDE_CMD%% *}"

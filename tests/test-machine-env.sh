@@ -21,10 +21,10 @@
 # 1-7 source lib/machine-env.sh alone, which is NOT the order the entry points
 # use: they load lib/claude-call.sh first, and it assigns
 # RUN_ISSUES_CLAUDE_CMD/_MODEL at source time. A snapshot taken inside
-# source_machine_env therefore counted the package's own npx default as a caller
+# source_machine_env therefore counted the package's own default as a caller
 # choice and restored it over the env file — measured on two machines as an S0
-# failure ("MISSING (required): @anthropic-ai/claude-code") while the env file
-# named an installed driver. Cases 8-10 pin the real order and the
+# failure (the CLI's default invocation, then npx-based, reported missing) while
+# the env file named an installed driver. Cases 8-10 pin the real order and the
 # machine_env_capture entry point that fixes it.
 #
 # Cases Y and Z are the ones that matter: both drive the real orchestrate.sh, Y
@@ -145,7 +145,7 @@ echo "=== Case 8: with capture, the file wins over a library's source-time defau
 # The regression at unit level. Without machine_env_capture every one of these
 # returns claude-call.sh's own default instead of the file's value.
 OUT=$(RUN_ISSUES_ENV_FILE="$ENVF2" run_real_order RUN_ISSUES_CLAUDE_CMD)
-check "RUN_ISSUES_CLAUDE_CMD comes from the file, not the npx default" "$OUT" "/from/file"
+check "RUN_ISSUES_CLAUDE_CMD comes from the file, not the library default" "$OUT" "/from/file"
 OUT=$(RUN_ISSUES_ENV_FILE="$ENVF2" run_real_order RUN_ISSUES_CLAUDE_MODEL)
 check "RUN_ISSUES_CLAUDE_MODEL comes from the file, not the empty default" "$OUT" "model-from-file"
 OUT=$(RUN_ISSUES_ENV_FILE="$ENVF2" run_real_order RUN_ISSUES_CLAUDE_TIMEOUT)
@@ -271,9 +271,9 @@ fi
 echo "=== Case Y: orchestrate.sh runs the ENV FILE's claude when nobody overrode it ==="
 # The #200 regression, end to end, and the exact scenario measured on two
 # machines: ~/.config/run-issues/env names the CLI, the caller names nothing, and
-# the run must use the file's driver. Before the fix lib/claude-call.sh's npx
+# the run must use the file's driver. Before the fix lib/claude-call.sh's own
 # default was already in the snapshot by the time source_machine_env ran, so the
-# file's value was restored away and S0 reported the package missing.
+# file's value was restored away and S0 reported the CLI missing.
 #
 # Same fixture as Z with the one variable that matters removed, on its own
 # worktree and issue number so Z's finalisation cannot bleed in.

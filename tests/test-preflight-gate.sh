@@ -10,8 +10,8 @@
 # Cases:
 #   B1  overridden RUN_ISSUES_CLAUDE_CMD that does not exist -> exit 8 + fix cmd
 #   B2  gh present but not authenticated -> exit 8 + `gh auth login`
-#   B3  default (npx) claude command whose package is absent (npx exits 127) —
-#       the production failure mode that `command -v npx` cannot see
+#   B3  default `claude` command that resolves on PATH yet exits 127 at call
+#       time — the production failure mode that `command -v claude` cannot see
 #   C   after B1-B3: no run dir, no lock, no worktree, no issue assignment
 #   B4  a complete environment -> the gate is transparent: S0 passes and the run
 #       proceeds into phase_a. `poll` is no longer a mode (issue #99 made a named
@@ -34,7 +34,7 @@
 # that a naive `$RUN_ISSUES_CLAUDE_CMD --version` caused in the mocked runs of
 # test-clarification-loop-cap.sh and test-restart-budget.sh.
 #
-# Offline and machine-independent: gh, npx and the claude CLI are PATH stubs,
+# Offline and machine-independent: gh and the claude CLI are PATH stubs,
 # HOME is a throwaway dir (so the machine-local env file is never sourced) and
 # the lock root is redirected into the work dir.
 #
@@ -80,14 +80,13 @@ exit 0
 SH
 chmod +x "$BIN/gh"
 
-# A working claude CLI and a working npx (individual cases override npx).
+# A working claude CLI (individual cases override its exit code).
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/claude"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/npx"
-chmod +x "$BIN/claude" "$BIN/npx"
+chmod +x "$BIN/claude"
 
-npx_exits() {  # npx_exits <code>
-  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$BIN/npx"
-  chmod +x "$BIN/npx"
+claude_exits() {  # claude_exits <code>
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$BIN/claude"
+  chmod +x "$BIN/claude"
 }
 
 # The target repo. orchestrate.sh requires a .git dir. A parseable github.com
@@ -150,15 +149,16 @@ GH_AUTH_RC=1 run_orch "$REPO" 42
 rc_is 8 "B2 unauthenticated gh exits 8"
 says 'gh auth login' "B2 names the fix command"
 
-# --- B3: default npx invocation, package not installed --------------------
-# The package-missing case: npx itself resolves, so only running it reveals the
-# failure. This is the exact chain that used to end in a wrong issue comment.
+# --- B3: default `claude` invocation that fails at call time --------------
+# The call-time-failure case: `claude` itself resolves on PATH, so only running
+# it reveals the failure. This is the exact chain that used to end in a wrong
+# issue comment.
 unset RUN_ISSUES_CLAUDE_CMD
-npx_exits 127
+claude_exits 127
 run_orch "$REPO" 42
-rc_is 8 "B3 default command with a missing package exits 8"
-says '@anthropic-ai/claude-code' "B3 names the missing package"
-npx_exits 0
+rc_is 8 "B3 default command that exits 127 at call time exits 8"
+says '@anthropic-ai/claude-code' "B3 names the fix command"
+claude_exits 0
 
 # --- C: a failed gate leaves nothing behind -------------------------------
 if [ -d "$REPO/.claude/run-issues" ]; then

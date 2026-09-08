@@ -656,7 +656,7 @@ report_preflight() {
   log "  $(preflight_report_tool git required "needed to update the package (submodule pin); install: $(preflight_install_hint git)" || true)"
   log "  $(preflight_report_tool gh required "GitHub CLI — orchestrate.sh and pr-watch.sh depend on it; install: $(preflight_install_hint gh)" || true)"
   log "  $(preflight_report_tool jq required "JSON handling in orchestrate.sh, poller.sh and pr-watch.sh; install: $(preflight_install_hint jq)" || true)"
-  log "  $(preflight_report_tool npx required "the default RUN_ISSUES_CLAUDE_CMD invokes the Claude CLI via npx; install: $(preflight_install_hint npx)" || true)"
+  log "  $(preflight_report_tool claude required "the default RUN_ISSUES_CLAUDE_CMD invokes the native \`claude\` command; install: $(preflight_install_hint claude)" || true)"
   log "  $(preflight_report_tool tmux optional "only the pollers need it; install: $(preflight_install_hint tmux)" || true)"
   log "  $(preflight_report_tool python3 optional "only the Ohjaamo action service needs it (action-server.sh); install: $(preflight_install_hint python3)" || true)"
   tb="$(preflight_timeout_bin)"

@@ -20,7 +20,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_MAX_CLARIFICATIONS` | `3` | Tarkennussilmukan katto |
 | `RUN_ISSUES_CLAUDE_TIMEOUT` | *(asettamatta)* = `RUN_ISSUES_CLAUDE_TIMEOUT_DEFAULT` (`3600`) | Perusaikabudjetti per claude-kutsu. **Asettamatta jättäminen on merkitsevää:** `lib/claude-call.sh` ei materialisoi oletusta source-hetkellä, koska `load_repo_timeout` lukee juuri tämän muuttujan asetettuna olon merkkinä siitä, ohittiko joku sen — materialisoitu oletus teki kohderepon `claude_timeout_seconds`istä kuolleen konfiguraation. Oletus sovelletaan kutsuhetkellä (`claude_call_timeout`) |
 | `RUN_ISSUES_CLAUDE_TIMEOUT_MAX` | `3600` | Ramppaavan timeoutin katto |
-| `RUN_ISSUES_CLAUDE_CMD` | `npx --no-install @anthropic-ai/claude-code` | Claude-CLI:n kutsu. **Windows:** Claude Coden natiiviasennin ei asenna npm-pakettia vaan `claude`-komennon polulle, jolloin oletus exittaa 127 ja S0-portti raportoi puuttuvan Claude CLI:n — aseta `RUN_ISSUES_CLAUDE_CMD=claude`. Saman nimen kertoo portin virheilmoituksen vihje. Ohitettu arvo vaihtaa S0:n `probe`-moodin `have`-moodiin: omalle ajurille ei arvata `--version`-semantiikkaa (README §3.2) |
+| `RUN_ISSUES_CLAUDE_CMD` | `claude` | Claude-CLI:n kutsu, oletuksena natiiviasennuksen tuoma paljas `claude`-komento. Kone, jolla on npm-paketti mutta ei `claude`-komentoa polulla, saa oletuksesta 127:n ja S0-portin virheilmoituksen — aseta silloin npx-kutsu: `RUN_ISSUES_CLAUDE_CMD='npx --no-install @anthropic-ai/claude-code'`. Saman korjauksen kertoo portin virheilmoituksen vihje. Ohitettu arvo vaihtaa S0:n `probe`-moodin `have`-moodiin: omalle ajurille ei arvata `--version`-semantiikkaa (README §3.2) |
 | `RUN_ISSUES_CLAUDE_MODEL` | *(tyhjä)* | Mallin ohitus |
 | `RUN_ISSUES_PRINCIPLES_FILE` | *(asettamatta)* = paketin `principles/coding.md` | Jokaiseen orkestroituun claude-kutsuun liitettävä koodausstandardi (`--append-system-prompt-file`). **Asettamatta jättäminen ja tyhjäksi asettaminen ovat eri asia:** tyhjä = ei koodausstandardia lainkaan. Lukukelvoton polku ⇒ lokirivi + paketin oletus, ei ajon kaatumista. **Ei koske toimintasopimusta** (`principles/auto-run-contract.md`), joka liitetään samaan järjestelmäkehotteeseen aina eikä ole ohitettavissa |
 | `RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT` | `1200` | S7b:n aikakatto |
@@ -172,7 +172,7 @@ nimiavaruuksissa `RUN_ISSUES_*` ja `PR_WATCH_*` **kutsuja voittaa tiedoston**, m
 voittaa. Ratkaisevaa on, *milloin* "kutsujan asettama" luetaan: `machine_env_capture` ottaa
 tilannekuvan prosessin ympäristöstä ennen kuin yhtäkään kirjastoa on ladattu (#200), joten
 paketin omat `${VAR:-oletus}`-materialisoinnit eivät kelpaa kutsujan valinnaksi. Ennen tätä
-`lib/claude-call.sh`:n npx-oletus palautui env-tiedoston arvon päälle, eikä tiedostosta voinut
+`lib/claude-call.sh`:n oma oletus palautui env-tiedoston arvon päälle, eikä tiedostosta voinut
 asettaa `RUN_ISSUES_CLAUDE_CMD`ia lainkaan.
 
 ### Epic-ajo (`run-epic.sh`)

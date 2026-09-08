@@ -235,12 +235,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Loaded FIRST and captured immediately (issue #200): machine_env_capture defines
 # "what the caller set" as the process environment at startup. Every library below
 # materialises its own `${VAR:-default}` at source time, and the snapshot used to
-# be taken after all of them — so lib/claude-call.sh's npx default counted as a
+# be taken after all of them — so lib/claude-call.sh's own default counted as a
 # caller choice and was restored over whatever ~/.config/run-issues/env said,
 # making RUN_ISSUES_CLAUDE_CMD/_MODEL unsettable from the machine's only config
 # channel for a hand-started run. Pure function definitions, so an early source
-# has no side effects; source_machine_env itself still runs at its old place,
-# after ensure_node_runtime and before the S0 gate.
+# has no side effects; source_machine_env itself still runs later, before the S0
+# gate (and now before ensure_node_runtime, which reads the final CLAUDE_CMD).
 source "$SCRIPT_DIR/lib/machine-env.sh"
 machine_env_capture
 # NOTE the deliberate asymmetry with RUN_ISSUES_AUTO/RUN_ISSUES_REVIEW_GATE
@@ -443,12 +443,18 @@ log() {
 # ---------- node runtime ----------
 # The poller launches this script via a fresh tmux server whose environment
 # lacks the interactive shell's nvm PATH (nvm is sourced in zsh/shared.zsh,
-# interactive only). The cycle-review and implementer phases shell out to
-# `npx`, so a missing node bin makes every claude call die with exit 127 and
-# the run stalls at S6. Source nvm (mirroring zsh/shared.zsh) so npx resolves
-# regardless of launch context — poller/tmux, manual --restart, or --continue.
-# No-op when npx is already on PATH (the common interactive case).
+# interactive only). Only the npx invocation of RUN_ISSUES_CLAUDE_CMD needs a
+# node bin: without it that override's claude calls die with exit 127 and the
+# run stalls at S6. The default `claude` command needs no node runtime, so this
+# is a no-op unless the configured command's first token is `npx`. When it is,
+# source nvm (mirroring zsh/shared.zsh) so npx resolves regardless of launch
+# context — poller/tmux, manual --restart, or --continue. Also a no-op when npx
+# is already on PATH (the common interactive case).
 ensure_node_runtime() {
+  case "${RUN_ISSUES_CLAUDE_CMD%% *}" in
+    npx) ;;
+    *) return 0 ;;
+  esac
   command -v npx >/dev/null 2>&1 && return 0
   local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
   # nvm.sh is not written for `set -euo pipefail`; relax while sourcing, then
@@ -465,9 +471,8 @@ ensure_node_runtime() {
   fi
   set -eu
   command -v npx >/dev/null 2>&1 \
-    || log "WARNING: npx not found after sourcing nvm ($nvm_dir); claude calls will fail (exit 127)"
+    || log "WARNING: npx not found after sourcing nvm ($nvm_dir); the npx RUN_ISSUES_CLAUDE_CMD will fail (exit 127)"
 }
-ensure_node_runtime
 
 # ---------- machine-local secret provisioning ----------
 # The Studio poller runs as a LaunchAgent, which does NOT inherit the
@@ -498,6 +503,12 @@ ensure_node_runtime
 # at top level, before the MODE dispatch, covers start / --resume / --restart /
 # --continue uniformly.
 source_machine_env
+
+# Runs AFTER source_machine_env because it reads the FINAL RUN_ISSUES_CLAUDE_CMD:
+# the env file may set it to the npx invocation, and only then does a node
+# runtime matter. Reading it any earlier (before the env file is sourced) would
+# see the default `claude` and skip nvm for a machine that actually needs npx.
+ensure_node_runtime
 
 # ---------- S0: preflight dependency gate (issue #7) ----------
 # A missing external dependency used to be diagnosed as something else entirely:
