@@ -696,7 +696,7 @@ case "$(uname -s)" in
     # Kentät: Proto Local-Address Foreign-Address State PID → portti on Local-Addressin
     # viimeinen ":"-kenttä (kattaa myös IPv6:n [::]:5173). \r poistetaan (§5.8).
     PIDS=$(netstat -ano | awk -v port="$PORT" '
-      $4=="LISTENING" { n=split($2, a, ":"); if (a[n]==port) print $5 }' | sort -u)
+      $4=="LISTENING" { n=split($2, a, ":"); if (a[n]==port) print $5 }' | tr -d '\r' | sort -u)
     echo "PORT=$PORT PIDS=$PIDS"
     for PID in $PIDS; do
       CMD=$(powershell -NoProfile -Command \
