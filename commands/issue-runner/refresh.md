@@ -682,15 +682,39 @@ Konfigiehdotus — laukaisi a1b2c3d "chore: switch to npm"
 Tarkista kunkin CONFIG.services-palvelun osalta, kuunteleeko portti jo ja onko se
 **tämän** repon prosessi. Skannaa portit `port .. port + portFallbackRange`.
 
+Portin kuuntelija ja sen komentorivi luetaan **alustan mukaan** — POSIX-työkalut `lsof`/`ps`
+eivät ole olemassa Git Bashissa. Haara `uname -s`:n MINGW-osumasta, sama kuvio jolla
+`lib/paths.sh` ja `lib/jq-binary.sh` jo haarautuvat:
+
 ```bash
 # Esimerkki yhdelle portille; toista jokaiselle service/portille.
 PORT=5173
-PIDS=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null)
-echo "PORT=$PORT PIDS=$PIDS"
-for PID in $PIDS; do
-  CMD=$(ps -p "$PID" -o command= 2>/dev/null)
-  echo "PID=$PID CMD=$CMD"
-done
+
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    # Windows (Git Bash): netstat antaa Windows-PID:n, cmdline luetaan Win32_Processista.
+    # Kentät: Proto Local-Address Foreign-Address State PID → portti on Local-Addressin
+    # viimeinen ":"-kenttä (kattaa myös IPv6:n [::]:5173). \r poistetaan (§5.8).
+    PIDS=$(netstat -ano | awk -v port="$PORT" '
+      $4=="LISTENING" { n=split($2, a, ":"); if (a[n]==port) print $5 }' | sort -u)
+    echo "PORT=$PORT PIDS=$PIDS"
+    for PID in $PIDS; do
+      CMD=$(powershell -NoProfile -Command \
+        "(Get-CimInstance Win32_Process -Filter \"ProcessId=$PID\").CommandLine" 2>/dev/null \
+        | tr -d '\r')
+      echo "PID=$PID CMD=$CMD"
+    done
+    ;;
+  *)
+    # macOS / Linux — muuttumaton POSIX-polku.
+    PIDS=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null)
+    echo "PORT=$PORT PIDS=$PIDS"
+    for PID in $PIDS; do
+      CMD=$(ps -p "$PID" -o command= 2>/dev/null)
+      echo "PID=$PID CMD=$CMD"
+    done
+    ;;
+esac
 ```
 
 Luokittele jokainen löydetty kuunteleva PID:
@@ -703,6 +727,24 @@ Luokittele jokainen löydetty kuunteleva PID:
 - **FOREIGN** — portti on varattu mutta cmdline ei viittaa tähän repo-juureen (toinen
   projekti, toinen worktree, tai muu ohjelma).
 - **FREE** — portti ei kuuntele (PIDS tyhjä).
+
+**Windowsilla polkuvertailu tehdään Windows-muotoista cmdlineä vasten.** `$REPO_ROOT` on Git
+Bashin POSIX-polku (`/c/Users/...`), mutta `Win32_Process`in cmdline on Windows-muotoa
+(`C:\Users\...` tai `C:/Users/...`) — suora `grep -F "$REPO_ROOT/"` ei osu koskaan, jolloin oma
+dev-server luokittuisi virheellisesti FOREIGNiksi. Muunna repo-juuri Windows-muotoon ja
+normalisoi molemmat samaan muotoon (kenoviivat eteenpäin, gemena) ennen substring-vertailua.
+Worktree-alipolun etusijasääntö (A5) säilyy samana:
+
+```bash
+REPO_ROOT_WIN=$(cygpath -m "$REPO_ROOT" 2>/dev/null || printf '%s' "$REPO_ROOT")
+norm() { printf '%s' "$1" | tr 'A-Z\\' 'a-z/'; }
+NCMD=$(norm "$CMD"); NROOT=$(norm "$REPO_ROOT_WIN")
+case "$NCMD" in
+  *"$NROOT/.claude/worktrees/"*) KLASS=FOREIGN ;;       # toisen worktreen prosessi
+  *"$NROOT/"*|*"$NROOT") KLASS=RUNNING_HERE ;;
+  *) KLASS=FOREIGN ;;
+esac
+```
 
 Päätökset:
 
@@ -730,27 +772,52 @@ Käynnissä oleva dev-server pitää pysäyttää ja käynnistää uudelleen, jo
 juuri regeneroidun Prisma Clientin. Pysäytä koko dev-prosessiryhmä (turbo + sen lapset
 web/api), ei vain yhtä lehteä.
 
-Kerää PHASE 4:n RUNNING_HERE-PID:t. Selvitä niiden uniikit prosessiryhmät (PGID) ja
-lähetä koko ryhmälle ensin SIGTERM, odota porttien vapautumista, ja SIGKILL vasta jos
-ei vapaudu:
+Kerää PHASE 4:n RUNNING_HERE-PID:t (POSIXissa lsof:n system-PID:t, Windowsissa netstatin
+Windows-PID:t). Lähetä ensin graceful-lopetus, odota porttien vapautumista, ja pakota vasta
+jos ei vapaudu. Sama `uname -s`-haara kuin PHASE 4:ssä:
 
 ```bash
 # RUNNING_PIDS = PHASE 4:ssä tähän repoon luokitellut kuuntelevat PID:t (web + api).
-PGIDS=$(for PID in $RUNNING_PIDS; do ps -o pgid= -p "$PID" 2>/dev/null; done | tr -d ' ' | sort -u)
-echo "PGIDS=$PGIDS"
 
-for PGID in $PGIDS; do kill -TERM -"$PGID" 2>/dev/null || true; done
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    # Windows: prosessiryhmät eivät kartu Windowsiin. taskkill //T pysäyttää prosessipuun
+    # (turbo/pnpm-emo + web/api-lapset); //F pakottaa. Graceful-yritys ensin ilman //F —
+    # konsoliprosessi ei useinkaan sulkeudu sillä ("This process can only be terminated
+    # forcefully"), joten //F on porttien vapautumisen jälkeinen fallback, sama TERM→KILL-
+    # porrastus kuin POSIXissa.
+    for PID in $RUNNING_PIDS; do taskkill //PID "$PID" //T 2>/dev/null || true; done
 
-# Odota max 10 s että portit vapautuvat (käytä PHASE 4:n portteja).
-DEADLINE=$((SECONDS+10))
-while [ "$SECONDS" -lt "$DEADLINE" ]; do
-  STILL=$(lsof -nP -iTCP:5173 -iTCP:3001 -sTCP:LISTEN -t 2>/dev/null)
-  [ -z "$STILL" ] && break
-  sleep 1
-done
+    DEADLINE=$((SECONDS+10))
+    while [ "$SECONDS" -lt "$DEADLINE" ]; do
+      STILL=$(netstat -ano | awk '
+        $4=="LISTENING" { n=split($2, a, ":"); if (a[n]=="5173" || a[n]=="3001") print $5 }')
+      [ -z "$STILL" ] && break
+      sleep 1
+    done
 
-# SIGKILL-fallback jos jokin yhä elossa.
-for PGID in $PGIDS; do kill -KILL -"$PGID" 2>/dev/null || true; done
+    for PID in $RUNNING_PIDS; do taskkill //PID "$PID" //T //F 2>/dev/null || true; done
+    ;;
+  *)
+    # macOS / Linux — muuttumaton POSIX-polku: pysäytä koko dev-prosessiryhmä (turbo + lapset),
+    # ei vain yhtä lehteä.
+    PGIDS=$(for PID in $RUNNING_PIDS; do ps -o pgid= -p "$PID" 2>/dev/null; done | tr -d ' ' | sort -u)
+    echo "PGIDS=$PGIDS"
+
+    for PGID in $PGIDS; do kill -TERM -"$PGID" 2>/dev/null || true; done
+
+    # Odota max 10 s että portit vapautuvat (käytä PHASE 4:n portteja).
+    DEADLINE=$((SECONDS+10))
+    while [ "$SECONDS" -lt "$DEADLINE" ]; do
+      STILL=$(lsof -nP -iTCP:5173 -iTCP:3001 -sTCP:LISTEN -t 2>/dev/null)
+      [ -z "$STILL" ] && break
+      sleep 1
+    done
+
+    # SIGKILL-fallback jos jokin yhä elossa.
+    for PGID in $PGIDS; do kill -KILL -"$PGID" 2>/dev/null || true; done
+    ;;
+esac
 ```
 
 > **Huom:** jos dev-server oli käynnissä omassa terminaalissasi (ei aiemman `/issue-runner:refresh`:n
@@ -765,7 +832,7 @@ Kun portit ovat vapaat → etene PHASE 5:een (normaali taustakäynnistys + healt
 
 Käynnistä `start`-komento niin että se **jää eloon työkalukutsua ja sessiota pidemmäksi
 ajaksi** — dev-serverin tarkoitettu elinkaari on sessiota pidempi: käyttäjä jatkaa
-työskentelyä ja pysäyttää sen itse `kill <DEV_PID>`:llä (PHASE 6).
+työskentelyä ja pysäyttää sen itse PHASE 6:n antamalla, alustakohtaisella pysäytyskomennolla.
 
 **Ensisijainen tapa — `nohup … & disown`.** Irrota prosessi kokonaan sessiosta, jotta se
 säilyy hengissä myös työkalukutsun ja session jälkeen. `setsid` **ei kuulu macOS:n
@@ -903,8 +970,25 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
      JSON-katkelma tai diff. Sano eksplisiittisesti, että **mitään ei kirjoitettu** — ehdotus
      odottaa hyväksyntää. Jos ehdotuksia ei ole, älä mainitse osiota lainkaan.
 5. **Dev-URL(t)**: primary ensin (esim. `http://localhost:5173`), sitten muut.
-6. **Taustaprosessi**: `DEV_PID` ja lokipolku `.claude/refresh-dev.log`.
-7. **Muistutus**: dev-server jää taustalle — pysäytä `kill <DEV_PID>` kun et tarvitse.
+6. **Taustaprosessi**: `DEV_PID` ja lokipolku `.claude/refresh-dev.log`. **Windowsilla
+   raportoi lisäksi Windows-PID**, koska `DEV_PID` on Git Bashin oma MSYS-PID eikä `taskkill`
+   hyväksy sitä (issuen ydinvika). Muunnos MSYS:n `/proc/<pid>/winpid`-kautta:
+
+   ```bash
+   case "$(uname -s)" in
+     MINGW*|MSYS*|CYGWIN*)
+       WINPID=$(cat "/proc/$DEV_PID/winpid" 2>/dev/null)
+       echo "DEV_PID=$DEV_PID WINPID=$WINPID" ;;
+   esac
+   ```
+
+7. **Muistutus**: dev-server jää taustalle — pysäytä se kun et enää tarvitse. Anna
+   käyttäjän **omalla alustalla** oikeasti toimiva pysäytyskomento:
+   - macOS / Linux: `kill <DEV_PID>`
+   - Windows (Git Bash): `taskkill //PID <WINPID> //T //F` — `//T` pysäyttää koko
+     prosessipuun (pnpm/turbo + web/api-lapset), `//F` pakottaa (ilman sitä konsoliprosessi
+     kieltäytyy: "This process can only be terminated forcefully"). `kill <DEV_PID>` ei riitä,
+     koska se jättäisi natiivit node-lapsiprosessit orvoiksi porttia pitämään.
 
 ---
 
