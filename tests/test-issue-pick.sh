@@ -266,6 +266,59 @@ if grep -E '^repos/.*(assignee|creator)' "$ARGV" >/dev/null; then
 fi
 ok "assignee filtering is local: same query, same call count"
 
+# --- 9c. the negation form of the assignee list (issue #246) ---------------
+# A `not:<login>` entry denies a target instead of allowing it, so two machines
+# can split work as ["runner-a"] on one and ["not:runner-a"] on the other with
+# no second repo-authorised account. The fixture keeps ONE variable per issue:
+#
+#   30  assigned to runner-a                       -> DENY-listed
+#   31  assigned to runner-b                        -> not denied
+#   32  no assignee, author runner-a                -> DENY reaches the author
+#   33  two assignees, one of them runner-a          -> one DENY hit rejects
+#   34  assigned to a login that only PREFIXES "not" -> ordinary login, allowed
+cat > "$ISSUES" <<'JSON'
+[
+ {"number":30,"labels":[{"name":"auto-run"}],"assignees":[{"login":"runner-a"}],"user":{"login":"outsider"}},
+ {"number":31,"labels":[{"name":"auto-run"}],"assignees":[{"login":"runner-b"}],"user":{"login":"outsider"}},
+ {"number":32,"labels":[{"name":"auto-run"}],"assignees":[],"user":{"login":"runner-a"}},
+ {"number":33,"labels":[{"name":"auto-run"}],"assignees":[{"login":"runner-b"},{"login":"runner-a"}],"user":{"login":"outsider"}},
+ {"number":34,"labels":[{"name":"auto-run"}],"assignees":[{"login":"notrunner"}],"user":{"login":"outsider"}}
+]
+JSON
+
+# A pure DENY list ("not:runner-a") must leave everyone else runnable: an empty
+# ALLOW means "any login", not "no match". The oldest non-denied issue is 31.
+check "pure DENY list => others still pick up" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "not:runner-a")" "31"
+# A DENY hit rejects the assigned issue (30) and the DENY reaches the author of
+# an unassigned one (32); the two-assignee issue 33 is rejected on one hit.
+check "a DENY assignee is skipped" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "not:runner-b,not:runner-a")" "34"
+# not: without the colon is an ordinary login: `notrunner` on the ALLOW list
+# matches issue 34, and nothing is denied.
+check "not without a colon is an ordinary login" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "notrunner")" "34"
+
+# ALLOW and DENY together: BOTH conditions are required. Allow runner-a and
+# runner-b, deny runner-a -> only 31 (runner-b) survives; 30 is denied, 33 has a
+# DENY hit, 32's author is denied, 34's login is not allowed.
+check "ALLOW+DENY require both conditions" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "runner-a,runner-b,not:runner-a")" "31"
+# The same login in both lists: DENY beats ALLOW. Allowing runner-a and denying
+# it must reject 30, not pick it.
+check "same login in ALLOW and DENY => DENY wins" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "runner-a,not:runner-a")" ""
+
+# The author fallback reaches the negation too: an unassigned issue whose author
+# is denied stays out even though nothing else disqualifies it.
+cat > "$ISSUES" <<'JSON'
+[
+ {"number":40,"labels":[{"name":"auto-run"}],"assignees":[],"user":{"login":"runner-a"}}
+]
+JSON
+check "unassigned issue by a DENY author is skipped" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "not:runner-a")" ""
+
 # --- 10. poller.sh still delegates; no second pickup query ------------------
 # Issue #99 converged the two pickup searches into one. This guards that
 # convergence AND the #133 move: an inline pickup in poller.sh would be both a

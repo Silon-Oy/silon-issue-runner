@@ -222,14 +222,29 @@ _labels_query_csv() {
 # because the alternative reading ("an empty allow-list allows no one") would
 # make a repo stop picking up silently and forever.
 #
-# When the list is set, an issue qualifies if any of its assignees is on it —
-# or, when it has NO assignee, if its author is. The author fallback is what
-# keeps a hand-written issue runnable without anyone assigning it first; the
-# assignee field is then the override that moves the work to another machine.
-# Note the direction of the fallback: it applies only to an UNASSIGNED issue,
-# so assigning an issue to someone outside the list keeps it out of pickup even
-# when a listed login opened it. That is a human opt-out ("I will do this one
-# myself"), and it only exists in repos that set the key.
+# A list entry is either a login (`maintainer`) or a negation (`not:maintainer`,
+# issue #246). The list is split HERE, not in the resolver, so the resolver
+# stays the one place that never has to know the syntax:
+#
+#   ALLOW = entries with no prefix. An empty ALLOW means "any login qualifies",
+#           NOT "no match" — same fail-safe reading as an empty list.
+#   DENY  = `not:`-prefixed entries, read without the prefix. `not:` needs the
+#           colon: `notollisaari` is an ordinary login in ALLOW.
+#
+# An issue qualifies when BOTH hold against its TARGET logins:
+#   1. ALLOW is empty OR the target matches some ALLOW login, and
+#   2. the target matches NO DENY login.
+# DENY beats ALLOW when the same login is in both — negation is the fail-closed
+# direction — and one DENY hit among several assignees is enough to reject.
+#
+# The TARGET is the issue's assignee logins, or — when it has NO assignee — its
+# author (the #238 fallback). The fallback is what keeps a hand-written issue
+# runnable without anyone assigning it first, and it applies to BOTH directions:
+# an unassigned issue opened by a DENY login stays out of pickup, and assigning
+# an issue to someone outside the ALLOW list keeps it out even when a listed
+# login opened it. Those are the two human opt-outs, and they exist only in
+# repos that set the key. The negation opt-out needs no repo access on the
+# denied login — moving work to another machine is just "not assigned here".
 #
 # `.assignees` and `.user.login` are already in the REST payload, so none of
 # this costs an extra call.
@@ -246,13 +261,14 @@ _pick_filter_jq() {
      | select(
          (($ENV.RUN_ISSUES_PICK_ASSIGNEES // "")
           | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $want
+         | ($want | map(select(startswith("not:") | not))) as $allow
+         | ($want | map(select(startswith("not:")) | .[4:])) as $deny
          | [ (.assignees // [])[] | .login // empty ] as $has
          | (.user.login // "") as $author
-         | ($want | length) == 0
-           or (if ($has | length) == 0
-               then ($want | index($author)) != null
-               else ($has | any(. as $login | ($want | index($login)) != null))
-               end))
+         | (if ($has | length) == 0 then [$author] else $has end) as $target
+         | (($allow | length) == 0
+            or ($target | any(. as $login | ($allow | index($login)) != null)))
+           and ($target | all(. as $login | ($deny | index($login)) == null)))
      | .number ] | .[]'
 }
 

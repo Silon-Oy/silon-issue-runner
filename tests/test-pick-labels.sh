@@ -172,7 +172,8 @@ else
     { "path": "/tmp/repo-a", "labels": ["auto-run"], "assignees": ["runner-a", "runner-b"] },
     { "path": "/tmp/repo-b/", "labels": ["auto-run"] },
     { "path": "/tmp/repo-c", "labels": ["auto-run"], "assignees": [] },
-    { "path": "/tmp/repo-d", "labels": ["auto-run"], "assignees": [" spaced ", "", "  "] }
+    { "path": "/tmp/repo-d", "labels": ["auto-run"], "assignees": [" spaced ", "", "  "] },
+    { "path": "/tmp/repo-e", "labels": ["auto-run"], "assignees": ["not:runner-a", " not:runner-b "] }
   ]
 }
 JSON
@@ -193,6 +194,11 @@ JSON
   as_case "case9 an entry's own trailing slash is normalised"  ''                   "$AWL" '/tmp/repo-b/'
   as_case "case9 an empty array means no assignee filtering"   ''                   "$AWL" '/tmp/repo-c'
   as_case "case9 whitespace is trimmed and blanks are dropped" 'spaced'             "$AWL" '/tmp/repo-d'
+  # The `not:` negation prefix (issue #246) must survive the resolver verbatim:
+  # ALLOW/DENY splitting lives in _pick_filter_jq, so this function stays the one
+  # place that never has to know the syntax. Whitespace is still trimmed around
+  # the whole entry, but the colon and prefix are carried through.
+  as_case "case9 the not: prefix is returned verbatim"         'not:runner-a,not:runner-b' "$AWL" '/tmp/repo-e'
   # An uncovered repo must NOT inherit anything: unlike labels there is no
   # default to inherit, and inventing one would filter a checkout nobody
   # configured.
