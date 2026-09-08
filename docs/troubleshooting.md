@@ -28,7 +28,7 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 5 | Estynyt ennen implementeriä tai implementerissä — worktreen luonti (S4), db-clone, riippuvuusasennus (S7b), testiympäristön provisiointi (S7c) tai implementer palautti BLOCKED. Tarkan syyn ja sen korjauksen kertoo `run.json`-statuksen syykenttä, ks. [`usage-reference.md`](usage-reference.md#käyttötapaukset) käyttötapaus (e) |
 | 6 | PR:n avaus epäonnistui |
 | 7 | Implementer (S8) aikakatkaistiin — ajo on `--restart`-kelpoinen |
-| 8 | **Puuttuva pakollinen riippuvuus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon |
+| 8 | **Puuttuva pakollinen riippuvuus tai riittämätön repo-kirjoitusoikeus** — S0-portti kieltäytyi käynnistämästä ajoa; mitään ei lukittu, claimattu eikä luotu. Virheilmoitus nimeää työkalun ja korjauskomennon, tai (#256) puuttuvan Write-roolin ja sen myöntäjän. Ohitus: `RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1` (vain oikeustarkistus) |
 | 9 | **Issue on estetty avoimella `blocked_by`-riippuvuudella** — S2b-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota; ajo viimeisteltiin `blocked`-tilaan ja lukko vapautettiin. Portti lukee riippuvuusgraafin suoraan (hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia: se on odotustila, joka jatkuu itsestään kun estäjä sulkeutuu. Nimetyn ajon voi pakottaa `--force`-lipulla |
 | 10 | Odottaa ihmisen katselmointia — jatka komennolla `--resume` |
 | 11 | Odottaa tarkennusta — vastaa issuelle, poller jatkaa `--continue`-ajolla |

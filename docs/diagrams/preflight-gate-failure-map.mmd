@@ -28,10 +28,13 @@ flowchart TD
         MCL2 --> MCL3["empty .out -> CR_DECISION empty<br/>orchestrate.sh:836 -> UNKNOWN"]
         MCL3 --> MCL4["orchestrate.sh:1797 BLOCKED*|'' branch<br/>-> exit 5 + WRONG issue comment:<br/>'implementer jäi jumiin'"]
         MGH["gh auth missing"] --> MGH2["fails at S1/S3 with a raw gh error<br/>= looks like a permissions bug"]
+        MWR["Read-only token (issue #256)<br/>gh auth token succeeds, push denied"] --> MWR2["auto-claimed label fails at S3 (needs Triage)<br/>then push 403 at S10 (needs Write)<br/>= two late failures, after the claim/worktree"]
     end
 
     A1 -.blocked by.-> MJQ
     A1 -.blocked by.-> MGH
+    A3 -.blocked by.-> MWR
+    A4 -.blocked by.-> MWR
     A6 -.blocked by.-> MCL
     A8 -.blocked by.-> MCL
 
@@ -45,6 +48,6 @@ flowchart TD
     classDef bad fill:#ffe0e0,stroke:#c00
     classDef good fill:#e0ffe0,stroke:#0a0
     classDef warn fill:#fff6d0,stroke:#c90
-    class MJQ2,MCL2,MCL3,MCL4,MGH2 bad
+    class MJQ2,MCL2,MCL3,MCL4,MGH2,MWR2 bad
     class GATE,FAIL good
     class TMO,TMO2 warn

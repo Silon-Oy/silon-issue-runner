@@ -23,6 +23,9 @@
 #   7. preflight_gate_report: an absent timeout binary is a WARNING, never
 #      fatal — regression guard for the pre-gate behaviour (unbounded claude
 #      calls are allowed to keep running)
+#   8. preflight_repo_write_report: the push=true/false/unreadable verdicts and
+#      the 0/2 severity split, the deferred (empty-slug) note, and the
+#      fail-closed rule that an unreadable answer is never a green light (#256)
 #
 # Run: bash tests/test-preflight.sh
 
@@ -280,6 +283,75 @@ if printf '%s\n' "$out" | grep -qF 'MISSING (optional): timeout/gtimeout'; then
   echo "PASS: case7 warns about the missing timeout binary"
 else
   echo "FAIL: case7 did not warn about the timeout binary — got: $out"; FAIL=1
+fi
+
+# ---- Case 8: preflight_repo_write_report ----
+# The probe EXECUTES gh, so it is driven with a PATH stub whose answer is set by
+# $GH_PERM (true|false|error). The identity is the caller's concern (S0 wraps
+# this in gha_with_token); the module only reads whatever `gh` returns.
+mkdir -p "$WORK/w"
+cat > "$WORK/w/gh" <<'SH'
+#!/bin/bash
+if [ "${1:-}" = "api" ]; then
+  case "${GH_PERM:-true}" in
+    error) exit 1 ;;
+    *) printf '%s\n' "${GH_PERM:-true}" ;;
+  esac
+  exit 0
+fi
+exit 0
+SH
+chmod +x "$WORK/w/gh"
+
+# Empty slug => deferred note, severity 0, never a failure (install time).
+line=$(preflight_repo_write_report "")
+rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$line" | grep -q 'deferred to run time'; then
+  echo "PASS: case8 empty slug is a deferred advisory note (rc 0)"
+else
+  echo "FAIL: case8 empty slug: rc=$rc line='$line'"; FAIL=1
+fi
+
+# push=true => ok, severity 0.
+line=$(PATH="$WORK/w" GH_PERM=true preflight_repo_write_report example-org/app)
+rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$line" | grep -q '^ok: repo write access to example-org/app$'; then
+  echo "PASS: case8 push=true returns ok (rc 0)"
+else
+  echo "FAIL: case8 push=true: rc=$rc line='$line'"; FAIL=1
+fi
+
+# push=false => fatal (rc 2), names the Write role AND who grants it.
+line=$(PATH="$WORK/w" GH_PERM=false preflight_repo_write_report example-org/app)
+rc=$?
+if [ "$rc" -eq 2 ]; then
+  echo "PASS: case8 push=false is fatal (rc 2)"
+else
+  echo "FAIL: case8 push=false returned $rc (expected 2)"; FAIL=1
+fi
+if printf '%s\n' "$line" | grep -q 'Write (push)' && \
+   printf '%s\n' "$line" | grep -q 'organization owner or a repository admin'; then
+  echo "PASS: case8 push=false names the Write role and its grantor"
+else
+  echo "FAIL: case8 push=false message lacks role/grantor: '$line'"; FAIL=1
+fi
+
+# An unreadable answer (gh error) is fail-closed: fatal, never a green light.
+line=$(PATH="$WORK/w" GH_PERM=error preflight_repo_write_report example-org/app)
+rc=$?
+if [ "$rc" -eq 2 ] && printf '%s\n' "$line" | grep -q 'refusing fail-closed'; then
+  echo "PASS: case8 an unreadable answer is fail-closed (rc 2)"
+else
+  echo "FAIL: case8 unreadable answer: rc=$rc line='$line'"; FAIL=1
+fi
+
+# A missing gh cannot probe, which is also fail-closed rather than a pass.
+line=$(PATH="$WORK/nope" preflight_repo_write_report example-org/app)
+rc=$?
+if [ "$rc" -eq 2 ] && printf '%s\n' "$line" | grep -q 'gh is not available'; then
+  echo "PASS: case8 a missing gh is fail-closed (rc 2)"
+else
+  echo "FAIL: case8 missing gh: rc=$rc line='$line'"; FAIL=1
 fi
 
 echo "----------------------------------------"

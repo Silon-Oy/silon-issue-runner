@@ -665,6 +665,11 @@ report_preflight() {
   else
     log "  MISSING (optional): timeout/gtimeout — claude calls would run unbounded; install: $(preflight_install_hint timeout)"
   fi
+  # Repo write-access probe (issue #256): the same source of truth the S0 gate
+  # uses, reported advisorily. There is no target repo at install time, so the
+  # empty slug yields a "deferred to run time" note rather than a probe — the
+  # install must not fail for a permission it has no repo to check.
+  log "  $(preflight_repo_write_report "" || true)"
 }
 
 # poller_env_values <file> — echo the three host-gate-relevant settings the

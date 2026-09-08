@@ -20,6 +20,13 @@
 #       That still proves the gate did not block a healthy environment.
 #   B5  RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses the gate even when claude is broken
 #   B6  GitHub App mode downgrades the missing personal login to a warning
+#   B7  a Read-only token (permissions.push=false) is fatal at S0 (exit 8),
+#       before any claim/worktree, and the message names the Write role and who
+#       grants it (issue #256)
+#   B8  an unreadable permissions response is fail-closed — fatal at S0, not a
+#       silent pass (issue #256)
+#   B9  RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 bypasses the write probe even when the
+#       token lacks push
 #
 # B1 also pins the counterpart of the probe/have split: an overridden claude
 # command must be tested for existence only, never executed. Executing it would
@@ -51,14 +58,23 @@ GH_LOG="$WORK/gh.log"
 : > "$GH_LOG"
 
 # gh stub: records argv, answers `auth token` with $GH_AUTH_RC (so a test can
-# simulate a machine that never ran `gh auth login`) and returns an empty issue
-# list, i.e. "no candidate".
+# simulate a machine that never ran `gh auth login`), answers `api repos/…` with
+# the repo write-access probe's `.permissions.push` value (GH_PERM: true|false,
+# or "error" to fail the call — the fail-closed case) and returns an empty issue
+# list otherwise, i.e. "no candidate".
 cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$GH_LOG"
 if [ "\${1:-}" = "auth" ] && [ "\${2:-}" = "token" ]; then
   [ "\${GH_AUTH_RC:-0}" = "0" ] && printf 'gho_stubtoken\n'
   exit "\${GH_AUTH_RC:-0}"
+fi
+if [ "\${1:-}" = "api" ]; then
+  case "\${GH_PERM:-true}" in
+    error) exit 1 ;;
+    *) printf '%s\n' "\${GH_PERM:-true}" ;;
+  esac
+  exit 0
 fi
 exit 0
 SH
@@ -74,10 +90,13 @@ npx_exits() {  # npx_exits <code>
   chmod +x "$BIN/npx"
 }
 
-# The target repo. orchestrate.sh requires a .git dir; no remote is needed
-# because gh is stubbed.
+# The target repo. orchestrate.sh requires a .git dir. A parseable github.com
+# origin is added so the S0 repo write-access probe (issue #256) can resolve an
+# owner/repo slug and query the stubbed `gh api repos/…`; without it the probe
+# is skipped (a repo with no github remote fails later at issue fetch anyway).
 REPO="$WORK/repo"
 git init -q "$REPO"
+git -C "$REPO" remote add origin https://github.com/example-org/app.git
 # Force `main` regardless of the machine's init.defaultBranch.
 git -C "$REPO" symbolic-ref HEAD refs/heads/main
 
@@ -202,6 +221,42 @@ RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$PEM" \
 rc_is_not 8 "B6 App mode does not make a missing personal login fatal"
 says 'WARNING' "B6 the finding is reported as a warning"
 says 'gh auth login' "B6 the warning still carries the fix command"
+
+# --- B7: a Read-only token is fatal at S0 (issue #256) --------------------
+# The token authenticates (gh auth token ok) but lacks push. Until this gate
+# existed the run reached S3/S10 and failed there, after the issue was reserved
+# or a worktree built. Now it must refuse at S0, before any side effect.
+export RUN_ISSUES_CLAUDE_CMD="$BIN/claude"
+: > "$GH_LOG"
+GH_PERM=false run_orch "$REPO" 42
+rc_is 8 "B7 a Read-only token exits 8"
+says 'Write (push)' "B7 names the missing Write role"
+says 'organization owner or a repository admin' "B7 names who grants it"
+says 'nothing was locked, claimed or created' "B7 states that no work started"
+if grep -qE -- '--add-assignee|issue edit|--add-label' "$GH_LOG"; then
+  bad "B7 the issue was reserved/claimed: $(grep -E -- '--add-assignee|issue edit|--add-label' "$GH_LOG")"
+else
+  ok "B7 the issue was never reserved or claimed"
+fi
+if [ -d "$REPO/.claude/run-issues" ]; then
+  bad "B7 a failed write probe created a run dir"
+else
+  ok "B7 no run dir was created"
+fi
+
+# --- B8: an unreadable permissions response is fail-closed ----------------
+# A network error / SSO block / missing repo must not read as "can write".
+GH_PERM=error run_orch "$REPO" 42
+rc_is 8 "B8 an unreadable permissions response exits 8 (fail-closed)"
+says 'refusing fail-closed' "B8 names the fail-closed refusal"
+
+# --- B9: the write-probe escape hatch -------------------------------------
+# The probe must never be the reason a working machine cannot start: a
+# Read-only stub plus the skip flag reaches the normal flow (then the S1 poll
+# rejection, exit 1 — after the probe was skipped).
+GH_PERM=false RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 run_orch "$REPO" poll
+rc_is 1 "B9 RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 bypasses the write probe"
+says 'S0_Preflight ok' "B9 the gate still passes"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "preflight-gate: all passed" || echo "preflight-gate: FAILURES"

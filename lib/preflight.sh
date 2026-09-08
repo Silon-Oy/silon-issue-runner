@@ -9,10 +9,11 @@
 # instead of drifting apart in two copies.
 #
 # Every function is free of persistent side effects: no writes, no exits, no
-# globals. Two functions — preflight_probe_claude and preflight_timeout_bin —
-# EXECUTE the command they are asked about, because for those two a name on
-# PATH does not imply the contract we need. Each names that exception in its
-# own header.
+# globals. Four functions — preflight_probe_claude, preflight_timeout_bin,
+# preflight_jq_binary_ok and preflight_repo_write_report — EXECUTE the command
+# they are asked about, because for those a name on PATH (or a token that
+# merely exists) does not imply the contract we need. Each names that exception
+# in its own header.
 
 set -euo pipefail
 
@@ -207,4 +208,67 @@ preflight_gate_report() {
 
   [ "$fatal" -eq 0 ] || return 2
   return 0
+}
+
+# preflight_repo_write_report <slug> — one finding line about whether the gh
+# identity a run will WRITE with can push to <slug> (an "owner/repo" string).
+# `gh auth token` upstream only proves a token EXISTS, not that it can write; a
+# Read-only token passes that check and then fails only after the run has
+# reserved the issue (the auto-claimed label needs Triage) or built a worktree
+# (push needs Write). This probe moves that class of late, side-effect-laden
+# failure to S0, where nothing has happened yet (issue #256).
+#
+# The CALLER selects the identity by wrapping this in gha_with_token, so an
+# App-mode run probes with its installation token and everyone else with the
+# personal login. A check made as a DIFFERENT identity than the one that writes
+# would green-light permissions the run never uses — worse than no check.
+#
+# Empty <slug> means there is no target repo yet (install time): the check is
+# deferred to run time, reported as an advisory note, never a failure.
+#
+# EXECUTES gh — the fourth exception to this module's no-side-effects rule
+# (preflight_probe_claude, preflight_timeout_bin, preflight_jq_binary_ok are the
+# others) — for the same reason: a token's write scope is a fact only the API
+# can answer, not one a name on PATH implies. Prints ONE line and returns
+# preflight_report_tool's severity vocabulary:
+#   0 — push access confirmed ("ok: …"), OR deferred (no slug yet)
+#   2 — no write access, or the response could not be read. FAIL-CLOSED: an
+#       unreadable answer counts as "cannot write", never as "can" (CLAUDE.md
+#       §4). The S0 gate makes this fatal; install.sh prints it and moves on.
+preflight_repo_write_report() {
+  local slug="${1:-}"
+
+  if [ -z "$slug" ]; then
+    printf 'repo write access: deferred to run time (no target repo at install)\n'
+    return 0
+  fi
+
+  if ! preflight_have gh; then
+    # The gh dependency check reports an absent gh fatally on its own; here it
+    # only means the probe cannot run, which is fail-closed like any other
+    # unreadable answer.
+    printf 'MISSING (required): repo write access to %s — gh is not available to check it\n' "$slug"
+    return 2
+  fi
+
+  local push rc=0
+  push=$(gh api "repos/$slug" --jq '.permissions.push' 2>/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'MISSING (required): repo write access to %s — could not read permissions (network error, missing repo, or org SSO not authorized); refusing fail-closed. Set RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 to override\n' "$slug"
+    return 2
+  fi
+  case "$push" in
+    true)
+      printf 'ok: repo write access to %s\n' "$slug"
+      return 0
+      ;;
+    false)
+      printf 'MISSING (required): repo write access to %s — the token authenticates but has only Read/Triage; ask an organization owner or a repository admin to grant Write (push)\n' "$slug"
+      return 2
+      ;;
+    *)
+      printf 'MISSING (required): repo write access to %s — permissions response was unreadable (push field was "%s"); refusing fail-closed. Set RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 to override\n' "$slug" "${push:-<empty>}"
+      return 2
+      ;;
+  esac
 }

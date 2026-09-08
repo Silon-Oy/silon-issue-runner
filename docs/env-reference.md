@@ -33,6 +33,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_IMAGE_TIMEOUT` | `60` | Kuvalatauksen timeout |
 | `RUN_ISSUES_REPO_SLUG_MAX` | `40` | Repo-slugin pituuskatto ajotunnisteissa |
 | `RUN_ISSUES_SKIP_PREFLIGHT` | `0` | `1` = ohita S0-portti. Hätävara: portti ei saa koskaan olla syy siihen, ettei ajo käynnisty toimivalla koneella |
+| `RUN_ISSUES_SKIP_REPO_WRITE_CHECK` | `0` | `1` = ohita S0:n repo-kirjoitusoikeuden tarkistus (#256). S0 tarkistaa `gh api repos/<owner/repo> --jq .permissions.push`illa — sillä identiteetillä, jolla ajo oikeasti kirjoittaa (GitHub App -tilassa Appin tunnuksella) — että tunnuksella on vähintään Write; Read-only-tunnus kaatuisi muuten vasta varauslabelin tai pushin kohdalla. Fatal ja **fail-closed**: verkkovirhe tai epäselvä vastaus estää ajon. Sama hätävaraperuste kuin `RUN_ISSUES_SKIP_PREFLIGHT`illa. Vain uuden ajon poluilla; resume/restart/continue eivät tarkista (claim on jo ohitettu). Repo ilman jäsentyvää GitHub-remotea jää tarkistamatta — se kaatuu joka tapauksessa S1:n issue-haussa ennen claimia |
 
 ### Poller
 

@@ -46,6 +46,8 @@
 #                           issue -> PR -> pr-watch auto-merge.
 #   RUN_ISSUES_SKIP_PREFLIGHT  "1" = skip the S0 dependency gate (escape hatch;
 #                           the gate must never be the reason a run cannot start)
+#   RUN_ISSUES_SKIP_REPO_WRITE_CHECK  "1" = skip the S0 repo write-access probe
+#                           (same escape-hatch rationale; issue #256)
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
@@ -59,9 +61,10 @@
 #   6   PR open failed
 #   7   implementer (S8) timed out — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
-#   8   missing required dependency — the S0 preflight gate refused to start the
-#       run; nothing was locked, claimed or created. The stderr message names
-#       the missing tool AND its fix command.
+#   8   missing required dependency OR insufficient repo write access — the S0
+#       preflight gate refused to start the run; nothing was locked, claimed or
+#       created. The stderr message names the missing tool AND its fix command,
+#       or (issue #256) the missing Write role AND who grants it.
 #   9   issue is blocked by an open dependency — refused between the lock and the
 #       claim (S2b), before the issue is assigned to us. The run dir is finalized
 #       blocked/blocked_by_dependency and the lock released; nothing is claimed.
@@ -545,6 +548,45 @@ preflight_gate() {
     else
       findings="${findings}${findings:+$'\n'}MISSING (required): gh auth — ${auth_hint}"
       rc=2
+    fi
+  fi
+
+  # Repo write-access probe (issue #256). The `gh auth token` check above proves
+  # a token EXISTS, not that it can write; a Read-only token sails through and
+  # fails only after the run has reserved the issue (auto-claimed label needs
+  # Triage) or built a worktree (push needs Write). This moves that failure to
+  # S0, where nothing has happened yet.
+  #
+  # Guarded on REPO_ROOT because only the new-run (pick -> claim) path has a
+  # target repo at this point: resume/restart/continue reload REPO_ROOT from
+  # run.json later, and by then the claim is long past, so the failure this
+  # guards against cannot occur. An unresolvable slug (a clone with no parseable
+  # GitHub remote) is left un-probed on purpose: such a repo cannot fetch its
+  # issue at all, so S1 fails visibly with no claim — there is no Read-only
+  # token to slip a green light past here.
+  #
+  # The identity is the one the run WRITES with: gha_with_token supplies the App
+  # installation token in App mode and is a pass-through otherwise, so the check
+  # never green-lights permissions the run will not use. It runs inside a command
+  # substitution so gha_with_token's temporary token export stays confined to
+  # that subshell.
+  if [ "${RUN_ISSUES_SKIP_REPO_WRITE_CHECK:-0}" != "1" ] && [ -n "$REPO_ROOT" ]; then
+    local write_slug write_line write_rc=0
+    write_slug=$(resolve_remote_to_owner_repo "$REPO_ROOT" "$REMOTE_NAME" 2>/dev/null) || write_slug=""
+    if [ -n "$write_slug" ]; then
+      write_line=$(gha_with_token preflight_repo_write_report "$write_slug") || write_rc=$?
+      if [ "$write_rc" -eq 2 ]; then
+        # A real verdict from the probe (no write, or an unreadable API answer):
+        # preflight_repo_write_report returns only 0 or 2.
+        findings="${findings}${findings:+$'\n'}${write_line}"
+        rc=2
+      elif [ "$write_rc" -ne 0 ]; then
+        # A non-{0,2} code can only come from gha_with_token itself failing to
+        # mint the App installation token — App-auth territory, deliberately out
+        # of scope here (issue #256): the probe never ran. Warn, don't block; a
+        # broken App token surfaces through its own channel.
+        findings="${findings}${findings:+$'\n'}MISSING (optional): repo write access to ${write_slug} — could not obtain the GitHub App identity to check it (App auth is verified elsewhere)"
+      fi
     fi
   fi
 
