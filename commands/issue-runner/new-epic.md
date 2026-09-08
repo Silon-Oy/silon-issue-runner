@@ -170,8 +170,12 @@ vahvistuksessa kuin epic ja sen lapset:
 ```
 
 Vahvistuksen jälkeen **lohko kirjoitetaan kohderepon `CLAUDE.md`:hen ennen osion 3 ensimmäistä
-kirjoitusta**, jotta ketju on määritelty jo silloin kun poller voi poimia sen. Komento **ei
-committaa**: muutos jää työpuuhun, kuten muukin sen tuotos.
+kirjoitusta**, jotta ketju on määritelty jo silloin kun poller voi poimia sen. **Sijoita se
+ennen mahdollista konemanageroitua lohkoa:** jos tiedostossa on `<!-- BEGIN:… -->`-tyylinen
+merkkilohko (esim. Next.jsin `<!-- BEGIN:nextjs-agent-rules -->`), lisää Languages-lohko sen
+eteen, muuten tiedoston loppuun. Konemanageroitu lohko kirjoitetaan uudelleen joka ajolla, joten
+sen sisään tai perään jäänyt määrittely katoaisi hiljaa. Komento **ei committaa**: muutos jää
+työpuuhun, kuten muukin sen tuotos.
 
 Sisarkomento [`/issue-runner:new-issue`](new-issue.md) tekee saman yhdelle issuelle osiossaan 4.1.
 

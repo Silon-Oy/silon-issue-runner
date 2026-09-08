@@ -249,8 +249,14 @@ työpuuhun, joten se ei saa tapahtua näkymättömissä:
 - Plans: <vastaus>
 ```
 
-> **Komento ei committaa.** Se lisää lohkon `CLAUDE.md`-tiedoston loppuun ja jättää muutoksen
-> työpuuhun, kuten muunkin tuotoksensa. Committaaminen on käyttäjän päätös.
+> **Sijoita lohko ennen mahdollista konemanageroitua lohkoa.** Jos `CLAUDE.md`:ssä on
+> `<!-- BEGIN:… -->`-tyylinen merkkilohko (esim. Next.jsin dev-ajossa kirjoittama
+> `<!-- BEGIN:nextjs-agent-rules -->`), lisää Languages-lohko **sen eteen**; muuten tiedoston
+> loppuun. Konemanageroitu lohko kirjoitetaan uudelleen joka ajolla, joten sen sisään tai
+> perään jäänyt määrittely katoaisi hiljaa seuraavassa uudelleenkirjoituksessa.
+>
+> **Komento ei committaa.** Muutos jää työpuuhun, kuten muukin sen tuotos. Committaaminen on
+> käyttäjän päätös.
 
 Sisarkomento [`/issue-runner:new-epic`](new-epic.md) tekee saman kokonaisuudelle osiossaan 2.1 — yksi kysymys
 kattaa siellä koko ketjun.
