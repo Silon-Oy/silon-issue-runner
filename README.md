@@ -255,7 +255,7 @@ sitä vanhempi jq on S0-portille sama asia kuin puuttuva riippuvuus.
 **Asennus Git Bashissa** (ei PowerShellissä, ei CMD:ssä)
 
 ```bash
-git clone https://github.com/Silon-Oy/claude-issue-runner.git
+git clone <paketin repo-URL> claude-issue-runner
 cd claude-issue-runner
 MSYS=winsymlinks:nativestrict bash install.sh --dry-run   # tulostaa suunnitelman
 MSYS=winsymlinks:nativestrict bash install.sh             # soveltaa sen
