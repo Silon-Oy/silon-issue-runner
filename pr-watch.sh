@@ -64,6 +64,9 @@
 #   7  post-merge migration failed
 #   8  red CI needs a human (AI could not repair / CI stayed red / attempt cap
 #      reached — PR commented, needs-human label added)
+#   9  gh is missing or unauthenticated (checked once per run before the first PR
+#      call, same lib/preflight.sh mechanism as the orchestrator's S0 gate) — a
+#      durable condition, not the transient "retry next poll" of code 4
 
 set -euo pipefail
 
@@ -412,8 +415,12 @@ watch_one() {
 
   # ----- P3: Classify -----------------------------------------------------
   local pr_json
+  # No `2>/dev/null` here: gh_route captures gh's stderr, inspects it for the
+  # rate-limit signal and re-emits it unchanged "so nothing downstream loses an
+  # error message" (see gh_route). Swallowing it here defeated exactly that — the
+  # first call to fail was the one call whose reason went missing (issue #279).
   if ! pr_json=$(gh_route pr view "$pr_num" \
-        --json state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName 2>/dev/null); then
+        --json state,mergeable,mergeStateStatus,labels,statusCheckRollup,headRefName,baseRefName); then
     log "gh pr view failed for PR #$pr_num"
     _release
     return 4
@@ -1298,6 +1305,43 @@ _pr_ci_handover_to_human() {
   printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
     log "failed to post ci-repair comment on PR #$pr_num"
 }
+
+# ----- P0: dependency gate (issue #279) -----------------------------------
+# A missing or unauthenticated gh used to look exactly like a transient PR-level
+# error: the first `gh pr view` failed, watch_one logged "gh pr view failed for
+# PR #N" and returned 4 ("safe to retry next poll") — but nothing had been
+# checked and nothing changed on the next tick, so the run was silently stuck
+# (observed 2026-09-09: gh absent from a non-interactive ssh session's PATH).
+# This gate moves the observation to the one point where it is still cheap and
+# honest: before the first PR call, ONCE per invocation (not once per PR, so a
+# multi-repo scan cannot print the same line per candidate — §5.7).
+#
+# It reuses lib/preflight.sh (preflight_have + preflight_install_hint), the same
+# probe the orchestrator's S0 gate uses, rather than re-deriving the check. gh
+# authentication is policy, not a fact about a tool, so — exactly as in the
+# orchestrator (orchestrate.sh) — the `gh auth token` check lives in this caller,
+# not in the pure module. `gh auth token` (not `gh auth status`) is deliberate:
+# status calls the API, which would make a network outage a new way for the
+# watcher to fail to start. In App mode the runs authenticate with an
+# installation token, so a missing personal login is only advisory there.
+#
+# Exit 9 is its own code, distinct from 4: a missing dependency is a durable
+# condition, not a transient one, so it must never read as "safe to retry".
+pr_watch_gh_gate() {
+  if ! preflight_have gh; then
+    log "gh is not available on PATH — cannot watch any PR (fix: $(preflight_install_hint gh)); exit 9"
+    exit 9
+  fi
+  if ! gh auth token >/dev/null 2>&1; then
+    if gha_enabled; then
+      log "WARNING: gh has no personal auth token ($(preflight_install_hint gh-auth)) — proceeding on the GitHub App installation token"
+    else
+      log "gh is not authenticated — cannot watch any PR (fix: $(preflight_install_hint gh-auth)); exit 9"
+      exit 9
+    fi
+  fi
+}
+pr_watch_gh_gate
 
 # ----- main ---------------------------------------------------------------
 if [ "$TARGET" = "scan" ]; then

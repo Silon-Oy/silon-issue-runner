@@ -62,6 +62,7 @@ tarkoittaa ja miten symlink-koetus toimii Windowsissa: [`README.md`](../README.m
 | 6 | Konflikti vaatii ihmisen — AI ei ratkaissut tai CI punainen (`needs-human`-label + kommentti) |
 | 7 | Merge-jälkeinen migraatio epäonnistui |
 | 8 | Punainen CI vaatii ihmisen — AI ei korjannut, CI jäi punaiseksi tai yrityskatto täyttyi (`needs-human`-label + kommentti) |
+| 9 | **`gh` puuttuu tai on autentikoimatta** — P0-portti tarkisti `gh`:n saatavuuden (olemassaolo PATHissa + `gh auth token`) kerran ennen ensimmäistä PR-kutsua, samalla `lib/preflight.sh`-mekanismilla kuin orkestraattorin S0-portti, eikä `gh` ollut käytettävissä. **Pysyvä puute, ei ohimenevä (koodi 4):** korjaa asentamalla `gh` (`brew install gh`) tai autentikoimalla (`gh auth login`). GitHub App -tilassa henkilökohtaisen loginin puute on vain varoitus, ei este |
 
 ### Kokonaistila (`status.sh`)
 
