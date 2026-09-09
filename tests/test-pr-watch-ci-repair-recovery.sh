@@ -326,7 +326,7 @@ echo "$OUT" | sed 's/^/H| /'
 echo "H| (rc=$RC)"
 
 [ "$RC" = "0" ] || { echo "FAIL H: expected rc 0 (merged), got $RC"; FAIL_H=1; }
-echo "$OUT" | grep -q "re-armed after CI-repair handover" || { echo "FAIL H: no re-armed log"; FAIL_H=1; }
+echo "$OUT" | grep -q "re-armed after handover" || { echo "FAIL H: no re-armed log"; FAIL_H=1; }
 [ -f "$MERGE_FLAG" ] || { echo "FAIL H: PR not merged after re-arm"; FAIL_H=1; }
 [ "$(jq -r '.status' "$RD/run.json")" = "merged" ] || { echo "FAIL H: status not merged"; FAIL_H=1; }
 [ "$FAIL_H" = "0" ] && echo "PASS H: re-armed run merges once CI green + needs-human removed"

@@ -57,8 +57,12 @@ WT="$WORK/wt-feature"
 # --- gh mock -------------------------------------------------------------
 BIN="$WORK/bin"; mkdir -p "$BIN"
 COMMENT_FLAG="$WORK/comment_called"
+LABELS_LOG="$WORK/labels.log"; : > "$LABELS_LOG"
 cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
+case "\$1" in
+  api) printf '%s\n' "\$*" >> "$LABELS_LOG"; exit 0 ;;   # label writes
+esac
 case "\$1 \$2" in
   "pr view")
     cat <<'JSON'
@@ -132,6 +136,9 @@ fi
 grep -q '"event":"pr_conflicted"' "$RD/state.jsonl" || { echo "FAIL no pr_conflicted event"; FAIL=1; }
 grep -q '"event":"pr_conflict_resolution_started"' "$RD/state.jsonl" || { echo "FAIL no pr_conflict_resolution_started event"; FAIL=1; }
 [ -f "$COMMENT_FLAG" ] || { echo "FAIL gh pr comment was not called"; FAIL=1; }
+# Issue #276 symptom D: the conflict handover must be filterable — the same
+# needs-human label the CI-repair path uses (shared _pr_mark_needs_human).
+grep -q 'labels\[\]=needs-human' "$LABELS_LOG" || { echo "FAIL needs-human label not attached on conflict abort"; FAIL=1; }
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "pr-watch-conflict-abort: all passed" || echo "pr-watch-conflict-abort: FAILURES"

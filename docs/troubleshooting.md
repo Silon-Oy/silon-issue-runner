@@ -59,7 +59,7 @@ tarkoittaa ja miten symlink-koetus toimii Windowsissa: [`README.md`](../README.m
 | 3 | Lukkokilpailu hävitty (toinen vahti tai orkestraattori pitää issueta) |
 | 4 | Ei vielä mergettävissä (turvallista yrittää seuraavalla kierroksella) |
 | 5 | Merge epäonnistui |
-| 6 | Konflikti vaatii ihmisen — AI ei ratkaissut tai CI punainen |
+| 6 | Konflikti vaatii ihmisen — AI ei ratkaissut tai CI punainen (`needs-human`-label + kommentti) |
 | 7 | Merge-jälkeinen migraatio epäonnistui |
 | 8 | Punainen CI vaatii ihmisen — AI ei korjannut, CI jäi punaiseksi tai yrityskatto täyttyi (`needs-human`-label + kommentti) |
 

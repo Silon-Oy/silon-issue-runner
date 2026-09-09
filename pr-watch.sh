@@ -60,7 +60,7 @@
 #   4  not mergeable yet (reporting; safe to retry next poll)
 #   5  merge failed
 #   6  conflict needs a human (AI could not resolve / CI red — rebase aborted or
-#      left for inspection, PR commented)
+#      left for inspection, PR commented, needs-human label added)
 #   7  post-merge migration failed
 #   8  red CI needs a human (AI could not repair / CI stayed red / attempt cap
 #      reached — PR commented, needs-human label added)
@@ -125,8 +125,9 @@ machine_env_capture
 # from claude-call.sh, sourced above.
 . "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=lib/labels.sh
-# Label writes go through the REST helpers (no read:project scope needed). The
-# CI-repair human-handover attaches the needs-human label through these.
+# Label writes go through the REST helpers (no read:project scope needed). Every
+# human-handover path — CI repair AND both conflict paths — attaches the
+# needs-human label through these, via the shared _pr_mark_needs_human helper.
 . "$SCRIPT_DIR/lib/labels.sh"
 # shellcheck source=lib/github-app-auth.sh
 # Opt-in GitHub App identity (same env vars as the orchestrator). gha_with_token
@@ -277,13 +278,16 @@ scan_candidates() {
     status=$(run_field "$rid" '.status')
     url=$(run_field "$rid" '.pr_url')
     host=$(run_field "$rid" '.host')
-    # Emit completed runs, PLUS runs left blocked by a CI-repair handover (issue
-    # #45, symptom B): those must return to the scan so a PR whose CI has since
-    # gone green (human fixed the cause in main, rebased, removed needs-human) is
-    # merged instead of stranded forever. The condition is deliberately NARROW —
-    # only the ci_repair_failed* blocked_reason — so every other blocked state
-    # (stalled_in_*, env_bootstrap_failed, pr_conflicted) stays out of the scan
-    # exactly as before; watch_one applies the needs-human hold gate before acting.
+    # Emit completed runs, PLUS runs a handover left for a human to un-stick:
+    #   - blocked / ci_repair_failed*      (issue #45, symptom B)
+    #   - pr_conflicted / ci_red_after_resolution* | rebase_conflict*
+    #                                      (issue #276, symptom B)
+    # Both must return to the scan so a PR whose CI has since gone green (human
+    # fixed the cause in main, rebased, removed needs-human) is merged instead of
+    # stranded forever. Each condition is deliberately NARROW — only the specific
+    # handover reasons — so every other blocked state (stalled_in_*,
+    # env_bootstrap_failed) stays out of the scan exactly as before; watch_one
+    # applies the needs-human hold gate before acting on any re-emitted run.
     case "$status" in
       completed)
         # Cost gate (issue #130): a completed run whose LAST recorded PR
@@ -314,6 +318,16 @@ scan_candidates() {
         reason=$(run_field "$rid" '.blocked_reason')
         case "$reason" in
           ci_repair_failed*) : ;;
+          *) continue ;;
+        esac
+        ;;
+      pr_conflicted)
+        # Symptom B (issue #276): the conflict path finalizes to pr_conflicted
+        # with exactly these two reasons; re-emit them so a since-mergeable PR is
+        # not stranded. Any other reason (there is none today) stays out.
+        reason=$(run_field "$rid" '.blocked_reason')
+        case "$reason" in
+          ci_red_after_resolution*|rebase_conflict*) : ;;
           *) continue ;;
         esac
         ;;
@@ -405,26 +419,29 @@ watch_one() {
     return 4
   fi
 
-  # ----- Issue #45 (symptom B): un-stick a CI-repair handover ------------
-  # A run this watcher previously blocked via _pr_ci_handover_to_human is
-  # re-emitted into the scan (scan_candidates below), so it is no longer lost
-  # forever. The needs-human label is the hold flag: while present, the watcher
-  # stays hands-off — no re-decision, no repeated comment on every poll. Once a
-  # human removes it (as the handover comment instructs), the run is re-armed and
-  # falls through to the normal decision: it merges if CI has since gone green, or
-  # is re-attempted/re-handed-over if still red. This delivers what the comment
-  # promises ("remove needs-human when handled").
+  # ----- Un-stick a handover (issues #45 + #276, symptom B) --------------
+  # A run this watcher previously handed to a human — via the CI-repair path
+  # (_pr_ci_handover_to_human) OR the conflict path (_pr_publish_and_revalidate /
+  # _pr_abort_to_human) — is re-emitted into the scan (scan_candidates above), so
+  # it is no longer lost forever. The needs-human label is the hold flag for
+  # BOTH: while present, the watcher stays hands-off — no re-decision, no repeated
+  # comment on every poll (§5.6, §5.7). Once a human removes it (as the handover
+  # comment instructs), the run is re-armed and falls through to the normal
+  # decision: it merges if CI has since gone green / the branch is mergeable, or
+  # is re-attempted/re-handed-over otherwise. The reason patterns uniquely
+  # identify the handover states (blocked/ci_repair_failed*, pr_conflicted/
+  # ci_red_after_resolution*, pr_conflicted/rebase_conflict*), so gating on the
+  # reason alone is sufficient.
   case "$run_blocked_reason" in
-    ci_repair_failed*)
-      if [ "$run_status" = "blocked" ] && pr_has_label "$pr_json" needs-human; then
-        log "PR #$pr_num held by needs-human (CI-repair handover) — skipping until a human removes the label"
+    ci_repair_failed*|ci_red_after_resolution*|rebase_conflict*)
+      if pr_has_label "$pr_json" needs-human; then
+        log "PR #$pr_num held by needs-human (automation handover) — skipping until a human removes the label"
         [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
           state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=needs_human_held"
         _release
         return 4
       fi
-      [ "$run_status" = "blocked" ] && \
-        log "PR #$pr_num re-armed after CI-repair handover (needs-human removed) — re-examining"
+      log "PR #$pr_num re-armed after handover (needs-human removed) — re-examining"
       ;;
   esac
 
@@ -876,6 +893,27 @@ _conflict_resolution_clean() {
   )
 }
 
+# _pr_mark_needs_human <pr-number> — attach the needs-human label to a PR the
+# watcher is handing to a human. Ensures the label exists, then adds it; both are
+# best-effort (a failed label never changes the outcome). The REST label helpers
+# route to PR_OWNER_REPO when known (issue #33) and fall back to {owner}/{repo}
+# cwd inference when empty, so we keep the REPO_ROOT cwd.
+#
+# Shared by EVERY handover path — CI repair (_pr_ci_handover_to_human) AND both
+# conflict-path handovers (_pr_publish_and_revalidate, _pr_abort_to_human, issue
+# #276 symptom D) — so the hold flag is written ONE way, never copied (CLAUDE.md
+# §7). The label is what makes a handover FILTERABLE (CLAUDE.md §4: "pelkkä
+# kommentti ei riitä: se ei ole suodatettava") and, together with the run's
+# re-emission into scan_candidates, what lets watch_one's hold gate re-arm the
+# run once a human removes it.
+_pr_mark_needs_human() {
+  local pr_num="$1"
+  ( cd "$REPO_ROOT" && labels_ensure "$PR_OWNER_REPO" needs-human B60205 "Vaatii ihmisen — automaatio luovutti" ) \
+    || log "could not ensure needs-human label for PR #$pr_num"
+  ( cd "$REPO_ROOT" && labels_add "$PR_OWNER_REPO" "$pr_num" needs-human ) \
+    || log "could not add needs-human label to PR #$pr_num"
+}
+
 # _pr_publish_and_revalidate <pr-number> <run-id> <run-dir> <worktree> <branch> [base-ref]
 # Force-pushes the rebased branch and revalidates CI. Shared by the clean-rebase
 # and AI-resolved paths so the CI gate is identical on both.
@@ -900,6 +938,9 @@ _pr_publish_and_revalidate() {
     return 0
   fi
   log "CI not green after rebase for PR #$pr_num — stopping (human needed)"
+  # Filterable handover (issue #276, symptom D): the same needs-human label the
+  # CI-repair path uses, so this conflict handover is not a bare comment.
+  _pr_mark_needs_human "$pr_num"
   [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
     state_finalize "$run_dir" "pr_conflicted" "ci_red_after_resolution_pr_$pr_num"
     state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=ci_not_green_after_rebase"
@@ -926,6 +967,9 @@ _pr_abort_to_human() {
   base_sha=$( cd "$worktree" && git rev-parse "$PR_ROUTE_REMOTE/$base_ref" 2>/dev/null || echo "unknown" )
 
   log "AI could not resolve conflict on PR #$pr_num — rebase aborted; asking for human resolution"
+  # Filterable handover (issue #276, symptom D): the same needs-human label the
+  # CI-repair path uses, so this conflict handover is not a bare comment.
+  _pr_mark_needs_human "$pr_num"
   [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
     state_finalize "$run_dir" "pr_conflicted" "rebase_conflict_pr_$pr_num"
     state_event "$run_dir" "pr_conflicted" "pr=$pr_num" "base_sha=$base_sha"
@@ -940,26 +984,33 @@ _pr_abort_to_human() {
     log "failed to post conflict comment on PR #$pr_num"
 }
 
-# pr_wait_ci_green <pr-number> — poll `gh pr checks` until all checks pass,
-# any fails, or we time out. Returns 0 only when all checks pass.
+# pr_wait_ci_green <pr-number> — poll the PR's statusCheckRollup until CI is
+# GREEN or RED, or we time out on PENDING. Returns 0 only when CI is green.
+#
+# Reads the SAME source as pr_decide's merge gate — the gh-pr-view
+# statusCheckRollup via pr_ci_state — so the two can never disagree on what
+# "green" means (CLAUDE.md §7; issue #276, symptom A). The old implementation
+# polled `gh pr checks`, whose "no checks reported" (rc=1) on a repo with no
+# checks configured matched neither the rc==0 pass nor the fail|error grep, so it
+# spun the FULL 40×15s window and then returned 1 — leaving an otherwise
+# mergeable PR stuck. pr_ci_state maps an empty rollup to GREEN, so this now
+# returns 0 IMMEDIATELY for a checkless PR without consuming any timeout budget.
 # Bounded so a stuck/queued pipeline doesn't hang the watcher forever.
 pr_wait_ci_green() {
   local pr_num="$1"
   local max_polls="${PR_WATCH_CI_MAX_POLLS:-40}"   # 40 * 15s = 10 min
   local interval="${PR_WATCH_CI_POLL_SECS:-15}"
-  local i=0 out rc
+  local i=0 json ci
   while [ "$i" -lt "$max_polls" ]; do
-    set +e
-    out=$(gh_route pr checks "$pr_num" 2>/dev/null)
-    rc=$?
-    set -e
-    # gh pr checks: rc 0 = all passed, 8 = some pending, non-zero/other = failure.
-    if [ "$rc" = "0" ]; then
-      return 0
+    if json=$(gh_route pr view "$pr_num" --json statusCheckRollup 2>/dev/null); then
+      ci=$(pr_ci_state "$json")
+      case "$ci" in
+        GREEN) return 0 ;;
+        RED)   return 1 ;;
+      esac
     fi
-    if printf '%s' "$out" | grep -qiE '\bfail|\berror'; then
-      return 1
-    fi
+    # PENDING, or a failed fetch (rate limit / network) — wait and retry. A
+    # failed fetch never counts as green: fail-safe, like the old rc!=0 path.
     i=$((i + 1))
     sleep "$interval"
   done
@@ -1220,13 +1271,7 @@ _pr_collect_ci_log() {
 _pr_ci_handover_to_human() {
   local pr_num="$1" run_dir="$2" worktree="$3" failed="$4" why="$5" kind="${6:-agent_ran}"
 
-  # needs-human label — ensure it exists, then attach. Both are best-effort. The
-  # REST label helpers route to PR_OWNER_REPO when known (issue #33) and fall back
-  # to {owner}/{repo} cwd inference when empty, so we keep the REPO_ROOT cwd.
-  ( cd "$REPO_ROOT" && labels_ensure "$PR_OWNER_REPO" needs-human B60205 "Vaatii ihmisen — automaatio luovutti" ) \
-    || log "could not ensure needs-human label for PR #$pr_num"
-  ( cd "$REPO_ROOT" && labels_add "$PR_OWNER_REPO" "$pr_num" needs-human ) \
-    || log "could not add needs-human label to PR #$pr_num"
+  _pr_mark_needs_human "$pr_num"
 
   [ -n "$run_dir" ] && [ -d "$run_dir" ] && {
     state_finalize "$run_dir" "blocked" "ci_repair_failed_pr_$pr_num"

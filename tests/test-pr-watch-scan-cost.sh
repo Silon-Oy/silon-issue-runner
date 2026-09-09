@@ -120,6 +120,12 @@ RID_LEGACY=$(mk_run 400 400 completed "")
 RID_CIREPAIR=$(mk_run 500 500 blocked "ci_repair_failed_pr_500" SKIP_CLOSED)
 # 600: blocked with some other reason -> still filtered as before (#45-narrow).
 RID_OTHERBLOCK=$(mk_run 600 600 blocked "stalled_in_S8" "")
+# 900/910: pr_conflicted handovers (issue #276, symptom B) -> EMITTED, so a PR
+#          that has since become mergeable is un-stuck instead of stranded.
+RID_CONFLICT_CI=$(mk_run 900 900 pr_conflicted "ci_red_after_resolution_pr_900" "")
+RID_CONFLICT_REBASE=$(mk_run 910 910 pr_conflicted "rebase_conflict_pr_910" "")
+# 920: pr_conflicted with an unrecognised reason -> stays out (narrow, like #45).
+RID_CONFLICT_OTHER=$(mk_run 920 920 pr_conflicted "something_else" "")
 
 OUT=$(scan_candidates)
 echo "--- scan_candidates output ---"; echo "$OUT"
@@ -145,8 +151,15 @@ emitted "$OUT" "$RID_LEGACY"  || fail "legacy run #400 (no decision) was NOT emi
 # Non-ci_repair blocked stays out of scan exactly as before the change.
 emitted "$OUT" "$RID_OTHERBLOCK" && fail "blocked/stalled run #600 was emitted (should stay out)"
 
+# AC: #276 conflict handovers are re-emitted so a since-mergeable PR is un-stuck.
+emitted "$OUT" "$RID_CONFLICT_CI"     || fail "pr_conflicted/ci_red_after_resolution run #900 was NOT emitted (#276 symptom B)"
+emitted "$OUT" "$RID_CONFLICT_REBASE" || fail "pr_conflicted/rebase_conflict run #910 was NOT emitted (#276 symptom B)"
+# Narrow: an unrecognised pr_conflicted reason stays out, mirroring the #45-narrow blocked filter.
+emitted "$OUT" "$RID_CONFLICT_OTHER"  && fail "pr_conflicted/other run #920 was emitted (should stay out — narrow filter)"
+
 # THE cost guard: scan_candidates must make ZERO gh calls. Finality is read from
-# local state only — if this goes non-zero the fix costs what it saves.
+# local state only — if this goes non-zero the fix costs what it saves. Re-armed
+# pr_conflicted runs must NOT reintroduce the O(historical run-dirs) cost (§5.4).
 check "gh calls from scan_candidates" "$(n_gh)" "0"
 
 # ---- Fail-closed: unreadable state.jsonl => emit (decision 5) ---------------

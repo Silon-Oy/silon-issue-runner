@@ -95,13 +95,20 @@ case "\$1" in
   api) exit 0 ;;                       # label writes — not expected here
 esac
 case "\$1 \$2" in
-  "pr view")   cat <<'JSON'
+  "pr view")
+    # Classification asks for many fields (incl. mergeable); pr_wait_ci_green's
+    # revalidation asks ONLY for statusCheckRollup. Serve red to the first, GREEN
+    # to the second — the agent's fix has landed by revalidation time.
+    if printf '%s' "\$*" | grep -q mergeable; then
+      cat <<'JSON'
 $PR_VIEW_RED
 JSON
+    else
+      echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+    fi
     ;;
   "run list")  echo '[{"databaseId":9001,"conclusion":"failure"}]' ;;
   "run view")  echo "e2e failed: expected visible, got hidden" ;;
-  "pr checks") exit 0 ;;               # GREEN after the fix
   "pr merge")  touch "$MERGE_FLAG"; echo "merged (mock)" ;;
   "pr comment") cat > /dev/null ;;
   "issue view") echo '{"state":"CLOSED"}' ;;
@@ -232,13 +239,19 @@ case "\$1" in
   api) printf '%s\n' "\$*" >> "$LABELS_LOG"; exit 0 ;;
 esac
 case "\$1 \$2" in
-  "pr view")   cat <<'JSON'
+  "pr view")
+    # Classification (has mergeable) => red; revalidation (statusCheckRollup only)
+    # => STILL red, so the fix is rejected and the run is handed to a human.
+    if printf '%s' "\$*" | grep -q mergeable; then
+      cat <<'JSON'
 $PR_VIEW_RED
 JSON
+    else
+      echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    fi
     ;;
   "run list")  echo '[{"databaseId":9002,"conclusion":"failure"}]' ;;
   "run view")  echo "e2e still failing" ;;
-  "pr checks") echo "e2e   fail"; exit 1 ;;    # stays RED on revalidation
   "pr comment") cat > /dev/null; touch "$COMMENT_FLAG" ;;
   "pr merge")  touch "$WORK_C/merge_called" ;;
   *) exit 0 ;;
@@ -305,13 +318,21 @@ case "\$1" in
   api) printf '%s\n' "\$*" >> "$LABELS_LOG"; exit 0 ;;
 esac
 case "\$1 \$2" in
-  "pr view")   cat <<'JSON'
+  "pr view")
+    # Classification (has mergeable) => red. The revalidation call (statusCheckRollup
+    # only) must NOT be reached: the agent made no commit, so pr_fix_ci short-circuits
+    # before revalidating. Flag it so we can assert it never happens.
+    if printf '%s' "\$*" | grep -q mergeable; then
+      cat <<'JSON'
 $PR_VIEW_RED
 JSON
+    else
+      touch "$CHECKS_FLAG"
+      echo '{"statusCheckRollup":[]}'
+    fi
     ;;
   "run list")  echo '[{"databaseId":9003,"conclusion":"failure"}]' ;;
   "run view")  echo "e2e failing" ;;
-  "pr checks") touch "$CHECKS_FLAG"; exit 0 ;;   # must NOT be reached
   "pr comment") cat > /dev/null; touch "$COMMENT_FLAG" ;;
   "pr merge")  touch "$WORK_D/merge_called" ;;
   *) exit 0 ;;
