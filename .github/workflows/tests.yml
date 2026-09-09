@@ -3,8 +3,32 @@
 #
 # macOS is where the pollers and the LaunchAgents run. Windows is where the
 # INTERACTIVE path runs — Claude Code driving the package's scripts through Git
-# Bash, with no poller, no launchd and no cockpit (epic #211). Both are gates,
-# so both are here.
+# Bash, with no poller, no launchd and no cockpit (epic #211).
+#
+# WHERE EACH PLATFORM RUNS, AND WHY IT DIFFERS. Actions minutes are billed in
+# this private repository and are free in the public mirror
+# (Silon-Oy/silon-issue-runner) — measured, not assumed: every mirror line item
+# bills gross and discounts the same amount to a zero net, on Linux, Windows and
+# macOS alike. The multipliers make that gap large: macOS costs 10.3x a Linux
+# minute and Windows 1.67x, and in one nine-day stretch this workflow alone
+# spent 1416 billed minutes here — two thirds of the organisation's entire
+# Actions spend, which it then exhausted.
+#
+# So the two platforms are treated by how much a late signal costs:
+#
+#   - macOS stays a PR gate. Its regressions land unattended — the pollers and
+#     LaunchAgents run there, and this repository merges its own PRs without a
+#     human (pr-watch.sh), so nothing else would notice a break before the tool
+#     that produces the fixes is the thing that is broken.
+#   - Windows runs in the public mirror only. The interactive path has a person
+#     present by definition, so a signal that arrives at release time is still
+#     in time; it is also the slow job (median 16 minutes against macOS's 3).
+#
+# The `if:` conditions below are what make one file behave differently in the
+# two repositories — the mirror is a copy of this tree, so a trigger-level split
+# would be copied along with it. THE MIRROR IS NAMED IN THOSE CONDITIONS: if it
+# is ever renamed or replaced, Windows silently stops running everywhere, and
+# the condition is the only place that says so.
 #
 # EVERY JOB IN THIS FILE MUST BE A REAL GATE. The PR watcher (pr-watch.sh) reads
 # the PR's check rollup and never merges on a red or pending rollup: a job-level
@@ -21,6 +45,14 @@ on:
   push:
     branches: [main]
 
+# A PR branch that is pushed again supersedes its own in-flight run; without
+# this both platforms ran to completion on every intermediate commit. Pushes to
+# main are never cancelled — in the mirror that is the release run, and its
+# result is the record that the released tree passed.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -28,6 +60,13 @@ jobs:
   macos:
     name: tests (macos-latest)
     runs-on: macos-latest
+    # The PR gate here; in the mirror it also runs on the release push. What it
+    # does not do is run twice for the same commit in this repository: a merge
+    # to main used to re-run the gate the PR had just passed, which was 32 of
+    # this workflow's 75 runs in the stretch measured above.
+    if: >-
+      github.event_name == 'pull_request'
+      || github.repository == 'Silon-Oy/silon-issue-runner'
     # A wedged test must not hold the rollup for the default six hours.
     timeout-minutes: 30
     steps:
@@ -66,6 +105,11 @@ jobs:
   windows:
     name: tests (windows-latest)
     runs-on: windows-latest
+    # Mirror only — see the header. A skipped job is not a hole in the gate as
+    # far as the watcher is concerned: pr_ci_state (lib/pr-watch-lib.sh) counts
+    # SKIPPED alongside SUCCESS and NEUTRAL, so this reports OK in a PR rollup
+    # here and is a real gate on the released tree in the mirror.
+    if: github.repository == 'Silon-Oy/silon-issue-runner'
     # Git Bash spawns processes far slower than macOS; the suite takes several
     # times its macOS duration here. The cap keeps a wedged run from burning
     # hours, not from finishing.
