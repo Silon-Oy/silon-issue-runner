@@ -47,17 +47,26 @@
 #      may be moot). This precedes FIX_CI so the rebase and CI-repair paths are
 #      mutually exclusive per invocation and never nest: a PR still red after a
 #      rebase is re-derived as CLEAN+red on the next poll and can then FIX_CI.
-#   2. UNSTABLE never enters FIX_CI. mergeStateStatus == UNSTABLE means the
-#      REQUIRED checks are green and GitHub considers the PR mergeable; a red
-#      rollup entry there is a NON-required check. Repairing it would be wrong,
-#      so UNSTABLE keeps its prior behaviour (falls through to the merge switch,
-#      which still needs ci==GREEN to actually MERGE — a non-required red there
-#      yields WAIT_CI exactly as before, never a merge on red).
+#   2. UNSTABLE never enters FIX_CI, AND its non-required rollup does not gate
+#      the merge. mergeStateStatus == UNSTABLE is GitHub's own verdict that the
+#      REQUIRED checks are green and the PR is mergeable; a red/pending rollup
+#      entry there is a NON-required check. Repairing it would be wrong (no
+#      FIX_CI), and blocking the merge on it would be wrong too: in a repo with
+#      NO required checks (branch protection off), ANY red check yields UNSTABLE,
+#      so gating UNSTABLE on ci==GREEN left such a repo un-mergeable forever —
+#      WAIT_CI every tick (issue #276, symptom C; README §7.5 already promises
+#      UNSTABLE "ei estä mergeä"). So UNSTABLE falls through to the merge switch
+#      and MERGEs on mergeable, regardless of the non-required rollup. A red
+#      REQUIRED check yields BLOCKED (not UNSTABLE), which never merges here — so
+#      this never merges on a red required check.
 #
 # INVARIANT (enforced here, asserted by the unit test): the function NEVER
-# returns MERGE unless label AND CI-green AND mergeable are all true together.
-# The FIX_CI path does not weaken this — FIX_CI is a request to repair, not a
-# merge; the merge only happens after a fresh CI-green revalidation.
+# returns MERGE unless label AND mergeable AND the REQUIRED checks are green are
+# all true together. "Required checks green" means ci==GREEN for a normal state,
+# or mergeStateStatus==UNSTABLE (GitHub's verdict that the required checks passed
+# while a non-required check is red/pending). The FIX_CI path does not weaken
+# this — FIX_CI is a request to repair, not a merge; the merge only happens after
+# a fresh CI-green revalidation.
 #
 # Arguments:
 #   $1  the gh-pr-view JSON document (string)
@@ -151,16 +160,21 @@ pr_decide() {
     return 0
   fi
 
-  # PENDING (or a non-required RED under UNSTABLE) => wait; nothing to do yet.
-  if [ "$ci" != "GREEN" ]; then
+  # PENDING => wait; nothing to do yet. UNSTABLE is EXEMPT (issue #276, symptom
+  # C, ordering point 2): its red/pending rollup is non-required by definition,
+  # GitHub already deems the PR mergeable, so it must fall through to the merge
+  # switch instead of waiting on a check that never gates the merge.
+  if [ "$ci" != "GREEN" ] && [ "$merge_state" != "UNSTABLE" ]; then
     echo "WAIT_CI"
     return 0
   fi
 
   case "$merge_state" in
     CLEAN|HAS_HOOKS|UNSTABLE)
-      # UNSTABLE = mergeable but some non-required check failed; CI gate above
-      # already validated required checks, so this is still mergeable.
+      # UNSTABLE = mergeable but some non-required check is red/pending; GitHub's
+      # own verdict is that the REQUIRED checks passed, so it is still mergeable
+      # (the CI gate above is skipped for UNSTABLE precisely so a non-required red
+      # cannot block the merge — issue #276, symptom C).
       if [ "$mergeable" = "MERGEABLE" ]; then
         echo "MERGE"
       else

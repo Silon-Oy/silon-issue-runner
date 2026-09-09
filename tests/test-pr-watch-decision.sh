@@ -3,7 +3,10 @@
 #
 # Pure decision logic, no GitHub access. Feeds mocked `gh pr view` JSON and
 # asserts the decision token. Enforces the core invariant: MERGE is only ever
-# returned when (merge label AND CI green AND mergeable) all hold together.
+# returned when (merge label AND mergeable AND required-checks-green) all hold
+# together — where "required-checks-green" is ci==GREEN, or mergeStateStatus
+# UNSTABLE (GitHub's verdict that the required checks passed while a non-required
+# check is red/pending — issue #276, symptom C).
 #
 # Run: bash tests/test-pr-watch-decision.sh   (exit 0 = all pass)
 
@@ -90,11 +93,18 @@ assert "red+blocked+repairOFF=WAIT"   WAIT_CI  "$(mk OPEN MERGEABLE BLOCKED $L F
 assert "red+clean+repairOFF=WAIT"     WAIT_CI  "$(mk OPEN MERGEABLE CLEAN   $L FAILURE)"  0 "$L" 0
 assert "pending+repairON=WAIT_CI"     WAIT_CI  "$PENDING"                                 0 "$L" 1
 
-# Edge: UNSTABLE means required checks are green; a non-required red must NOT be
-# repaired and must NOT block the merge. So repair ON + UNSTABLE + red does not
-# yield FIX_CI — it stays WAIT_CI (prior behaviour), never MERGE-on-red.
-assert "unstable+red+repairON=WAIT"   WAIT_CI  "$(mk OPEN MERGEABLE UNSTABLE $L FAILURE)" 0 "$L" 1
+# Edge (issue #276, symptom C): UNSTABLE means GitHub deems the REQUIRED checks
+# green and the PR mergeable; a non-required red must NOT be repaired (no FIX_CI)
+# and must NOT block the merge. In a repo with NO required checks (branch
+# protection off) EVERY red check yields UNSTABLE, so gating it on ci==GREEN left
+# such a repo un-mergeable forever. So UNSTABLE + red + MERGEABLE + label => MERGE
+# regardless of the CI-repair toggle — never FIX_CI, never WAIT_CI, and never a
+# merge on a red REQUIRED check (that is BLOCKED, tested above).
+assert "unstable+red+repairON=MERGE"  MERGE    "$(mk OPEN MERGEABLE UNSTABLE $L FAILURE)" 0 "$L" 1
+assert "unstable+red+repairOFF=MERGE" MERGE    "$(mk OPEN MERGEABLE UNSTABLE $L FAILURE)" 0 "$L" 0
 assert "unstable+green=MERGE"         MERGE    "$(mk OPEN MERGEABLE UNSTABLE $L SUCCESS)" 0 "$L" 1
+# UNSTABLE but NOT mergeable (e.g. GitHub still computing) must not merge.
+assert "unstable+red+notmergeable=WAIT" WAIT_CI "$(mk OPEN CONFLICTING UNSTABLE $L FAILURE)" 0 "$L" 1
 
 # Edge: a PR that is both DIRTY and red rebases FIRST — REBASE (res ON) takes
 # precedence over FIX_CI, so the two paths never nest in one invocation.
