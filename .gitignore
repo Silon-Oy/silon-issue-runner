@@ -7,3 +7,6 @@
 .claude/run-issues-archive/
 .claude/worktrees/
 # <<< /run-issues orchestrator runtime state <<<
+
+# Local scratch: a Codex-flavoured derivative of CLAUDE.md, not part of the package.
+AGENTS.md
