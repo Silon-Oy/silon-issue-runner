@@ -222,14 +222,14 @@ _labels_query_csv() {
 # because the alternative reading ("an empty allow-list allows no one") would
 # make a repo stop picking up silently and forever.
 #
-# A list entry is either a login (`maintainer`) or a negation (`not:maintainer`,
+# A list entry is either a login (`octocat`) or a negation (`not:octocat`,
 # issue #246). The list is split HERE, not in the resolver, so the resolver
 # stays the one place that never has to know the syntax:
 #
 #   ALLOW = entries with no prefix. An empty ALLOW means "any login qualifies",
 #           NOT "no match" — same fail-safe reading as an empty list.
 #   DENY  = `not:`-prefixed entries, read without the prefix. `not:` needs the
-#           colon: `notollisaari` is an ordinary login in ALLOW.
+#           colon: `notoctocat` is an ordinary login in ALLOW.
 #
 # An issue qualifies when BOTH hold against its TARGET logins:
 #   1. ALLOW is empty OR the target matches some ALLOW login, and

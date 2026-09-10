@@ -63,13 +63,13 @@ resolvoijalla, joten ne eivät voi olla eri mieltä siitä, mitä tämä kone po
 API-kutsuja ei synny: assignee- ja avaajatieto on jo poiminnan REST-vastauksessa.
 
 **Käänteinen määritys `not:<tunnus>` (issue #246).** Listan alkio on joko tunnus
-(`"maintainer"`, **ALLOW**) tai kielto (`"not:maintainer"`, **DENY**). Issue kelpaa, kun molemmat
+(`"octocat"`, **ALLOW**) tai kielto (`"not:octocat"`, **DENY**). Issue kelpaa, kun molemmat
 pätevät: (1) ALLOW on tyhjä **tai** kohde osuu johonkin ALLOW-tunnukseen, ja (2) kohde ei osu
 yhteenkään DENY-tunnukseen. **DENY voittaa ALLOW:n**, jos sama tunnus on molemmissa (fail-closed),
 ja useasta assigneesta riittää yksi DENY-osuma. Kohde on tässäkin assignee-joukko tai, sen
-puuttuessa, avaaja. `not:` vaatii kaksoispisteen — `notollisaari` on tavallinen ALLOW-tunnus.
+puuttuessa, avaaja. `not:` vaatii kaksoispisteen — `notoctocat` on tavallinen ALLOW-tunnus.
 Muoto ratkaisee kahden koneen jaon ilman toista repo-oikeuksin varustettua tunnusta:
-`["maintainer"]` ja `["not:maintainer"]` osuu jokaiseen issueen täsmälleen kerran, **eikä
+`["octocat"]` ja `["not:octocat"]` osuu jokaiseen issueen täsmälleen kerran, **eikä
 DENY-tunnukselta vaadita repo-oikeutta**. **Varoitus:** liian laaja DENY tuottaa **nolla osumaa
 yhtä hiljaa kuin väärä poimintalabel** (README §6.2) — repo lakkaa poimimasta ilman virhettä ja lokia.
 
