@@ -57,6 +57,14 @@
 #   (o) run-dir not writable -> the CONTRACT alone (never nothing), plus a
 #       warning. The non-overridable half is the one worth saving.
 #   (p) structural: the contract text lives in exactly one file in the package.
+#   (q) the DEFAULT driver additionally declares the plugin/extension context
+#       (issue #282): --strict-mcp-config --setting-sources project,local, so a
+#       run never inherits the machine's ~/.claude/settings.json enabledPlugins /
+#       extraKnownMarketplaces, plus a log line making the choice readable from
+#       the run trace.
+#   (r) an OVERRIDDEN driver gets NONE of those flags — same default-driver seam
+#       as the S0 preflight probe, because an operator's own driver's flag
+#       vocabulary must not be assumed.
 #
 # (l) AND (m) ARE ONE INVARIANT, and it is the subtlest thing here. The obvious
 # `RUN_ISSUES_PRINCIPLES_FILE="${RUN_ISSUES_PRINCIPLES_FILE:-$DEFAULT}"` line at
@@ -132,6 +140,13 @@ flag_value() {
   awk '$0 == "--append-system-prompt-file" { getline; print; exit }' "$ARGV"
 }
 has_flag() { grep -qxF -- '--append-system-prompt-file' "$ARGV"; }
+
+# setting_sources_value — the argument following --setting-sources in the
+# recorded argv, or empty when the flag is absent (issue #282).
+setting_sources_value() {
+  awk '$0 == "--setting-sources" { getline; print; exit }' "$ARGV"
+}
+has_strict_mcp() { grep -qxF -- '--strict-mcp-config' "$ARGV"; }
 
 # COMBINED — where call_claude writes the concatenation for the fixed run-dir /
 # step-id these cases use. Asserting the exact path (not just the content) is
@@ -484,6 +499,56 @@ if [ -n "$dupes" ]; then
 else
   ok p "the contract wording lives in exactly one file"
 fi
+
+# ===========================================================================
+# (q) DEFAULT driver declares the plugin/extension context (issue #282)
+# ===========================================================================
+# The stub necessarily overrides RUN_ISSUES_CLAUDE_CMD (a real `claude` would
+# launch a billable agent — CLAUDE.md §5.5), so to exercise the *default-driver*
+# branch we pin the default constant to the stub after sourcing. That faithfully
+# reproduces production, where CMD and DEFAULT are both the bare `claude`.
+default_driver_invoke() {  # [<shell prelude>]
+  local rc=0
+  (
+    set -euo pipefail
+    export RUN_ISSUES_CLAUDE_CMD="$BIN/claude-stub"
+    # shellcheck disable=SC2294
+    [ "$#" -gt 0 ] && eval "$*"
+    # shellcheck disable=SC1090
+    . "$LIB"
+    RUN_ISSUES_CLAUDE_CMD_DEFAULT="$BIN/claude-stub"   # CMD == DEFAULT: our default was accepted
+    call_claude "$RUNDIR" "step" "$PROMPT"
+  ) 2> "$WORK/stderr.txt" || rc=$?
+  printf '%s' "$rc"
+}
+
+RC=$(default_driver_invoke)
+Q_OK=1
+[ "$RC" = "0" ] || { bad q "call_claude returned $RC (want 0)"; Q_OK=0; }
+has_strict_mcp || { bad q "no --strict-mcp-config in argv"; Q_OK=0; }
+[ "$(setting_sources_value)" = "project,local" ] \
+  || { bad q "setting-sources='$(setting_sources_value)' (want project,local)"; Q_OK=0; }
+# Must not have displaced the existing invocation shape.
+grep -qxF -- '--dangerously-skip-permissions' "$ARGV" || { bad q "--dangerously-skip-permissions gone"; Q_OK=0; }
+grep -qxF -- '-p' "$ARGV" || { bad q "-p gone"; Q_OK=0; }
+# Readable from the run trace, not just the source (the whole point of #282).
+grep -q 'plugin context declared' "$WORK/stderr.txt" \
+  || { bad q "the chosen context is not logged — not readable from the run trace"; Q_OK=0; }
+[ "$Q_OK" = "1" ] && ok q "default driver -> --strict-mcp-config --setting-sources project,local + log line"
+
+# ===========================================================================
+# (r) an OVERRIDDEN driver gets NONE of those flags
+# ===========================================================================
+# The plain invoke() leaves RUN_ISSUES_CLAUDE_CMD_DEFAULT as the packaged
+# 'claude', so the stub IS an override — the production condition for a custom
+# driver (docs/local-llm-runner.md), whose flag vocabulary must not be assumed.
+RC=$(invoke)
+R_OK=1
+[ "$RC" = "0" ] || { bad r "call_claude returned $RC (want 0)"; R_OK=0; }
+if has_strict_mcp; then bad r "--strict-mcp-config reached an overridden driver"; R_OK=0; fi
+if [ -n "$(setting_sources_value)" ]; then bad r "--setting-sources reached an overridden driver"; R_OK=0; fi
+grep -q 'left to the overridden driver' "$WORK/stderr.txt" || { bad r "the override case is not logged"; R_OK=0; }
+[ "$R_OK" = "1" ] && ok r "overridden driver -> no plugin-context flags (default-driver seam holds)"
 
 [ "$FAIL" -eq 0 ] && echo "principles-delivery: all passed" || echo "principles-delivery: FAILURES"
 exit "$FAIL"

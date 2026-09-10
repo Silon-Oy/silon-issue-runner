@@ -312,15 +312,57 @@ call_claude() {
   local -a principles_args=()
   [ -n "$principles_file" ] && principles_args=(--append-system-prompt-file "$principles_file")
 
+  # ---------- declared plugin/extension context (issue #282) ----------
+  # An orchestrated run is meant to be reproducible, so it DECLARES its plugin
+  # and MCP context instead of inheriting whatever the machine's
+  # ~/.claude/settings.json happens to enable. Without these flags the native
+  # `claude` command syncs that file's `enabledPlugins` / `extraKnownMarketplaces`
+  # into every unattended 3600 s call: undeclared machine state whose token cost
+  # and behaviour vary per machine and never show up in the run's own bookkeeping
+  # — the same failure shape as the machine env file overwriting a caller's
+  # explicit choice (CLAUDE.md §5.5).
+  #
+  #   --setting-sources project,local  loads only the target repo's own settings
+  #       (project = its checked-in, reproducible .claude/settings.json; local =
+  #       .claude/settings.local.json), never the machine's USER-level profile,
+  #       which is exactly where the measured plugin list and marketplaces live.
+  #   --strict-mcp-config              uses only MCP servers from --mcp-config
+  #       (we pass none), so no ambient MCP server the machine happens to have
+  #       configured leaks into the run either.
+  #
+  # NOT --bare, though it is the one flag that skips plugin sync outright: it would
+  # ALSO skip CLAUDE.md auto-discovery (the cycle-review and implementer steps rely
+  # on the target repo's CLAUDE.md reaching the agent) and, decisively, force
+  # ANTHROPIC_API_KEY auth — "OAuth and keychain are never read" — which breaks the
+  # whole reason this module defaults to the native `claude` command: routing usage
+  # through the Claude plan instead of API billing (see RUN_ISSUES_CLAUDE_CMD_DEFAULT).
+  #
+  # Gated on the SAME default-driver seam as the S0 preflight probe (orchestrate.sh)
+  # and the CI-repair preflight (pr-watch.sh): an overridden RUN_ISSUES_CLAUDE_CMD
+  # is the operator's own driver (e.g. a local-LLM wrapper, docs/local-llm-runner.md)
+  # whose flag vocabulary we must not assume — the same rule that keeps --version off
+  # an override. Logged (not just applied) so the chosen context is readable from the
+  # run trace, not only from this source: undeclaredness is the whole point of #282.
+  local -a plugin_context_args=()
+  if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
+    # `project,local` is a SINGLE element: --setting-sources takes one
+    # comma-separated value, so the comma is deliberate, not an array separator.
+    # shellcheck disable=SC2054
+    plugin_context_args=(--strict-mcp-config --setting-sources project,local)
+    _claude_call_log "plugin context declared: --strict-mcp-config --setting-sources project,local (not inheriting the machine's ~/.claude/settings.json plugins/marketplaces)"
+  else
+    _claude_call_log "plugin context left to the overridden driver: RUN_ISSUES_CLAUDE_CMD=$RUN_ISSUES_CLAUDE_CMD"
+  fi
+
   local rc=0
   if [ -n "$timeout_prefix" ]; then
     # shellcheck disable=SC2086
-    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   else
     printf '[claude-call %s] WARNING: no timeout binary available (timeout/gtimeout), claude calls may hang indefinitely — install coreutils (brew install coreutils)\n' \
       "$(date -u +%FT%TZ)" >&2
     # shellcheck disable=SC2086
-    $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
+    $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   fi
 
   printf '%s\n' "$rc" > "$exit_file"
