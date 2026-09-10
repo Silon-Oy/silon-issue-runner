@@ -100,7 +100,8 @@ echo "--- lockfiles"; ls -1 pnpm-lock.yaml yarn.lock package-lock.json bun.lock 
 echo "--- workspaces"; ls -1 pnpm-workspace.yaml 2>/dev/null; ls -1d apps/*/package.json packages/*/package.json 2>/dev/null
 echo "--- dev-server config"; ls -1 vite.config.* next.config.* svelte.config.* astro.config.* nuxt.config.* webpack.config.* 2>/dev/null
 echo "--- compose"; ls -1 docker-compose*.yml compose*.yml 2>/dev/null
-echo "--- prisma"; ls -1 prisma/schema.prisma 2>/dev/null
+echo "--- prisma"; ls -1 prisma/schema.prisma 2>/dev/null; ls -1d prisma/migrations 2>/dev/null
+echo "--- muut migraatiohakemistot"; ls -1d db/migrations migrations sql/migrations 2>/dev/null; ls -1 db/migrate.sh 2>/dev/null
 echo "--- env-esimerkki"; ls -1 .env.example .env.sample 2>/dev/null
 ```
 
@@ -110,7 +111,7 @@ echo "--- env-esimerkki"; ls -1 .env.example .env.sample 2>/dev/null
 | Lockfile | Package manager: `pnpm-lock.yaml` → `pnpm`, `yarn.lock` → `yarn`, `package-lock.json` → `npm`, `bun.lock`/`bun.lockb` → `bun`. Yhdistettynä: esim. `pnpm dev` |
 | Dev-serverin konfigi (`vite.config.*`, `next.config.*`, vastaava) | **Portti** `server.port` / `--port`-lipusta. Jos porttia ei ole asetettu, käytä frameworkin dokumentoitua oletusta (Vite 5173, Next/Nuxt 3000, Astro 4321) — tämä on frameworkin oletus, ei arvaus |
 | `docker-compose*.yml` | Julkaistut portit (`ports: - "3001:3001"`) → omat palvelunsa, jos ne ovat *tämän* repon dev-palveluita |
-| `prisma/schema.prisma` + `package.json`:n migraatioskriptit | **Vain havainto raportille.** Ks. kohta 3 — luonti ei kirjoita `migrations`-kenttää |
+| `prisma/schema.prisma`, `prisma/migrations/`, `*.sql`-migraatiohakemisto + `package.json`:n migraatioskriptit | **Vain havainto raportille.** Ks. kohta 3 — luonti ei kirjoita `migrations`-kenttää, mutta *ehdottaa* sitä, jos autodetektio ei kata mekanismia |
 | Workspace-rakenne (`pnpm-workspace.yaml`, `workspaces`, `apps/*`, `packages/*`) | Monorepo ⇒ **useampi `services`-rivi**: jokainen erikseen käynnistyvä dev-palvelu omana palvelunaan |
 
 Lue portti lähteestä, älä muistista:
@@ -143,9 +144,22 @@ FALLBACK-tila arvasi. Muut kentät **vain jos repo tarjoaa niille katteen**:
 - **`migrations`** — **älä kirjoita luontivaiheessa.** Kentän *olemassaolo* siirtää
   migraatioiden omistajuuden PHASE 3a:lta PHASE 3c:lle. Arvattu `apply`-komento kytkisi
   siis hiljaa pois toimivan Prisma-autodetektion ja korvaisi sen arvauksella — juuri se
-  vika, jota tämä muutos muuten korjaa. Jos repossa on `prisma/schema.prisma`, PHASE 3a
-  hoitaa migraatiot ilman kenttää. Jos repolla on **muu** migraatiomekanismi (Drizzle,
-  Knex, Rails tms.), **mainitse se PHASE 6:n raportissa** käsin lisättäväksi — älä lisää itse.
+  vika, jota tämä muutos muuten korjaa. **Jos repossa on `prisma/schema.prisma` *ja*
+  `prisma/migrations/`-kansio**, PHASE 3a:n autodetektio hoitaa migraatiot ilman kenttää.
+
+  **Ehdota kenttää** — älä kirjoita — jos tutkinta paljasti migraatiomekanismin, jota
+  PHASE 3a:n autodetektio **ei** kata:
+  - `prisma/schema.prisma` **ilman** `prisma/migrations/`-kansiota (skeema tyyppien
+    generointiin, migraatiot muualla — PHASE 3a ohittaa tämän hiljaa);
+  - `*.sql`-migraatiohakemisto (`db/migrations/`, `migrations/`, `sql/migrations/` numeroituine
+    `.sql`-tiedostoineen) tai oma migraatioskripti (`db/migrate.sh`);
+  - muu migraatiotyökalu (Drizzle, Knex, Rails, Atlas, Flyway tms.).
+
+  Ehdotus esitetään PHASE 6:n raportissa ihmiselle **käsin lisättäväksi**: konkreettinen
+  `migrations`-katkelma, jos `apply`-komennon voi lukea `package.json`:n skripteistä (esim.
+  `db:migrate`), muuten maininta että kenttä tarvitaan ja mistä `apply` löytyy. Kenttää **ei
+  kirjoiteta arvaamalla** — väärä `apply` on vaarallisempi kuin puuttuva, ja se kytkisi pois
+  autodetektion niiltä repoilta, joilla se toimii (`refresh.md`:n muuttumaton perustelu).
 
 `portFallbackRange`: `10` palvelulle, joka auto-inkrementoi vapaaseen porttiin (Vite, Next);
 `0` palvelulle, jonka portti on kiinteä (proxyyn kovakoodattu API). `healthPath`: `"/"`
@@ -318,8 +332,19 @@ sovelleta kahdesti.
 > Vaiheet ovat toisensa poissulkevat, joten migraatioita ei yritetä soveltaa kahdesti.
 
 **Autodetektio (ei konfigimuutosta olemassa oleviin `refresh.json`-tiedostoihin):** aja
-vaihe vain jos `CONFIG.migrations` **puuttuu** ja repo-juuressa on Prisma-skeema. Muuten
-**ohita hiljaa** — ei virhettä, ei mainintaa raportissa.
+vaihe vain jos `CONFIG.migrations` **puuttuu** ja repo-juuressa on **sekä**
+`prisma/schema.prisma` **että** `prisma/migrations/`-kansio. Muuten **ohita hiljaa** — ei
+virhettä, ei mainintaa raportissa.
+
+**Miksi molemmat, ei pelkkä skeema:** `prisma/schema.prisma` tarkoittaa Prismaa, mutta ei
+välttämättä Prisman *migraatioita* — repo voi käyttää skeemaa vain tyyppien ja clientin
+generointiin (PHASE 3d) ja migratoida jollain muulla mekanismilla (raaka SQL, `db/migrate.sh`,
+Atlas, Flyway). Tällaisessa repossa `prisma/migrations/`-kansiota **ei ole**, `prisma migrate
+status` epäonnistuu, ja alla oleva päätöspuu luokittelisi virheen `P1001`-yhteysvirheeksi →
+STOP ja neuvo ajaa olematon `db:up`. Kansion vaatiminen sitoo autodetektion täsmälleen siihen
+tapaukseen, jota `prisma migrate deploy` oikeasti omistaa. Muut mekanismit kulkevat
+`CONFIG.migrations`-kentän kautta (PHASE 3c), ja PHASE 0b **ehdottaa** sitä (ks. PHASE 0b
+kohta 3).
 
 ```bash
 # MIGRATIONS_CONFIGURED=1 jos CONFIG.migrations on määritelty (→ PHASE 3c omistaa).
@@ -327,8 +352,10 @@ if [ "$MIGRATIONS_CONFIGURED" = 1 ]; then
   echo "PHASE-3a: CONFIG.migrations määritelty — PHASE 3c omistaa migraatiot, ohitetaan"
 elif [ ! -f "$REPO_ROOT/prisma/schema.prisma" ]; then
   echo "PHASE-3a: ei prisma/schema.prisma — ohitetaan hiljaa"
+elif [ ! -d "$REPO_ROOT/prisma/migrations" ]; then
+  echo "PHASE-3a: prisma/schema.prisma löytyi mutta ei prisma/migrations/ -kansiota — migraatiot muulla mekanismilla, ohitetaan hiljaa"
 else
-  echo "PHASE-3a: prisma/schema.prisma löytyi — tarkistetaan migraatiotila"
+  echo "PHASE-3a: prisma/schema.prisma + prisma/migrations/ löytyi — tarkistetaan migraatiotila"
 fi
 ```
 
@@ -649,7 +676,7 @@ Laukaisevat signaalit — käy nämä läpi muuttuneesta tiedostolistasta:
 | Lockfile vaihtui (`pnpm-lock.yaml` ↔ `package-lock.json` ↔ `yarn.lock` ↔ `bun.lock*`; lisäys tai poisto) | `start`-kentän pakettimanageri ei enää vastaa repoa |
 | `package.json`:n `scripts.dev` muuttui eikä vastaa enää `CONFIG.start`ia | `start` osoittaa vanhaan skriptiin |
 | Uusi palvelu tai portti: `docker-compose*.yml`, dev-serverin konfigi (`vite.config.*`, `next.config.*`, …), `.env.example`:n PORT-muuttuja | uusi `services`-rivi tai muuttunut `port` |
-| `prisma/schema.prisma` ilmestyi **eikä** `CONFIG.migrations`-kenttää ole | migraatiotarve syntyi — PHASE 3a hoitaa Prisman, mutta muu ORM vaatii `migrations`-kentän |
+| `prisma/schema.prisma` ilmestyi **eikä** `CONFIG.migrations`-kenttää ole | migraatiotarve syntyi — PHASE 3a hoitaa Prisman **vain jos** `prisma/migrations/`-kansio on mukana; skeema ilman kansiota tai muu ORM vaatii `migrations`-kentän |
 | Uusi workspace (`pnpm-workspace.yaml`, `workspaces`-lohko, uusi `apps/*/package.json` tai `packages/*/package.json`) | uusi erikseen käynnistyvä palvelu `services`-taulukkoon |
 
 Kun signaali osuu, **lue muuttunut tiedosto ja vertaa sitä konfigin nykyiseen arvoon** —
@@ -963,8 +990,10 @@ Kun dev on terve (tai ohitettiin koska jo käynnissä), raportoi tiivisti:
 4b. **Konfigi**:
    - **Luotiin (PHASE 0b)**: jos `CONFIG_CREATED=1`, kerro että `.claude/refresh.json`
      luotiin, mistä lähteistä `start` ja `services` johdettiin, ja mitkä kentät jäivät
-     käsin asetettaviksi (erityisesti `migrations`, jos repolla on muu kuin Prisma-pohjainen
-     migraatiomekanismi).
+     käsin asetettaviksi. **Erityisesti `migrations`:** jos PHASE 0b havaitsi
+     migraatiomekanismin jota PHASE 3a:n autodetektio ei kata — muu ORM, `*.sql`-hakemisto,
+     tai `prisma/schema.prisma` ilman `prisma/migrations/`-kansiota — esitä tässä
+     konkreettinen `migrations`-katkelma tai kerro mistä `apply` löytyy. Ehdotus, ei kirjoitus.
    - **Ehdotukset (PHASE 3e)**: jos pull-diffistä löytyi konfigia koskettavia muutoksia,
      listaa kukin ehdotus omana kohtanaan: laukaissut commit, mikä muuttui, ja konkreettinen
      JSON-katkelma tai diff. Sano eksplisiittisesti, että **mitään ei kirjoitettu** — ehdotus
@@ -1005,7 +1034,7 @@ sisältää tietoa, jota repo ei kerro:
 | `buildHints` | Vain löydetylle lockfilelle; muuten tyhjä ja käsin täydennettävä |
 | `processMatch` | Ei — jätetään pois, oletus (repo-juuri) riittää |
 | `prismaGenerate` | Ei — PHASE 3d päättelee komennon; aseta vain jos päättely osuu väärin |
-| `migrations` | **Ei koskaan** — kentän olemassaolo siirtäisi omistajuuden PHASE 3a:lta 3c:lle, ja arvattu `apply` kytkisi hiljaa pois toimivan autodetektion. Muun kuin Prisman käyttäjä lisää tämän käsin |
+| `migrations` | **Ei kirjoita, mutta voi ehdottaa** — kentän olemassaolo siirtäisi omistajuuden PHASE 3a:lta 3c:lle, ja arvattu `apply` kytkisi hiljaa pois toimivan autodetektion. Lisää käsin, jos repo migratoi muulla kuin Prisman `migrate`-komennolla (ks. kentän kuvaus). PHASE 0b ehdottaa katkelman, jos se havaitsee kattamattoman mekanismin |
 
 Kentät:
 
@@ -1036,9 +1065,18 @@ Kentät:
   `package.json`:n `prisma:generate`- tai `db:generate`-skriptistä, ja viimeisenä
   fallbackina `npx prisma generate`. Aseta tämä vain jos automaattinen päättely osuu väärin
   (esim. monorepo, jossa generate ajetaan workspace-lipulla).
-- **`migrations`** *(object, valinnainen)* — pending-migraatioiden sovellus, jonka PHASE 3c
-  ajaa **aina** (myös kun `BEHIND == 0`), riippumatta siitä pullasiko komento. Repo-agnostinen:
-  komennot annetaan tässä, ei kovakoodattuna ORM:ään. Kentät:
+- **`migrations`** *(object, valinnainen — mutta **pakollinen**, jos repo migratoi muulla
+  kuin Prisman `migrate`-komennolla)* — pending-migraatioiden sovellus, jonka PHASE 3c ajaa
+  **aina** (myös kun `BEHIND == 0`), riippumatta siitä pullasiko komento. Repo-agnostinen:
+  komennot annetaan tässä, ei kovakoodattuna ORM:ään.
+
+  **Milloin pakollinen:** PHASE 3a:n Prisma-autodetektio kattaa **vain** repot, joissa on
+  sekä `prisma/schema.prisma` että `prisma/migrations/`-kansio. Repo, joka migratoi jollain
+  muulla mekanismilla — raaka SQL, Drizzle, Knex, Rails, Atlas, Flyway, oma `db/migrate.sh`,
+  tai `prisma/schema.prisma` **ilman** `prisma/migrations/`-kansiota (skeema vain tyyppien ja
+  clientin generointiin) — **tarvitsee tämän kentän**, muuten pending-migraatioita ei
+  sovelleta lainkaan ja skeemariippuvaiset endpointit kaatuvat ajossa. PHASE 0b ehdottaa
+  kenttää, jos se havaitsee tällaisen mekanismin, mutta ei kirjoita sitä arvaamalla. Kentät:
   - `apply` *(string, pakollinen)* — komento joka soveltaa pending-migraatiot. **Oltava
     idempotentti** (soveltaa vain pendingit, turvallinen re-run). Ajetaan repo-juuressa
     login-shellissä, joten se voi hoitaa `nvm use`:n oikean Node-ABI:n varmistamiseksi. Esim.
@@ -1098,9 +1136,10 @@ varmista että kukin pätee yhä:
    (PHASE 4b), jottei jää vanhentuneen Prisma Clientin varaan. Migraatio sovelletaan
    **kerran** (PHASE 3 ei enää aja `migrate deploy`ta). Jos dev-kanta on alhaalla, komento
    pysähtyy ja neuvoo käynnistämään kannan projektin omalla skriptillä (esim. `$PM run db:up`,
-   jos repo tarjoaa sen). Repo ilman `prisma/schema.prisma` — tai repo jolla on
-   `CONFIG.migrations` (silloin PHASE 3c omistaa migraatiot, ks. skenaario 10) — ohittaa
-   PHASE 3a:n hiljaa: ei virhettä eikä mainintaa raportissa.
+   jos repo tarjoaa sen). PHASE 3a ohitetaan hiljaa (ei virhettä eikä mainintaa raportissa),
+   jos repossa **ei** ole `prisma/schema.prisma`, jos skeema on olemassa mutta
+   `prisma/migrations/`-kansio puuttuu (migraatiot muulla mekanismilla, ks. skenaario 15),
+   tai jos repolla on `CONFIG.migrations` (silloin PHASE 3c omistaa migraatiot, ks. skenaario 10).
 8. **gitignore-huolto on idempotentti.** PHASE 3b varmistaa että `.claude/refresh-dev.log`
    (aina) ja `.claude/refresh.json` (jos olemassa eikä trackattu) ovat ignorattuja. Kun
    rivit ovat jo olemassa → ei muutosta eikä likaista työpuuta. Trackattua `refresh.json`:ia
@@ -1164,3 +1203,14 @@ varmista että kukin pätee yhä:
    itsestään** — seuraavalla ajolla diff on eri eikä sama rivi toistu, joten mekanismi ei
    tarvitse tilatiedostoa, muistia eikä vaimennuslaskuria. Kun `BEHIND == 0` tai konfig
    luotiin tässä ajossa, vaihe ohitetaan kokonaan.
+
+15. **Skeema ilman `prisma/migrations/` → PHASE 3a ohittaa, PHASE 0b ehdottaa kenttää.**
+   Repo, jossa on `prisma/schema.prisma` (tyyppien ja clientin generointiin) mutta **ei**
+   `prisma/migrations/`-kansiota — migraatiot raa'alla SQL:llä, omalla `db/migrate.sh`:llä,
+   Atlaksella tms. — ohittaa PHASE 3a:n autodetektion **hiljaa** aivan kuten repo ilman
+   skeemaa: ei `prisma migrate status`ia, ei `P1001`-luokitusta olemattomaan `db:up`-neuvoon.
+   PHASE 3d:n client-generointi ajetaan silti (repo *haluaa* clientin, ja se pysyy skeeman
+   olemassaoloon sidottuna). Jos konfigia luodaan (PHASE 0b), se **ehdottaa** `migrations`-
+   kenttää tälle mekanismille käsin lisättäväksi muttei kirjoita sitä. Repo, jossa on **sekä**
+   skeema **että** `prisma/migrations/`-kansio, käyttäytyy täsmälleen kuten ennen (skenaario 7:
+   `migrate status`, päätöspuu, `migrate deploy`, `SCHEMA_CHANGED=1`).
