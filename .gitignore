@@ -1,5 +1,8 @@
 .DS_Store
 
+# Local scratch: a Codex-flavoured derivative of CLAUDE.md, not part of the package.
+AGENTS.md
+
 # >>> /run-issues orchestrator runtime state (managed — do not edit) >>>
 # Per-run artefacts (logs, prompts, JSON state) and git worktrees created
 # by the /run-issues orchestrator. Auto-maintained — never version-controlled.
@@ -7,6 +10,3 @@
 .claude/run-issues-archive/
 .claude/worktrees/
 # <<< /run-issues orchestrator runtime state <<<
-
-# Local scratch: a Codex-flavoured derivative of CLAUDE.md, not part of the package.
-AGENTS.md
