@@ -348,6 +348,16 @@ Propagointi **on idempotentti** ja se on kriittinen ominaisuus (poller toistaa s
    kanssa toistuvasti — **paitsi** jos poller propagoi joka tikki. Ks. avoin päätös D.
 4. **`epic`-labelia ei propagoida.** Vain `auto-run` (ja watchlistin muut ajolabelit tarpeen
    mukaan, ks. avoin päätös E) siirtyy; `epic` jää epicille.
+5. **`auto-merge` (`PR_WATCH_MERGE_LABEL`) propagoituu oletuksena (#284).** `auto-run` epicillä
+   tarkoittaa "aja ketju kerralla läpi ilman ihmisen mergejä", joten merge-label kulkee
+   poimintalabelien mukana lapselle, ja `orchestrate.sh:propagate_pr_labels` siirtää sen PR:lle
+   avaushetkellä. Opt-out on `manual-merge`: epicillä se estää propagoinnin koko ketjulle,
+   lapsella vain siltä lapselta (lapsi ajetaan silti — vain automerge jää pois). Opt-out on
+   **label eikä labelin poisto**, samasta syystä kuin `wip` (päätös D): propagointi on
+   monotoninen ja idempotentti joka tikki, joten poistettu `auto-merge` palaisi seuraavalla
+   tikillä. Nimi resolvoidaan yhdestä jaetusta paikasta (`lib/poller-config.sh:poller_merge_label`),
+   ei toisteta kovakoodattuna. Jo `auto-claimed`-lapsi ei muutu takautuvasti: `propagate_pr_labels`
+   lukee ajon alussa otetun `issue.json`:n.
 
 > **Päätös D — voiko ihminen jättää lapsen ajon ulkopuolelle?** — **Ratkaistu (#81):** vaihtoehto
 > (i), olemassa oleva `wip` (ja `blocked_by`); `scan_epics` ohittaa `wip`-lapset propagoinnissa,
@@ -362,14 +372,18 @@ Propagointi **on idempotentti** ja se on kriittinen ominaisuus (poller toistaa s
 > joten uusi opt-out-label olisi päällekkäinen mekanismi. Dokumentoidaan: "jätä lapsi ajon
 > ulkopuolelle `wip`-labelilla tai `blocked_by`-riippuvuudella".
 
-> **Päätös E — mitkä labelit propagoituvat?** — **Ratkaistu (#81):** watchlistin repolle vaatima
-> ajolabelijoukko (`auto-run` + repon vaatimat) → `lib/epic.sh:propagate_run_labels`. Alkuperäinen
-> harkinta:
+> **Päätös E — mitkä labelit propagoituvat?** — **Ratkaistu (#81), laajennettu (#284):**
+> watchlistin repolle vaatima ajolabelijoukko (`auto-run` + repon vaatimat) **sekä PR-vahdin
+> merge-label (`auto-merge`) oletuksena** → `lib/epic.sh:propagate_run_labels` /
+> `_epic_propagate_child`. Alkuperäinen harkinta:
 > Watchlist voi vaatia repolle useampia labeleita (esim. `["auto-run", "backend"]`, AND).
 > Silloin lapsi tarvitsee **kaikki** ne poimintaan.
 > **Suositus:** propagoi täsmälleen se labelijoukko, jonka watchlist vaatii kyseiselle repolle
 > (`labels` / `default_labels`). Näin propagoitu lapsi täyttää poimintaehdon riippumatta siitä,
 > montako labelia repo vaatii. Yksittäistapaus `["auto-run"]` on tämän erikoistapaus.
+> **#284:n lisäys:** merge-label ei ole poimintaehto (se ei kuulu epic-listaushakuun eikä
+> lapsen poimintaan), joten se lisätään vasta propagointihetkellä `_epic_propagate_child`issa,
+> `manual-merge`-opt-outilla (§3.3 kohta 5). `epic`-labelia ei edelleenkään propagoida (kohta 4).
 
 ---
 

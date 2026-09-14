@@ -672,7 +672,8 @@ automaation lisäämää labelia kannata poistaa käsin ennen kuin syy on korjat
 | `auto-clean-skipped` | `auto-clean.sh`, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
 | `auto-reset` | **sinä** tai Ohjaamon *Nollaa* | `auto-reset.sh` onnistuneen purun jälkeen | Pyytää purkamaan issuen ajojäänteet **sulkematta issueta**: ajo alkaa alusta puhtaasta basesta. Ks. 6.6 i) |
 | `auto-reset-skipped` | `auto-reset.sh`, kun se ei voi purkaa | **sinä**, kun olet hoitanut asian | Estää nollauksen loputtoman uudelleenyrityksen. Oma labelinsa, jottei kahden purkuverbin tila mene sekaisin |
-| `auto-merge` | **sinä** issuelle | — | Propagoituu issuelta PR:lle, ja PR-vahti mergeää vain labeloidun PR:n |
+| `auto-merge` | **sinä** issuelle; **epicin lapsille propagoituu oletuksena** | — | Propagoituu issuelta PR:lle, ja PR-vahti mergeää vain labeloidun PR:n |
+| `manual-merge` | **sinä** epicille tai sen lapselle | sinä | Opt-out `auto-merge`-propagoinnista: epicillä koko ketjulta, lapsella vain siltä lapselta. Lapsi ajetaan silti — vain automerge jää pois. Label eikä poisto, koska propagointi on monotoninen (6.5) |
 
 Kolme yleistä sekaannusta kannattaa erottaa heti:
 
@@ -685,12 +686,14 @@ Kolme yleistä sekaannusta kannattaa erottaa heti:
   poistaminen on nimenomaan se toimenpide, joka palauttaa PR:n vahdin käsittelyyn (7.5).
 - **`auto-merge` luetaan PR:ltä, ei issuelta.** Orkestraattori kopioi sen issuelta PR:lle
   (`RUN_ISSUES_PR_LABELS_CSV`, oletus `auto-merge`). Jos lisäät labelin issuelle vasta PR:n
-  avaamisen jälkeen, se ei siirry itsestään — lisää se silloin suoraan PR:lle.
+  avaamisen jälkeen, se ei siirry itsestään — lisää se silloin suoraan PR:lle. **Epicin lapselle
+  `auto-merge` propagoituu oletuksena** (6.5), joten ketju ajetaan kerralla läpi; estä se
+  `manual-merge`-labelilla epicillä (koko ketju) tai lapsella (vain se lapsi).
 
 Kolme labelinimeä on vaihdettavissa ympäristömuuttujalla: `auto-clean`
 (`RUN_ISSUES_CLEAN_LABEL`), `auto-reset` (`RUN_ISSUES_RESET_LABEL`) ja `auto-merge`
 (`PR_WATCH_MERGE_LABEL`). `waiting`, `wip`, `auto-claimed`, `needs-human`,
-`auto-clean-skipped` ja `auto-reset-skipped` ovat kovakoodattuja.
+`auto-clean-skipped`, `auto-reset-skipped` ja `manual-merge` ovat kovakoodattuja.
 
 Automaation itsensä lisäämät labelit (`waiting`, `auto-claimed`, `needs-human`,
 `auto-clean-skipped`, `auto-reset-skipped` sekä PR:lle kopioitavat) luodaan repoon tarvittaessa

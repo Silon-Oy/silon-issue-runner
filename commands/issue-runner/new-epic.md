@@ -119,10 +119,16 @@ Lue kuvaus ja perehdy repoon sen verran, että pilkkominen osuu todelliseen kood
   syklinen** (`/issue-runner:run-epic` kieltäytyy syklistä exit-koodilla 4).
 - **Labelit:** epicille `epic` + `PICK_LABELS`. **Lapsille ei mitään** — poller propagoi
   ajolabelit epicin avoimille lapsille.
+- **Merge-tila:** oletuksena **lapset mergetään automaattisesti** — poller propagoi `auto-merge`n
+  ajolabelien mukana, joten ketju ajetaan kerralla läpi ilman ihmisen mergejä. Jos halutaan
+  **manuaalinen merge**, lisää `manual-merge` epicille (estää koko ketjulta) tai yksittäiselle
+  lapselle (vain se lapsi). Komento **ei** kirjoita `auto-merge`a lapsille — se syntyy
+  propagoinnissa.
 
 **Esitä suunnitelma käyttäjälle kokonaisuudessaan ja pyydä vahvistus.** Suunnitelmassa näkyvät
-epicin otsikko ja runko, jokaisen alaissueen otsikko ja runko, riippuvuudet (`"B odottaa A:ta"`)
-ja labelit — sekä osion 1 watchlist-huomio, jos `COVERED=1`.
+epicin otsikko ja runko, jokaisen alaissueen otsikko ja runko, riippuvuudet (`"B odottaa A:ta"`),
+labelit ja **merge-tila** ("lapset mergetään automaattisesti" tai "manuaalinen merge:
+`manual-merge` epicillä") — sekä osion 1 watchlist-huomio, jos `COVERED=1`.
 
 > **Ei vahvistusta ⇒ nolla kirjoitusta.** Sama suunnittele–sovella-jako kuin `install.sh`:ssa ja
 > `run-epic.sh`:ssa. Jos käyttäjä haluaa muutoksia, korjaa suunnitelma ja kysy uudelleen.
@@ -299,6 +305,7 @@ käsin:
 | Riippuvuudet | mitkä kirjautuivat ja mitkä eivät |
 | Assignee | kenelle epic ja lapset assignattiin — tai **että ne jäivät assignaamatta ja miksi** |
 | Labelit | lisättiinkö ja mitkä — vai jätettiinkö tarkoituksella lisäämättä (3.3) |
+| Merge-tila | lapset mergetään automaattisesti (`auto-merge` propagoituu), vai manuaalinen merge (`manual-merge` epicillä) |
 | Watchlist | osion 1 huomio, jos `COVERED=1` |
 | Kielimäärittely | kirjattiinko se `CLAUDE.md`:hen (osio 2.1) — ja että muutos on committaamatta |
 

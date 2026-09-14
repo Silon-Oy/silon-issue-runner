@@ -54,7 +54,8 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `auto-clean-skipped` | automaatio, kun se ei voi siivota | **sinä**, kun olet hoitanut asian | Estää siivouksen loputtoman uudelleenyrityksen |
 | `auto-reset` (`RUN_ISSUES_RESET_LABEL`) | sinä (tai Ohjaamon *Nollaa*) | automaatio purun jälkeen | Pyytää purkamaan ajojäänteet **sulkematta** issueta: ajo alkaa alusta puhtaasta basesta. **Ei koskaan poimintalabeliksi** |
 | `auto-reset-skipped` | automaatio, kun se ei voi purkaa | **sinä**, kun olet hoitanut asian | Estää nollauksen loputtoman uudelleenyrityksen. Oma labelinsa, ei jaettu siivouksen kanssa |
-| `auto-merge` (`PR_WATCH_MERGE_LABEL`) | sinä issuelle, automaatio PR:lle | sinä | PR-vahti mergeää **vain** labeloidun PR:n |
+| `auto-merge` (`PR_WATCH_MERGE_LABEL`) | sinä issuelle, automaatio PR:lle; **epicin lapsille propagoituu oletuksena** | sinä | PR-vahti mergeää **vain** labeloidun PR:n |
+| `manual-merge` | sinä epicille tai sen lapselle | sinä | Opt-out `auto-merge`-propagoinnista: epicillä estää koko ketjulta, lapsella vain siltä lapselta. Lapsi ajetaan silti — vain automerge jää pois |
 | `auto-claimed` | automaatio, kun ajo varaa issuen (S3) | automaatio, kun ajo perääntyy tai siivotaan | **Varaus**: estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Älä lisää tai poista käsin** |
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
 | `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä | sinä | Suodatettava merkintä epic-issuella |
@@ -69,6 +70,9 @@ liittämistä, ja automaatio luo vain omat labelinsa. Kolme kallista sekaannusta
   lisättynä muulle PR:lle se ei jarruta mergeä.
 - **`auto-merge` luetaan issuelta ajon alkaessa ja siirretään PR:lle sen avaushetkellä.**
   Kesken ajon tai sen jälkeen issuelle lisätty label ei siirry — lisää se silloin suoraan PR:lle.
+  Sama koskee epicin lasta: `auto-merge` propagoituu oletuksena, mutta jo ennen tätä ominaisuutta
+  käynnistynyt lapsi (jolla on `auto-claimed`) luki `issue.json`:n ajon alussa, joten sen PR
+  labeloidaan käsin.
 
 ## Milloin issue lähtee ajoon
 
@@ -149,6 +153,10 @@ poiminnan ulkopuolella, eikä estoa voi vahingossa poistaa labelia poistamalla.
 - `epic`-label **estää poiminnan** — epic ei ole itse ajettava tehtävä.
 - `auto-run` epicillä on **propagointisignaali**, ei ajosignaali: automaatio lisää ajolabelit
   epicin avoimille alaissueille ja poller ajaa ketjun riippuvuusjärjestyksessä.
+- **`auto-merge` propagoituu lapsille oletuksena**, joten ketju ajetaan kerralla läpi ilman
+  ihmisen mergejä. Estä se koko ketjulta lisäämällä `manual-merge` epicille, tai yhdeltä
+  lapselta lisäämällä `manual-merge` sille lapselle — opt-out on label, ei labelin poisto,
+  koska propagointi palauttaisi poistetun labelin.
 - Jätä yksittäinen alaissue ajon ulkopuolelle `wip`illä, älä `auto-run`ia poistamalla —
   propagointi palauttaisi sen.
 - `epic-attention` epicillä tarkoittaa, että jokin lapsi tarvitsee ihmistä; riippumattomat
