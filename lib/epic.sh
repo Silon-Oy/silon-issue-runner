@@ -45,6 +45,12 @@ _EPIC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # labels_add / labels_ensure — REST label writes (no read:project scope needed).
 # shellcheck source=labels.sh
 . "$_EPIC_DIR/labels.sh"
+# poller_merge_label / EPIC_MANUAL_MERGE_LABEL (issue #284) — the merge label name
+# (resolved from PR_WATCH_MERGE_LABEL in ONE shared place) and its epic opt-out.
+# Pure function-only file: sourcing it here is idempotent with the pollers /
+# run-epic that already source it.
+# shellcheck source=poller-config.sh
+. "$_EPIC_DIR/poller-config.sh"
 
 # _epic_log <message> — best-effort logger, same spirit as run-terminate.sh's
 # _run_terminate_log. orchestrate.sh/poller callers with a log() function get it;
@@ -144,6 +150,20 @@ _epic_missing_labels() {
   printf '%s' "$out"
 }
 
+# _epic_effective_merge_label <epic-labels-csv> — the merge label to ride along
+# with the run labels for THIS epic's children (issue #284), or the empty string
+# when the epic opts out with manual-merge. The name is resolved from the ONE
+# shared resolver (poller_merge_label), so "auto-merge" is never hardcoded here;
+# per-CHILD opt-out (a child carrying manual-merge) is applied later, inside
+# _epic_propagate_child, because only there is the child's own label set in scope.
+_epic_effective_merge_label() {
+  if _epic_csv_has "$1" "$EPIC_MANUAL_MERGE_LABEL"; then
+    printf ''
+  else
+    poller_merge_label
+  fi
+}
+
 # _epic_child_ref <child-repo> <epic-repo> <child-N> — the human-facing reference
 # for a child (issue #92): `owner/repo#N` when the child lives in a DIFFERENT repo
 # than the epic, plain `#N` when same-repo (or when either repo is unknown, so the
@@ -172,7 +192,7 @@ _epic_attn_marker() {
   fi
 }
 
-# _epic_propagate_child <epic-N> <child-owner/repo> <child-N> <child-labels-csv> <run-labels-csv>
+# _epic_propagate_child <epic-N> <child-owner/repo> <child-N> <child-labels-csv> <run-labels-csv> [<merge-label>]
 # The SINGLE run-label propagation decision for one child, shared by the poller's
 # epic_process_one and run-epic.sh (#82, AC4: `grep` must not find two label-
 # propagation implementations). Best-effort, always returns 0.
@@ -191,14 +211,26 @@ _epic_attn_marker() {
 # adds only the run labels the child is MISSING (idempotent via _epic_missing_labels;
 # labels_add is itself additive). Diagnostics go to the epic log, never stdout, so
 # a poller that redirects epic_process_one's stdout to its logfile stays clean.
+#
+# The optional <merge-label> (issue #284) rides along with the run labels so the
+# child carries it at pickup time and orchestrate.sh's propagate_pr_labels moves it
+# onto the PR at open time. The caller passes it EMPTY when the epic opts out
+# (manual-merge on the epic); this function additionally drops it for THIS child
+# when the child carries manual-merge. Either opt-out suppresses only the merge
+# label — the child still gets the run labels, so it still runs, just without
+# auto-merge (unlike wip, which parks the child entirely).
 _epic_propagate_child() {
-  local epic="$1" child_repo="$2" num="$3" child_labels="$4" labels_csv="$5"
+  local epic="$1" child_repo="$2" num="$3" child_labels="$4" labels_csv="$5" merge_label="${6:-}"
   if _epic_csv_has "$child_labels" "wip"; then
     _epic_log "epic #$epic: child #$num is wip — skipping propagation"
     return 0
   fi
+  local want="$labels_csv"
+  if [ -n "$merge_label" ] && ! _epic_csv_has "$child_labels" "$EPIC_MANUAL_MERGE_LABEL"; then
+    want="${want:+$want,}$merge_label"
+  fi
   local missing
-  missing=$(_epic_missing_labels "$child_labels" "$labels_csv")
+  missing=$(_epic_missing_labels "$child_labels" "$want")
   if [ -n "$missing" ]; then
     if labels_add "$child_repo" "$num" "$missing" 2>&1 | while IFS= read -r _l; do _epic_log "$_l"; done; then :; fi
     _epic_log "epic #$epic: propagated [$missing] to child ${child_repo}#$num"
@@ -206,7 +238,7 @@ _epic_propagate_child() {
   return 0
 }
 
-# propagate_run_labels <repo-root> <epic-N> <run-labels-csv> [<owner/repo>]
+# propagate_run_labels <repo-root> <epic-N> <run-labels-csv> [<owner/repo>] [<merge-label>]
 # Resolve the epic's children (the canonical native → task-list resolver) and
 # propagate the run labels to every OPEN child through _epic_propagate_child. This
 # is the shared apply path M4 (docs/epic-orchestration.md §6.2) that /run-epic
@@ -214,8 +246,12 @@ _epic_propagate_child() {
 # command therefore share ONE propagation implementation (AC4). Best-effort and
 # idempotent — always returns 0; an unreadable child graph logs and does nothing
 # (fail-closed: a false "propagated" would be worse than waiting a tick).
+#
+# <merge-label> (issue #284) is passed through to every child; the caller resolves
+# it (poller_merge_label, or empty when the epic opts out with manual-merge — the
+# epic-level decision, which the caller has the epic labels to make).
 propagate_run_labels() {
-  local repo="$1" epic="$2" labels_csv="${3:-}" owner_repo="${4:-}"
+  local repo="$1" epic="$2" labels_csv="${3:-}" owner_repo="${4:-}" merge_label="${5:-}"
   local children rc=0
   children=$(list_epic_children "$repo" "$epic" "$owner_repo") || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -233,7 +269,7 @@ propagate_run_labels() {
     # epic's repo, a cross-repo child to its home repo. Fall back to the epic's
     # owner/repo when the resolver could not name it (origin-mode cwd inference).
     [ -n "$child_repo" ] || child_repo="$owner_repo"
-    _epic_propagate_child "$epic" "$child_repo" "$num" "$child_labels" "$labels_csv"
+    _epic_propagate_child "$epic" "$child_repo" "$num" "$child_labels" "$labels_csv" "$merge_label"
   done <<EOF
 $children
 EOF
@@ -312,6 +348,14 @@ epic_process_one() {
   local epic_title
   epic_title=$(jq -r '.title // ""' "$epic_json" 2>/dev/null || echo "")
 
+  # The merge label to propagate to this epic's children (issue #284): resolved
+  # from the ONE shared resolver, or empty when the epic carries manual-merge. The
+  # decision is made once per epic here (where the epic's labels are in scope) and
+  # passed to every _epic_propagate_child; per-child manual-merge is applied there.
+  local epic_labels_csv merge_label
+  epic_labels_csv=$(jq -r '[.labels[]?.name] | join(",")' "$epic_json" 2>/dev/null || echo "")
+  merge_label="$(_epic_effective_merge_label "$epic_labels_csv")"
+
   local total=0 closed=0
   local num state child_labels child_repo title line child_ref
   # 1. PROPAGATION + 2. ESCALATION, per child.
@@ -344,8 +388,9 @@ epic_process_one() {
     # --- propagate the run labels the child is missing (idempotent). This goes
     # through the SINGLE propagation primitive shared with run-epic.sh (#82,
     # AC4: no second label-propagation implementation). It targets the CHILD's
-    # own repo (issue #92).
-    _epic_propagate_child "$epic" "$child_repo" "$num" "$child_labels" "$labels_csv"
+    # own repo (issue #92) and carries the merge label (issue #284) unless opted
+    # out on the epic (merge_label empty) or on this child (manual-merge).
+    _epic_propagate_child "$epic" "$child_repo" "$num" "$child_labels" "$labels_csv" "$merge_label"
 
     # --- escalate a stalled child to the epic, once per child. The marker is
     # repo-qualified for a cross-repo child (edge #92: two repos may share an

@@ -201,9 +201,11 @@ reset_rec() { : > "$REC/labels_add"; : > "$REC/labels_add_repo"; : > "$REC/label
 # Epic 100: epic-labelled, open. Children 201 (runnable), 202 (blocked_by 201),
 # 203 (blocked_by 202), 204 (closed).
 seed_title 100 "Statusnäkymä-epic"; seed_labels 100 "epic,auto-run"; seed_state 100 OPEN
+# 202 carries BOTH auto-run and auto-merge so it stays fully-labelled (idempotent)
+# once #284 makes auto-merge ride along with auto-run.
 seed_subs 100 '[
   {"number":201,"state":"open","title":"Base","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
-  {"number":202,"state":"open","title":"Middle","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":202,"state":"open","title":"Middle","labels":[{"name":"auto-run"},{"name":"auto-merge"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":203,"state":"open","title":"Top","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":204,"state":"closed","title":"Done","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
 ]'
@@ -225,6 +227,31 @@ printf '%s\n' "$out" | grep -q "#203 Top — blocked by #202" && pass "report: #
   || fail "report: blocked-behind missing (out: $out)"
 printf '%s\n' "$out" | grep -qi "dry-run" && pass "report: dry-run banner present" \
   || fail "report: no dry-run banner"
+# #284: the default epic (no manual-merge) reports that children auto-merge.
+printf '%s\n' "$out" | grep -qE "merge: +auto" && pass "report #284: default epic reports children auto-merge" \
+  || fail "report #284: 'merge: auto' state line missing (out: $out)"
+
+# ===========================================================================
+# 1b. #284 — an epic carrying manual-merge reports MANUAL merge (dry-run), and
+#     the merge label is not propagated on apply.
+# ===========================================================================
+seed_title 180 "Manual-merge epic"; seed_labels 180 "epic,auto-run,manual-merge"; seed_state 180 OPEN
+seed_subs 180 '[
+  {"number":281,"state":"open","title":"Bare","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
+]'
+touch "$STATE/exists/281"
+reset_rec
+out=$(run_epic 180 --repo "$REPO" --dry-run 2>&1); rc=$?
+[ "$rc" = 0 ] && pass "manual-merge epic dry-run exits 0" || fail "manual-merge dry-run exited $rc (out: $out)"
+printf '%s\n' "$out" | grep -qE "merge: +manual" && pass "report #284: manual-merge epic reports manual merge" \
+  || fail "report #284: 'merge: manual' state line missing (out: $out)"
+reset_rec
+out=$(run_epic 180 --repo "$REPO" 2>&1); rc=$?
+[ "$rc" = 0 ] && pass "manual-merge epic apply exits 0" || fail "manual-merge apply exited $rc (out: $out)"
+grep -q "^281:.*auto-run" "$REC/labels_add" && pass "manual-merge epic: bare child 281 still gets auto-run" \
+  || fail "manual-merge epic: 281 not labelled with auto-run (rec: $(cat "$REC/labels_add"))"
+grep -q "^281:.*auto-merge" "$REC/labels_add" && fail "manual-merge epic: 281 wrongly got auto-merge" \
+  || pass "manual-merge epic #284: auto-merge NOT propagated (opt-out on epic)"
 
 # ===========================================================================
 # 2. Happy path — apply propagates to open children lacking the labels (AC4)
@@ -232,12 +259,17 @@ printf '%s\n' "$out" | grep -qi "dry-run" && pass "report: dry-run banner presen
 reset_rec
 out=$(run_epic 100 --repo "$REPO" 2>&1); rc=$?
 [ "$rc" = 0 ] && pass "apply exits 0" || fail "apply exited $rc (out: $out)"
-# 201 & 203 lacked auto-run → labelled; 202 already had it → not re-added; 204 closed → skipped.
+# 201 & 203 lacked the labels → labelled; 202 already had both → not re-added; 204 closed → skipped.
 [ "$(adds_for 201)" -ge 1 ] && pass "apply: auto-run propagated to bare open child 201" \
   || fail "apply: 201 not labelled"
 [ "$(adds_for 203)" -ge 1 ] && pass "apply: auto-run propagated to bare open child 203" \
   || fail "apply: 203 not labelled"
-[ "$(adds_for 202)" = 0 ] && pass "apply idempotent: already-labelled child 202 not re-added" \
+# #284: auto-merge rides along with auto-run to the bare children.
+grep -q "^201:.*auto-merge" "$REC/labels_add" && pass "apply #284: auto-merge propagated to bare child 201" \
+  || fail "apply #284: 201 did not receive auto-merge (rec: $(cat "$REC/labels_add"))"
+grep -q "^203:.*auto-merge" "$REC/labels_add" && pass "apply #284: auto-merge propagated to bare child 203" \
+  || fail "apply #284: 203 did not receive auto-merge"
+[ "$(adds_for 202)" = 0 ] && pass "apply idempotent: fully-labelled child 202 not re-added" \
   || fail "apply: 202 was re-labelled"
 [ "$(adds_for 204)" = 0 ] && pass "apply: closed child 204 skipped" || fail "apply: closed 204 labelled"
 

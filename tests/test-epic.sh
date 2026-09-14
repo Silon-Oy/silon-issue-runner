@@ -204,6 +204,7 @@ REPO="$WORK"  # any dir; gh is mocked
 
 added_for() { grep -c "^$1:" "$REC/labels_add"; }              # count add calls for issue
 added_has() { grep -q "^$1:.*$2" "$REC/labels_add"; }          # add for issue included label
+added_lacks() { ! grep -q "^$1:.*$2" "$REC/labels_add"; }      # no add for issue included label
 # add for a child in a SPECIFIC repo included label (issue #92 cross-repo target).
 added_repo_has() { grep -q "^$1#$2:.*$3" "$REC/labels_add_repo"; }
 comments_for() { grep -c "^$1\$" "$REC/comment_post"; }        # count comments posted to issue
@@ -314,29 +315,35 @@ case "$s" in *'--search'*|*'is:open'*) fail "epic_list_open drifted back to a se
 
 # ===========================================================================
 # 4. epic_process_one — propagation + idempotency + escalation
+# The epic has no manual-merge, so the merge label (auto-merge, issue #284) rides
+# along with auto-run unless the child opts out with manual-merge.
 # ===========================================================================
 seed_title 100 "Demo epic"
 seed_labels 100 "epic,auto-run"
 : > "$STATE/comments/100.jsonl"
 seed_subissues 100 '[
   {"number":101,"state":"open","title":"needs label","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
-  {"number":102,"state":"open","title":"already","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":102,"state":"open","title":"already","labels":[{"name":"auto-run"},{"name":"auto-merge"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":103,"state":"closed","title":"done","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":104,"state":"open","title":"parked","labels":[{"name":"wip"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":105,"state":"open","title":"stuck","labels":[{"name":"needs-human"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
   {"number":106,"state":"open","title":"cross needs label","labels":[],"repository_url":"https://api.github.com/repos/other/repo"},
-  {"number":107,"state":"open","title":"cross stuck","labels":[{"name":"needs-human"}],"repository_url":"https://api.github.com/repos/other/repo"}
+  {"number":107,"state":"open","title":"cross stuck","labels":[{"name":"needs-human"}],"repository_url":"https://api.github.com/repos/other/repo"},
+  {"number":108,"state":"open","title":"no automerge","labels":[{"name":"manual-merge"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
 ]'
 
 epic_process_one "$REPO" 100 "auto-run" "silon-oy/demo" origin
 
-# 101 (open, no label) → auto-run added
+# 101 (open, no label) → auto-run AND auto-merge added (issue #284)
 added_has 101 "auto-run" && pass "propagate: auto-run added to bare open child 101" \
   || fail "propagate: 101 did not receive auto-run"
-# 105 (open, needs-human, no auto-run) → auto-run added too
+added_has 101 "auto-merge" && pass "propagate #284: auto-merge added to bare open child 101" \
+  || fail "propagate #284: 101 did not receive auto-merge"
+# 105 (open, needs-human, no auto-run) → auto-run + auto-merge added too
 added_has 105 "auto-run" || fail "propagate: 105 did not receive auto-run"
-# 102 (already auto-run) → NO add
-[ "$(added_for 102)" = 0 ] && pass "idempotent: already-labelled child 102 not re-added" \
+added_has 105 "auto-merge" || fail "propagate #284: 105 did not receive auto-merge"
+# 102 (already auto-run + auto-merge) → NO add
+[ "$(added_for 102)" = 0 ] && pass "idempotent: fully-labelled child 102 not re-added" \
   || fail "idempotent: 102 was re-labelled ($(added_for 102) times)"
 # 103 (closed) → NO add
 [ "$(added_for 103)" = 0 ] && pass "closed child 103 skipped" \
@@ -344,6 +351,11 @@ added_has 105 "auto-run" || fail "propagate: 105 did not receive auto-run"
 # 104 (wip) → NO add
 [ "$(added_for 104)" = 0 ] && pass "wip child 104 skipped (opt-out)" \
   || fail "wip child 104 was labelled"
+# 108 (manual-merge) → auto-run added, but auto-merge withheld (per-child opt-out, #284)
+added_has 108 "auto-run" && pass "propagate #284: manual-merge child 108 still gets auto-run" \
+  || fail "propagate #284: 108 did not receive auto-run"
+added_lacks 108 "auto-merge" && pass "propagate #284: manual-merge child 108 does NOT get auto-merge" \
+  || fail "propagate #284: 108 wrongly received auto-merge"
 
 # Escalation: 105 + 107 have needs-human → two comments on the epic + epic-attention label
 [ "$(comments_for 100)" = 2 ] && pass "escalation: stalled children 105 + 107 escalated to epic (2 comments)" \
@@ -405,6 +417,29 @@ grep -q '#201' "$STATE/comments/200.jsonl" && grep -q '#202' "$STATE/comments/20
 epic_process_one "$REPO" 200 "auto-run" "" origin
 [ "$(comments_for 200)" = 1 ] && pass "completion idempotent: no repeat on 2nd tick" \
   || fail "completion idempotent: comment count rose to $(comments_for 200)"
+
+# ===========================================================================
+# 6. epic_process_one — manual-merge on the EPIC opts the whole chain out (#284)
+# The merge label reaches NO child; the run labels still propagate normally.
+# ===========================================================================
+seed_title 250 "Manual-merge epic"
+seed_labels 250 "epic,auto-run,manual-merge"
+: > "$STATE/comments/250.jsonl"
+seed_subissues 250 '[
+  {"number":251,"state":"open","title":"bare","labels":[],"repository_url":"https://api.github.com/repos/silon-oy/demo"},
+  {"number":252,"state":"open","title":"has run label","labels":[{"name":"auto-run"}],"repository_url":"https://api.github.com/repos/silon-oy/demo"}
+]'
+
+epic_process_one "$REPO" 250 "auto-run" "silon-oy/demo" origin
+
+# 251 (bare) → auto-run added, but NO auto-merge (epic opted out).
+added_has 251 "auto-run" && pass "epic opt-out #284: bare child 251 still gets auto-run" \
+  || fail "epic opt-out #284: 251 did not receive auto-run"
+added_lacks 251 "auto-merge" && pass "epic opt-out #284: 251 does NOT get auto-merge (manual-merge on epic)" \
+  || fail "epic opt-out #284: 251 wrongly received auto-merge"
+# 252 (already auto-run) → NO add: epic opted out, so there is no merge label to add.
+[ "$(added_for 252)" = 0 ] && pass "epic opt-out #284: already-labelled child 252 not re-added" \
+  || fail "epic opt-out #284: 252 was re-labelled ($(added_for 252) times)"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "epic: all passed" || echo "epic: FAILURES"

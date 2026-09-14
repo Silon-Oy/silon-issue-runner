@@ -449,7 +449,9 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
   # via the same env vars pr-watch reads.
   GH_RES="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
   GH_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
-  GH_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
+  # The merge label name from the ONE shared resolver (issue #284), so the
+  # default is not spelled out a second time here (poller-config.sh is sourced above).
+  GH_LABEL="$(poller_merge_label)"
 
   # Github enum: run-index <tab> issue_number <tab> pr_number <tab> owner/repo,
   # for every run that has an issue_number and a resolved owner (issue #78:

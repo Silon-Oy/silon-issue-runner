@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # lib/poller-config.sh — configuration resolution for poller.sh,
 # pr-watch-poller.sh, drain-queue.sh and /issue-runner:new-epic: the host gate,
-# the watchlist lookup and the conditions a repo's issues must meet to be picked
-# up (labels, and the optional per-repo assignee allow-list).
+# the watchlist lookup, the conditions a repo's issues must meet to be picked up
+# (labels, and the optional per-repo assignee allow-list), and the shared
+# resolution of the PR-watch merge label and its epic opt-out (issue #284).
 #
 # Both pollers make the same two decisions before they do anything else, and
 # both must be able to make them on a machine that has no ~/dotfiles. Keeping
@@ -96,6 +97,27 @@ poller_resolve_watchlist() {
 # because those two used to be the two places the chain below lived.
 # shellcheck disable=SC2034  # read by the sourcing pollers, not by this file
 POLLER_PICK_LABELS_DEFAULT='auto-run'
+
+# poller_merge_label — echo the label whose presence on a PR lets pr-watch merge
+# it, resolving PR_WATCH_MERGE_LABEL with the SAME default the watcher applies
+# (pr-watch.sh line: PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}").
+# ONE shared resolver so a caller that must name the label — epic-level merge-label
+# propagation (issue #284), the status view, the Ohjaamo allow-merge action — does
+# not hardcode "auto-merge" a second time. Pure: printf is a builtin, so this keeps
+# the file's "free of external commands" guarantee.
+poller_merge_label() {
+  printf '%s' "${PR_WATCH_MERGE_LABEL:-auto-merge}"
+}
+
+# The opt-out label that suppresses merge-label propagation from an epic (issue
+# #284). FIXED, not configurable — the same shape as the `wip` run opt-out and the
+# `epic` label itself. On the EPIC it stops the merge label reaching ANY child; on
+# a CHILD it stops it for that child only. It is a LABEL, not the ABSENCE of the
+# merge label, because propagation is monotonic and idempotent every tick: a
+# manually removed merge label would simply return next tick (docs
+# epic-orchestration.md §3.3, päätös D — the same reason wip is a label).
+# shellcheck disable=SC2034  # read by the sourcing callers, not by this file
+EPIC_MANUAL_MERGE_LABEL="manual-merge"
 
 # _poller_trim_csv <csv> — echo <csv> with surrounding whitespace removed from
 # the whole string and from each element, and with empty elements dropped.

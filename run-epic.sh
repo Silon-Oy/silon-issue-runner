@@ -178,6 +178,12 @@ fi
 EPIC_TITLE="$(jq -r '.title // ""' "$EPIC_JSON" 2>/dev/null || echo "")"
 EPIC_HAS_LABEL=0
 _epic_labels_have "$EPIC_JSON" "epic" && EPIC_HAS_LABEL=1
+# The epic's own label set (used by both --stop's release and launch's merge-state
+# decision). The merge label (issue #284) propagates to the children by default;
+# manual-merge on the epic opts the whole chain out (MERGE_LABEL then empty).
+EPIC_LABELS_CSV="$(jq -r '[.labels[]?.name] | join(",")' "$EPIC_JSON" 2>/dev/null || echo "")"
+MERGE_LABEL="$(_epic_effective_merge_label "$EPIC_LABELS_CSV")"
+EPIC_MANUAL_MERGE=0; [ -z "$MERGE_LABEL" ] && EPIC_MANUAL_MERGE=1
 
 # --- 2. resolve the child set (native canonical → task-list fallback) ---
 # rc 2 from list_epic_children is fail-closed (unreadable native graph); a truly
@@ -301,8 +307,8 @@ _stop_scan_child_run() {
 if [ "$STOP" -eq 1 ]; then
   THIS_HOST="$(runner_host)"
   STOP_RUN="${RUN_EPIC_STOP_RUN:-$SCRIPT_DIR/stop-run.sh}"
-  # The epic's own label set — its run labels are what we remove FIRST.
-  EPIC_LABELS_CSV="$(jq -r '[.labels[]?.name] | join(",")' "$EPIC_JSON" 2>/dev/null || echo "")"
+  # EPIC_LABELS_CSV (the epic's own label set — its run labels are what we remove
+  # FIRST) is resolved once up top, shared with the launch path's merge decision.
 
   # Does the epic carry any of the run labels? (drives the report + apply.)
   epic_has_any=0
@@ -598,17 +604,29 @@ for i in $(seq 0 $((TOTAL - 1))); do
 done
 
 # What propagation WOULD do per open child (also drives the report). Refs are
-# repo-qualified for a cross-repo child (issue #92).
+# repo-qualified for a cross-repo child (issue #92). The effective want set per
+# child is the run labels plus the merge label (issue #284) unless it is opted out
+# on the epic (MERGE_LABEL empty) or on this child (manual-merge) — the SAME rule
+# _epic_propagate_child applies, kept in step so the report never lies.
 would_label=""   # list of open children missing the labels
 already=""       # already fully labelled
 skipped_wip=""
+skipped_merge="" # open children whose auto-merge is opted out with manual-merge
 for i in $(seq 0 $((TOTAL - 1))); do
   [ "${STATES[$i]}" = "open" ] || continue
   if _epic_csv_has "${LABELS[$i]}" "wip"; then
     skipped_wip="${skipped_wip:+$skipped_wip, }$(_child_ref "$i")"
     continue
   fi
-  if [ -n "$(_epic_missing_labels "${LABELS[$i]}" "$LABELS_CSV")" ]; then
+  child_want="$LABELS_CSV"
+  child_merge_optout=0
+  _epic_csv_has "${LABELS[$i]}" "$EPIC_MANUAL_MERGE_LABEL" && child_merge_optout=1
+  if [ -n "$MERGE_LABEL" ] && [ "$child_merge_optout" -eq 0 ]; then
+    child_want="${child_want:+$child_want,}$MERGE_LABEL"
+  fi
+  [ -n "$MERGE_LABEL" ] && [ "$child_merge_optout" -eq 1 ] \
+    && skipped_merge="${skipped_merge:+$skipped_merge, }$(_child_ref "$i")"
+  if [ -n "$(_epic_missing_labels "${LABELS[$i]}" "$child_want")" ]; then
     would_label="${would_label:+$would_label, }$(_child_ref "$i")"
   else
     already="${already:+$already, }$(_child_ref "$i")"
@@ -621,6 +639,11 @@ mode_tag="[apply]"; [ "$DRY_RUN" -eq 1 ] && mode_tag="[dry-run — no changes]"
   echo "run-epic $mode_tag — epic #$EPIC: ${EPIC_TITLE:-（ei otsikkoa）}"
   echo "  repo:          $REPO_ROOT${OWNER_REPO:+ ($OWNER_REPO)}"
   echo "  run labels:    $LABELS_CSV"
+  if [ "$EPIC_MANUAL_MERGE" -eq 1 ]; then
+    echo "  merge:         manual (manual-merge on the epic — '$(poller_merge_label)' NOT propagated to children)"
+  else
+    echo "  merge:         auto (children auto-merge — '$MERGE_LABEL' propagates to each, opt out per child with manual-merge)"
+  fi
   if [ "$EPIC_HAS_LABEL" -eq 1 ]; then
     echo "  epic label:    present"
   elif [ "$DRY_RUN" -eq 1 ]; then
@@ -638,7 +661,8 @@ mode_tag="[apply]"; [ "$DRY_RUN" -eq 1 ] && mode_tag="[dry-run — no changes]"
   echo "  propagation:"
   echo "    label:       ${would_label:-none (all open children already carry the labels)}"
   echo "    already set:  ${already:-none}"
-  [ -n "$skipped_wip" ] && echo "    skipped wip: $skipped_wip"
+  [ -n "$skipped_wip" ] && echo "    skipped wip:  $skipped_wip"
+  [ -n "$skipped_merge" ] && echo "    manual-merge: $skipped_merge (auto-merge opted out on the child)"
   echo
   # Run order, grouped by repo (issue #92: a cross-repo epic lists its children
   # under each repo). A single-repo epic prints one group.
@@ -701,8 +725,10 @@ if [ "$EPIC_HAS_LABEL" -ne 1 ]; then
   echo "  added 'epic' label to #$EPIC"
 fi
 
-# 2. Propagate the run labels to the open children — the SHARED apply path (AC4).
-propagate_run_labels "$REPO_ROOT" "$EPIC" "$LABELS_CSV" "$OWNER_REPO"
+# 2. Propagate the run labels (and the merge label, issue #284) to the open
+#    children — the SHARED apply path (AC4). MERGE_LABEL is empty when the epic
+#    opts out with manual-merge, so the merge label is not propagated then.
+propagate_run_labels "$REPO_ROOT" "$EPIC" "$LABELS_CSV" "$OWNER_REPO" "$MERGE_LABEL"
 echo "  propagated run labels to open children (see report above)"
 
 # 3. --start-now: launch the first runnable child immediately (docs §5.3).
