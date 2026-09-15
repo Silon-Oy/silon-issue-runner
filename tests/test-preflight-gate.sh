@@ -27,6 +27,10 @@
 #       silent pass (issue #256)
 #   B9  RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 bypasses the write probe even when the
 #       token lacks push
+#   B10 GitHub App mode checks the installation's grants, not the token's repo
+#       role: a write-capable installation passes S0 while gh answers push=false
+#   B11 App mode with a read-only contents grant is fatal at S0 and names it
+#       (B10/B11 serve the installation from a local mock; SKIP without python3)
 #
 # B1 also pins the counterpart of the probe/have split: an overridden claude
 # command must be tested for existence only, never executed. Executing it would
@@ -257,6 +261,81 @@ says 'refusing fail-closed' "B8 names the fail-closed refusal"
 GH_PERM=false RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 run_orch "$REPO" poll
 rc_is 1 "B9 RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 bypasses the write probe"
 says 'S0_Preflight ok' "B9 the gate still passes"
+
+# --- B10/B11: App mode checks the installation, not the token's repo role --
+# An installation token's repo read reports push=false even when the App may
+# write, so the personal probe refused every App-mode run. The gh stub keeps
+# answering push=false here; only the installation (a local mock of
+# GET /repos/{owner}/{repo}/installation) may decide.
+if ! command -v python3 >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
+  echo "SKIP: B10/B11 — python3 and openssl are needed to mock the App installation endpoint"
+else
+  APP_PEM="$WORK/app-rsa.pem"
+  openssl genrsa -out "$APP_PEM" 2048 2>/dev/null
+  chmod 600 "$APP_PEM"
+  INST_JSON="$WORK/installation.json"
+  MOCK_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+  python3 - "$MOCK_PORT" "$INST_JSON" >/dev/null 2>&1 <<'PY' &
+import sys, http.server, pathlib
+
+port = int(sys.argv[1])
+inst = pathlib.Path(sys.argv[2])
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if not self.path.endswith("/installation"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = inst.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a, **kw):
+        pass
+
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+  MOCK_PID=$!
+  trap 'kill "$MOCK_PID" 2>/dev/null; rm -rf "$WORK"' EXIT
+  for _ in $(seq 1 30); do
+    curl -sS -o /dev/null "http://127.0.0.1:${MOCK_PORT}/" 2>/dev/null && break
+    sleep 0.1
+  done
+
+  run_orch_app() {  # run_orch_app <args...> — run_orch in App mode against the mock
+    GH_PERM=false \
+    RUN_ISSUES_GITHUB_APP_ID=1 \
+    RUN_ISSUES_GITHUB_APP_INSTALLATION_ID=42 \
+    RUN_ISSUES_GITHUB_APP_PRIVATE_KEY_PATH="$APP_PEM" \
+    RUN_ISSUES_GHA_TOKEN_ENDPOINT_BASE="http://127.0.0.1:${MOCK_PORT}" \
+    RUN_ISSUES_GHA_CACHE_FILE="$WORK/gha-token.json" \
+      run_orch "$@"
+  }
+
+  # B10: the installation grants write => S0 passes despite push=false (then the
+  # S1 poll rejection, exit 1 — after the gate).
+  printf '{"id":42,"permissions":{"issues":"write","contents":"write","pull_requests":"write"}}' > "$INST_JSON"
+  run_orch_app "$REPO" poll
+  rc_is 1 "B10 App mode with a write-capable installation passes S0 despite push=false"
+  says 'S0_Preflight ok' "B10 the gate passes"
+  if grep -qF 'Write (push)' "$ERR"; then
+    bad "B10 App mode still ran the personal push probe: $(tr '\n' '|' < "$ERR")"
+  else
+    ok "B10 App mode did not run the personal push probe"
+  fi
+
+  # B11: a read-only contents grant is fatal at S0 and names the grant.
+  printf '{"id":42,"permissions":{"issues":"write","contents":"read","pull_requests":"write"}}' > "$INST_JSON"
+  run_orch_app "$REPO" 42
+  rc_is 8 "B11 App mode without contents:write exits 8"
+  says 'lacks write permission on: contents' "B11 names the missing grant"
+  says 'nothing was locked, claimed or created' "B11 states that no work started"
+
+  kill "$MOCK_PID" 2>/dev/null
+fi
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "preflight-gate: all passed" || echo "preflight-gate: FAILURES"

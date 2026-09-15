@@ -70,6 +70,11 @@
 #                            so callers can splice it into `git push` without
 #                            putting the token into the remote URL (which would
 #                            leak into `.git/config` and logs).
+#   gha_repo_installation <owner/repo>
+#                          — print the installation covering a repo (id +
+#                            granted permissions), read with the JWT. The S0
+#                            write probe's source in App mode: an installation
+#                            token cannot report its own write access.
 
 # This file is a sourced library — every helper guards its side effects so
 # stray `set -e` on the caller's side cannot trip them. We intentionally do NOT
@@ -263,26 +268,34 @@ _gha_cache_write() {
   return 0
 }
 
-# _gha_mint_token — JWT → installation token (POST /app/installations/{id}/access_tokens).
-# Prints "<token>\t<expires_at>" on stdout, non-zero on failure.
-_gha_mint_token() {
+# _gha_app_request <method> <path> — one App-authenticated API call (signed with
+# the JWT, not an installation token). Prints the response body, a newline, then
+# the HTTP status code. Returns 1 when the JWT cannot be produced and 2 when curl
+# gets no HTTP answer at all (network/DNS). An HTTP error status is still rc 0:
+# what each status means is the caller's call.
+_gha_app_request() {
+  local method="$1" path="$2"
   local jwt
   jwt=$(_gha_make_jwt) || return 1
-  local url="${RUN_ISSUES_GHA_TOKEN_ENDPOINT_BASE%/}/app/installations/${RUN_ISSUES_GITHUB_APP_INSTALLATION_ID}/access_tokens"
+  local url="${RUN_ISSUES_GHA_TOKEN_ENDPOINT_BASE%/}${path}"
   # The JWT is passed via -H so it never lands in the URL (no query/log leak).
-  # --fail-with-body returns non-zero on HTTP errors but still emits the body
-  # to stdout so we can quote it back to the caller in a diagnostic.
-  local resp http_code body
-  resp=$(curl -sS \
-    -X POST \
+  curl -sS \
+    -X "$method" \
     -H "Authorization: Bearer $jwt" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     -w '\n%{http_code}' \
-    "$url" 2>&1) || {
-    _gha_log "ERROR: curl POST $url failed (network/DNS)"
-    return 1
+    "$url" 2>&1 || {
+    _gha_log "ERROR: curl $method $url failed (network/DNS)"
+    return 2
   }
+}
+
+# _gha_mint_token — JWT → installation token (POST /app/installations/{id}/access_tokens).
+# Prints "<token>\t<expires_at>" on stdout, non-zero on failure.
+_gha_mint_token() {
+  local resp http_code body
+  resp=$(_gha_app_request POST "/app/installations/${RUN_ISSUES_GITHUB_APP_INSTALLATION_ID}/access_tokens") || return 1
   http_code="${resp##*$'\n'}"
   body="${resp%$'\n'*}"
   case "$http_code" in
@@ -305,6 +318,46 @@ _gha_mint_token() {
     return 1
   fi
   printf '%s\t%s' "$token" "$expires_at"
+}
+
+# ---------- public: the installation covering a repo ----------
+# gha_repo_installation <owner/repo> — print the JSON of this App's installation
+# covering <owner/repo> (GET /repos/{owner}/{repo}/installation, App-authenticated).
+# It carries the installation `id` and its granted `permissions`, the one place
+# the API states what an installation token may write: a repo read made WITH that
+# token reports every `permissions` flag false, `pull` included (measured
+# 2026-09-14), so the token cannot answer the question about itself.
+#   0 — found; the JSON on stdout
+#   1 — unreadable: no HTTP answer, or an unexpected status (diagnostic logged)
+#   2 — 404: GitHub reports no installation of this App covering <owner/repo>
+#   3 — the App identity itself is unavailable: App mode off, key unusable, or
+#       the JWT rejected (401)
+gha_repo_installation() {
+  local slug="$1"
+  gha_enabled || return 3
+  local resp req_rc=0
+  resp=$(_gha_app_request GET "/repos/${slug}/installation") || req_rc=$?
+  case "$req_rc" in
+    0) ;;
+    1) return 3 ;;
+    *) return 1 ;;
+  esac
+  local http_code body
+  http_code="${resp##*$'\n'}"
+  body="${resp%$'\n'*}"
+  case "$http_code" in
+    200)
+      printf '%s' "$body"
+      return 0 ;;
+    404)
+      return 2 ;;
+    401)
+      _gha_log "ERROR: 401 reading the App installation for $slug — JWT rejected. Check RUN_ISSUES_GITHUB_APP_ID + private key pairing."
+      return 3 ;;
+    *)
+      _gha_log "ERROR: HTTP $http_code reading the App installation for $slug (response body: $(printf '%s' "$body" | tr '\n' ' ' | head -c 300))"
+      return 1 ;;
+  esac
 }
 
 # ---------- public: get a token ----------

@@ -27,6 +27,11 @@
 #    bypasses the App even with App env set; and a repo the App cannot read fails
 #    soft (empty result, rc 0, diagnostic to RUN_ISSUES_GH_ERR) instead of a silent
 #    "no candidates".
+# 8. gha_repo_installation (TEST 10) maps GET /repos/{o}/{r}/installation onto
+#    its return codes — 200 JSON, 404 none, 401 or App off identity unavailable,
+#    other status or no answer unreadable — and reads with the JWT without
+#    minting. It is the S0 write probe's App-mode source, so a wrong mapping
+#    would turn "cannot tell" into a green light.
 #
 # How it stays network-free
 # -------------------------
@@ -111,6 +116,22 @@ class H(http.server.BaseHTTPRequestHandler):
             "permissions": {"issues": "write", "pull_requests": "write", "contents": "write"},
         }).encode()
         self.send_response(201)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def do_GET(self):
+        # GET /repos/{owner}/{repo}/installation — gha_repo_installation's
+        # source. The repo name picks the answer; anything else is a 404. GETs
+        # never touch the hit counter, so "the probe mints nothing" is checkable.
+        routes = {
+            "/repos/o/installed/installation": (200, {"id": 98765, "permissions": {"issues": "write", "contents": "write", "pull_requests": "write"}}),
+            "/repos/o/rejected/installation": (401, {"message": "A JSON web token could not be decoded"}),
+            "/repos/o/broken/installation": (500, {"message": "Server Error"}),
+        }
+        code, payload = routes.get(self.path, (404, {"message": "Not Found"}))
+        body = json.dumps(payload).encode()
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -492,6 +513,33 @@ fi
 [ -s "$GH_ERR9" ] && ok "9d: the failed App read left a diagnostic in RUN_ISSUES_GH_ERR (not silent)" || \
   fail "9d: mixed-access failure was silent (RUN_ISSUES_GH_ERR empty)"
 : > "$GH_DENY_LIST"   # disarm
+
+# ---------- TEST 10: gha_repo_installation — the App write probe's source -----
+echo "--- TEST 10: gha_repo_installation ---"
+M10=$(cat "$HIT_COUNTER")
+BODY10=$(gha_repo_installation o/installed 2>/dev/null); RC10=$?
+if [ "$RC10" = "0" ] && [ "$(printf '%s' "$BODY10" | jq -r '.permissions.contents')" = "write" ]; then
+  ok "10a: 200 => rc 0 with the installation JSON on stdout"
+else
+  fail "10a: expected rc 0 + installation JSON (rc=$RC10 body='$BODY10')"
+fi
+[ "$(cat "$HIT_COUNTER")" = "$M10" ] && ok "10b: the probe reads with the JWT and mints no installation token" || \
+  fail "10b: the probe minted a token ($M10 -> $(cat "$HIT_COUNTER"))"
+
+probe_rc() {  # probe_rc <slug> — gha_repo_installation's rc, output discarded
+  gha_repo_installation "$1" >/dev/null 2>&1
+  echo $?
+}
+RC10C=$(probe_rc o/missing)
+[ "$RC10C" = "2" ] && ok "10c: 404 => rc 2 (no installation)" || fail "10c: 404 did not map to rc 2 (got $RC10C)"
+RC10D=$(probe_rc o/rejected)
+[ "$RC10D" = "3" ] && ok "10d: 401 => rc 3 (App identity unavailable)" || fail "10d: 401 did not map to rc 3 (got $RC10D)"
+RC10E=$(probe_rc o/broken)
+[ "$RC10E" = "1" ] && ok "10e: 500 => rc 1 (unreadable, never found)" || fail "10e: 500 did not map to rc 1 (got $RC10E)"
+RC10F=$(RUN_ISSUES_GHA_TOKEN_ENDPOINT_BASE="http://127.0.0.1:1" probe_rc o/installed)
+[ "$RC10F" = "1" ] && ok "10f: no HTTP answer => rc 1 (unreadable)" || fail "10f: a network failure did not map to rc 1 (got $RC10F)"
+RC10G=$( unset RUN_ISSUES_GITHUB_APP_ID; probe_rc o/installed )
+[ "$RC10G" = "3" ] && ok "10g: App mode off => rc 3" || fail "10g: App mode off did not map to rc 3 (got $RC10G)"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "github-app-auth: all passed" || echo "github-app-auth: FAILURES"

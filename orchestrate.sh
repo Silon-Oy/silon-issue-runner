@@ -64,7 +64,8 @@
 #   8   missing required dependency OR insufficient repo write access — the S0
 #       preflight gate refused to start the run; nothing was locked, claimed or
 #       created. The stderr message names the missing tool AND its fix command,
-#       or (issue #256) the missing Write role AND who grants it.
+#       or (issue #256) the missing Write role — in GitHub App mode the missing
+#       installation or grant — AND who grants it.
 #   9   issue is blocked by an open dependency — refused between the lock and the
 #       claim (S2b), before the issue is assigned to us. The run dir is finalized
 #       blocked/blocked_by_dependency and the lock released; nothing is claimed.
@@ -576,27 +577,29 @@ preflight_gate() {
   # issue at all, so S1 fails visibly with no claim — there is no Read-only
   # token to slip a green light past here.
   #
-  # The identity is the one the run WRITES with: gha_with_token supplies the App
-  # installation token in App mode and is a pass-through otherwise, so the check
-  # never green-lights permissions the run will not use. It runs inside a command
-  # substitution so gha_with_token's temporary token export stays confined to
-  # that subshell.
+  # The identity is the one the run WRITES with, and each identity has its own
+  # probe: the App installation's grants in App mode, the personal login's repo
+  # role otherwise. The personal probe must not run with the App's token — an
+  # installation token's repo read reports every permission false, so it refused
+  # every App-mode run (preflight_app_write_report has the details).
   if [ "${RUN_ISSUES_SKIP_REPO_WRITE_CHECK:-0}" != "1" ] && [ -n "$REPO_ROOT" ]; then
     local write_slug write_line write_rc=0
     write_slug=$(resolve_remote_to_owner_repo "$REPO_ROOT" "$REMOTE_NAME" 2>/dev/null) || write_slug=""
     if [ -n "$write_slug" ]; then
-      write_line=$(gha_with_token preflight_repo_write_report "$write_slug") || write_rc=$?
+      if gha_enabled; then
+        write_line=$(preflight_app_write_report "$write_slug") || write_rc=$?
+      else
+        write_line=$(preflight_repo_write_report "$write_slug") || write_rc=$?
+      fi
       if [ "$write_rc" -eq 2 ]; then
-        # A real verdict from the probe (no write, or an unreadable API answer):
-        # preflight_repo_write_report returns only 0 or 2.
+        # A real verdict (no write, or an unreadable API answer).
         findings="${findings}${findings:+$'\n'}${write_line}"
         rc=2
       elif [ "$write_rc" -ne 0 ]; then
-        # A non-{0,2} code can only come from gha_with_token itself failing to
-        # mint the App installation token — App-auth territory, deliberately out
-        # of scope here (issue #256): the probe never ran. Warn, don't block; a
-        # broken App token surfaces through its own channel.
-        findings="${findings}${findings:+$'\n'}MISSING (optional): repo write access to ${write_slug} — could not obtain the GitHub App identity to check it (App auth is verified elsewhere)"
+        # The App probe's advisory rc 1: the App identity itself was unavailable,
+        # so the probe never ran — App-auth territory that surfaces through its
+        # own channel. Warn, don't block.
+        findings="${findings}${findings:+$'\n'}${write_line:-MISSING (optional): repo write access to ${write_slug} — the probe exited ${write_rc} without a finding}"
       fi
     fi
   fi

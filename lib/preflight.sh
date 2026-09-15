@@ -9,11 +9,11 @@
 # instead of drifting apart in two copies.
 #
 # Every function is free of persistent side effects: no writes, no exits, no
-# globals. Four functions — preflight_probe_claude, preflight_timeout_bin,
-# preflight_jq_binary_ok and preflight_repo_write_report — EXECUTE the command
-# they are asked about, because for those a name on PATH (or a token that
-# merely exists) does not imply the contract we need. Each names that exception
-# in its own header.
+# globals. Five functions — preflight_probe_claude, preflight_timeout_bin,
+# preflight_jq_binary_ok, preflight_repo_write_report and
+# preflight_app_write_report — EXECUTE the command they are asked about, because
+# for those a name on PATH (or a token that merely exists) does not imply the
+# contract we need. Each names that exception in its own header.
 
 set -euo pipefail
 
@@ -218,10 +218,11 @@ preflight_gate_report() {
 # (push needs Write). This probe moves that class of late, side-effect-laden
 # failure to S0, where nothing has happened yet (issue #256).
 #
-# The CALLER selects the identity by wrapping this in gha_with_token, so an
-# App-mode run probes with its installation token and everyone else with the
-# personal login. A check made as a DIFFERENT identity than the one that writes
-# would green-light permissions the run never uses — worse than no check.
+# This is the PERSONAL login's probe; an App-mode run is checked by
+# preflight_app_write_report, and the caller picks between the two. A check made
+# as a DIFFERENT identity than the one that writes would green-light permissions
+# the run never uses — worse than no check — and this probe run with an
+# installation token refuses every App run (that function explains why).
 #
 # Empty <slug> means there is no target repo yet (install time): the check is
 # deferred to run time, reported as an advisory note, never a failure.
@@ -271,4 +272,85 @@ preflight_repo_write_report() {
       return 2
       ;;
   esac
+}
+
+# preflight_app_write_report <slug> — the GitHub App counterpart of
+# preflight_repo_write_report: one finding line about whether the App
+# installation a run will WRITE with may write to <slug>.
+#
+# The personal probe cannot simply run with the App's token: a `repos/<slug>`
+# read made with an installation token reports every `permissions` flag false —
+# `pull` included, on a repo that same token just read — so push=false refused
+# every App-mode run, including runs on repos the App could write. What an
+# installation may write is readable only App-authenticated, which is
+# gha_repo_installation's job (lib/github-app-auth.sh; the caller sources both).
+#
+# App permissions are granular, so "Write" means the three grants a run writes
+# with: issues (the auto-claimed label, S3), contents (push, S10) and
+# pull_requests (PR create, S11). The installation must also be the configured
+# one: tokens are minted from RUN_ISSUES_GITHUB_APP_INSTALLATION_ID, so another
+# installation's grants would green-light a token the run never gets.
+#
+# EXECUTES an API read through gha_repo_installation — the fifth exception to
+# this module's no-side-effects rule, for the same reason as
+# preflight_repo_write_report. Prints ONE line and returns preflight_report_tool's
+# severity vocabulary:
+#   0 — the configured installation covers <slug> with all three grants ("ok: …")
+#   1 — the App identity itself is unavailable (App mode off, key unusable, JWT
+#       rejected): the probe never ran, and App auth surfaces that through its
+#       own channel, so the finding is advisory
+#   2 — no installation, a different installation, a missing grant, or an
+#       unreadable answer. FAIL-CLOSED, like preflight_repo_write_report.
+preflight_app_write_report() {
+  local slug="$1"
+  local override='Set RUN_ISSUES_SKIP_REPO_WRITE_CHECK=1 to override'
+
+  if ! declare -F gha_repo_installation >/dev/null; then
+    printf 'MISSING (required): repo write access to %s — the GitHub App probe (lib/github-app-auth.sh) is not loaded; refusing fail-closed. %s\n' "$slug" "$override"
+    return 2
+  fi
+
+  local body probe_rc=0
+  body=$(gha_repo_installation "$slug") || probe_rc=$?
+  case "$probe_rc" in
+    0) ;;
+    2)
+      printf 'MISSING (required): repo write access to %s — the GitHub App has no installation covering this repository; ask an organization owner to install the App there or add the repository to its selection\n' "$slug"
+      return 2
+      ;;
+    3)
+      printf 'MISSING (optional): repo write access to %s — could not obtain the GitHub App identity to check it (App auth is verified elsewhere)\n' "$slug"
+      return 1
+      ;;
+    *)
+      printf 'MISSING (required): repo write access to %s — could not read the GitHub App installation (network error or unexpected API answer); refusing fail-closed. %s\n' "$slug" "$override"
+      return 2
+      ;;
+  esac
+
+  # One jq pass yields "<id>\t<grants that are not write>". Anything that is not
+  # an installation object fails jq or leaves the id empty: unreadable, not ok.
+  local verdict id missing
+  verdict=$(printf '%s' "$body" | jq -r '
+    . as $i
+    | ["issues", "contents", "pull_requests"]
+    | map(select((($i.permissions // {})[.]) != "write"))
+    | "\($i.id // "")\t\(join(", "))"' 2>/dev/null) || verdict=""
+  id="${verdict%%$'\t'*}"
+  missing="${verdict#*$'\t'}"
+
+  if [ -z "$verdict" ] || [ -z "$id" ]; then
+    printf 'MISSING (required): repo write access to %s — the GitHub App installation answer was unreadable; refusing fail-closed. %s\n' "$slug" "$override"
+    return 2
+  fi
+  if [ "$id" != "${RUN_ISSUES_GITHUB_APP_INSTALLATION_ID:-}" ]; then
+    printf 'MISSING (required): repo write access to %s — the repository is covered by GitHub App installation %s, but RUN_ISSUES_GITHUB_APP_INSTALLATION_ID is %s; point it at the installation that covers this repository\n' "$slug" "$id" "${RUN_ISSUES_GITHUB_APP_INSTALLATION_ID:-<unset>}"
+    return 2
+  fi
+  if [ -n "$missing" ]; then
+    printf 'MISSING (required): repo write access to %s — the GitHub App installation lacks write permission on: %s; the App owner adds it in the App permission settings and an organization owner approves the update on the installation\n' "$slug" "$missing"
+    return 2
+  fi
+  printf 'ok: repo write access to %s (GitHub App installation %s)\n' "$slug" "$id"
+  return 0
 }

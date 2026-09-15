@@ -27,6 +27,10 @@
 #   8. preflight_repo_write_report: the push=true/false/unreadable verdicts and
 #      the 0/2 severity split, the deferred (empty-slug) note, and the
 #      fail-closed rule that an unreadable answer is never a green light (#256)
+#   9. preflight_app_write_report: in App mode the installation's grants decide
+#      even while gh answers push=false (an installation token's repo read always
+#      does); a wrong installation id or a missing grant is fatal, an unreadable
+#      answer is fail-closed, and an unavailable App identity is advisory (rc 1)
 #
 # Run: bash tests/test-preflight.sh
 
@@ -353,6 +357,62 @@ if [ "$rc" -eq 2 ] && printf '%s\n' "$line" | grep -q 'gh is not available'; the
   echo "PASS: case8 a missing gh is fail-closed (rc 2)"
 else
   echo "FAIL: case8 missing gh: rc=$rc line='$line'"; FAIL=1
+fi
+
+# ---- Case 9: preflight_app_write_report ----
+# The installation's grants come from gha_repo_installation (github-app-auth.sh,
+# whose HTTP mapping test-github-app-auth.sh covers), stubbed here as a function
+# answering per $GHA_INST with the lib's return codes: 0 JSON, 1 unreadable,
+# 2 no installation, 3 App identity unavailable.
+gha_repo_installation() {
+  case "${GHA_INST:-ok}" in
+    ok)        printf '{"id":42,"permissions":{"issues":"write","contents":"write","pull_requests":"write","metadata":"read"}}' ;;
+    readonly)  printf '{"id":42,"permissions":{"issues":"write","contents":"read","metadata":"read"}}' ;;
+    otherinst) printf '{"id":7,"permissions":{"issues":"write","contents":"write","pull_requests":"write"}}' ;;
+    garbage)   printf 'not json' ;;
+    noid)      printf '{"permissions":{"issues":"write","contents":"write","pull_requests":"write"}}' ;;
+    error)     return 1 ;;
+    notfound)  return 2 ;;
+    noauth)    return 3 ;;
+  esac
+}
+RUN_ISSUES_GITHUB_APP_INSTALLATION_ID=42
+
+app_case() {  # app_case <GHA_INST> <expected rc> <needle> <tag>
+  local out code
+  # The gh stub shadows gh only: the App probe needs the real jq on PATH.
+  out=$(PATH="$WORK/w:$PATH" GH_PERM=false GHA_INST="$1" preflight_app_write_report example-org/app)
+  code=$?
+  if [ "$code" -eq "$2" ] && printf '%s\n' "$out" | grep -qF -- "$3"; then
+    echo "PASS: case9 $4"
+  else
+    echo "FAIL: case9 $4: rc=$code line='$out'"; FAIL=1
+  fi
+}
+
+# The regression: gh still answers push=false (what an installation token's repo
+# read reports), yet a configured installation with the three grants is ok.
+app_case ok 0 'ok: repo write access to example-org/app (GitHub App installation 42)' \
+  "the installation's grants decide, not the token's push=false"
+app_case readonly 2 'lacks write permission on: contents, pull_requests' \
+  "a missing or read-only grant is fatal and names each grant"
+app_case otherinst 2 'covered by GitHub App installation 7, but RUN_ISSUES_GITHUB_APP_INSTALLATION_ID is 42' \
+  "another installation's grants are not the configured installation's"
+app_case notfound 2 'no installation covering this repository' \
+  "no installation is fatal and names who fixes it"
+app_case error 2 'refusing fail-closed' "an unreadable probe is fail-closed"
+app_case garbage 2 'refusing fail-closed' "a non-JSON answer is fail-closed"
+app_case noid 2 'refusing fail-closed' "an answer without an installation id is fail-closed"
+app_case noauth 1 'MISSING (optional)' \
+  "an unavailable App identity is advisory (rc 1), never ok"
+
+# Without the App lib loaded the probe cannot run, which is fail-closed too.
+line=$( unset -f gha_repo_installation; preflight_app_write_report example-org/app )
+rc=$?
+if [ "$rc" -eq 2 ] && printf '%s\n' "$line" | grep -q 'is not loaded; refusing fail-closed'; then
+  echo "PASS: case9 a missing App probe is fail-closed (rc 2)"
+else
+  echo "FAIL: case9 missing App probe: rc=$rc line='$line'"; FAIL=1
 fi
 
 echo "----------------------------------------"
