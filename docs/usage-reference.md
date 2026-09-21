@@ -231,6 +231,7 @@ tuloste:
 | `worktree_base_unresolved` | Feature-haaran base-refiä ei saatu ratkaistua: remotella on refejä mutta ei symbolista HEADia eikä `base_branch`ia ole asetettu. Korjaus: `git remote set-head <remote> -a` kohderepossa |
 | `worktree_leftover_branch` | Saman issuen edellisestä ajosta jäi paikallinen haara (suljettu PR `--delete-branch`illa poistaa vain remote-haaran). Korjaus: `cleanup-run.sh --repo <polku> --issue <N>` |
 | `worktree_create_failed` | Muu `git worktree add` -virhe (olemassa oleva worktree-hakemisto, levytila, oikeudet). Syytä ei arvata — gitin oma virheviesti on ajon lokissa |
+| `env_bootstrap_node_unavailable` | Kohderepon `.nvmrc` pinnaa Node-version jota ei saatu aktivoitua tällä koneella (nvm puuttuu tai versiota ei ole asennettu). Ajo ei valu koneen oletus-Nodeen, koska väärä ABI rikkoisi natiivit addonit. Korjaus: `nvm install <versio>` koneelle |
 | `env_bootstrap_failed` / `env_bootstrap_timeout` | Riippuvuuksien asennus kaatui — tyypillisesti puuttuva `GITHUB_TOKEN` yksityiselle riippuvuudelle |
 | `provision_test_env_failed` | Repon oma testiympäristöhook kaatui |
 | `db_clone_rc_<n>` | Db-kloonaus epäonnistui |

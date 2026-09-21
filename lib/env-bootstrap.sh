@@ -52,3 +52,36 @@ detect_composer() {
     printf '%s' ""
   fi
 }
+
+# detect_node_version <dir> — echo the Node version the target repo pins in
+# <dir>/.nvmrc (trimmed of surrounding whitespace), or "" when the directory has
+# no .nvmrc (or the file is blank).
+#
+# The empty return is the no-op case (issue #287): the repo does not pin a Node
+# version, so the run keeps whatever Node is already on PATH — behaviour
+# unchanged from before this file learned to read .nvmrc. The orchestrator
+# (select_node_runtime) treats empty as "keep PATH node, source=default".
+#
+# The content is returned VERBATIM minus whitespace: nvm accepts every form an
+# .nvmrc may hold — "22", "v22", "22.1.0", "lts/hydrogen", "lts/*", "node" — so
+# normalizing further would mean second-guessing nvm's own resolver. The caller
+# hands the string straight to `nvm use`. Pure: reads the filesystem, mutates
+# nothing (the sibling of detect_package_manager / detect_composer).
+detect_node_version() {
+  local dir="$1"
+  local f="$dir/.nvmrc"
+  [ -f "$f" ] || { printf '%s' ""; return 0; }
+  # First non-blank line, leading/trailing whitespace stripped. .nvmrc is
+  # conventionally a single line; tolerating a trailing newline or a hand-edited
+  # blank line keeps the file from resolving to an empty version.
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"   # strip leading whitespace
+    line="${line%"${line##*[![:space:]]}"}"   # strip trailing whitespace
+    if [ -n "$line" ]; then
+      printf '%s' "$line"
+      return 0
+    fi
+  done < "$f"
+  printf '%s' ""
+}

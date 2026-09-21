@@ -55,9 +55,10 @@
 #       (automatic pickup is the poller's job, not the orchestrator's — issue #99)
 #   3   lock/claim race lost
 #   4   cycle review blocked the run (auto mode only)
-#   5   blocked before/at the implementer — db-clone failed, env bootstrap
-#       (S7b dependency install) failed or timed out, the test-env provisioning
-#       hook (S7c) failed, or implementer returned BLOCKED
+#   5   blocked before/at the implementer — db-clone failed, the .nvmrc-pinned
+#       Node could not be activated (S7b, env_bootstrap_node_unavailable), env
+#       bootstrap (S7b dependency install) failed or timed out, the test-env
+#       provisioning hook (S7c) failed, or implementer returned BLOCKED
 #   6   PR open failed
 #   7   implementer (S8) timed out — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
@@ -451,28 +452,48 @@ log() {
 # source nvm (mirroring zsh/shared.zsh) so npx resolves regardless of launch
 # context — poller/tmux, manual --restart, or --continue. Also a no-op when npx
 # is already on PATH (the common interactive case).
+# _source_nvm — source nvm's shell integration (nvm.sh) if present, so `nvm`
+# becomes an available shell function in the CURRENT shell. Candidates, in order:
+# an explicit RUN_ISSUES_NVM_SH override (the ONLY candidate when set — a
+# non-existent override does NOT fall back, matching the watchlist-override rule,
+# which also keeps tests hermetic against a real Homebrew nvm on the host), then
+# $NVM_DIR/nvm.sh, then the Homebrew location. nvm.sh is NOT written for
+# `set -euo pipefail`, so callers MUST relax `set +eu` around this call. Shared by
+# ensure_node_runtime (npx resolution for the operator's driver) and
+# select_node_runtime (.nvmrc activation, issue #287) so the two cannot drift on
+# WHERE nvm lives. No-op when no candidate exists; callers verify with
+# `command -v nvm` afterwards.
+_source_nvm() {
+  local -a candidates
+  if [ -n "${RUN_ISSUES_NVM_SH:-}" ]; then
+    candidates=("$RUN_ISSUES_NVM_SH")
+  else
+    candidates=("${NVM_DIR:-$HOME/.nvm}/nvm.sh" "/opt/homebrew/opt/nvm/nvm.sh")
+  fi
+  local c
+  for c in "${candidates[@]}"; do
+    if [ -s "$c" ]; then
+      # shellcheck disable=SC1090
+      . "$c"
+      return 0
+    fi
+  done
+}
+
 ensure_node_runtime() {
   case "${RUN_ISSUES_CLAUDE_CMD%% *}" in
     npx) ;;
     *) return 0 ;;
   esac
   command -v npx >/dev/null 2>&1 && return 0
-  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
-  # nvm.sh is not written for `set -euo pipefail`; relax while sourcing, then
-  # restore. pipefail is unaffected by `set +eu`.
+  # nvm.sh is not written for `set -euo pipefail`; relax while sourcing/using,
+  # then restore. pipefail is unaffected by `set +eu`.
   set +eu
-  if [ -s "$nvm_dir/nvm.sh" ]; then
-    # shellcheck disable=SC1090
-    . "$nvm_dir/nvm.sh"
-    nvm use default >/dev/null 2>&1 || true
-  elif [ -s "/opt/homebrew/opt/nvm/nvm.sh" ]; then
-    # shellcheck disable=SC1091
-    . "/opt/homebrew/opt/nvm/nvm.sh"
-    nvm use default >/dev/null 2>&1 || true
-  fi
+  _source_nvm
+  command -v nvm >/dev/null 2>&1 && nvm use default >/dev/null 2>&1 || true
   set -eu
   command -v npx >/dev/null 2>&1 \
-    || log "WARNING: npx not found after sourcing nvm ($nvm_dir); the npx RUN_ISSUES_CLAUDE_CMD will fail (exit 127)"
+    || log "WARNING: npx not found after sourcing nvm; the npx RUN_ISSUES_CLAUDE_CMD will fail (exit 127)"
 }
 
 # ---------- machine-local secret provisioning ----------
@@ -1837,6 +1858,77 @@ commit_run_issues_gitignore() {
 # Runs on every path that reaches phase_b (start, --resume, --restart,
 # --continue), so it is the single chokepoint before S8. Idempotent: both
 # composer install and the JS install are safe to re-run on a restart.
+# select_node_runtime — honour the target repo's .nvmrc BEFORE installing
+# dependencies (issue #287), so native addons (better-sqlite3, ...) compile and
+# run against the ABI the repo declares — not whatever Node happens to sit on the
+# run process's PATH. Undeclared machine state (a Homebrew `node` upgrade) used to
+# break a run with NOTHING in the run record naming the Node that did the install;
+# the diagnosis only surfaced from the compiler's V8 symbol errors.
+#
+#   no .nvmrc              -> no-op: keep the PATH Node, exactly as before this
+#                            issue (no new coercion, no new failure cause). The
+#                            chosen Node + source=default are still traced (AC4).
+#   .nvmrc + activatable   -> `nvm use <pin>` mutates PATH IN THIS SHELL; because
+#                            phase_b runs the S7b installs, the S7c provision hook
+#                            and the S8 implementer as child subshells, they all
+#                            inherit the same Node (AC2 — a version wrapped around
+#                            only the install would leave the tests on a different
+#                            ABI than the freshly built node_modules).
+#   .nvmrc + NOT activatable -> the run does NOT silently fall back to the default
+#                            Node (that silent fallback is the whole bug). It
+#                            finalizes as its own diagnosable blocked state,
+#                            env_bootstrap_node_unavailable, so the cause is
+#                            legible in the issue's situation comment.
+#
+# Runs at the top of phase_b (before run_env_bootstrap) so every entry path
+# (start/resume/restart/continue) is covered uniformly.
+select_node_runtime() {
+  local pin
+  pin=$(detect_node_version "$WORKTREE_PATH")
+
+  if [ -z "$pin" ]; then
+    local cur="none"
+    command -v node >/dev/null 2>&1 && cur=$(node --version 2>/dev/null || printf 'unknown')
+    log "node-runtime: no .nvmrc in worktree — using PATH node ($cur)"
+    state_event "$RUN_DIR" "node_runtime_selected" "source=default" "version=$cur"
+    return 0
+  fi
+
+  # .nvmrc present: source nvm and try to activate the pinned version. nvm.sh is
+  # not written for `set -euo pipefail`; relax around sourcing + `nvm use`.
+  local have_nvm=0 use_rc=1
+  set +eu
+  _source_nvm
+  if command -v nvm >/dev/null 2>&1; then
+    have_nvm=1
+    nvm use "$pin" >/dev/null 2>&1
+    use_rc=$?
+  fi
+  set -eu
+
+  if [ "$have_nvm" -eq 0 ] || [ "$use_rc" -ne 0 ]; then
+    log "node-runtime: .nvmrc pins '$pin' but nvm could not activate it (nvm_present=$have_nvm, use_rc=$use_rc) — finalizing blocked (no implementer budget spent)"
+    state_finalize "$RUN_DIR" "blocked" "env_bootstrap_node_unavailable"
+    state_event "$RUN_DIR" "env_bootstrap_node_unavailable" "requested=$pin" "nvm_present=$have_nvm"
+    local detail
+    if [ "$have_nvm" -eq 0 ]; then
+      detail="Kohderepo pinnaa Node-version \`$pin\` (\`.nvmrc\`), mutta nvm:ää ei löytynyt tältä koneelta, joten pinnattua versiota ei voitu aktivoida. Ajo ei valu koneen PATH-Nodeen, koska väärä ABI rikkoo natiivit addonit (esim. \`better-sqlite3\`). Asenna nvm ja pinnattu Node-versio (\`nvm install $pin\`) tälle koneelle, ja kommentoi issueen — ajo yritetään uudelleen."
+    else
+      detail="Kohderepo pinnaa Node-version \`$pin\` (\`.nvmrc\`), mutta sitä ei ole asennettu tälle koneelle (\`nvm use $pin\` epäonnistui). Ajo ei valu koneen oletus-Nodeen, koska väärä ABI rikkoo natiivit addonit (esim. \`better-sqlite3\`). Asenna versio (\`nvm install $pin\`) ja kommentoi issueen — ajo yritetään uudelleen."
+    fi
+    _post_situation_to_issue "env_bootstrap_node_unavailable" "$detail" "" blocked prose
+    _add_needs_human_label
+    exit 5
+  fi
+
+  # nvm use mutated PATH in this shell; PATH is already exported, so child
+  # subshells (S7b installs, S7c hook, S8 implementer) inherit the pinned Node.
+  local active="unknown"
+  command -v node >/dev/null 2>&1 && active=$(node --version 2>/dev/null || printf 'unknown')
+  log "node-runtime: .nvmrc pins '$pin' — activated node $active via nvm"
+  state_event "$RUN_DIR" "node_runtime_selected" "source=nvmrc" "requested=$pin" "version=$active"
+}
+
 run_env_bootstrap() {
   enter_state "S7b_EnvBootstrap"
   log "S7b_EnvBootstrap"
@@ -2064,7 +2156,11 @@ run_provision_test_env() {
 # Phase B: implementer → evolution → PR
 # ===========================================================================
 phase_b() {
-  # ---------- S7b: env bootstrap (fail-fast dep install) ----------
+  # ---------- S7b: node runtime (.nvmrc) then env bootstrap (fail-fast dep install) ----------
+  # select_node_runtime FIRST: it exports the target repo's pinned Node onto PATH
+  # so the installs below — and every later subshell (S7c hook, S8 implementer
+  # + its tests) — build and run against the ABI the repo declares (issue #287).
+  select_node_runtime
   run_env_bootstrap
 
   # ---------- S7c: per-run test-env provisioning (opt-in hook) ----------

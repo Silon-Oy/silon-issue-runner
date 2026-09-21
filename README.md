@@ -202,9 +202,13 @@ sudo loginctl enable-linger "$USER"   # PAKOLLINEN
 `enable-linger` on se, jonka unohtaminen tuottaa hiljaisimman vian: user-yksiköt kuolevat
 uloskirjautuessa, poller "ei vain tee mitään", eikä mikään loki kerro miksi.
 
-Yksiköt ajavat `bash -l -c` **tarkoituksella** — login-shelli lataa nvm:n, jotta `npx`
-resolvoituu. Tarkista `bash -lc 'node -v'` ennen kuin luotat niihin: jos login-shellin Node
-on eri kuin interaktiivisen, claude-kutsut kaatuvat koodilla 127.
+Yksiköt ajavat `bash -l -c` **tarkoituksella** profiilikonfiguraatiosi soveltamiseksi. Login-shelli
+**ei** lataa nvm:ää itsestään — macOS:n bash-login lukee vain ensimmäisen löytyvän tiedostoista
+`.bash_profile` / `.bash_login` / `.profile`, eikä nvm ole niissä ellei sitä sinne itse laita,
+joten `ensure_node_runtime` sourceaa nvm:n npx-ajurille. Ja vaikka lataisi, se antaisi koneen
+**oletusversion**, ei kohderepon `.nvmrc`:tä — repon Noden aktivointi on erillinen S7b-vaihe
+(`select_node_runtime`, #287). Tarkista `bash -lc 'node -v'`: jos se eroaa interaktiivisesta,
+npx-muotoiset claude-kutsut kaatuvat koodilla 127.
 
 **Mitoitus.** Ajo pitää yllä samanaikaisesti Claude CLI:tä, kohderepon buildia ja sen
 testiympäristöä. Mitatut luvut yhdestä pnpm-monorepo-kohderepoista: repo + `node_modules`
@@ -1173,7 +1177,8 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 
 `blocked`-tilan tavalliset syyt: `cycle_review_BLOCKER`, `origin_fetch_failed`,
 `worktree_base_unresolved`, `worktree_leftover_branch`, `worktree_create_failed`,
-`env_bootstrap_failed`, `env_bootstrap_timeout`, `provision_test_env_failed`,
+`env_bootstrap_node_unavailable`, `env_bootstrap_failed`, `env_bootstrap_timeout`,
+`provision_test_env_failed`,
 `implementer_BLOCKED`, `clarification_loop_exhausted`, `git_push_failed`,
 `pr_create_failed`, `stalled_in_<vaihe>`. Näistä kaikki jättävät issuelle
 `needs-human`-labelin; kolme S4-syytä on avattu korjauskomentoineen kohdassa (e) yllä.

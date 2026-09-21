@@ -15,7 +15,7 @@ lukuihin.
 | `action-token.sh` | Ohjaamon jaettu CSRF-token. Bearer-salaisuus: ei koskaan `status.json`iin, lokiin eikä kommenttiin |
 | `archive.sh` | Terminaalitilaisten run-dirien siirto `run-issues-archive/`iin. PR-suoja on paikallinen, ei gh-kutsu |
 | `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi) ja aina päällä olevan järjestelmäkehotteen toimitus: toimintasopimus + koodausstandardi yhdistettynä — myös PR-vahti kutsuu tästä `load_repo_principles_file`ia |
-| `env-bootstrap.sh` | Pakettimanagerin tunnistus S7b:n fail-fast-asennusporttiin |
+| `env-bootstrap.sh` | Pakettimanagerin ja kohderepon `.nvmrc`-Node-version tunnistus S7b:n fail-fast-asennusporttiin |
 | `epic.sh` | Epic-tason automaatio: ajolabelien propagointi, `needs-human`-eskalaatio, valmiuskommentti. Best-effort (aina rc 0) |
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |
 | `github-app-auth.sh` | Opt-in GitHub App -identiteetti. Kattaa kirjoitukset **ja** raskaimmat luvut |

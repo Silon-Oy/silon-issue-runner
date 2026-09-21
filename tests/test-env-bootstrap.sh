@@ -105,6 +105,30 @@ assert_composer "$D/bedrock"  "composer"
 assert_pm "$D/bedrock" "npm"
 [ "$FAIL" = "0" ] && echo "PASS (a) detect_package_manager + detect_composer: independent lockfile detection + no-op"
 
+# detect_node_version — pure .nvmrc reader (issue #287). Empty when no .nvmrc (or
+# blank); content returned verbatim minus whitespace (nvm resolves the form).
+assert_node_version() {
+  local got want="$2"
+  got=$(detect_node_version "$1")
+  if [ "$got" != "$want" ]; then
+    echo "FAIL (a): detect_node_version('$1') = '$got' (want '$want')"; FAIL=1
+  fi
+}
+mk "$D/nonvmrc"; : > "$D/nonvmrc/package.json"                    # package.json, no .nvmrc
+mk "$D/nvm22";    printf '22\n'      > "$D/nvm22/.nvmrc"
+mk "$D/nvmv";     printf 'v22.1.0\n' > "$D/nvmv/.nvmrc"
+mk "$D/nvmws";    printf '  22  \n'  > "$D/nvmws/.nvmrc"          # surrounding whitespace
+mk "$D/nvmlts";   printf 'lts/*\n'   > "$D/nvmlts/.nvmrc"        # nvm alias form, passed through
+mk "$D/nvmblank"; printf '\n\n'      > "$D/nvmblank/.nvmrc"      # blank -> empty (nothing to honour)
+assert_node_version "$D/none"     ""          # no .nvmrc at all
+assert_node_version "$D/nonvmrc"  ""
+assert_node_version "$D/nvm22"    "22"
+assert_node_version "$D/nvmv"     "v22.1.0"
+assert_node_version "$D/nvmws"    "22"
+assert_node_version "$D/nvmlts"   "lts/*"
+assert_node_version "$D/nvmblank" ""
+[ "$FAIL" = "0" ] && echo "PASS (a) detect_node_version: pure .nvmrc reader (trim, alias forms, blank/no-op)"
+
 # Helper to drive the orchestrator in resume/PROCEED mode.
 run_orch() {
   ( cd "$REPO" && \
@@ -113,6 +137,7 @@ run_orch() {
     RUN_ISSUES_CLAUDE_CMD="$BIN/claude" \
     RUN_ISSUES_LOCK_ROOT="$WORK/locks" \
     RUN_ISSUES_ENV_FILE="$WORK/no-such-env" \
+    RUN_ISSUES_NVM_SH="${RUN_ISSUES_NVM_SH:-$WORK/no-such-nvm}" \
     "$@" )
 }
 
@@ -122,9 +147,13 @@ run_orch() {
 # claude mock writes a sentinel (proves the implementer was reached) and returns
 # BLOCKED so phase_b stops cleanly at S8 without needing the full PR flow.
 SENTINEL="$WORK/claude-ran"
+# The mock records the `node --version` it sees so a .nvmrc test can prove the
+# pinned Node reached the implementer subshell (issue #287, AC2), not just the
+# install. Returns BLOCKED so phase_b stops cleanly at S8.
 cat > "$BIN/claude" <<SH
 #!/usr/bin/env bash
 touch "$SENTINEL"
+node --version > "$WORK/claude-node.txt" 2>/dev/null || echo "no-node" > "$WORK/claude-node.txt"
 echo "IMPLEMENTER_RESULT: BLOCKED — test stop after gate"
 SH
 chmod +x "$BIN/claude"
@@ -285,6 +314,146 @@ grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (e): needs-human label
 grep -q '"event":"env_bootstrap_failed"' "$RD_E/state.jsonl" \
   || { echo "FAIL (e): no env_bootstrap_failed event"; FAIL=1; }
 [ "$FAIL" = "0" ] && echo "PASS (e) composer install failure -> blocked/env_bootstrap_failed + needs-human + exit 5"
+
+# ===========================================================================
+# .nvmrc integration doubles (issue #287)
+# ===========================================================================
+# A fake node whose --version is distinctive, so a test can prove the pinned
+# Node actually reached a subshell — not the machine's real node.
+FAKE_NODE_BIN="$WORK/fake-node-bin"; mkdir -p "$FAKE_NODE_BIN"
+cat > "$FAKE_NODE_BIN/node" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = "--version" ] && { echo "v22.99.99"; exit 0; }
+exit 0
+SH
+chmod +x "$FAKE_NODE_BIN/node"
+
+# A fake nvm.sh (injected via RUN_ISSUES_NVM_SH): `nvm use 22` succeeds and
+# prepends the fake node bin to PATH; any other version fails (rc=3), standing in
+# for "version not installed on this machine". This is what keeps the test
+# hermetic against the host's real nvm/Homebrew nvm.
+FAKE_NVM_SH="$WORK/fake-nvm.sh"
+cat > "$FAKE_NVM_SH" <<SH
+nvm() {
+  if [ "\$1" = "use" ]; then
+    case "\$2" in
+      22|v22) export PATH="$FAKE_NODE_BIN:\$PATH"; return 0 ;;
+      *) return 3 ;;
+    esac
+  fi
+  return 0
+}
+SH
+
+# npm mock is left over as a success from (d); reuse it. composer was left
+# failing by (e), but (f)/(g)/(h) carry no composer.lock so it is never invoked.
+
+# ===========================================================================
+# (f) .nvmrc pins an activatable version -> nvm use succeeds, the pinned Node is
+#     exported onto PATH, install runs, and the implementer subshell sees it
+#     (issue #287, AC1 + AC2 + AC4)
+# ===========================================================================
+RID_F="20260522-1704-issue-64"
+RD_F="$REPO/.claude/run-issues/$RID_F"
+WT_F="$WORK/wt-f"; mkdir -p "$WT_F"
+printf '22\n' > "$WT_F/.nvmrc"
+: > "$WT_F/package.json"; : > "$WT_F/package-lock.json"   # -> npm install (mock ok)
+state_init "$RD_F" "$RID_F" "$REPO" "64"
+state_set "$RD_F" "branch" "auto-run/issue-64-x"
+state_set "$RD_F" "worktree_path" "$WT_F"
+state_set "$RD_F" "cycle_review_decision" "PROCEED"
+echo '{"title":"t","body":"b","comments":[]}' > "$RD_F/issue.json"
+echo "CYCLE_REVIEW_DECISION: PROCEED" > "$RD_F/01-cycle-review.out"
+rm -f "$SENTINEL" "$WORK/claude-node.txt"
+
+set +e
+OUT_F=$(RUN_ISSUES_NVM_SH="$FAKE_NVM_SH" run_orch "$ORCH" --resume "$RD_F" --decision PROCEED 2>&1)
+RC_F=$?
+set -e
+echo "--- (f) .nvmrc activatable (rc=$RC_F) ---"; echo "$OUT_F" | grep node-runtime | tail -2
+SEL_F=$(jq -rc 'select(.event=="node_runtime_selected") | .data' "$RD_F/state.jsonl" | tail -1)
+[ "$(printf '%s' "$SEL_F" | jq -r '.source')" = "nvmrc" ] \
+  || { echo "FAIL (f): node_runtime_selected source != nvmrc ($SEL_F)"; FAIL=1; }
+[ "$(printf '%s' "$SEL_F" | jq -r '.requested')" = "22" ] \
+  || { echo "FAIL (f): node_runtime_selected requested != 22 ($SEL_F)"; FAIL=1; }
+[ "$(printf '%s' "$SEL_F" | jq -r '.version')" = "v22.99.99" ] \
+  || { echo "FAIL (f): node_runtime_selected version != v22.99.99 ($SEL_F)"; FAIL=1; }
+[ -f "$SENTINEL" ] || { echo "FAIL (f): implementer not reached after nvm activation"; FAIL=1; }
+# AC2: the pinned Node reached the implementer subshell, not just the install.
+[ "$(cat "$WORK/claude-node.txt" 2>/dev/null)" = "v22.99.99" ] \
+  || { echo "FAIL (f): implementer saw node '$(cat "$WORK/claude-node.txt" 2>/dev/null)' (want v22.99.99 — PATH did not propagate)"; FAIL=1; }
+grep -q '"event":"env_bootstrap_ok"' "$RD_F/state.jsonl" \
+  || { echo "FAIL (f): install did not run under the pinned Node"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS (f) .nvmrc activatable -> pinned Node on PATH for install + implementer"
+
+# ===========================================================================
+# (g) .nvmrc pins a version nvm cannot activate (not installed) -> own blocked
+#     state, no silent fallback, implementer never reached (issue #287, AC3)
+# ===========================================================================
+RID_G="20260522-1705-issue-65"
+RD_G="$REPO/.claude/run-issues/$RID_G"
+WT_G="$WORK/wt-g"; mkdir -p "$WT_G"
+printf '99\n' > "$WT_G/.nvmrc"                            # fake nvm fails `use 99`
+: > "$WT_G/package.json"; : > "$WT_G/package-lock.json"
+state_init "$RD_G" "$RID_G" "$REPO" "65"
+state_set "$RD_G" "branch" "auto-run/issue-65-x"
+state_set "$RD_G" "worktree_path" "$WT_G"
+state_set "$RD_G" "cycle_review_decision" "PROCEED"
+echo '{"title":"t","body":"b","comments":[]}' > "$RD_G/issue.json"
+echo "CYCLE_REVIEW_DECISION: PROCEED" > "$RD_G/01-cycle-review.out"
+rm -f "$SENTINEL"; : > "$GH_LOG"
+
+set +e
+OUT_G=$(RUN_ISSUES_NVM_SH="$FAKE_NVM_SH" run_orch "$ORCH" --resume "$RD_G" --decision PROCEED 2>&1)
+RC_G=$?
+set -e
+echo "--- (g) .nvmrc not installed (rc=$RC_G) ---"; echo "$OUT_G" | grep node-runtime | tail -1
+[ "$RC_G" = "5" ] || { echo "FAIL (g): expected exit 5, got $RC_G"; FAIL=1; }
+ST_G=$(jq -r '.status' "$RD_G/run.json")
+RE_G=$(jq -r '.blocked_reason' "$RD_G/run.json")
+[ "$ST_G" = "blocked" ] || { echo "FAIL (g): status='$ST_G' (want blocked)"; FAIL=1; }
+[ "$RE_G" = "env_bootstrap_node_unavailable" ] || { echo "FAIL (g): blocked_reason='$RE_G'"; FAIL=1; }
+[ ! -f "$SENTINEL" ] || { echo "FAIL (g): implementer invoked despite node-unavailable (budget spent)"; FAIL=1; }
+grep -q '"event":"env_bootstrap_node_unavailable"' "$RD_G/state.jsonl" \
+  || { echo "FAIL (g): no env_bootstrap_node_unavailable event"; FAIL=1; }
+grep -qF 'labels[]=needs-human' "$GH_LOG" || { echo "FAIL (g): needs-human label not attempted"; FAIL=1; }
+grep -q 'issue comment' "$GH_LOG" || { echo "FAIL (g): situation comment not posted"; FAIL=1; }
+# The install must NOT have run: no ABI-mismatched node_modules left behind.
+grep -q '"event":"env_bootstrap_ok"' "$RD_G/state.jsonl" \
+  && { echo "FAIL (g): install ran despite unavailable pinned Node"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS (g) .nvmrc not installed -> blocked/env_bootstrap_node_unavailable + exit 5, no fallback"
+
+# ===========================================================================
+# (h) .nvmrc present but nvm itself is absent -> same diagnosable blocked state
+#     (nvm_present=0), still no silent fallback (issue #287, AC3)
+# ===========================================================================
+RID_H="20260522-1706-issue-66"
+RD_H="$REPO/.claude/run-issues/$RID_H"
+WT_H="$WORK/wt-h"; mkdir -p "$WT_H"
+printf '22\n' > "$WT_H/.nvmrc"
+: > "$WT_H/package.json"; : > "$WT_H/package-lock.json"
+state_init "$RD_H" "$RID_H" "$REPO" "66"
+state_set "$RD_H" "branch" "auto-run/issue-66-x"
+state_set "$RD_H" "worktree_path" "$WT_H"
+state_set "$RD_H" "cycle_review_decision" "PROCEED"
+echo '{"title":"t","body":"b","comments":[]}' > "$RD_H/issue.json"
+echo "CYCLE_REVIEW_DECISION: PROCEED" > "$RD_H/01-cycle-review.out"
+rm -f "$SENTINEL"; : > "$GH_LOG"
+
+# RUN_ISSUES_NVM_SH points at a non-existent file -> the override is the ONLY
+# candidate, so nvm is never sourced and `command -v nvm` fails (nvm_present=0).
+set +e
+OUT_H=$(RUN_ISSUES_NVM_SH="$WORK/absent-nvm.sh" run_orch "$ORCH" --resume "$RD_H" --decision PROCEED 2>&1)
+RC_H=$?
+set -e
+echo "--- (h) nvm absent (rc=$RC_H) ---"; echo "$OUT_H" | grep node-runtime | tail -1
+[ "$RC_H" = "5" ] || { echo "FAIL (h): expected exit 5, got $RC_H"; FAIL=1; }
+RE_H=$(jq -r '.blocked_reason' "$RD_H/run.json")
+[ "$RE_H" = "env_bootstrap_node_unavailable" ] || { echo "FAIL (h): blocked_reason='$RE_H'"; FAIL=1; }
+NVMP_H=$(jq -rc 'select(.event=="env_bootstrap_node_unavailable") | .data.nvm_present' "$RD_H/state.jsonl" | tail -1)
+[ "$NVMP_H" = "0" ] || { echo "FAIL (h): nvm_present='$NVMP_H' (want 0)"; FAIL=1; }
+[ ! -f "$SENTINEL" ] || { echo "FAIL (h): implementer invoked despite absent nvm (budget spent)"; FAIL=1; }
+[ "$FAIL" = "0" ] && echo "PASS (h) .nvmrc + no nvm -> blocked/env_bootstrap_node_unavailable (nvm_present=0)"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "env-bootstrap: all passed" || echo "env-bootstrap: FAILURES"
