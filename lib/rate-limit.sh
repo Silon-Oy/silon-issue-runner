@@ -32,6 +32,10 @@
 _RATE_LIMIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=paths.sh
 . "$_RATE_LIMIT_DIR/paths.sh"
+# deadline_file_read / deadline_file_write: the one-line state file shape this
+# module shares with lib/usage-limit.sh.
+# shellcheck source=deadline-file.sh
+. "$_RATE_LIMIT_DIR/deadline-file.sh"
 
 # Backoff ladder in seconds. Doubling from one poller interval up to an hour;
 # the cap matters because a deadline further out than the outage would idle the
@@ -82,17 +86,11 @@ rate_limit_state_file() {
 # state file, defaulting to 0/0. Anything unparseable degrades to the defaults:
 # a corrupt file must not be able to wedge the factory shut.
 _rate_limit_read() {
-  RATE_LIMIT_DEADLINE=0
-  RATE_LIMIT_STEP=0
-  local line d s
-  line=$(cat "${1:-}" 2>/dev/null || printf '')
-  [ -n "$line" ] || return 0
-  d="${line%% *}"
-  s="${line##* }"
-  case "$d" in ''|*[!0-9]*) d=0 ;; esac
-  case "$s" in ''|*[!0-9]*) s=0 ;; esac
-  RATE_LIMIT_DEADLINE="$d"
-  RATE_LIMIT_STEP="$s"
+  local pair
+  pair=$(deadline_file_read "${1:-}")
+  RATE_LIMIT_DEADLINE="${pair%% *}"
+  RATE_LIMIT_STEP="${pair#* }"
+  case "$RATE_LIMIT_STEP" in ''|*[!0-9]*) RATE_LIMIT_STEP=0 ;; esac
 }
 
 # rate_limit_active <path> [<now-epoch>] — 0 when a backoff deadline is still in
@@ -129,10 +127,7 @@ rate_limit_trip() {
   done
   local next_step=$((RATE_LIMIT_STEP + 1))
   local deadline=$((now + secs))
-  local tmp
-  tmp=$(mktemp "${f}.XXXXXX" 2>/dev/null) || { printf '%s %s' "$deadline" "$secs"; return 0; }
-  printf '%s %s\n' "$deadline" "$next_step" > "$tmp" 2>/dev/null
-  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  deadline_file_write "$f" "$deadline" "$next_step" || true
   printf '%s %s' "$deadline" "$secs"
 }
 
