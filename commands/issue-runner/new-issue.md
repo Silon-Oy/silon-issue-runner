@@ -26,6 +26,25 @@ riippuvuudet. Tämä komento tekee **yhden issuen**.
   autentikoitu; vaihtaminen tapahtuu jälkikäteen GitHubissa.
 - Komento **ei eskaloi epiciksi omin päin.** Se ehdottaa; päätöksen tekee käyttäjä.
 
+## Shell-lohkot ajetaan bashilla
+
+Tämän komennon `bash`-lohkot ovat bashia, mutta Claude Coden Bash-työkalu ajaa käyttäjän
+oletusshelliä, macOS:llä zsh:ta. Siellä `read -r -a` kaatuu virheeseen `read: bad option: -a`,
+ja `lib/poller-config.sh` palauttaa silti sisäänrakennetun oletuslabelin. Vika on siis hiljainen:
+väärä label näyttää onnistuneelta resolvoinnilta. **Aja jokainen lohko bashilla:**
+
+```
+bash -c "$(cat <<'SH'
+…lohko…
+SH
+)"
+```
+
+Skripti kulkee argumenttina eikä stdinissä, joten lohkon omat komennot eivät voi lukea sitä.
+Muuttujat ja funktiot eivät säily työkalukutsusta toiseen: aja toisistaan riippuvat lohkot samassa
+kutsussa tai kirjoita edellisen lohkon tulostamat arvot auki. Bashia vaativan lohkon ensimmäinen
+rivi pysäyttää ajon, jos lohko on kuitenkin päätynyt muuhun shelliin.
+
 ## 0. Ilman argumenttia: usage
 
 Argumentti on vapaamuotoinen kuvaus yhdestä tehtävästä. Jos sitä ei ole, tulosta usage äläkä lue
@@ -44,6 +63,7 @@ poller ei koskaan poimi. Älä päättele labelia repon olemassa olevista issuei
 kantaa labelia, jonka watchlist on sittemmin vaihtanut.
 
 ```bash
+[ -n "${BASH_VERSION:-}" ] || { echo "FAIL: lohko vaatii bashin — ks. Shell-lohkot ajetaan bashilla"; exit 1; }
 REPO_ROOT=$(pwd)
 
 . "$HOME/.claude/scripts/run-issues/lib/poller-config.sh"
@@ -111,6 +131,7 @@ mutta hiljaa pudotettu assignee on juuri se vika, jota tämä komento on estäm�
 ### 1.1 Jokaisen poimintalabelin on oltava repossa olemassa
 
 ```bash
+[ -n "${BASH_VERSION:-}" ] || { echo "FAIL: lohko vaatii bashin — ks. Shell-lohkot ajetaan bashilla"; exit 1; }
 EXISTING=$(gh api "repos/$OWNER_REPO/labels" --paginate --jq '.[].name')
 
 MISSING=()

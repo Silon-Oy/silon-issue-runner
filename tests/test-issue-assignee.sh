@@ -124,7 +124,7 @@ run_create() {   # <file> <marker> <login> ; prints payload to $PAYLOAD
     # new-epic defines create_issue but does not call it; new-issue creates inline.
     if declare -F create_issue >/dev/null 2>&1 && [ ! -s "$GH_PAYLOADS" ]; then
       body="$WORK/body.md"; printf '## Tavoite\n\nrunko\n' > "$body"
-      create_issue "$EPIC_TITLE" "$body"
+      ISSUE_BODY_FILE="$body" create_issue
     fi
   ) >/dev/null 2>&1
 }

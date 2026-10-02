@@ -21,6 +21,25 @@ kokonaisuudessaan: [`docs/epic-orchestration.md`](../../docs/epic-orchestration.
 - **Assignee ei ole valinta.** Sekä epic että jokainen alaissue assignataan sille tunnukselle,
   jolla `gh` on autentikoitu; vaihtaminen tapahtuu jälkikäteen GitHubissa.
 
+## Shell-lohkot ajetaan bashilla
+
+Tämän komennon `bash`-lohkot ovat bashia, mutta Claude Coden Bash-työkalu ajaa käyttäjän
+oletusshelliä, macOS:llä zsh:ta. Siellä `read -r -a` kaatuu virheeseen `read: bad option: -a`,
+ja `lib/poller-config.sh` palauttaa silti sisäänrakennetun oletuslabelin. Vika on siis hiljainen:
+väärä label näyttää onnistuneelta resolvoinnilta. **Aja jokainen lohko bashilla:**
+
+```
+bash -c "$(cat <<'SH'
+…lohko…
+SH
+)"
+```
+
+Skripti kulkee argumenttina eikä stdinissä, joten lohkon omat komennot eivät voi lukea sitä.
+Muuttujat ja funktiot eivät säily työkalukutsusta toiseen: aja toisistaan riippuvat lohkot samassa
+kutsussa tai kirjoita edellisen lohkon tulostamat arvot auki. Bashia vaativan lohkon ensimmäinen
+rivi pysäyttää ajon, jos lohko on kuitenkin päätynyt muuhun shelliin.
+
 ## 0. Ilman argumenttia: usage
 
 Argumentti on vapaamuotoinen kuvaus kokonaisuudesta. Jos sitä ei ole, tulosta usage äläkä lue
@@ -38,6 +57,7 @@ funktiolla, jota poller käyttää** (`lib/poller-config.sh`), jottei epic voi s
 tämän koneen poller ei koskaan poimi.
 
 ```bash
+[ -n "${BASH_VERSION:-}" ] || { echo "FAIL: lohko vaatii bashin — ks. Shell-lohkot ajetaan bashilla"; exit 1; }
 REPO_ROOT=$(pwd)
 
 . "$HOME/.claude/scripts/run-issues/lib/poller-config.sh"
@@ -215,8 +235,12 @@ echo "LEDGER=$LEDGER"
 # jotta markdown, rivinvaihdot ja backtickit säilyvät koskemattomina. Assignee
 # menee samaan payloadiin (osio 1): yksi kutsu per issue, ei erillistä
 # assignauskutsua, joka epäonnistuessaan jättäisi issuen ilman assigneeta.
-create_issue() {   # <otsikko> <runkotiedosto>
-  jq -n --arg t "$1" --rawfile b "$2" --argjson a "$ASSIGNEES_JSON" \
+#
+# Syöte tulee nimetyistä muuttujista ISSUE_TITLE ja ISSUE_BODY_FILE eikä
+# numeroiduista parametreista: komennon argumenttisubstituutio korvaa ne
+# käyttäjän kuvauksen sanoilla jo ennen kuin bash näkee rungon.
+create_issue() {
+  jq -n --arg t "$ISSUE_TITLE" --rawfile b "$ISSUE_BODY_FILE" --argjson a "$ASSIGNEES_JSON" \
     '{title: $t, body: $b} + (if ($a | length) > 0 then {assignees: $a} else {} end)' \
     | gh api "repos/$OWNER_REPO/issues" --input - \
         --jq '[.number, .id, ([.assignees[].login] | join(","))] | @tsv'
@@ -230,7 +254,8 @@ siis todellisen assignee-joukon, ja se kirjataan `$LEDGER`iin muun tuotoksen tap
 ### 3.0 Epic-issue (ilman labeleita)
 
 ```bash
-EPIC_LINE=$(create_issue "$EPIC_TITLE" "$EPIC_BODY_FILE") \
+ISSUE_TITLE=$EPIC_TITLE ISSUE_BODY_FILE=$EPIC_BODY_FILE
+EPIC_LINE=$(create_issue) \
   || { echo "FAIL: epicin luonti epäonnistui — mitään ei ole vielä kirjoitettu"; exit 1; }
 IFS=$'\t' read -r EPIC_NUM EPIC_ID EPIC_ASSIGNEES <<<"$EPIC_LINE"   # erotin on tabi, ei väli
 echo "epic #$EPIC_NUM (id $EPIC_ID) luotu, assignee: ${EPIC_ASSIGNEES:-<ei yhtään>}" \
@@ -242,7 +267,8 @@ puhdas.
 
 ### 3.1 Alaissueet
 
-Luo jokainen lapsi samalla `create_issue`lla ja kirjaa numero + id + assignee. Yhden lapsen
+Luo jokainen lapsi samalla `create_issue`lla (aseta ensin lapsen `ISSUE_TITLE` ja
+`ISSUE_BODY_FILE`) ja kirjaa numero + id + assignee. Yhden lapsen
 epäonnistuminen **ei** lopeta ajoa: jatka lopuilla ja raportoi puuttuvat osiossa 4 — puolivalmis
 epic, josta ei kerrota, on tämän komennon pahin vikatila.
 
@@ -280,6 +306,7 @@ poller voisi väliaikana poimia epicin tavallisena issuena ja polttaa koko timeo
 tehtävään, jota ei ole.
 
 ```bash
+[ -n "${BASH_VERSION:-}" ] || { echo "FAIL: lohko vaatii bashin — ks. Shell-lohkot ajetaan bashilla"; exit 1; }
 LABEL_ARGS=(-f 'labels[]=epic')
 IFS=',' read -r -a PICK_ARR <<<"$PICK_LABELS"
 for l in "${PICK_ARR[@]}"; do [ -n "$l" ] && LABEL_ARGS+=(-f "labels[]=$l"); done
