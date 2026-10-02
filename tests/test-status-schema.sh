@@ -99,9 +99,10 @@ done
 check "runner is an object" "$(jq -r '.runner | type' "$OUT")" "object"
 RUNNER_MISSING="$(jq -r '
   (["version","behind_origin","pinned_version","update_state","pin_age_seconds",
-    "rate_limited_until","rate_limit_backoff_seconds"]) as $req
+    "rate_limited_until","rate_limit_backoff_seconds",
+    "usage_limited_until","usage_limit_wait_seconds"]) as $req
   | ($req - (.runner | keys)) | join(",")' "$OUT")"
-check "runner has all seven fields" "$RUNNER_MISSING" ""
+check "runner has all nine fields" "$RUNNER_MISSING" ""
 # Rate-limit fields (issue #126) are ADDITIVE to the #105 object and, like the
 # rest of it, local — present without --github. They are null unless a backoff
 # deadline is actually in the future, so a stale state file from a past outage
@@ -110,6 +111,9 @@ check "runner.rate_limited_until null when healthy" \
   "$(jq -r '.runner.rate_limited_until' "$OUT")" "null"
 check "runner.rate_limit_backoff_seconds null when healthy" \
   "$(jq -r '.runner.rate_limit_backoff_seconds' "$OUT")" "null"
+# Usage-limit fields (issue #294): same additive, null-unless-active contract.
+check "runner.usage_limited_until null when no limit" \
+  "$(jq -r '.runner.usage_limited_until' "$OUT")" "null"
 # update_state is one of the four documented words.
 BAD_STATE="$(jq -r '.runner.update_state | select(. != "up_to_date" and . != "pin_pending" and . != "behind_upstream" and . != "unknown")' "$OUT")"
 check "runner.update_state in enum" "$BAD_STATE" ""
@@ -153,7 +157,7 @@ BAD_CLASS="$(jq -r --argjson e "$CLASS_ENUM" '[.runs[] | .class | select(. as $c
 check "all classes in enum" "$BAD_CLASS" ""
 
 # ---- every class_reason is in the documented enum ----
-REASON_ENUM='["active_session","recent_progress","wedged_session","orphaned","awaiting_review","blocked","timed_out","pr_conflicted","awaiting_clarification","pr_unlabelled","pr_open_waiting","pr_state_unknown","pr_not_open","lost_race","cancelled"]'
+REASON_ENUM='["active_session","recent_progress","wedged_session","orphaned","awaiting_review","blocked","timed_out","pr_conflicted","awaiting_clarification","pr_unlabelled","pr_open_waiting","pr_state_unknown","pr_not_open","lost_race","cancelled","usage_limited"]'
 BAD_REASON="$(jq -r --argjson e "$REASON_ENUM" '[.runs[] | .class_reason | select(. as $c | ($e | index($c)) | not)] | unique | join(",")' "$OUT")"
 check "all class_reasons in enum" "$BAD_REASON" ""
 

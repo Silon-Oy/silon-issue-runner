@@ -235,6 +235,7 @@ REASON_LABELS='{
   "awaiting_review":"odottaa katselmointia",
   "blocked":"estynyt",
   "timed_out":"aikakatkaistu",
+  "usage_limited":"Clauden käyttöraja",
   "pr_conflicted":"PR-konflikti",
   "awaiting_clarification":"odottaa vastaustasi",
   "pr_unlabelled":"PR ilman auto-merge-labelia",

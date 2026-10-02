@@ -125,6 +125,11 @@ _STATUS_CLASSIFY_JQ='
           {class:"attention", class_reason:"blocked", class_confidence:"high"}
         elif $st == "timed_out" then
           {class:"attention", class_reason:"timed_out", class_confidence:"high"}
+        elif $st == "usage_limited" then
+          # Claude usage limit (issue #294): NOT attention — the poller resumes
+          # it after the reset without a human, so it sits with the runs the
+          # automation still owns.
+          {class:"running", class_reason:"usage_limited", class_confidence:"high"}
         elif $st == "pr_conflicted" then
           {class:"attention", class_reason:"pr_conflicted", class_confidence:"high"}
         elif $st == "awaiting_clarification" then

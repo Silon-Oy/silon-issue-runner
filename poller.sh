@@ -51,6 +51,11 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # shellcheck source=lib/rate-limit.sh
 . "${RUN_ISSUES_HOME}/lib/rate-limit.sh"
 
+# usage_limit_* (issue #294). The machine-wide Claude usage-limit gate: while it
+# is in force this tick starts no claude work. Defines functions only.
+# shellcheck source=lib/usage-limit.sh
+. "${RUN_ISSUES_HOME}/lib/usage-limit.sh"
+
 # host_gate_notice (issue #152 follow-up). Sourced here because the host gate
 # below runs before any log path is opened and still has to be able to report a
 # missing host list. Defines one function; no top-level work.
@@ -425,6 +430,45 @@ scan_timed_out() {
   done
   # See scan_answered: return 0 so a trailing-false `&&` cannot abort a caller
   # that captures the output in a command substitution under `set -e`.
+  return 0
+}
+
+# scan_usage_limited <repo-path> [<remote>] [<now-epoch>] — prints
+# "<issue-number> <run-dir>" lines for usage_limited runs on THIS host whose
+# recorded reset time (run.json usage_limit_reset_at) has passed (issue #294).
+# Sibling of scan_timed_out, feeding the same restart loop: the orchestrator's
+# --restart resumes both, and a usage-limited run has no retry budget to check —
+# the limit says nothing about the task.
+#
+# A missing or unparseable reset time counts as passed. Fail-OPEN on purpose,
+# and safe: the machine-wide gate still holds every restart until the limit's
+# own deadline, so the worst case is one more limited call after it, never a
+# run parked forever behind a field nobody will write again.
+scan_usage_limited() {
+  local repo_path="$1"
+  local want_remote="${2:-}"
+  local now="${3:-$(date +%s)}"
+  local runs_dir="$repo_path/.claude/run-issues"
+  [ -d "$runs_dir" ] || return 0
+  local rj status host reset inum rem
+  shopt -s nullglob
+  for rj in "$runs_dir"/*/run.json; do
+    status=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
+    [ "$status" = "usage_limited" ] || continue
+    host=$(jq -r '.host // ""' "$rj" 2>/dev/null || echo "")
+    if [ -n "$host" ] && [ "$host" != "$THIS_HOST" ]; then
+      continue
+    fi
+    if [ -n "$want_remote" ]; then
+      rem=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
+      [ "$rem" = "$want_remote" ] || continue
+    fi
+    reset=$(jq -r '.usage_limit_reset_at // ""' "$rj" 2>/dev/null || echo "")
+    case "$reset" in ''|*[!0-9]*) reset=0 ;; esac
+    [ "$reset" -le "$now" ] || continue
+    inum=$(jq -r '.issue_number // empty' "$rj" 2>/dev/null || echo "")
+    [ -n "$inum" ] && printf '%s %s\n' "$inum" "$(dirname "$rj")"
+  done
   return 0
 }
 
@@ -1108,6 +1152,33 @@ while IFS= read -r stalled_repo_json; do
   done < <(scan_stalled "$STALLED_REPO_PATH")
 done < <(jq -c '.repos[]?' "$WATCHLIST")
 
+# ----- Claude usage-limit gate (issue #294) ----------------------------------
+# The limit belongs to this machine's Claude subscription, so while it is in
+# force nothing here may START claude work: no new pickup, no restart, no
+# continue — each would only hit the same limit, and a timeout restart would
+# spend its retry budget doing so. Teardown, reconciliation, blocked-run
+# cleanup and epic propagation make no claude call and keep running; the
+# liveness sweep above already did. One log line per tick (§5.7).
+USAGE_LIMIT_FILE="$(usage_limit_state_file)"
+CLAUDE_WORK_ALLOWED=1
+if usage_limit_active "$USAGE_LIMIT_FILE"; then
+  CLAUDE_WORK_ALLOWED=0
+  echo "$(date -u +%FT%TZ) poller: Claude usage limit in force until $(date -u -r "$USAGE_LIMIT_DEADLINE" +%FT%TZ 2>/dev/null || date -u -d "@$USAGE_LIMIT_DEADLINE" +%FT%TZ 2>/dev/null || echo "$USAGE_LIMIT_DEADLINE") — starting no claude work this tick" >> "$LOG"
+fi
+
+# _claude_work_allowed — 0 when this tick may start claude work. Used as a guard
+# in front of the scans that feed claude-spending spawns, so a limited tick also
+# skips their network reads.
+_claude_work_allowed() {
+  [ "$CLAUDE_WORK_ALLOWED" = "1" ]
+}
+
+# The orchestrator records a usage limit in the same file this poller reads. A
+# tmux session inherits the tmux SERVER's environment, not ours, so the log dir
+# is passed on the command line — otherwise an overridden RUN_ISSUES_LOG_DIR
+# would have the run write one file and the poller read another.
+ORCH_ENV="RUN_ISSUES_AUTO=1 RUN_ISSUES_LOG_DIR='$LOG_DIR'"
+
 # Count currently active run-issues tmux sessions to respect the cap.
 # The `|| ACTIVE=0` fallback lives OUTSIDE the command substitution on purpose:
 # grep -c always prints a count to stdout (0 on no matches) but exits 1 when the
@@ -1234,7 +1305,7 @@ while IFS= read -r repo_json; do
         "'$CLEANUP' --repo '$REPO_PATH' --issue '$FIN_ISSUE' --remote '$REMOTE' --force --yes 2>&1 | tee -a '$RUNS_LOG'"
     done < <(scan_finished "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
-    # ----- Restart timed-out runs FIRST (before picking new issues) ----------
+    # ----- Restart timed-out and usage-limited runs FIRST (before picking) ---
     while IFS= read -r restart_line; do
       [ -n "$restart_line" ] || continue
       RESTART_ISSUE="${restart_line%% *}"
@@ -1252,8 +1323,8 @@ while IFS= read -r repo_json; do
       fi
       echo "$(date -u +%FT%TZ) poller: restarting $R_SESSION for run=$RESTART_DIR remote=$REMOTE" >> "$LOG"
       tmux new-session -d -s "$R_SESSION" \
-        "RUN_ISSUES_AUTO=1 '$ORCH' --restart '$RESTART_DIR' 2>&1 | tee -a '$RUNS_LOG'"
-    done < <(scan_timed_out "$REPO_PATH" "$REMOTE")
+        "$ORCH_ENV '$ORCH' --restart '$RESTART_DIR' 2>&1 | tee -a '$RUNS_LOG'"
+    done < <(_claude_work_allowed && { scan_timed_out "$REPO_PATH" "$REMOTE"; scan_usage_limited "$REPO_PATH" "$REMOTE"; })
 
     # ----- Continue answered clarifications --------------------------------
     while IFS= read -r continue_line; do
@@ -1273,8 +1344,8 @@ while IFS= read -r repo_json; do
       fi
       echo "$(date -u +%FT%TZ) poller: continuing $C_SESSION for run=$CONTINUE_DIR remote=$REMOTE" >> "$LOG"
       tmux new-session -d -s "$C_SESSION" \
-        "RUN_ISSUES_AUTO=1 '$ORCH' --continue '$CONTINUE_DIR' 2>&1 | tee -a '$RUNS_LOG'"
-    done < <(scan_answered "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
+        "$ORCH_ENV '$ORCH' --continue '$CONTINUE_DIR' 2>&1 | tee -a '$RUNS_LOG'"
+    done < <(_claude_work_allowed && scan_answered "$REPO_PATH" "$REMOTE" "$OWNER_REPO")
 
     # ----- Retry answered blocked runs (issue #57) -------------------------
     # A human reply on a blocked run's issue means the blocker is (claimed to be)
@@ -1327,6 +1398,9 @@ while IFS= read -r repo_json; do
     # the first rejection rather than repeating it for the remaining repos.
     if _rl_hit; then break 2; fi
 
+    # Usage limit in force: no pickup (logged once above, not per repo).
+    _claude_work_allowed || continue
+
     # ----- Pick a new candidate issue (per remote) -------------------------
     # The ONLY pickup search in the package lives in lib/issue.sh (issue #99): the
     # poller delegates to pick_oldest_candidate so there is a single query and a
@@ -1368,7 +1442,7 @@ while IFS= read -r repo_json; do
     # every gh call, git push, fetch, and lock — the entire (issue → PR) chain
     # routes to the source org.
     tmux new-session -d -s "$SESSION" \
-      "RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '$RUNS_LOG'"
+      "$ORCH_ENV RUN_ISSUES_REVIEW_GATE=auto '$ORCH' --remote '$REMOTE' '$REPO_PATH' '$ISSUE_NUM' 2>&1 | tee -a '$RUNS_LOG'"
   done
 done < <(jq -c '.repos[]?' "$WATCHLIST")
 

@@ -73,6 +73,9 @@ assert "blocked=attention/blocked" "attention blocked high" $S \
   "$(mk status='"blocked"')"
 assert "timed_out=attention/timed_out" "attention timed_out high" $S \
   "$(mk status='"timed_out"')"
+# usage_limited (issue #294): the poller resumes it itself — not attention.
+assert "usage_limited=running/usage_limited" "running usage_limited high" $S \
+  "$(mk status='"usage_limited"')"
 assert "pr_conflicted=attention/pr_conf" "attention pr_conflicted high" $S \
   "$(mk status='"pr_conflicted"')"
 assert "awaiting_clar=attention/awaiting" "attention awaiting_clarification high" $S \

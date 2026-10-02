@@ -102,6 +102,10 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 # --github sweep stops early on a rejection instead of asking 18 more times.
 # shellcheck source=lib/rate-limit.sh
 . "$RUN_ISSUES_HOME/lib/rate-limit.sh"
+# usage_limit_* (issue #294): the runner object reports an ACTIVE Claude usage
+# limit. Read-only — status.sh never writes the gate file (§5.1's rule).
+# shellcheck source=lib/usage-limit.sh
+. "$RUN_ISSUES_HOME/lib/usage-limit.sh"
 # --github enrichment: pr_decide / pr_ci_state (pr-watch-lib.sh), gha_with_token
 # (github-app-auth.sh), the shared epic child-set resolver (issue.sh's
 # list_epic_children — issue #91: the view resolves epic children through the SAME
@@ -409,6 +413,7 @@ RUNNER_PIN_EPOCH="$(runner_pin_commit_epoch "$RUN_ISSUES_HOME")"
 # Only an ACTIVE deadline is reported: a stale state file left over from a past
 # outage must not make a healthy runner look throttled.
 RUNNER_RATE_LIMIT="$(rate_limit_status_json "$(rate_limit_state_file)" "$NOW_EPOCH")"
+RUNNER_USAGE_LIMIT="$(usage_limit_status_json "$(usage_limit_state_file)" "$NOW_EPOCH")"
 RUNNER_JSON="$(jq -nc \
   --arg version "$RUNNER_VERSION" \
   --arg behind "$RUNNER_BEHIND" \
@@ -416,6 +421,7 @@ RUNNER_JSON="$(jq -nc \
   --arg state "$RUNNER_STATE" \
   --arg pinepoch "$RUNNER_PIN_EPOCH" \
   --argjson rl "$RUNNER_RATE_LIMIT" \
+  --argjson ul "$RUNNER_USAGE_LIMIT" \
   --argjson now "$NOW_EPOCH" '
   {
     version: $version,
@@ -424,7 +430,7 @@ RUNNER_JSON="$(jq -nc \
     update_state: $state,
     pin_age_seconds: (if $pinepoch == "" then null
                       else (($now - ($pinepoch | tonumber)) as $a | if $a < 0 then 0 else $a end) end)
-  } + $rl' 2>/dev/null || printf '{"version":"?","behind_origin":null,"pinned_version":null,"update_state":"unknown","pin_age_seconds":null,"rate_limited_until":null,"rate_limit_backoff_seconds":null}')"
+  } + $rl + $ul' 2>/dev/null || printf '{"version":"?","behind_origin":null,"pinned_version":null,"update_state":"unknown","pin_age_seconds":null,"rate_limited_until":null,"rate_limit_backoff_seconds":null,"usage_limited_until":null,"usage_limit_wait_seconds":null}')"
 
 # ---- optional GitHub enrichment (--github) ----------------------------------
 # Fill each run's `github` sub-object from `gh pr list` ONCE per owner/repo,

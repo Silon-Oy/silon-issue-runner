@@ -454,6 +454,7 @@ a:hover{text-decoration:underline}
     recent_progress:       {label:"Käynnissä",               next:"Edennyt äskettäin — ei toimia."},
     blocked:               {label:"Estetty",                 next:"Vaatii huomiotasi — lue tilannekommentti issuesta."},
     timed_out:             {label:"Aikakatkaistu",           next:"Voidaan käynnistää uudelleen: orchestrate.sh --restart."},
+    usage_limited:         {label:"Käyttöraja",              next:"Clauden käyttöraja täyttyi — poller jatkaa ajoa itse rajan nollauduttua."},
     pr_conflicted:         {label:"PR-konflikti",            next:"Ratkaise rebase-konflikti tai anna vahdin hoitaa."},
     awaiting_clarification:{label:"Odottaa vastaustasi",     next:"Botin kysymys odottaa vastaustasi issuessa."},
     pr_not_open:           {label:"PR suljettu",             next:"PR mergetty tai suljettu — ajo siivottavissa."},
@@ -795,6 +796,20 @@ a:hover{text-decoration:underline}
       rlw.appendChild(el("div", "runner-next",
         "Pollerit perääntyvät itsestään eivätkä kuormita rajaa lisää. Ajo jatkuu automaattisesti."));
       box.appendChild(rlw);
+    }
+    // Claude usage-limit banner (#294). Same shape and the same independence
+    // from update_state as the rate-limit banner: shown only while the limit is
+    // in force (status.sh nulls the field otherwise).
+    if (rn.usage_limited_until != null) {
+      var ulw = el("div", "runner-state rs-rate_limited");
+      var ulh = el("div", "runner-head");
+      ulh.appendChild(el("span", "runner-label", "Clauden käyttöraja — uusia ajoja ei aloiteta"));
+      if (rn.usage_limit_wait_seconds != null)
+        ulh.appendChild(el("span", "runner-ver", "nollautuu " + dur(rn.usage_limit_wait_seconds) + " kuluttua"));
+      ulw.appendChild(ulh);
+      ulw.appendChild(el("div", "runner-next",
+        "Rajaan osuneet ajot jatkuvat automaattisesti nollautumisen jälkeen. Ei toimenpiteitä."));
+      box.appendChild(ulw);
     }
     if (!rn.update_state || rn.update_state === "up_to_date") return;
     var info = RUNNER_STATES[rn.update_state] || {label: rn.update_state, next: ""};

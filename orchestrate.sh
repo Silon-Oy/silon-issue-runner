@@ -48,6 +48,10 @@
 #                           the gate must never be the reason a run cannot start)
 #   RUN_ISSUES_SKIP_REPO_WRITE_CHECK  "1" = skip the S0 repo write-access probe
 #                           (same escape-hatch rationale; issue #256)
+#   RUN_ISSUES_USAGE_LIMIT_DETECTION  "0" = do not detect the Claude usage limit
+#                           (escape hatch; default 1 — issue #294)
+#   RUN_ISSUES_USAGE_LIMIT_BACKOFF  seconds to wait when the usage-limit message
+#                           carries no parseable reset time (default 3600)
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
@@ -60,7 +64,7 @@
 #       bootstrap (S7b dependency install) failed or timed out, the test-env
 #       provisioning hook (S7c) failed, or implementer returned BLOCKED
 #   6   PR open failed
-#   7   implementer (S8) timed out — run finalized as timed_out, eligible for
+#   7   implementer (S8) timed out or was killed by a signal — run finalized as timed_out, eligible for
 #       auto-restart via --restart (or budget-exhausted handed to a human)
 #   8   missing required dependency OR insufficient repo write access — the S0
 #       preflight gate refused to start the run; nothing was locked, claimed or
@@ -89,10 +93,18 @@
 #       (or blocked/epic_check_failed when unreadable) and the lock released;
 #       nothing is claimed and NO needs-human label is added (a pre-claim gate,
 #       like S2b). A named run can override with --force.
+#  13   a claude call hit the Claude subscription's usage limit (S6, S8 or S9,
+#       issue #294) — the run is finalized usage_limited with the reset time in
+#       run.json (usage_limit_reset_at), NO needs-human label and no comment; the
+#       poller resumes it via --restart once the reset has passed, and starts no
+#       other claude work on this machine until then.
 #
 # --restart <run-dir> resumes a timed_out run with a ramped, capped timeout
 # (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). It skips pick/claim
 # and re-enters Phase B. Budget is RUN_ISSUES_MAX_RETRIES (default 1).
+# It also resumes a usage_limited run, from the phase the limit interrupted
+# (S6 cycle review, S8 implementer or S9 evolution), WITHOUT spending that
+# budget or ramping the timeout: a usage limit says nothing about the task.
 #
 # --continue <run-dir> resumes an awaiting_clarification run after the issue
 # author has replied: it re-takes the lock, increments clarification_round,
@@ -678,6 +690,13 @@ LOCK_HELD=0
 CLAIMED=0
 CURRENT_STATE=""
 RESTART_CONTEXT=""
+# PHASE_B_FROM (issue #294): empty = phase_b runs from S7b. "S9_Evolution" =
+# the implementer already finished and a usage limit interrupted evolution, so a
+# restart resumes at S9 instead of re-running the implementer.
+PHASE_B_FROM=""
+# USAGE_LIMIT_RESUME_PHASE: the phase a usage_limited run is resumed in by
+# --restart (S6_CycleReview, S8_Implementer, S9_Evolution); empty otherwise.
+USAGE_LIMIT_RESUME_PHASE=""
 # CLARIFICATION_CONTEXT is rendered into the cycle-review prompt. Empty on a
 # normal first pass (the prompt section collapses); the --continue path fills
 # it with the prior clarification headline + the issue author's reply.
@@ -757,6 +776,36 @@ finalize_timeout() {
     _hand_to_human "auto-restart-budgetti loppui ($rc_now/$RUN_ISSUES_MAX_RETRIES). Implementer-vaihe aikakatkesi toistuvasti." "$RUN_DIR/02-implementer.out" || true
     state_event "$RUN_DIR" "handed_to_human" "reason=timeout_budget_exhausted" "retry_count=$rc_now"
   fi
+}
+
+# finalize_usage_limit <phase> — the run hit the Claude usage limit (call_claude
+# returned CLAUDE_USAGE_LIMIT_RC, issue #294). Finalize as usage_limited and exit
+# 13. call_claude has already tripped the machine-wide gate and recorded
+# usage_limit_reset_at in run.json; this records WHERE the run stopped so
+# --restart resumes there.
+#
+# Deliberately NOT a hand-off: no needs-human label and no situation comment.
+# Nothing is wrong that a human could fix — the poller resumes the run itself
+# once the reset passes, and a comment per limited run would be noise exactly
+# when every run on the machine is hitting the same limit.
+#
+# A limit inside a --continue cycle review must not lose the issue author's
+# reply: the restart re-runs S6, and CLARIFICATION_CONTEXT is rebuilt from the
+# file written here rather than from a marker scan that would no longer find
+# the reply "new".
+finalize_usage_limit() {
+  local phase="$1"
+  log "claude usage limit hit in $phase — finalizing run as usage_limited (resumes after the reset)"
+  state_set "$RUN_DIR" usage_limit_phase "$phase"
+  if [ "$phase" = "S6_CycleReview" ] && [ "$IS_CONTINUE" = "1" ]; then
+    printf '%s' "$CLARIFICATION_CONTEXT" > "$RUN_DIR/usage-limit-clarification-context.txt"
+    state_set "$RUN_DIR" usage_limit_continue "1"
+  fi
+  state_finalize "$RUN_DIR" "usage_limited" "usage_limit"
+  local reset
+  reset=$(jq -r '.usage_limit_reset_at // ""' "$RUN_DIR/run.json" 2>/dev/null || echo "")
+  state_event "$RUN_DIR" "usage_limited" "phase=$phase" "reset_at=$reset"
+  exit 13
 }
 
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap
@@ -1146,13 +1195,19 @@ run_cycle_review() {
     "REPO_CLAUDE_MD=$repo_claude_md" \
     "CLARIFICATION_CONTEXT=$CLARIFICATION_CONTEXT"
 
+  local cr_rc=0
   (
     cd "$WORKTREE_PATH"
     call_claude "$RUN_DIR" "01-cycle-review" "$cr_prompt"
-  ) || true
+  ) || cr_rc=$?
+  [ "$cr_rc" = "$CLAUDE_USAGE_LIMIT_RC" ] && finalize_usage_limit "S6_CycleReview"
 
   local cr_out="$RUN_DIR/01-cycle-review.out"
-  CR_DECISION=$(grep -E '^CYCLE_REVIEW_DECISION:' "$cr_out" | tail -1 | awk '{print $2}')
+  # `|| true`: an output with no decision line (an empty .out, a crashed CLI)
+  # makes grep exit 1, and under `set -euo pipefail` that used to kill the
+  # orchestrator right here — silently, with no finalization (issue #294). An
+  # empty decision is handled by review_gate as a blocker instead.
+  CR_DECISION=$(grep -E '^CYCLE_REVIEW_DECISION:' "$cr_out" 2>/dev/null | tail -1 | awk '{print $2}' || true)
   state_set "$RUN_DIR" "cycle_review_decision" "${CR_DECISION:-UNKNOWN}"
   state_event "$RUN_DIR" "cycle_review_done" "decision=${CR_DECISION:-UNKNOWN}"
 }
@@ -1312,11 +1367,15 @@ restart_load_state() {
     resolve_owner_repo
   fi
 
-  # Only timed_out runs are restartable. Anything else is a usage error.
-  if [ "$prior_status" != "timed_out" ]; then
-    echo "orchestrate: --restart only applies to timed_out runs (status='$prior_status')" >&2
-    exit 1
-  fi
+  # Only timed_out and usage_limited runs are restartable. Anything else is a
+  # usage error.
+  case "$prior_status" in
+    timed_out|usage_limited) ;;
+    *)
+      echo "orchestrate: --restart only applies to timed_out or usage_limited runs (status='$prior_status')" >&2
+      exit 1
+      ;;
+  esac
 
   # Take the per-issue lock for the duration of the restart.
   if ! lock_issue "$ISSUE_NUM" "$REMOTE_NAME" "$REPO_SLUG"; then
@@ -1327,7 +1386,9 @@ restart_load_state() {
   CLAIMED=1
 
   # Budget check. Exhausted -> hand to a human, exit 0 (terminal, not an error).
-  if [ "$retry_count" -ge "$RUN_ISSUES_MAX_RETRIES" ]; then
+  # A usage_limited run is exempt: the limit interrupted it, the task did not
+  # overrun, so it neither checks nor spends the timeout budget (issue #294).
+  if [ "$prior_status" = "timed_out" ] && [ "$retry_count" -ge "$RUN_ISSUES_MAX_RETRIES" ]; then
     log "restart: retry budget exhausted (retry_count=$retry_count >= max=$RUN_ISSUES_MAX_RETRIES) — handing to human"
     state_finalize "$RUN_DIR" "timed_out" "timeout_budget_exhausted"
     _hand_to_human "auto-restart-budgetti loppui ($retry_count/$RUN_ISSUES_MAX_RETRIES). Implementer-vaihe aikakatkesi toistuvasti." "$RUN_DIR/02-implementer.out"
@@ -1347,9 +1408,37 @@ restart_load_state() {
 
   # Increment the retry counter BEFORE the claude call so the spend is durable
   # under the lock even if this attempt times out again (idempotency).
+  #
+  # A usage_limited run keeps its count: it resumes the attempt the limit
+  # interrupted — if that was itself a timeout restart, it is the same retry,
+  # with the same ramped timeout below — and it resumes in the phase the limit
+  # hit, which for S6/S9 is not the implementer at all.
   local new_retry
-  new_retry=$(state_increment_retry "$RUN_DIR")
-  state_event "$RUN_DIR" "restart_attempt" "retry_count=$new_retry"
+  if [ "$prior_status" = "usage_limited" ]; then
+    new_retry="$retry_count"
+    USAGE_LIMIT_RESUME_PHASE=$(jq -r '.usage_limit_phase // "S8_Implementer"' "$rj")
+    local reset_at now_epoch
+    reset_at=$(jq -r '.usage_limit_reset_at // ""' "$rj")
+    now_epoch=$(date +%s)
+    # Not a gate: the poller only restarts after the reset, and a hand-run
+    # --restart is the operator's explicit call. Logged so the trace shows it.
+    if [ -n "$reset_at" ] && [ "$reset_at" -gt "$now_epoch" ] 2>/dev/null; then
+      log "restart: WARNING usage limit recorded until $reset_at is still in the future — restarting anyway (explicit --restart)"
+    fi
+    case "$USAGE_LIMIT_RESUME_PHASE" in
+      S9_Evolution) PHASE_B_FROM="S9_Evolution" ;;
+      S6_CycleReview)
+        if [ "$(jq -r '.usage_limit_continue // ""' "$rj")" = "1" ]; then
+          IS_CONTINUE=1
+          CLARIFICATION_CONTEXT=$(cat "$RUN_DIR/usage-limit-clarification-context.txt" 2>/dev/null || true)
+        fi
+        ;;
+    esac
+    state_event "$RUN_DIR" "usage_limit_resume" "phase=$USAGE_LIMIT_RESUME_PHASE" "retry_count=$new_retry"
+  else
+    new_retry=$(state_increment_retry "$RUN_DIR")
+    state_event "$RUN_DIR" "restart_attempt" "retry_count=$new_retry"
+  fi
 
   # Re-open the run as in-progress; phase_b will re-finalize on its own.
   state_set "$RUN_DIR" "status" "initialized"
@@ -2155,7 +2244,22 @@ run_provision_test_env() {
 # ===========================================================================
 # Phase B: implementer → evolution → PR
 # ===========================================================================
+# phase_b — the whole of Phase B. PHASE_B_FROM=S9_Evolution (a usage-limited
+# run whose implementer had already finished) skips straight to delivery.
 phase_b() {
+  if [ "$PHASE_B_FROM" = "S9_Evolution" ]; then
+    log "resuming at S9_Evolution — the implementer finished before the usage limit"
+    # The pinned Node still has to be on PATH for the evolution agent; the
+    # dependency install and test-env hook are S8's prerequisites, not S9's.
+    select_node_runtime
+  else
+    phase_b_implement
+  fi
+  phase_b_deliver
+}
+
+# phase_b_implement — S7b env bootstrap → S7c test env → S8 implementer.
+phase_b_implement() {
   # ---------- S7b: node runtime (.nvmrc) then env bootstrap (fail-fast dep install) ----------
   # select_node_runtime FIRST: it exports the target repo's pinned Node onto PATH
   # so the installs below — and every later subshell (S7c hook, S8 implementer
@@ -2220,10 +2324,20 @@ PROVISION_ENV
     finalize_timeout "S8_Implementer" "implementer_timeout"
     exit 7
   fi
+  [ "$imp_rc" = "$CLAUDE_USAGE_LIMIT_RC" ] && finalize_usage_limit "S8_Implementer"
+  # Killed by a signal (rc > 128: TERM/KILL reached the claude child or its
+  # timeout wrapper) is the same outcome the EXIT trap's safety net records —
+  # the attempt was cut short, not answered — so it is finalized as such here.
+  # This used to happen only by accident: the empty output's missing result line
+  # killed the script under `set -e` and the trap caught it (issue #294).
+  if [ "$imp_rc" -gt 128 ]; then
+    finalize_timeout "S8_Implementer" "implementer_killed_in_S8"
+    exit 7
+  fi
 
   local imp_out="$RUN_DIR/02-implementer.out"
   local imp_result
-  imp_result=$(grep -E '^IMPLEMENTER_RESULT:' "$imp_out" | tail -1 | sed 's/^IMPLEMENTER_RESULT: *//')
+  imp_result=$(_implementer_result "$imp_out")
   state_event "$RUN_DIR" "implementer_done" "result=${imp_result:-UNKNOWN}"
 
   case "$imp_result" in
@@ -2239,12 +2353,32 @@ PROVISION_ENV
       exit 5
       ;;
   esac
+}
+
+# _implementer_result <implementer-out> — the IMPLEMENTER_RESULT payload, or
+# empty. Never fails: a missing line must reach the caller as "no result", not
+# kill the script under `set -e` (issue #294).
+_implementer_result() {
+  grep -E '^IMPLEMENTER_RESULT:' "$1" 2>/dev/null | tail -1 | sed 's/^IMPLEMENTER_RESULT: *//' || true
+}
+
+# phase_b_deliver — S9 evolution → S10 push → S11 PR → S12 finalize. Split from
+# phase_b_implement (issue #294) so a usage limit that interrupted evolution can
+# resume HERE instead of re-running a finished implementer. Everything it needs
+# from S8 is read back from the run dir, so both entries behave identically.
+phase_b_deliver() {
+  local cr_out="$RUN_DIR/01-cycle-review.out"
+  local cr_full=""
+  [ -f "$cr_out" ] && cr_full=$(cat "$cr_out")
+  local imp_out="$RUN_DIR/02-implementer.out"
+  local imp_result
+  imp_result=$(_implementer_result "$imp_out")
 
   # ---------- S9: evolution ----------
   enter_state "S9_Evolution"
   log "S9_Evolution"
   local imp_tail
-  imp_tail=$(tail -200 "$imp_out")
+  imp_tail=$(tail -200 "$imp_out" 2>/dev/null || true)
   local evo_prompt="$RUN_DIR/03-evolution.prompt"
   render_prompt \
     "$SCRIPT_DIR/prompts/03-evolution.md" \
@@ -2256,14 +2390,18 @@ PROVISION_ENV
     "ISSUE_TITLE=$ISSUE_TITLE" \
     "IMPLEMENTER_OUTPUT_TAIL=$imp_tail"
 
+  local evo_rc=0
   (
     cd "$WORKTREE_PATH"
     call_claude "$RUN_DIR" "03-evolution" "$evo_prompt"
-  ) || true
+  ) || evo_rc=$?
+  [ "$evo_rc" = "$CLAUDE_USAGE_LIMIT_RC" ] && finalize_usage_limit "S9_Evolution"
 
   local evo_out="$RUN_DIR/03-evolution.out"
   local evo_result
-  evo_result=$(grep -E '^EVOLUTION_RESULT:' "$evo_out" | tail -1 | sed 's/^EVOLUTION_RESULT: *//')
+  # `|| true` for the same reason as CR_DECISION: no result line is "UNKNOWN",
+  # not a silent death of the orchestrator.
+  evo_result=$(grep -E '^EVOLUTION_RESULT:' "$evo_out" 2>/dev/null | tail -1 | sed 's/^EVOLUTION_RESULT: *//' || true)
   state_event "$RUN_DIR" "evolution_done" "result=${evo_result:-UNKNOWN}"
 
   # ---------- S10: PR ----------
@@ -2422,6 +2560,12 @@ case "$MODE" in
     ;;
   restart)
     restart_load_state   # exits 0/3 on budget/lock/worktree problems
+    # A usage limit inside the cycle review left no decision to act on, so the
+    # restart re-runs S6 and the gate before Phase B (issue #294).
+    if [ "$USAGE_LIMIT_RESUME_PHASE" = "S6_CycleReview" ]; then
+      run_cycle_review
+      review_gate
+    fi
     phase_b
     ;;
   continue)

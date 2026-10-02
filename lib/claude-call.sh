@@ -22,6 +22,16 @@ if ! declare -F preflight_timeout_bin >/dev/null 2>&1; then
   unset _claude_call_lib_dir
 fi
 
+# usage_limit_* (issue #294): call_claude records a detected usage limit in the
+# machine-wide gate file. Function-only, so re-sourcing it is harmless.
+# shellcheck source=usage-limit.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/usage-limit.sh"
+
+# The return code call_claude uses for "the subscription's usage limit was hit".
+# 75 is sysexits' EX_TEMPFAIL — "try again later" is exactly the contract — and
+# it collides with neither timeout(1)'s 124/137 nor the CLI-missing 127.
+CLAUDE_USAGE_LIMIT_RC=75
+
 # Hard wall-clock budget per claude invocation. 60 minutes accommodates
 # implementer cycles in slower repos (e.g. pnpm monorepos whose verification
 # step builds + runs tests) that otherwise time out on the first attempt and
@@ -286,9 +296,136 @@ _resolve_timeout() {
   fi
 }
 
+# ---------- usage-limit detection (issue #294) ----------
+# Textual and after the fact, like lib/rate-limit.sh's GitHub detection: the CLI
+# offers no way to ask in advance, and the message is the only signal.
+#
+# MATCHING IS NARROW, AND SCOPED TO THE END OF THE OUTPUT. The .out file is the
+# agent's final answer, which can legitimately TALK about usage limits — this
+# very feature's implementer output does. Three guards keep that from tripping a
+# machine-wide pause:
+#   1. only the last few lines are read: in -p mode a limit hit replaces the
+#      final answer with the CLI's own one-line message;
+#   2. an output carrying a step result line (CYCLE_REVIEW_DECISION:,
+#      IMPLEMENTER_RESULT:, …) is a finished answer, never a limit;
+#   3. only the CLI's own phrasings match, not the bare words "usage limit".
+# A false positive costs one backoff window on one machine; a false negative is
+# the old behaviour. RUN_ISSUES_USAGE_LIMIT_DETECTION=0 turns detection off.
+CLAUDE_USAGE_LIMIT_TAIL_LINES=5
+
+# claude_usage_limit_matches <text> — 0 when the text is a usage-limit message.
+# Pure; no I/O.
+claude_usage_limit_matches() {
+  local lower
+  lower=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  case "$lower" in
+    *"usage limit reached"*) return 0 ;;
+    *"usage limit has been reached"*) return 0 ;;
+  esac
+  # "You've hit your limit", "You've hit your session limit", "…weekly limit"
+  [[ "$lower" =~ hit\ your\ ([a-z0-9-]+\ )?limit ]] && return 0
+  # "5-hour limit reached · resets 3pm"
+  [[ "$lower" =~ limit\ reached.*resets ]] && return 0
+  return 1
+}
+
+# _claude_usage_clock_to_epoch <hour-0-23> <minute> <tz> <now-epoch> — the next
+# occurrence (strictly after now) of the wall-clock time in <tz> (empty = the
+# machine's local zone). Prints nothing when date(1) cannot compute it. Handles
+# both date dialects: GNU (Linux, Git Bash) and BSD (macOS).
+_claude_usage_clock_to_epoch() {
+  local h="$1" m="$2" tz="$3" now="$4" day e
+  local -a tzenv=()
+  [ -n "$tz" ] && tzenv=(TZ="$tz")
+  if date -d @0 +%s >/dev/null 2>&1; then
+    day=$(env ${tzenv[@]+"${tzenv[@]}"} date -d "@$now" +%F 2>/dev/null) || return 0
+    e=$(env ${tzenv[@]+"${tzenv[@]}"} date -d "$day $h:$m:00" +%s 2>/dev/null) || return 0
+  else
+    day=$(env ${tzenv[@]+"${tzenv[@]}"} date -r "$now" +%F 2>/dev/null) || return 0
+    e=$(env ${tzenv[@]+"${tzenv[@]}"} date -j -f '%Y-%m-%d %H:%M:%S' "$day $h:$m:00" +%s 2>/dev/null) || return 0
+  fi
+  case "$e" in ''|*[!0-9]*) return 0 ;; esac
+  # The reset already passed today -> it is tomorrow's.
+  [ "$e" -gt "$now" ] || e=$((e + 86400))
+  printf '%s' "$e"
+}
+
+# claude_usage_limit_reset_epoch <text> [<now-epoch>] — the reset time carried
+# by a usage-limit message, as epoch seconds, or nothing when none parses. Two
+# shapes are understood:
+#   "Claude AI usage limit reached|1759420800"   (epoch after a pipe)
+#   "… resets 3pm (Europe/Helsinki)", "resets 11:30pm", "resets 15:00"
+# A result that is not in the future, or more than a week out, is discarded as a
+# misparse: the caller then falls back to RUN_ISSUES_USAGE_LIMIT_BACKOFF.
+claude_usage_limit_reset_epoch() {
+  local text="${1:-}" now="${2:-$(date +%s)}" lower e=""
+  lower=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
+  if [[ "$lower" =~ limit\ reached\|([0-9]{9,11}) ]]; then
+    e="${BASH_REMATCH[1]}"
+  elif [[ "$lower" =~ resets?\ (at\ )?([0-9]{1,2})(:([0-9]{2}))?\ ?(am|pm)?(\ \(([^\)]+)\))? ]]; then
+    local h="${BASH_REMATCH[2]}" m="${BASH_REMATCH[4]:-00}" ap="${BASH_REMATCH[5]}" tz=""
+    # The zone name is matched on the lowercased copy but must be passed in its
+    # original case (Europe/Helsinki, not europe/helsinki) — re-read it.
+    if [ -n "${BASH_REMATCH[7]}" ] && [[ "$text" =~ \(([A-Za-z_]+(/[A-Za-z0-9_+-]+)*)\) ]]; then
+      tz="${BASH_REMATCH[1]}"
+    fi
+    h=$((10#$h)); m=$((10#$m))
+    case "$ap" in
+      am) [ "$h" -eq 12 ] && h=0 ;;
+      pm) [ "$h" -lt 12 ] && h=$((h + 12)) ;;
+    esac
+    if [ "$h" -le 23 ] && [ "$m" -le 59 ]; then
+      e=$(_claude_usage_clock_to_epoch "$(printf '%02d' "$h")" "$(printf '%02d' "$m")" "$tz" "$now")
+    fi
+  fi
+  case "$e" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$e" -gt "$now" ] && [ "$e" -le $((now + 7 * 86400)) ] || return 0
+  printf '%s' "$e"
+}
+
+# claude_usage_limit_check <out-file> [<now-epoch>] — 0 when the step output
+# ends in a usage-limit message; prints "<deadline-epoch> <source>" where source
+# is `reset` (parsed from the message, plus a minute of margin because the
+# message has minute granularity) or `backoff` (the fallback wait). 1 otherwise,
+# including a missing file and the kill switch.
+claude_usage_limit_check() {
+  local f="${1:-}" now="${2:-$(date +%s)}" tail_text reset
+  usage_limit_enabled || return 1
+  [ -n "$f" ] && [ -s "$f" ] || return 1
+  if grep -qE '^[A-Z][A-Z_]*_(RESULT|DECISION):' "$f" 2>/dev/null; then
+    return 1
+  fi
+  tail_text=$(tail -n "$CLAUDE_USAGE_LIMIT_TAIL_LINES" "$f" 2>/dev/null || printf '')
+  claude_usage_limit_matches "$tail_text" || return 1
+  reset=$(claude_usage_limit_reset_epoch "$tail_text" "$now")
+  if [ -n "$reset" ]; then
+    printf '%s reset' "$((reset + 60))"
+  else
+    printf '%s backoff' "$((now + $(usage_limit_backoff_seconds)))"
+  fi
+  return 0
+}
+
+# _claude_usage_limit_record <run-dir> <step-id> <deadline> <source> — trip the
+# machine-wide gate and, when <run-dir> is an orchestrated run, record the
+# deadline in its run.json so the restart path knows when it may resume. The
+# PR watcher's agents pass a scratch dir with no run.json: the gate still trips.
+_claude_usage_limit_record() {
+  local run_dir="$1" step_id="$2" deadline="$3" source="$4"
+  usage_limit_trip "$(usage_limit_state_file)" "$deadline" "$source" || true
+  _claude_call_log "usage limit hit in step $step_id — no claude work on this machine until $(date -u -r "$deadline" +%FT%TZ 2>/dev/null || date -u -d "@$deadline" +%FT%TZ 2>/dev/null || echo "$deadline") (source=$source)"
+  if [ -f "$run_dir/run.json" ] && declare -F state_set >/dev/null 2>&1; then
+    state_set "$run_dir" usage_limit_reset_at "$deadline" || true
+    state_set "$run_dir" usage_limit_source "$source" || true
+    state_event "$run_dir" "usage_limit_hit" "step=$step_id" "reset_at=$deadline" "source=$source" || true
+  fi
+}
+
 # call_claude <run-dir> <step-id> <prompt-file>
-# Returns the claude process exit code (0 on success). Always writes the
-# .out and .exit files even on timeout or interruption.
+# Returns the claude process exit code (0 on success), or CLAUDE_USAGE_LIMIT_RC
+# when the output is a usage-limit message (the .exit file still records the
+# process's own code). Always writes the .out and .exit files even on timeout or
+# interruption.
 call_claude() {
   local run_dir="$1"
   local step_id="$2"
@@ -366,6 +503,14 @@ call_claude() {
   fi
 
   printf '%s\n' "$rc" > "$exit_file"
+
+  # A timeout is its own outcome (finalize_timeout); everything else is checked,
+  # including rc=0 — the CLI's exit code on a limit hit is not something to bet on.
+  local ul
+  if [ "$rc" != "124" ] && ul=$(claude_usage_limit_check "$out_file"); then
+    _claude_usage_limit_record "$run_dir" "$step_id" "${ul%% *}" "${ul#* }"
+    return "$CLAUDE_USAGE_LIMIT_RC"
+  fi
   return "$rc"
 }
 
