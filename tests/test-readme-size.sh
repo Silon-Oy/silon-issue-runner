@@ -37,7 +37,14 @@ FAIL=0
 # assignee routing, poller ordering) out to docs/usage-reference.md. The budget
 # sits just above that -- ~1 KB of headroom for minor edits, not a round number
 # with room for a whole section to sneak back in.
-MAX_BYTES=82500
+#
+# Raised to 83400 by issue #294, whose acceptance criteria require README to
+# document the new usage_limited run state and its two settings. The reference
+# material went to the mirrors first (exit code 13 -> docs/troubleshooting.md,
+# both variables -> docs/env-reference.md, the full behaviour ->
+# docs/usage-reference.md case d2); README carries only the three table rows a
+# human scanning "Ajon tilat" and section 5 needs, ~430 B.
+MAX_BYTES=83400
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

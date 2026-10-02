@@ -537,6 +537,8 @@ skriptin `# Env:`-otsikkokommentti.
 | `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle kopioitavat labelit (6.3) |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | Montako kertaa aikakatkaistu ajo yritetään uudelleen (6.6 d) |
 | `RUN_ISSUES_MAX_CLARIFICATIONS` | `3` | Tarkennuskierrosten katto (6.6 c) |
+| `RUN_ISSUES_USAGE_LIMIT_BACKOFF` | `3600` | Odotus sekunteina, kun käyttörajaviestistä ei saada nollautumisaikaa |
+| `RUN_ISSUES_USAGE_LIMIT_DETECTION` | `1` | `0` = käyttörajan tunnistus ja sen portti pois. Hätävara |
 | `RUN_ISSUES_AUTO` | `0` | `1` = ei interaktiivisia kehotteita (ks. osio 7.3) |
 | `RUN_ISSUES_SKIP_PREFLIGHT` | `0` | `1` = ohita S0-portti. Hätävara |
 
@@ -1171,6 +1173,7 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | `awaiting_review` | Katselmointiportti käsiajossa | Odottaa `--resume`-päätöstäsi |
 | `awaiting_clarification` | Katselmointi kysyi tarkennusta | Poller jatkaa, kun vastaat issueen |
 | `timed_out` | Claude-kutsu ylitti aikabudjetin | Poller yrittää `--restart`, jos budjetti riittää |
+| `usage_limited` | Claude-kutsu osui tilauksen käyttörajaan | Poller jatkaa `--restart`illa nollautumisen jälkeen; ei `needs-human`ia ([lisää](docs/usage-reference.md#käyttötapaukset), d2) |
 | `blocked` | Ajo pysähtyi virheeseen | `needs-human`-label + kommentti; vaatii ihmisen |
 | `lost_race` | Toinen ajo ehti varata issuen | Ei toimenpiteitä — normaalia rinnakkaisuutta |
 | `cancelled` | Peruttu katselmointiportissa | Worktree ja haara jätettiin paikoilleen |

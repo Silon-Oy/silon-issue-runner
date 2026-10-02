@@ -222,6 +222,29 @@ Poller huomaa vastauksen seuraavalla tikillä, poistaa `waiting`-labelin ja jatk
 `RUN_ISSUES_MAX_RETRIES` (oletus 1). Budjetin loputtua ajo jää odottamaan ihmistä. Sinä et
 tee mitään ensimmäisen aikakatkaisun jälkeen — odota yksi tikki.
 
+**d2) Ajo osui Clauden käyttörajaan** (exit 13, tila `usage_limited`, syy `usage_limit`). Kun
+claude-kutsun tuloste päättyy tilauksen käyttörajaviestiin (esim. *"You've hit your limit ·
+resets 3pm"* tai `Claude AI usage limit reached|<epoch>`), `call_claude` palauttaa
+erillisen koodin, ja ajo päättyy tähän tilaan cycle reviewssä (S6), toteutuksessa (S8) tai
+evoluutiovaiheessa (S9). Nollautumisaika jäsennetään viestistä ja kirjataan `run.json`iin
+(`usage_limit_reset_at`, `usage_limit_phase`). Jos aikaa ei saada jäsennettyä, käytetään
+`RUN_ISSUES_USAGE_LIMIT_BACKOFF`ia (oletus 3600 s). Issue **ei** saa `needs-human`-labelia eikä
+kommenttia, koska ihmisellä ei ole korjattavaa.
+
+Raja koskee koko koneen tilausta, joten kone tallentaa sen yhteen tiedostoon
+`$RUN_ISSUES_LOG_DIR/.claude-usage-limit`. Niin kauan kuin raja on voimassa, poller ei poimi uusia
+issueita eikä käynnistä restart- tai continue-ajoja. Lokiin tulee yksi rivi per tikki (*"Claude
+usage limit in force until …"*). Purku, siivous ja epicien propagointi jatkuvat, koska ne eivät
+kutsu Claudea. Nollautumisen jälkeen poller jatkaa ajoa `--restart`illa siitä vaiheesta, johon
+raja osui: S6 ajaa cycle reviewn uudelleen, S9 jatkaa evoluutiosta ajamatta toteutusta uudelleen.
+Jatko **ei kuluta** aikakatkaisujen uudelleenyritysbudjettia eikä kasvata aikakatkaisua, koska
+raja ei kerro tehtävän koosta mitään. `status.sh` näyttää tilan kentissä
+`runner.usage_limited_until` ja `runner.usage_limit_wait_seconds`, ja ajon luokka on
+`running/usage_limited`. Tunnistus lukee vain tulosteen viimeiset rivit eikä koskaan osu
+tulosteeseen, jossa on vaiheen tulosrivi (`IMPLEMENTER_RESULT:` ym.), joten käyttörajoista
+*puhuva* vastaus ei laukaise sitä. `RUN_ISSUES_USAGE_LIMIT_DETECTION=0` kytkee tunnistuksen ja
+portin pois.
+
 **e) Ajo estyi ennen toteutusta tai sen aikana** (exit 5). Syyn erottaa `run.json`-statuksen
 syykentästä, ja jokainen niistä tuottaa issuelle `needs-human`-labelin ja kommentin, jossa on
 tuloste:
@@ -495,6 +518,9 @@ takaraja) ja `rate_limit_backoff_seconds` (paljonko sitä on jäljellä). Molemm
 perääntyminen ole juuri nyt voimassa, joten vanha häiriö ei jää roikkumaan näkymään. Sivu näyttää
 kutsurajabannerin **myös silloin kun `update_state` on `up_to_date`** — runner voi olla ajan tasalla ja
 silti lukittuna ulos API:sta. Sama tieto nostaa myös sähköpostikoosteen otsikkoriville.
+Samalla periaatteella objekti kertoo **Clauden käyttörajan** (#294): `usage_limited_until` ja
+`usage_limit_wait_seconds` ovat `null`, ellei raja ole juuri nyt voimassa, ja sivu näyttää silloin
+oman bannerinsa (käsittelytapa: käyttötapaus d2).
 
 Sivu näyttää versiotilan yläosassa **vain kun se ei ole `up_to_date`**, suomenkielisin selittein. `pin_pending`
 on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsestään. Erottelu on

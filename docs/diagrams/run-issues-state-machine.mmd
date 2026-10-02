@@ -155,6 +155,22 @@ stateDiagram-v2
     S_RestartLoad --> [*]: worktree corrupt → needs-human (rc=0)
     S_RestartLoad --> [*]: lock held by other run (rc=3)
 
+    %% ----- Claude usage limit (issue #294) -----
+    %% call_claude returns CLAUDE_USAGE_LIMIT_RC when the step output ends in the
+    %% CLI's usage-limit message. The run finalizes usage_limited/usage_limit
+    %% (exit 13) with usage_limit_reset_at + usage_limit_phase in run.json and
+    %% the machine-wide gate file tripped — no needs-human, no comment. While the
+    %% gate holds, the poller starts no claude work on this machine; after the
+    %% reset, scan_usage_limited feeds the same --restart, which resumes in the
+    %% interrupted phase WITHOUT spending retry budget or ramping the timeout.
+    S6_CycleReview --> S_UsageLimited: usage limit (rc=13)
+    S8_Implementer --> S_UsageLimited: usage limit (rc=13)
+    S9_Evolution --> S_UsageLimited: usage limit (rc=13)
+    S_UsageLimited --> S_UsageRestart: --restart after usage_limit_reset_at
+    S_UsageRestart --> S6_CycleReview: phase was S6
+    S_UsageRestart --> S7b_EnvBootstrap: phase was S8
+    S_UsageRestart --> S9_Evolution: phase was S9
+
     %% ----- Poller liveness sweep (issue #49) -----
     %% scan_stalled (poller.sh) detects an in-progress run whose state.jsonl's
     %% last event ts is older than RUN_ISSUES_STALE_AFTER (default 3600s). The

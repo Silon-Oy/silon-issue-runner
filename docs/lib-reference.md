@@ -14,7 +14,8 @@ lukuihin.
 | `action-service.py` | **Ainoa Python-tiedosto.** Ohjaamon HTTP + auth -ydin: fail-closed `tailscale whois`, kolmikerroksinen CSRF, audit-loki, `execve` dispatcheriin — ei koskaan koske gh:hun itse |
 | `action-token.sh` | Ohjaamon jaettu CSRF-token. Bearer-salaisuus: ei koskaan `status.json`iin, lokiin eikä kommenttiin |
 | `archive.sh` | Terminaalitilaisten run-dirien siirto `run-issues-archive/`iin. PR-suoja on paikallinen, ei gh-kutsu |
-| `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi) ja aina päällä olevan järjestelmäkehotteen toimitus: toimintasopimus + koodausstandardi yhdistettynä — myös PR-vahti kutsuu tästä `load_repo_principles_file`ia |
+| `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi, käyttörajan tekstipohjainen tunnistus ja oma paluukoodi) ja aina päällä olevan järjestelmäkehotteen toimitus: toimintasopimus + koodausstandardi yhdistettynä — myös PR-vahti kutsuu tästä `load_repo_principles_file`ia |
+| `deadline-file.sh` | Koneen laajuisten perääntymisporttien yhteinen yksirivinen `<deadline> <tag>`-tilatiedosto: fail-soft luku, atominen kirjoitus. Jaettu `rate-limit.sh`:n ja `usage-limit.sh`:n kesken |
 | `env-bootstrap.sh` | Pakettimanagerin ja kohderepon `.nvmrc`-Node-version tunnistus S7b:n fail-fast-asennusporttiin |
 | `epic.sh` | Epic-tason automaatio: ajolabelien propagointi, `needs-human`-eskalaatio, valmiuskommentti. Best-effort (aina rc 0) |
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |
@@ -40,6 +41,7 @@ lukuihin.
 | `status-github.sh` | `status.sh --github`-rikastus. Ei omaa CI-rollupia eikä merge-päätöstä — kutsuu `pr-watch-lib.sh`:n omia |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot. `_iso_to_epoch` asuu täällä, jotta poller ja näkymä laskevat iän identtisesti |
 | `teardown.sh` | Label-vetoisen purun turvaportit **kutsuttavana funktiona**: lukko, run-dir-inventaario, `completed`-ajon PR-portti, `cleanup-run.sh`-delegaatti. `auto-clean.sh` ja `auto-reset.sh` ovat sen ohuita lopputuloskerroksia |
+| `usage-limit.sh` | Clauden käyttörajan koneen laajuinen portti (#294): takarajan tallennus (myöhempi voittaa), voimassaolo ja `status.sh`:n kentät. Tunnistus asuu `claude-call.sh`:ssa kutsun vieressä |
 | `version.sh` | Ajossa olevan version ja submodule-pinnin näkyväksi teko. Fail-soft: puuttuva `.git` ⇒ `?` |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |
 | `issue.test.sh`, `render-prompt.test.sh` | Yksikkötestit (`verify_claim`, `render_prompt`) |
