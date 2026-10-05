@@ -401,6 +401,17 @@ Puuttuva App-konfiguraatio on **hyvänlaatuinen no-op**: ilman muuttujia (tai jo
 luettavissa) kaikki putoaa paljaaseen `gh`:hon täsmälleen kuten ennen — App ei ole asennusehto.
 Ei-origin-remote ohittaa Appin aina (App-asennus on org-kohtainen).
 
+### Claude-tilausprofiilit (opt-in)
+
+Käyttörajan täyttyessä askel ajetaan heti seuraavalla tilauksella. Tunniste per tilaus
+(`claude setup-token`) omaan tiedostoonsa (mode 600), `env`iin vain polut:
+
+```bash
+RUN_ISSUES_CLAUDE_PROFILES="main=$HOME/.config/run-issues/main.token spare=$HOME/.config/run-issues/spare.token"
+```
+
+Ohje: [`docs/usage-reference.md`](docs/usage-reference.md#claude-tilausprofiilit).
+
 ### Watchlist — mitkä repot pollataan
 
 Oletuspolku `$HOME/.config/run-issues/watchlist.json`. Skeema ja multi-remote-esimerkki:

@@ -6,8 +6,8 @@ miksi* ajo lähtee liikkeelle (elinkaari, poimintaehdot, labelit, varaus, riippu
 [`README.md`](../README.md) osiossa 6, joka linkittää tänne.
 
 Tämä osio kattaa poiminnan koneiston, epicit, käyttötapaukset (mitä ihminen näkee ja tekee kussakin tilanteessa),
-slash-komennot, skriptit ja apuvälineet, `claude-issue-runner`-skillin, `status.sh`:n
-kokonaistilanäkymän ja `publish-release.sh`:n julkaisun.
+slash-komennot, skriptit ja apuvälineet, `claude-issue-runner`-skillin,
+Claude-tilausprofiilit, `status.sh`:n kokonaistilanäkymän ja `publish-release.sh`:n julkaisun.
 
 ---
 
@@ -428,6 +428,57 @@ Jos `$HOME/.claude/skills` on koneella kokonainen hakemistosymlinkki (jonkin toi
 omistama hakemisto), skillit eivät asennu automaattisesti: `install.sh` tulostaa siitä
 `CONFLICT`-rivin ja exit-koodin 4, mutta linkittää agentit ja komennot normaalisti. Miksi
 kieltäytymisen sijaan conflict: [`CLAUDE.md`](../CLAUDE.md) §3.
+
+## Claude-tilausprofiilit
+
+Koneelle voi antaa järjestetyn listan Claude-tilauksia. Askel ajetaan listan ensimmäisellä
+vapaalla profiililla. Kun sen käyttöraja täyttyy, profiili merkitään täydeksi nollautumisaikaan
+asti ja **sama askel ajetaan heti uudelleen seuraavalla vapaalla profiililla** samassa ajossa.
+Vasta kun kaikki profiilit ovat täynnä, ajo päättyy tilaan `usage_limited` ja kone odottaa
+**aikaisimpaan** profiilin nollautumiseen (sama odotustila kuin ilman profiileja, #294).
+
+**1. Luo kullekin tilaukselle tunniste.** Kirjaudu selaimessa kyseiselle Claude-tilille ja aja:
+
+```bash
+claude setup-token
+```
+
+Komento tulostaa pitkäikäisen OAuth-tunnisteen. Tallenna se omaan tiedostoonsa, oikeudet 600:
+
+```bash
+umask 077
+printf '%s\n' '<tunniste>' > "$HOME/.config/run-issues/claude-main.token"
+chmod 600 "$HOME/.config/run-issues/claude-main.token"
+```
+
+**2. Listaa profiilit `env`-tiedostossa** muodossa `nimi=polku`, välilyönnein tai rivinvaihdoin
+eroteltuna. Ensimmäinen on ensisijainen:
+
+```bash
+RUN_ISSUES_CLAUDE_PROFILES="main=$HOME/.config/run-issues/claude-main.token
+                            spare=$HOME/.config/run-issues/claude-spare.token"
+```
+
+- **Env-tiedostoon tulee vain polku, ei tunnistetta** — sama jako kuin GitHub Appin `.pem`-avaimessa.
+  Tunniste annetaan vain claude-prosessille `CLAUDE_CODE_OAUTH_TOKEN`-muuttujana: sitä ei
+  exportata ajon muuhun ympäristöön eikä se näy komentorivillä, lokissa tai tilassa. Siksi
+  launchd-ajot eivät riipu avainnipun avaamisesta.
+- Nimessä sallitaan `A-Z a-z 0-9 _ -`; polussa ei saa olla välilyöntejä.
+- `env` eikä `poller.env`: claude-kutsuja tekevät vain `orchestrate.sh` ja `pr-watch.sh`, jotka
+  lukevat `env`in. Pollerit eivät tarvitse tunnisteita.
+- **Rikkinäinen profiili ohitetaan, ei korvata oletuskirjautumisella.** Puuttuva, lukukelvoton tai
+  tyhjä tunnistetiedosto ⇒ lokirivi ja seuraava profiili. Jos yksikään profiili ei kelpaa, askel
+  epäonnistuu sen sijaan että se ajettaisiin hiljaa koneen omalla kirjautumisella.
+- Profiilien tila on koneen ajojen yhteinen (`$RUN_ISSUES_LOG_DIR/.claude-usage-limit.profile-<nimi>`):
+  täyttä profiilia ei käytetä ennen nollautumista, ja nollautumisen jälkeen ensisijainen profiili
+  palaa käyttöön itsestään.
+- Ajon `state.jsonl` kertoo, millä profiililla kukin askel ajettiin (`claude_profile`) ja missä
+  raja täyttyi (`claude_profile_limited`). Rajaan osuneen yrityksen tuloste säilyy tiedostossa
+  `<askel>.out.limited-<nimi>`.
+- Vain tilausten OAuth-tunnisteet. Älä aseta `ANTHROPIC_API_KEY`:tä samaan ympäristöön: se ohittaa
+  tilaustunnisteen ja siirtää käytön laskutettuun API:in.
+
+Ilman `RUN_ISSUES_CLAUDE_PROFILES`ia käytös on ennallaan: claude käyttää koneen omaa kirjautumista.
 
 ## Kokonaistilan katsominen (`status.sh`)
 
