@@ -26,6 +26,10 @@ fi
 # machine-wide gate file. Function-only, so re-sourcing it is harmless.
 # shellcheck source=usage-limit.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/usage-limit.sh"
+# claude_profile_* (issue #295): the ordered subscription list call_claude falls
+# over between on a usage limit. Function-only as well.
+# shellcheck source=claude-profiles.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-profiles.sh"
 
 # The return code call_claude uses for "the subscription's usage limit was hit".
 # 75 is sysexits' EX_TEMPFAIL — "try again later" is exactly the contract — and
@@ -421,11 +425,42 @@ _claude_usage_limit_record() {
   fi
 }
 
+# _claude_profile_event <run-dir> <step-id> <event> <key=value>... — the state
+# event for the profile half of a call. Names only, never a token.
+_claude_profile_event() {
+  local run_dir="$1" step_id="$2" event="$3"
+  shift 3
+  if [ -f "$run_dir/run.json" ] && declare -F state_event >/dev/null 2>&1; then
+    state_event "$run_dir" "$event" "step=$step_id" "$@" || true
+  fi
+}
+
+# _claude_all_profiles_full <run-dir> <step-id> <fallback-deadline> <fallback-source>
+# — every configured profile is at its limit (or unusable): trip the machine-wide
+# gate at the EARLIEST profile reset, which is when the next call can succeed.
+# The fallback is this call's own last detected deadline, for when no profile
+# file could be written (unwritable log dir) — the gate must still trip.
+_claude_all_profiles_full() {
+  local run_dir="$1" step_id="$2" fb_deadline="$3" fb_source="$4" earliest
+  earliest=$(claude_profiles_earliest_reset)
+  if [ -z "$earliest" ]; then
+    earliest="$fb_deadline $fb_source"
+  fi
+  _claude_call_log "every Claude profile is at its usage limit"
+  _claude_usage_limit_record "$run_dir" "$step_id" "${earliest%% *}" "${earliest#* }"
+}
+
 # call_claude <run-dir> <step-id> <prompt-file>
 # Returns the claude process exit code (0 on success), or CLAUDE_USAGE_LIMIT_RC
 # when the output is a usage-limit message (the .exit file still records the
 # process's own code). Always writes the .out and .exit files even on timeout or
 # interruption.
+#
+# With RUN_ISSUES_CLAUDE_PROFILES set (issue #295, lib/claude-profiles.sh) the
+# step runs on the first free profile; a usage limit marks that profile full and
+# the SAME step is re-run at once on the next free one. CLAUDE_USAGE_LIMIT_RC is
+# returned only when no profile is left. The limited attempt's output is kept as
+# <step-id>.out.limited-<profile> so .out always holds the final attempt.
 call_claude() {
   local run_dir="$1"
   local step_id="$2"
@@ -491,27 +526,78 @@ call_claude() {
     _claude_call_log "plugin context left to the overridden driver: RUN_ISSUES_CLAUDE_CMD=$RUN_ISSUES_CLAUDE_CMD"
   fi
 
-  local rc=0
-  if [ -n "$timeout_prefix" ]; then
-    # shellcheck disable=SC2086
-    $timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
-  else
+  local -a cmd=()
+  if [ -z "$timeout_prefix" ]; then
     printf '[claude-call %s] WARNING: no timeout binary available (timeout/gtimeout), claude calls may hang indefinitely — install coreutils (brew install coreutils)\n' \
       "$(date -u +%FT%TZ)" >&2
-    # shellcheck disable=SC2086
-    $RUN_ISSUES_CLAUDE_CMD $model_flag ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$out_file" 2>&1 || rc=$?
   fi
+  # shellcheck disable=SC2206  # deliberate word-split of multi-token settings
+  cmd=($timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag)
 
-  printf '%s\n' "$rc" > "$exit_file"
+  local use_profiles=0 profile="" profile_path="" tried="" token
+  local last_deadline="" last_source=""
+  claude_profiles_configured && use_profiles=1
 
-  # A timeout is its own outcome (finalize_timeout); everything else is checked,
-  # including rc=0 — the CLI's exit code on a limit hit is not something to bet on.
-  local ul
-  if [ "$rc" != "124" ] && ul=$(claude_usage_limit_check "$out_file"); then
-    _claude_usage_limit_record "$run_dir" "$step_id" "${ul%% *}" "${ul#* }"
-    return "$CLAUDE_USAGE_LIMIT_RC"
-  fi
-  return "$rc"
+  local rc ul
+  while :; do
+    token=""
+    if [ "$use_profiles" = 1 ]; then
+      local picked
+      if ! picked=$(claude_profile_pick "$tried"); then
+        if [ -n "$tried" ] || [ -n "$(claude_profiles_earliest_reset)" ]; then
+          # Nothing free, and at least one profile is full: the usage-limit
+          # outcome. No process ran on this pass, so .out says why.
+          [ -n "$last_deadline" ] || { printf 'claude-call: no Claude profile available — all at their usage limit\n' > "$out_file"; printf '%s\n' "$CLAUDE_USAGE_LIMIT_RC" > "$exit_file"; }
+          _claude_all_profiles_full "$run_dir" "$step_id" "${last_deadline:-$(( $(date +%s) + $(usage_limit_backoff_seconds) ))}" "${last_source:-backoff}"
+          return "$CLAUDE_USAGE_LIMIT_RC"
+        fi
+        # Nothing is full and nothing is usable: a configuration error. Fail
+        # closed — never fall back to the CLI's own login.
+        _claude_call_log "ERROR: RUN_ISSUES_CLAUDE_PROFILES is set but no profile is usable — step $step_id not run"
+        printf 'claude-call: RUN_ISSUES_CLAUDE_PROFILES is set but no profile has a usable token file\n' > "$out_file"
+        printf '1\n' > "$exit_file"
+        return 1
+      fi
+      profile="${picked%% *}"
+      profile_path="${picked#* }"
+      tried="$tried $profile"
+      token=$(claude_profile_token "$profile_path")
+      _claude_call_log "step $step_id runs on Claude profile '$profile'"
+      _claude_profile_event "$run_dir" "$step_id" "claude_profile" "profile=$profile"
+    fi
+
+    rc=0
+    # A subshell so the token reaches the claude process's environment only: it
+    # is never exported into this shell, never on a command line (ps), and never
+    # set at all without profiles — an empty CLAUDE_CODE_OAUTH_TOKEN is not the
+    # same thing as an absent one.
+    (
+      if [ -n "$token" ]; then
+        CLAUDE_CODE_OAUTH_TOKEN="$token"
+        export CLAUDE_CODE_OAUTH_TOKEN
+      fi
+      exec "${cmd[@]}" ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")"
+    ) > "$out_file" 2>&1 || rc=$?
+
+    printf '%s\n' "$rc" > "$exit_file"
+
+    # A timeout is its own outcome (finalize_timeout); everything else is checked,
+    # including rc=0 — the CLI's exit code on a limit hit is not something to bet on.
+    if [ "$rc" != "124" ] && ul=$(claude_usage_limit_check "$out_file"); then
+      if [ "$use_profiles" = 1 ]; then
+        last_deadline="${ul%% *}"
+        last_source="${ul#* }"
+        claude_profile_trip "$profile" "$last_deadline" "$last_source" || true
+        cp -f "$out_file" "$out_file.limited-$profile" 2>/dev/null || true
+        _claude_call_log "usage limit hit in step $step_id on Claude profile '$profile' — profile full until $(date -u -r "$last_deadline" +%FT%TZ 2>/dev/null || date -u -d "@$last_deadline" +%FT%TZ 2>/dev/null || echo "$last_deadline") (source=$last_source); trying the next profile"
+        _claude_profile_event "$run_dir" "$step_id" "claude_profile_limited" "profile=$profile" "reset_at=$last_deadline" "source=$last_source"
+        continue
+      fi
+      _claude_usage_limit_record "$run_dir" "$step_id" "${ul%% *}" "${ul#* }"
+      return "$CLAUDE_USAGE_LIMIT_RC"
+    fi
+    return "$rc"
+  done
 }
 
 # render_prompt <template-file> <output-file> <key1=val1> [<key2=val2> ...]
