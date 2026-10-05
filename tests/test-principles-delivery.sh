@@ -308,10 +308,14 @@ why=$(want_combined "$PACKAGED") || { bad h3 "absent config: $why"; H_OK=0; }
 # ===========================================================================
 # A real broken installation — the module in a package root that has no
 # principles/ — rather than poking the internal default variables. The paths are
-# derived from BASH_SOURCE, so copying the lib is enough to reproduce it.
+# derived from BASH_SOURCE, so copying the lib is enough to reproduce it. The
+# whole lib/ is copied, not a hand-picked list: claude-call.sh sources its
+# siblings (preflight.sh, usage-limit.sh and what that pulls in), and a list
+# would silently go stale the next time one is added — on bash 3.2 a missing
+# sibling made call_claude return 1 and masked what this case tests.
 BROKEN_ROOT="$WORK/broken-pkg"
 BROKEN="$BROKEN_ROOT/lib"; mkdir -p "$BROKEN"
-cp "$LIB" "$ROOT/lib/preflight.sh" "$BROKEN/"
+cp "$ROOT"/lib/*.sh "$BROKEN/"
 
 broken_invoke() {  # runs the copied module, whose package root is $BROKEN_ROOT
   local rc=0
