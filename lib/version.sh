@@ -16,7 +16,10 @@
 # version is visible in poller logs, the orchestrator's --version flag, and
 # situation comments. Every function is FAIL-SOFT: a missing .git, a detached
 # worktree, or no network yields "?" rather than an error, because visibility
-# must never gate a run. Pure functions, no top-level work — safe to source.
+# must never gate a run. Pure functions, no top-level work beyond sourcing the
+# pure git-remote.sh leaf (for runner_git_fetch_bounded, the shared bounded-fetch
+# primitive runner_fetch_throttled delegates to) — safe to source.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-remote.sh"
 
 # _runner_file_mtime <path> — file mtime as Unix epoch seconds, or empty on
 # failure. The `stat` format flag is not portable and the two spellings are NOT
@@ -197,10 +200,6 @@ runner_fetch_throttled() {
     fi
   fi
   : > "$stamp" 2>/dev/null || true
-  if [ -n "$tbin" ]; then
-    "$tbin" 30 git -C "$dir" fetch --quiet origin 2>/dev/null || true
-  else
-    git -C "$dir" fetch --quiet origin 2>/dev/null || true
-  fi
+  runner_git_fetch_bounded "$tbin" 30 "$dir" origin --quiet 2>/dev/null || true
   return 0
 }

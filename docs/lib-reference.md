@@ -19,7 +19,7 @@ lukuihin.
 | `deadline-file.sh` | Koneen laajuisten perääntymisporttien yhteinen yksirivinen `<deadline> <tag>`-tilatiedosto: fail-soft luku, atominen kirjoitus. Jaettu `rate-limit.sh`:n ja `usage-limit.sh`:n kesken |
 | `env-bootstrap.sh` | Pakettimanagerin ja kohderepon `.nvmrc`-Node-version tunnistus S7b:n fail-fast-asennusporttiin |
 | `epic.sh` | Epic-tason automaatio: ajolabelien propagointi, `needs-human`-eskalaatio, valmiuskommentti. Best-effort (aina rc 0) |
-| `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia |
+| `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia. Myös jaettu aikarajallisen `git fetch`in primitiivi (`runner_git_fetch_bounded`), jota `worktree.sh:refresh_origin` ja `version.sh:runner_fetch_throttled` käyttävät |
 | `github-app-auth.sh` | Opt-in GitHub App -identiteetti. Kattaa kirjoitukset **ja** raskaimmat luvut |
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `host.sh` | `runner_host`: koneen lyhyt konenimi yhdestä paikasta, nelivaiheisella varapolulla (`hostname -s` → `hostname` ensimmäiseen pisteeseen → `$COMPUTERNAME` → `unknown`). **Ei koskaan palauta tyhjää** — §5.6:n fail-closed-portit lukisivat tyhjän hostin vieraaksi koneeksi |

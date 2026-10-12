@@ -8,6 +8,10 @@
 #   2. Valid bare origin       -> return 0, and origin/<default> sees the new tip
 #   3. Origin -> nonexistent   -> return 1 (fetch ran but failed)
 #   4. Side-effect free        -> worktree clean + HEAD unchanged across the call
+#   5. Hung fetch bounded      -> a fetch that overruns RUN_ISSUES_FETCH_TIMEOUT
+#                                 returns 1 (same as any fetch failure) and names
+#                                 the timeout on stderr (issue #298). Skipped when
+#                                 no GNU timeout/gtimeout binary is available.
 #
 # Run: bash tests/test-refresh-origin.sh
 
@@ -105,6 +109,46 @@ if [ "$rc" -eq 1 ]; then
   echo "PASS: case3 returns 1 (fetch failed, nonexistent origin)"
 else
   echo "FAIL: case3 expected 1, got $rc"; FAIL=1
+fi
+
+# ---- Case 5: a hung fetch is bounded by RUN_ISSUES_FETCH_TIMEOUT -> rc 1 + log ----
+# A `git` shim answers `remote get-url` (so the remote-exists gate passes) but
+# makes every `fetch` hang well past the timeout. refresh_origin must map the
+# GNU-timeout kill (rc 124) to the generic fetch-failure rc 1 and name the
+# timeout on stderr so a human can tell it apart from an auth/network failure.
+# Uses the REAL timeout binary (resolved like production, skipped if absent); the
+# shim is scoped to a subshell so the test's own git calls are unaffected.
+TBIN=$(preflight_timeout_bin)
+if [ -z "$TBIN" ]; then
+  echo "SKIP: case5 no GNU timeout/gtimeout binary ($(preflight_install_hint timeout))"
+else
+  SHIMBIN="$WORK/shimbin"
+  mkdir -p "$SHIMBIN"
+  cat > "$SHIMBIN/git" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"remote get-url"*) echo "https://example.invalid/x.git"; exit 0 ;;
+  *fetch*)            exec sleep 30 ;;
+  *)                  exit 0 ;;
+esac
+SH
+  chmod +x "$SHIMBIN/git"
+
+  R5="$WORK/case5"
+  mkdir -p "$R5"
+  ERR5="$WORK/case5.err"
+  ( PATH="$SHIMBIN:$PATH"; RUN_ISSUES_FETCH_TIMEOUT=1; refresh_origin "$R5" ) 2>"$ERR5"
+  rc=$?
+  if [ "$rc" -eq 1 ]; then
+    echo "PASS: case5 hung fetch is killed and mapped to return 1"
+  else
+    echo "FAIL: case5 expected 1 (timeout -> fetch failure), got $rc"; FAIL=1
+  fi
+  if grep -qi "timed out" "$ERR5"; then
+    echo "PASS: case5 stderr names the timeout cause"
+  else
+    echo "FAIL: case5 stderr did not name the timeout (got: '$(cat "$ERR5")')"; FAIL=1
+  fi
 fi
 
 echo "----------------------------------------"

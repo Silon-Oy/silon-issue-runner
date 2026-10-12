@@ -13,6 +13,24 @@
 
 set -euo pipefail
 
+# Source the two pure leaves refresh_origin needs: preflight.sh for the GNU
+# timeout binary selection (preflight_timeout_bin) and git-remote.sh for the
+# shared bounded-fetch primitive (runner_git_fetch_bounded). Resolved from this
+# file's own dir so a test that sources worktree.sh alone still gets them.
+_WORKTREE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/preflight.sh
+. "$_WORKTREE_LIB_DIR/preflight.sh"
+# shellcheck source=lib/git-remote.sh
+. "$_WORKTREE_LIB_DIR/git-remote.sh"
+
+# Seconds before a hung `git fetch` in refresh_origin is killed and reported as
+# an ordinary fetch failure. Only enforced when a GNU timeout binary is present
+# (preflight_timeout_bin); without one the fetch runs unbounded, the same
+# contract claude-call.sh and runner_fetch_throttled document for a machine
+# without coreutils. 120s is generous for a slow network yet turns the
+# hang-for-an-hour failure of issue #298 into a prompt, diagnosable block.
+RUN_ISSUES_FETCH_TIMEOUT="${RUN_ISSUES_FETCH_TIMEOUT:-120}"
+
 # refresh_origin <repo-root> [<remote>]
 # Fetches the named remote (default "origin") so the local <remote>/* refs
 # reflect the remote tip before a worktree is branched off them. Despite the
@@ -21,8 +39,14 @@ set -euo pipefail
 # outcome so the caller can decide policy (fail-fast on a new run, soft on
 # restart/continue):
 #   0  fetch succeeded
-#   1  fetch ran but failed (network/auth) — <remote>/* refs may be stale
+#   1  fetch ran but failed (network/auth OR timed out) — <remote>/* refs may be
+#      stale. A timeout maps to this same 1 so the three call sites' existing
+#      policy handles a hung connection exactly like any other fetch failure
+#      (issue #298); the stderr line distinguishes the cause for a human.
 #   2  the named remote does not exist on the clone — benign no-op
+# The fetch is bounded by RUN_ISSUES_FETCH_TIMEOUT when a GNU timeout binary is
+# available, so a hung connection becomes a prompt rc=1 instead of stalling the
+# run in S4 until the poller's hour-long liveness limit trips it (issue #298).
 # Prints nothing to stdout; the caller may capture stderr for diagnostics.
 refresh_origin() {
   local repo="$1"
@@ -31,8 +55,19 @@ refresh_origin() {
   # No such remote -> nothing to refresh. Benign; not an error.
   git -C "$repo" remote get-url "$remote" >/dev/null 2>&1 || return 2
 
-  git -C "$repo" fetch "$remote" --quiet || return 1
-  return 0
+  local tbin fetch_rc=0
+  tbin=$(preflight_timeout_bin)
+  runner_git_fetch_bounded "$tbin" "$RUN_ISSUES_FETCH_TIMEOUT" "$repo" "$remote" --quiet \
+    || fetch_rc=$?
+  [ "$fetch_rc" -eq 0 ] && return 0
+
+  # GNU timeout exits 124 when it had to kill the fetch. Name that in the log the
+  # caller captures so a hung connection is told apart from an auth/network
+  # failure, then collapse to the generic fetch-failure rc 1 the callers handle.
+  if [ -n "$tbin" ] && [ "$fetch_rc" -eq 124 ]; then
+    echo "refresh_origin: 'git fetch $remote' timed out after ${RUN_ISSUES_FETCH_TIMEOUT}s (killed by $tbin) — treating as a fetch failure" >&2
+  fi
+  return 1
 }
 
 # create_worktree <repo-root> <run-id> <branch> [<base-branch>] [<remote>]
