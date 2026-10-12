@@ -33,6 +33,33 @@
 
 set -euo pipefail
 
+# runner_git_fetch_bounded <timeout-bin> <timeout-secs> <repo-root> <remote> [<fetch-arg>...]
+# The single `git fetch` primitive shared by the package's two fetch callers —
+# worktree.sh:refresh_origin (the S4 base refresh) and version.sh:
+# runner_fetch_throttled (the drift probe). Both used to inline the same
+# timeout-wrapping if/else; centralising it here means the "bound a fetch when a
+# timeout binary exists, otherwise run unbounded" rule lives in one place
+# (CLAUDE.md §7).
+#
+# When <timeout-bin> (from preflight_timeout_bin) is non-empty the fetch is
+# wrapped so a hung connection cannot stall the run; an empty <timeout-bin>
+# means the machine has no GNU timeout and the fetch runs unbounded — the
+# documented pre-existing contract for a box without coreutils (claude-call.sh).
+#
+# The command's OWN exit code is returned UNCHANGED so the caller can tell a
+# timeout apart from an ordinary fetch failure: GNU timeout exits 124 when it
+# had to kill the fetch. Pure: no state, no logging, stdout/stderr belong to the
+# caller, which owns all policy.
+runner_git_fetch_bounded() {
+  local tbin="$1" secs="$2" repo="$3" remote="$4"
+  shift 4
+  if [ -n "$tbin" ]; then
+    "$tbin" "$secs" git -C "$repo" fetch "$remote" "$@"
+  else
+    git -C "$repo" fetch "$remote" "$@"
+  fi
+}
+
 # Upper bound for the repo component. Repo names are short in practice; the cap
 # only bounds pathological input so lock dirs, tmux session names and git branch
 # names stay readable and well inside filesystem / git ref limits.
