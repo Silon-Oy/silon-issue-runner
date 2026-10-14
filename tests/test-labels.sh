@@ -18,7 +18,7 @@
 # 5. The pure URL parsers extract owner/repo and number from PR and issue URLs.
 #
 # Network-free: gh is a PATH shim that records argv and replays a scripted
-# exit code / stderr from files in the work dir.
+# exit code / stdout / stderr from files in the work dir.
 #
 # Run: bash tests/test-labels.sh   (exit 0 = all pass)
 
@@ -34,10 +34,12 @@ BIN="$WORK/bin"; mkdir -p "$BIN"
 GH_LOG="$WORK/gh-calls.log"
 GH_RC="$WORK/gh-rc"; echo 0 > "$GH_RC"
 GH_ERR="$WORK/gh-err"; : > "$GH_ERR"
+GH_OUT="$WORK/gh-out"; : > "$GH_OUT"
 
 cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
 echo "\$*" >> "$GH_LOG"
+cat "$GH_OUT"
 cat "$GH_ERR" >&2
 exit "\$(cat "$GH_RC")"
 SH
@@ -51,7 +53,7 @@ FAIL=0
 fail() { echo "FAIL: $*"; FAIL=1; }
 ok()   { echo "ok:   $*"; }
 
-reset() { : > "$GH_LOG"; echo 0 > "$GH_RC"; : > "$GH_ERR"; }
+reset() { : > "$GH_LOG"; echo 0 > "$GH_RC"; : > "$GH_ERR"; : > "$GH_OUT"; }
 
 # === 1 + 2. call shape, multi-label, trimming ==============================
 reset
@@ -125,13 +127,30 @@ esac
 
 # === 4. labels_ensure tolerates an existing label ==========================
 reset
+# Real gh split: the body with the "already_exists" code goes to STDOUT, only
+# the summary line to stderr. A mock that put the code on stderr let a
+# stdout-discarding labels_ensure pass while it logged a 422 on every claim.
 echo 1 > "$GH_RC"
-printf 'HTTP 422: Validation Failed (already_exists)\n' > "$GH_ERR"
+printf '{"message":"Validation Failed","errors":[{"resource":"Label","code":"already_exists","field":"name"}],"status":"422"}' > "$GH_OUT"
+printf 'gh: Validation Failed (HTTP 422)\n' > "$GH_ERR"
 ERR_OUT=$(labels_ensure "acme/widgets" "waiting" FBCA04 "odottaa" 2>&1 >/dev/null)
 RC=$?
 [ "$RC" -eq 0 ] || fail "labels_ensure should treat already_exists as success (rc=$RC)"
 [ -z "$ERR_OUT" ] || fail "already_exists should stay silent, got: '$ERR_OUT'"
 ok "labels_ensure: existing label is success, silently"
+
+# A 422 for any other validation error (e.g. a bad color) is a real failure.
+reset
+echo 1 > "$GH_RC"
+printf '{"message":"Validation Failed","errors":[{"resource":"Label","code":"invalid","field":"color"}],"status":"422"}' > "$GH_OUT"
+printf 'gh: Validation Failed (HTTP 422)\n' > "$GH_ERR"
+ERR_OUT=$(labels_ensure "acme/widgets" "waiting" ZZZZZZ 2>&1 >/dev/null)
+RC=$?
+[ "$RC" -ne 0 ] || fail "labels_ensure masked a non-duplicate 422"
+case "$ERR_OUT" in
+  *'"code":"invalid"'*) ok "labels_ensure: other 422 propagates with the response body in the diagnostic" ;;
+  *) fail "diagnostic should carry the 422 body, got: '$ERR_OUT'" ;;
+esac
 
 reset
 echo 1 > "$GH_RC"

@@ -161,8 +161,12 @@ labels_ensure() {
   [ -n "$color" ] && args+=(-f "color=$color")
   [ -n "$desc" ] && args+=(-f "description=$desc")
 
+  # stdout is kept here, unlike the other helpers: on a 422 `gh api` prints the
+  # response body (which carries the "already_exists" code) to stdout and only
+  # "gh: Validation Failed (HTTP 422)" to stderr. Discarding stdout made every
+  # claim on an existing label log a spurious failure.
   local err rc
-  err=$(labels_gh "${args[@]}" 2>&1 >/dev/null)
+  err=$(labels_gh "${args[@]}" 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     # "already_exists" is the documented 422 validation code for a duplicate
