@@ -412,6 +412,37 @@ else
 fi
 
 # ===========================================================================
+# Package file set for the structural scans (k) and (p)
+# ===========================================================================
+# Tracked plus untracked-but-not-ignored files, relative to $ROOT. A recursive
+# grep over $ROOT is the wrong set: the runner's own run-dirs and worktrees live
+# under the gitignored .claude/ of whatever repo it runs on — this one included —
+# so every leftover worktree is a full second copy of the package (contract,
+# claude-call.sh, this test) and every run-dir holds the concatenated
+# <step>.system-prompt.md. Both guards then flagged runtime state, not the
+# package. --others keeps a brand-new, not-yet-added duplicate in scope.
+# Read with a while-loop, not mapfile: mapfile is bash 4+, macOS ships 3.2.
+PKG_FILES=()
+while IFS= read -r f; do PKG_FILES+=("$f"); done \
+  < <(git -C "$ROOT" ls-files --cached --others --exclude-standard 2>/dev/null)
+# FAIL-CLOSED: an empty or implausibly small set (git missing, not a checkout)
+# would let both scans pass vacuously. Same floor-plus-anchor shape as
+# test-no-private-upstream.sh.
+PKG_FILES_OK=1
+if [ "${#PKG_FILES[@]}" -lt 20 ] \
+   || ! printf '%s\n' "${PKG_FILES[@]}" | grep -qx 'principles/auto-run-contract.md'; then
+  PKG_FILES_OK=0
+fi
+
+# pkg_grep_l <grep flags...> -- <pattern> — the package files that match, one
+# relative path per line. Missing files (tracked but deleted in the working
+# tree) are silently skipped.
+pkg_grep_l() {
+  [ "${#PKG_FILES[@]}" -gt 0 ] || return 0
+  (cd "$ROOT" && grep -l "$@" "${PKG_FILES[@]}" 2>/dev/null) || true
+}
+
+# ===========================================================================
 # (k) structural: all orchestrated steps go through the single seam
 # ===========================================================================
 missing=""
@@ -424,11 +455,13 @@ grep -q 'call_claude "$out_dir" "$step_id" "$prompt_file"' "$ROOT/pr-watch.sh" \
 # --dangerously-skip-permissions: any code path that actually runs an
 # orchestrated step needs it, so a second occurrence anywhere in the package's
 # shell would be a second invocation site — one the standard would not reach.
-strays=$(grep -rln -- '--dangerously-skip-permissions' "$ROOT" 2>/dev/null \
+strays=$(pkg_grep_l -- '--dangerously-skip-permissions' \
   | grep -E '\.(sh|py)$' \
-  | grep -v '/tests/' \
-  | grep -v '/lib/claude-call\.sh$' || true)
-if [ -n "$missing" ]; then
+  | grep -v '^tests/' \
+  | grep -vx 'lib/claude-call\.sh' || true)
+if [ "$PKG_FILES_OK" != "1" ]; then
+  bad k "package file set derivation broke (got ${#PKG_FILES[@]} file(s)) — the stray-invocation scan would pass vacuously"
+elif [ -n "$missing" ]; then
   bad k "step(s) not routed through call_claude:$missing"
 elif [ -n "$strays" ]; then
   bad k "the CLI is invoked outside lib/claude-call.sh (bypasses the standard):
@@ -485,20 +518,31 @@ fi
 # drift the moment either side is edited. Anchors are distinctive full sentences
 # from the contract rather than single words, so an ordinary paraphrase
 # elsewhere in the docs does not trip this.
+# grep matches line by line, so an anchor must sit on ONE line of the source.
+# The first anchor used to straddle a line break there and matched nothing at
+# all — a dead anchor passes silently, so each one is first proven against the
+# contract itself.
 CONTRACT_ANCHORS=(
-  'Saat siis tehdä muutoksia ilman erillistä lupakyselyä.'
+  'Tunnistat tilan siitä, että sait tämän tekstin'
   'voittaa jokaisen ohjeen, joka vaatii kysymään luvan ennen muutosta'
 )
+dead=""
+for anchor in "${CONTRACT_ANCHORS[@]}"; do
+  grep -qF -- "$anchor" "$CONTRACT" || dead="$dead '$anchor'"
+done
+[ -z "$dead" ] || bad p0 "anchor(s) no longer found on one line of $CONTRACT:$dead"
 dupes=""
 for anchor in "${CONTRACT_ANCHORS[@]}"; do
   while IFS= read -r f; do
     case "$f" in
-      "$CONTRACT"|"$HERE"/*) continue ;;   # the source, and this guard itself
+      principles/auto-run-contract.md|tests/*) continue ;;   # the source, and this guard itself
     esac
     dupes="$dupes $f"
-  done < <(grep -rlF -- "$anchor" "$ROOT" --exclude-dir=.git 2>/dev/null || true)
+  done < <(pkg_grep_l -F -- "$anchor")
 done
-if [ -n "$dupes" ]; then
+if [ "$PKG_FILES_OK" != "1" ]; then
+  bad p "package file set derivation broke (got ${#PKG_FILES[@]} file(s)) — the duplicate scan would pass vacuously"
+elif [ -n "$dupes" ]; then
   bad p "the contract wording is duplicated outside principles/auto-run-contract.md:$dupes"
 else
   ok p "the contract wording lives in exactly one file"
