@@ -15,8 +15,9 @@
 #    openssl RS256 path is correct (not just that it ran without error).
 # 5. gha_with_token wraps a subprocess with GH_TOKEN/GITHUB_TOKEN set; the
 #    no-op pass-through still works when App mode is OFF.
-# 6. gha_git_push_header emits "Authorization: Bearer ghs_…" and refuses to
-#    return anything when App mode is OFF.
+# 6. gha_git_push_header emits "Authorization: Basic base64(x-access-token:ghs_…)"
+#    — git's HTTP endpoint rejects Bearer with "invalid credentials" — and
+#    refuses to return anything when App mode is OFF.
 # 7. The heavy LIST reads (pick_oldest_candidate, issue_assignees, epic_list_open,
 #    scan_clean's label query) route through the App when App mode is on, so their
 #    volume spends the App's rate limit, not a personal quota (issue #127).
@@ -342,8 +343,13 @@ fi
 echo "--- TEST 7: gha_git_push_header ---"
 HDR=$(gha_git_push_header) || fail "7a: gha_git_push_header failed in App mode"
 case "$HDR" in
-  "Authorization: Bearer ghs_test_token_"*) ok "7a: emits 'Authorization: Bearer ghs_…' value" ;;
-  *) fail "7a: unexpected header value (got '${HDR:0:40}…')" ;;
+  "Authorization: Basic "*)
+    DECODED=$(printf '%s' "${HDR#Authorization: Basic }" | openssl base64 -d -A)
+    case "$DECODED" in
+      "x-access-token:ghs_test_token_"*) ok "7a: emits 'Authorization: Basic base64(x-access-token:ghs_…)'" ;;
+      *) fail "7a: Basic credentials decode to an unexpected value" ;;
+    esac ;;
+  *) fail "7a: unexpected header scheme (got '${HDR:0:21}…')" ;;
 esac
 ( unset RUN_ISSUES_GITHUB_APP_ID
   HDR2=$(gha_git_push_header 2>/dev/null)

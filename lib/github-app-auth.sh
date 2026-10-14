@@ -438,10 +438,16 @@ gha_git_push_header() {
   if ! tok=$(gha_token); then
     return 1
   fi
-  # GitHub accepts "Authorization: Bearer ghs_..." for installation tokens.
+  # Git's smart-HTTP endpoint takes installation tokens only as Basic auth with
+  # the x-access-token user. "Authorization: Bearer ghs_..." works against the
+  # REST API but git push / ls-remote answer "remote: invalid credentials".
+  # `openssl base64 -A` keeps the value on one line (GNU base64 would wrap it);
+  # openssl is already required for the JWT above.
   # We deliberately do NOT print this line to any log (the caller assigns it
   # to a local and passes it to `git -c`).
-  printf 'Authorization: Bearer %s' "$tok"
+  local basic
+  basic=$(printf 'x-access-token:%s' "$tok" | openssl base64 -A) || return 1
+  printf 'Authorization: Basic %s' "$basic"
 }
 
 # ---------- public: clear cache (testing / forced refresh) ----------
