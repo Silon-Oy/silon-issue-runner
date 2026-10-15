@@ -218,8 +218,8 @@ Otsikko kertoo lopputuloksen, ei toiminnan: *"status.sh erottelee arkistoidut aj
 osioonsa"*, ei *"korjaa status.sh"*.
 
 **Esitä luonnos käyttäjälle kokonaisuudessaan ja pyydä vahvistus.** Luonnoksessa näkyvät otsikko,
-runko, labelit — sekä osion 1 watchlist-huomio, jos `COVERED=1`, ja osion 1.1 puuttuvat labelit,
-jos niitä on.
+runko, labelit, **ehdotettu ajopolku perusteluineen** (osio 4.2) — sekä osion 1 watchlist-huomio,
+jos `COVERED=1`, ja osioiden 1.1 ja 4.2 puuttuvat labelit, jos niitä on.
 
 > **Ei vahvistusta ⇒ nolla kirjoitusta.** Sama suunnittele–sovella-jako kuin `install.sh`:ssa ja
 > `run-epic.sh`:ssa. Jos käyttäjä haluaa muutoksia, korjaa luonnos ja kysy uudelleen.
@@ -282,6 +282,44 @@ työpuuhun, joten se ei saa tapahtua näkymättömissä:
 Sisarkomento [`/issue-runner:new-epic`](new-epic.md) tekee saman kokonaisuudelle osiossaan 2.1 — yksi kysymys
 kattaa siellä koko ketjun.
 
+### 4.2 Ajopolku — ehdota, käyttäjä vahvistaa
+
+Ehdota issuelle ajopolkua: `light-run`, tavallinen (ei labelia) tai `heavy-run`. Kriteerit ovat
+kirjattuina yhdessä paikassa, skillin [`claude-issue-runner`](../../skills/claude-issue-runner/SKILL.md)
+osiossa *Ajopolku* — **lue ne sieltä äläkä kirjoita niitä tähän uudelleen.** Kaksi kriteeristöä
+ajautuisi erilleen, ja sama kuvaus luokittuisi eri komennoissa eri tavalla.
+
+Arvioi polku **luettuasi koodin** (osio 2): kokoarvio ja peruttavuus ovat uskottavia vasta, kun
+tiedät mihin muutos osuu. Näytä luonnoksessa yksi rivi:
+
+```
+Ajopolku: <light-run | tavallinen (ei labelia) | heavy-run> — <yhden rivin perustelu kriteereistä>
+```
+
+**Vahvistus on sama kuin luonnoksen**, ei erillinen kysymys: käyttäjä hyväksyy tai vaihtaa
+polun samalla kun hän hyväksyy tai korjaa luonnoksen. Vahvistettu valinta kirjataan osiossa 5
+labelina (`RUN_PATH_LABEL`): `light-run` tai `heavy-run`, tavallinen polku **ilman labelia**.
+
+**Ajopolkulabel ei ole poimintaehto.** Se ei kuulu `PICK_LABELS`iin eikä watchlistiin, ja issue
+ilman sitä ajetaan tavallista polkua. Jos käyttäjä ei ota kantaa polkuun, ehdotus jää voimaan
+sellaisena kuin se luonnoksessa näytettiin.
+
+Tarkista, onko valittu label repossa olemassa (`EXISTING` osiosta 1.1):
+
+```bash
+[ -n "${BASH_VERSION:-}" ] || { echo "FAIL: lohko vaatii bashin — ks. Shell-lohkot ajetaan bashilla"; exit 1; }
+RUN_PATH_LABEL=""   # light-run | heavy-run | tyhjä = tavallinen polku
+RUN_PATH_MISSING=0
+if [ -n "$RUN_PATH_LABEL" ]; then
+  grep -qxF -- "$RUN_PATH_LABEL" <<<"$EXISTING" || RUN_PATH_MISSING=1
+fi
+echo "RUN_PATH_LABEL=${RUN_PATH_LABEL:-<ei labelia>} RUN_PATH_MISSING=$RUN_PATH_MISSING"
+```
+
+Puuttuva ajopolkulabel kerrotaan luonnoksessa ja luodaan osiossa 5 samassa vahvistuksessa —
+samasta syystä kuin poimintalabel osiossa 1.1: kirjoitusvirhe ei saa syntyä uutena labelina
+huomaamatta.
+
 ## 5. Kirjoita — kaikki kuusi poimintaehtoa yhdellä kutsulla
 
 Poimintaehdot ovat `lib/issue.sh`:n `pick_oldest_candidate` ja `_pick_filter_jq`. Luotavan issuen
@@ -318,13 +356,25 @@ done
 Labelin luonnin epäonnistuminen **lopettaa ajon**: issue ilman poimintalabelia ei koskaan lähde
 ajoon.
 
+Jos osio 4.2 löysi ajopolkulabelin puuttuvaksi (`RUN_PATH_MISSING=1`), luo se samalla tavalla:
+
+```bash
+if [ "${RUN_PATH_MISSING:-0}" = 1 ]; then
+  gh api --method POST "repos/$OWNER_REPO/labels" -f "name=$RUN_PATH_LABEL" -f 'color=ededed' \
+    -f 'description=run-issues run path' >/dev/null \
+    && echo "label luotu: $RUN_PATH_LABEL" \
+    || { echo "FAIL: labelin '$RUN_PATH_LABEL' luonti epäonnistui — issueta ei luoda"; exit 1; }
+fi
+```
+
 Issue luodaan **yhdellä kutsulla, labelit ja assignee mukana samassa payloadissa**:
 
 ```bash
 BODY_FILE=$(mktemp)   # runko tiedostoon, jotta markdown, rivinvaihdot ja backtickit säilyvät
 
-LABELS_JSON=$(jq -cn --arg csv "$PICK_LABELS" \
-  '$csv | split(",") | map(select(length > 0))')
+# Ajopolkulabel (osio 4.2) samaan listaan; tyhjä = tavallinen polku, ei labelia.
+LABELS_JSON=$(jq -cn --arg csv "$PICK_LABELS" --arg path "${RUN_PATH_LABEL:-}" \
+  '($csv | split(",")) + [$path] | map(select(length > 0))')
 
 # Tyhjä tunnus (osio 1) => kenttä jätetään pois, ei lähetetä tyhjää listaa.
 ASSIGNEES_JSON=$(jq -cn --arg login "${RUNNER_LOGIN:-}" \
@@ -359,6 +409,7 @@ Tulosta aina, myös epäonnistumisessa:
 |---|---|
 | Issue | numero + URL + otsikko |
 | Labelit | mitkä lisättiin |
+| Ajopolku | vahvistettu polku: `light-run`, `heavy-run` vai tavallinen ilman labelia |
 | Assignee | kenelle issue assignattiin (`ISSUE_ASSIGNEES`) — tai **että se jäi assignaamatta ja miksi** |
 | Luodut labelit | jos osio 5 loi puuttuvia labeleita, mitkä |
 | Watchlist | osion 1 huomio, jos `COVERED=1` |

@@ -137,8 +137,16 @@ Lue kuvaus ja perehdy repoon sen verran, että pilkkominen osuu todelliseen kood
 - **Riippuvuudet:** mitkä lapset ovat `blocked_by` mihinkin lapseen. Vain aitoja
   järjestysriippuvuuksia — löysä ketjutus jonottaa ajot turhaan sarjaan. **Graafi ei saa olla
   syklinen** (`/issue-runner:run-epic` kieltäytyy syklistä exit-koodilla 4).
-- **Labelit:** epicille `epic` + `PICK_LABELS`. **Lapsille ei mitään** — poller propagoi
-  ajolabelit epicin avoimille lapsille.
+- **Ajopolku jokaiselle alaissueelle:** `light-run`, tavallinen (ei labelia) tai `heavy-run`,
+  ja yhden rivin perustelu. Kriteerit ovat kirjattuina yhdessä paikassa, skillin
+  [`claude-issue-runner`](../../skills/claude-issue-runner/SKILL.md) osiossa *Ajopolku* — **lue
+  ne sieltä äläkä kirjoita niitä tähän uudelleen.** Arvioi kukin lapsi erikseen: saman epicin
+  lapset ovat usein eri polkuja. Epic itse ei saa ajopolkua, koska se ei ole ajettava.
+- **Labelit:** epicille `epic` + `PICK_LABELS`. **Lapsille ei poimintalabeleita** — poller
+  propagoi ajolabelit epicin avoimille lapsille. Lapsen ainoa label on sen vahvistettu
+  ajopolkulabel (`light-run` tai `heavy-run`); tavallisen polun lapsi jää ilman labelia.
+  Ajopolkulabel ei ole poimintaehto eikä estä poimintaa, joten se ei vaikuta osion 3
+  kirjoitusjärjestykseen.
 - **Merge-tila:** oletuksena **lapset mergetään automaattisesti** — poller propagoi `auto-merge`n
   ajolabelien mukana, joten ketju ajetaan kerralla läpi ilman ihmisen mergejä. Jos halutaan
   **manuaalinen merge**, lisää `manual-merge` epicille (estää koko ketjulta) tai yksittäiselle
@@ -146,12 +154,18 @@ Lue kuvaus ja perehdy repoon sen verran, että pilkkominen osuu todelliseen kood
   propagoinnissa.
 
 **Esitä suunnitelma käyttäjälle kokonaisuudessaan ja pyydä vahvistus.** Suunnitelmassa näkyvät
-epicin otsikko ja runko, jokaisen alaissueen otsikko ja runko, riippuvuudet (`"B odottaa A:ta"`),
+epicin otsikko ja runko, jokaisen alaissueen otsikko, runko ja **ehdotettu ajopolku
+perusteluineen** (`Ajopolku: <light-run | tavallinen (ei labelia) | heavy-run> — <perustelu>`),
+riippuvuudet (`"B odottaa A:ta"`),
 labelit ja **merge-tila** ("lapset mergetään automaattisesti" tai "manuaalinen merge:
 `manual-merge` epicillä") — sekä osion 1 watchlist-huomio, jos `COVERED=1`.
 
 > **Ei vahvistusta ⇒ nolla kirjoitusta.** Sama suunnittele–sovella-jako kuin `install.sh`:ssa ja
 > `run-epic.sh`:ssa. Jos käyttäjä haluaa muutoksia, korjaa suunnitelma ja kysy uudelleen.
+
+**Ajopolut vahvistetaan samassa vahvistuksessa kuin suunnitelma**, ei erillisinä kysymyksinä:
+käyttäjä hyväksyy tai vaihtaa minkä tahansa lapsen polun samalla kun hän hyväksyy tai korjaa
+suunnitelman. Ehdotus, johon hän ei ota kantaa, jää voimaan sellaisena kuin se näytettiin.
 
 ### 2.1 Kielimäärittely — kysy, jos projektin `CLAUDE.md` ei sitä anna
 
@@ -239,9 +253,15 @@ echo "LEDGER=$LEDGER"
 # Syöte tulee nimetyistä muuttujista ISSUE_TITLE ja ISSUE_BODY_FILE eikä
 # numeroiduista parametreista: komennon argumenttisubstituutio korvaa ne
 # käyttäjän kuvauksen sanoilla jo ennen kuin bash näkee rungon.
+#
+# ISSUE_RUN_PATH on lapsen vahvistettu ajopolkulabel (light-run / heavy-run);
+# tyhjä = tavallinen polku eikä labels-kenttää lähetetä lainkaan.
 create_issue() {
   jq -n --arg t "$ISSUE_TITLE" --rawfile b "$ISSUE_BODY_FILE" --argjson a "$ASSIGNEES_JSON" \
-    '{title: $t, body: $b} + (if ($a | length) > 0 then {assignees: $a} else {} end)' \
+     --arg p "${ISSUE_RUN_PATH:-}" \
+    '{title: $t, body: $b}
+     + (if ($a | length) > 0 then {assignees: $a} else {} end)
+     + (if ($p | length) > 0 then {labels: [$p]} else {} end)' \
     | gh api "repos/$OWNER_REPO/issues" --input - \
         --jq '[.number, .id, ([.assignees[].login] | join(","))] | @tsv'
 }
@@ -254,7 +274,7 @@ siis todellisen assignee-joukon, ja se kirjataan `$LEDGER`iin muun tuotoksen tap
 ### 3.0 Epic-issue (ilman labeleita)
 
 ```bash
-ISSUE_TITLE=$EPIC_TITLE ISSUE_BODY_FILE=$EPIC_BODY_FILE
+ISSUE_TITLE=$EPIC_TITLE ISSUE_BODY_FILE=$EPIC_BODY_FILE ISSUE_RUN_PATH=""   # epic ei ole ajettava
 EPIC_LINE=$(create_issue) \
   || { echo "FAIL: epicin luonti epäonnistui — mitään ei ole vielä kirjoitettu"; exit 1; }
 IFS=$'\t' read -r EPIC_NUM EPIC_ID EPIC_ASSIGNEES <<<"$EPIC_LINE"   # erotin on tabi, ei väli
@@ -267,8 +287,10 @@ puhdas.
 
 ### 3.1 Alaissueet
 
-Luo jokainen lapsi samalla `create_issue`lla (aseta ensin lapsen `ISSUE_TITLE` ja
-`ISSUE_BODY_FILE`) ja kirjaa numero + id + assignee. Yhden lapsen
+Luo jokainen lapsi samalla `create_issue`lla (aseta ensin lapsen `ISSUE_TITLE`,
+`ISSUE_BODY_FILE` ja `ISSUE_RUN_PATH` — vahvistettu ajopolkulabel tai tyhjä tavalliselle
+polulle) ja kirjaa numero + id + assignee + ajopolku. Ajopolkulabel kulkee samassa kutsussa kuin
+issue, joten luokitukseton lapsi ei voi syntyä erillisen labelointikutsun epäonnistuessa. Yhden lapsen
 epäonnistuminen **ei** lopeta ajoa: jatka lopuilla ja raportoi puuttuvat osiossa 4 — puolivalmis
 epic, josta ei kerrota, on tämän komennon pahin vikatila.
 
@@ -316,8 +338,8 @@ gh api --method POST "repos/$OWNER_REPO/issues/$EPIC_NUM/labels" "${LABEL_ARGS[@
   || echo "FAIL labelit epicille #$EPIC_NUM"
 ```
 
-Puuttuva label syntyy GitHubissa automaattisesti. **Lapsille ei lisätä labeleita** missään
-vaiheessa.
+Puuttuva label syntyy GitHubissa automaattisesti. **Lapsille ei lisätä poimintalabeleita**
+missään vaiheessa; niiden ainoa label on osiossa 3.1 luonnin yhteydessä kirjattu ajopolku.
 
 ## 4. Raportoi — myös kun jokin meni pieleen
 
@@ -327,7 +349,7 @@ käsin:
 | Kohta | Mitä raportoidaan |
 |---|---|
 | Epic | numero + URL |
-| Alaissueet | mitkä syntyivät (numero + otsikko) ja **mitkä eivät** |
+| Alaissueet | mitkä syntyivät (numero + otsikko + ajopolku) ja **mitkä eivät** |
 | Sub-issue-linkit | mitkä kirjautuivat ja mitkä eivät |
 | Riippuvuudet | mitkä kirjautuivat ja mitkä eivät |
 | Assignee | kenelle epic ja lapset assignattiin — tai **että ne jäivät assignaamatta ja miksi** |

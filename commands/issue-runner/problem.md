@@ -196,15 +196,25 @@ sinä sen nyt tiedät. Argumenttiin kuuluu:
 | Toistoaskeleet | osio 2: mitä teit / mitä odotit / mitä tapahtui |
 | Juurisyyhavainto | osio 1: tiedosto ja funktio, tai poissuljetut ja mihin tieto loppui |
 | Rajaus | mitä korjaus ei koske |
+| Ajopolkuehdotus | `light-run`, tavallinen (ei labelia) tai `heavy-run` ja yhden rivin perustelu |
+
+**Ajopolku ehdotetaan triagen perusteella**, koska juuri triage tietää, onko syy tiedossa ja kuinka
+laajalle korjaus ulottuu. Kriteerit ovat kirjattuina yhdessä paikassa, skillin
+[`claude-issue-runner`](../../skills/claude-issue-runner/SKILL.md) osiossa *Ajopolku* — **lue ne
+sieltä äläkä kirjoita niitä tähän uudelleen.** Tämä komento vain ehdottaa: vahvistus ja labelointi
+tapahtuvat delegoidussa komennossa, joka näyttää polun luonnoksessaan ja kysyy sen samassa
+vahvistuksessa kuin luonnoksen.
 
 Esitä komento valmiina rivinä, jonka käyttäjä voi kopioida sellaisenaan:
 
 ```
-/issue-runner:new-issue <oire>. Toisto: <mitä teit> → odotettiin <x>, tapahtui <y>. Havainto: <tiedosto:funktio tai poissuljetut>. Rajaus: <mitä ei kuulu>.
+/issue-runner:new-issue <oire>. Toisto: <mitä teit> → odotettiin <x>, tapahtui <y>. Havainto: <tiedosto:funktio tai poissuljetut>. Rajaus: <mitä ei kuulu>. Ajopolkuehdotus: <light-run | tavallinen | heavy-run> — <perustelu>.
 ```
 
 Epic-haarassa sama `/issue-runner:new-epic`ille, ja siihen kuuluu lisäksi **osiin jako**, jonka perustelit
 osiossa 3.3 — se on juuri se tieto, jota `/issue-runner:new-epic` tarvitsee eikä voi päätellä oireesta.
+Ajopolkuehdotus annetaan silloin **jokaiselle osalle erikseen**, koska `/issue-runner:new-epic`
+luokittelee jokaisen alaissueen omakseen.
 
 **Älä aja delegoitua komentoa käyttäjän puolesta.** Se on hänen vahvistuksensa paikka:
 `/issue-runner:new-issue` ja `/issue-runner:new-epic` kysyvät luonnoksesta erikseen, ja tämän ohittaminen tekisi triagesta
@@ -219,6 +229,7 @@ Tulosta aina, riippumatta lopputuloksesta:
 | Verdikti | mikä kolmesta, ja yhdellä lauseella miksi |
 | Havainto | tiedosto ja funktio, tai poissuljetut ja mihin tieto loppui |
 | Duplikaatti | osuma ja käyttäjän päätös, tai "ei osumaa" (vain 3.2 / 3.3) |
+| Ajopolkuehdotus | ehdotettu polku perusteluineen, epicillä per osa (vain 3.2 / 3.3) |
 | Seuraava askel | valmis komentorivi, tai korjausohje |
 
 Lopuksi, sanamuoto lopputuloksen mukaan:

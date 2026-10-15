@@ -1,8 +1,8 @@
 ---
 name: claude-issue-runner
-description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset or auto-merge label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
+description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run or heavy-run label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
-version: 2.3.0
+version: 2.4.0
 ---
 
 # claude-issue-runner — järjestelmän käyttöohje
@@ -56,6 +56,8 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `auto-reset-skipped` | automaatio, kun se ei voi purkaa | **sinä**, kun olet hoitanut asian | Estää nollauksen loputtoman uudelleenyrityksen. Oma labelinsa, ei jaettu siivouksen kanssa |
 | `auto-merge` (`PR_WATCH_MERGE_LABEL`) | sinä issuelle, automaatio PR:lle; **epicin lapsille propagoituu oletuksena** | sinä | PR-vahti mergeää **vain** labeloidun PR:n |
 | `manual-merge` | sinä epicille tai sen lapselle | sinä | Opt-out `auto-merge`-propagoinnista: epicillä estää koko ketjulta, lapsella vain siltä lapselta. Lapsi ajetaan silti — vain automerge jää pois |
+| `light-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: kevyt polku. Ei poimintaehto eikä estä poimintaa. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
+| `heavy-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: raskas polku. Ei poimintaehto eikä estä poimintaa. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
 | `auto-claimed` | automaatio, kun ajo varaa issuen (S3) | automaatio, kun ajo perääntyy tai siivotaan | **Varaus**: estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Älä lisää tai poista käsin** |
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
 | `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä | sinä | Suodatettava merkintä epic-issuella |
@@ -101,6 +103,23 @@ Jos poimintalabeleita on kaksi, issue tarvitsee molemmat.
 > kumman tahansa poimintalabeliksi, listaus pyytää palvelimelta juuri ne issuet ja paikallinen
 > suodatin pudottaa ne kaikki → **nolla ehdokasta, ei virhettä, ei lokiriviä.** Repo jää
 > pysyvästi tyhjäksi ajoista. Älä koskaan käytä purkulabelia poimintalabelina.
+
+## Ajopolku — `light-run`, ei labelia vai `heavy-run`
+
+Issuen kirjoittaja luokittelee issuen yhteen kolmesta ajopolusta. Luokitus tehdään
+kirjoitushetkellä, koska silloin ihminen on varmasti paikalla; ajon aikana kysymykseen ei
+vastaisi kukaan. Tämä osio on kriteerien **ainoa** kirjattu muoto — `/issue-runner:new-issue`,
+`/issue-runner:new-epic` ja `/issue-runner:problem` viittaavat tänne eivätkä toista niitä.
+
+| Polku | Label | Kriteerit |
+|---|---|---|
+| Kevyt | `light-run` | Syy on tiedossa, muutos on enintään noin 3 tiedostoa tai 50 riviä, ja se on helppo perua |
+| Tavallinen | ei labelia | Tavallinen ominaisuus tai bugikorjaus |
+| Raskas | `heavy-run` | Syy on epäselvä, muutos ylittää tila-, rinnakkaisuus- tai integraatiorajan, sitä on vaikea perua tai se muuttaa arkkitehtuuria |
+
+**Labelia ei vaadita.** Issue ilman ajopolkulabelia kulkee tavallista polkua — puuttuva label
+on luokitus, ei puute. Kumpikaan label ei ole poimintaehto eikä estä poimintaa, joten niitä ei
+koskaan lisätä watchlistin poimintalabeleihin.
 
 ## Varaus on `auto-claimed`-label, assignaatio on kirjanpitoa
 
