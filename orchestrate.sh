@@ -2388,6 +2388,8 @@ phase_b_deliver() {
     "BRANCH=$BRANCH" \
     "ISSUE_NUMBER=$ISSUE_NUM" \
     "ISSUE_TITLE=$ISSUE_TITLE" \
+    "ISSUE_BODY=$ISSUE_BODY" \
+    "CYCLE_REVIEW_OUTPUT=$cr_full" \
     "IMPLEMENTER_OUTPUT_TAIL=$imp_tail"
 
   local evo_rc=0
@@ -2403,6 +2405,11 @@ phase_b_deliver() {
   # not a silent death of the orchestrator.
   evo_result=$(grep -E '^EVOLUTION_RESULT:' "$evo_out" 2>/dev/null | tail -1 | sed 's/^EVOLUTION_RESULT: *//' || true)
   state_event "$RUN_DIR" "evolution_done" "result=${evo_result:-UNKNOWN}"
+  # Δψ observations: structural problems evolution saw but left out of this PR.
+  # The PR is created only in S11, so evolution cannot edit its description;
+  # these lines are its route into the body. Absent lines = no section.
+  local evo_delta_psi
+  evo_delta_psi=$(grep -E '^EVOLUTION_DELTA_PSI:' "$evo_out" 2>/dev/null | sed 's/^EVOLUTION_DELTA_PSI: */- /' || true)
 
   # ---------- S10: PR ----------
   enter_state "S10_PR"
@@ -2436,6 +2443,12 @@ phase_b_deliver() {
     echo "${evo_result:-UNKNOWN}"
     echo '```'
     echo
+    if [ -n "$evo_delta_psi" ]; then
+      echo "## Δψ — follow-up outside this PR"
+      echo
+      echo "$evo_delta_psi"
+      echo
+    fi
     echo "Run dir: \`$RUN_DIR\`"
     echo
     echo "Closes #$ISSUE_NUM"
