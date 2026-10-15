@@ -50,8 +50,8 @@ NEEDS_CLARIFICATION (kysy TARKEMPI kysymys, älä toista samaa).
 
 ## Tehtäväsi
 
-Kirjoita analyysi alla olevilla otsikoilla tässä järjestyksessä. Jokainen otsikko alkaa
-ankkurin symbolilla (`## α — tarkoitus` jne.), jotta toteutus ja Evolution löytävät kohdat.
+Kirjoita analyysi alla olevilla otsikoilla tässä järjestyksessä. Ankkurikohtien otsikot
+alkavat ankkurin symbolilla (`## α — tarkoitus` jne.), jotta toteutus ja Evolution löytävät kohdat.
 
 1. **α — tarkoitus:** Kenelle ja miksi muutos tehdään? Onko se konkreettinen muutos vai
    kysymys/keskustelunavaus?
