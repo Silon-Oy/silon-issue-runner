@@ -256,6 +256,19 @@ joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
 | `RUN_ISSUES_DIGEST_FIX_MAX_PAGES` | `5` | **#314.** Sivukatto (100 riviä/sivu) per REST-listaus. Katon ylittyessä repon rivi merkitään katkenneeksi, jottei vajaa lista näytä nollalta |
 | `RUN_ISSUES_DIGEST_STATE_FILE` | `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha` | Sormenjälkitiedosto. Rivi 1 = sha256, rivi 2 = viimeisin lähetys-epoch. Kirjoitetaan atomisesti (`mktemp` + `mv -f`) |
 
+### Evolutionin havaintojen kooste (`evolution-digest.sh`, #315)
+
+Käsin ajettava, puhtaasti lukeva raportti. Lippu voittaa env-muuttujan. `--claude` käyttää
+lisäksi `lib/claude-call.sh`:n asetuksia (`RUN_ISSUES_CLAUDE_CMD`, `RUN_ISSUES_CLAUDE_MODEL` jne.),
+ja koneen `env`-tiedosto sourcetaan sitä varten kuten orkestraattorissa (kutsuja voittaa
+`RUN_ISSUES_*`-nimiavaruudessa).
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_EVOLUTION_DIGEST_DAYS` | `30` | Jakson pituus vuorokausina, mitattuna ajon `finished_at`ista (varalla `started_at`). `--since` ohittaa |
+| `RUN_ISSUES_EVOLUTION_DIGEST_MIN` | `2` | Montako eri ajoa aihe tarvitsee, jotta se lasketaan toistuvaksi (vähintään 2). `--min-count` ohittaa |
+| `RUN_ISSUES_WATCHLIST` | *(tyhjä)* | Watchlistin ohitus, sama semantiikka kuin pollerissa. `--watchlist` ohittaa |
+
 ### Statussivun renderöinti (`status-render.sh`, #62, #78)
 
 | Muuttuja | Oletus | Vaikutus |

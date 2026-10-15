@@ -362,6 +362,7 @@ käytettävissä.
 | `run-epic.sh` | `run-epic.sh <N> --repo <polku>` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille. `--stop` keskeyttää (pysäyttää elävät lapsiajot + poistaa ajolabelit). `--dry-run`, `--start-now`, `--remote`, `--labels` |
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
+| `evolution-digest.sh` | `evolution-digest.sh [--since <vrk>] [--claude]` | Evolutionin toistuvat havainnot jakson ajoista ja kohde-ehdotus kullekin. Puhtaasti lukeva, ajetaan käsin |
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run` |
 | `cleanup-run.sh` | `cleanup-run.sh --issue <N> --yes` | Ajojäänteiden purku. `--list`, `--all`, `--force`, `--dry-run`, `--remote` |
 | `auto-clean.sh` | *(pollerin kutsuma)* | Label-vetoinen siivous + issuen sulkeminen. Käsin: `--repo <polku> --issue <N>` |
@@ -619,6 +620,41 @@ on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsest
 olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka
 johti kerran väärään "5 vuorokautta jäljessä" -diagnoosiin ja aikeeseen tehdä käsin checkout elävän ajon
 alta (#32). Skeema ja tekninen referenssi: [`docs/design-history.md`](design-history.md).
+
+## Evolutionin havaintojen kooste (`evolution-digest.sh`)
+
+Evolution kirjaa jokaisen ajon lopuksi `03-evolution.out`-tiedostoon, mitä se korjasi itse
+(`FIXED`), mitä se jätti korjaamatta (`NEEDS_FOLLOWUP`) ja mitä rakenteellisia ongelmia se näki
+PR:n ulkopuolella (Δψ-rivit). Yksittäinen havainto päätyy vain yhden PR:n kuvaukseen. Kun sama
+havainto toistuu, Implementerin ohjeista tai kohderepon `CLAUDE.md`:stä puuttuu sääntö, tai
+rakenteellinen vika ansaitsee oman issuen. Kooste nostaa toistot esiin:
+
+```bash
+evolution-digest.sh                    # viimeiset 30 vrk, mekaaninen ryhmittely
+evolution-digest.sh --since 90         # pidempi jakso
+evolution-digest.sh --claude           # ryhmittely merkityksen perusteella (yksi Claude-kutsu)
+evolution-digest.sh --json | jq …      # havainnot ja ryhmät koneluettavina
+evolution-digest.sh --out raportti.md  # raportti tiedostoon
+```
+
+Kooste lukee watchlist-repojen elävät ja arkistoidut run-dirit. Se avaa vain jakson ajojen
+`run.json`- ja `03-evolution.out`-tiedostot, ei koskaan `state.jsonl`:ää, eikä tee yhtään
+gh-kutsua. Se ei kirjoita mihinkään repoon eikä GitHubiin.
+
+**Mekaaninen ryhmittely** (oletus) yhdistää havainnot, jotka mainitsevat saman tiedoston tai
+backtickeissä olevan tunnisteen. Aihe on toistuva, kun se esiintyy vähintään kahdessa eri ajossa
+(`--min-count`). Ehdotettu kohde määräytyy ryhmän muodosta:
+
+| Ryhmä | Ehdotettu kohde | Miksi |
+|---|---|---|
+| Useampi repo | Implementerin prompti (`prompts/02-implementer.md`) | Implementer ohittaa yleisen työtavan |
+| Yksi repo, Evolution korjasi (`FIXED`) | Kohderepon `CLAUDE.md` | Repon konventio, jota Implementer ei tunne |
+| Yksi repo, vain jatkotoimia tai Δψ-rivejä | Uusi issue | Korjaamaton rakenteellinen vika, ei ohjeen puute |
+
+Mekaaninen ryhmittely ei tunnista saman asian eri sanamuotoja. `--claude` antaa havainnot ja
+mekaaniset ryhmät yhdelle Claude-kutsulle, joka ryhmittelee merkityksen perusteella ja ehdottaa
+kullekin aiheelle konkreettisen ohjerivin tai issuen otsikon. Kutsu on opt-in, eikä koostetta
+ajasteta. Jos kutsu epäonnistuu, tuloste on mekaaninen raportti ja exit-koodi 3.
 
 ## Julkaisu julkiseen peiliin (`publish-release.sh`)
 

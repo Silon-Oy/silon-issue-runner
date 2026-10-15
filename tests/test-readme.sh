@@ -121,6 +121,8 @@ RUN_EPIC_CODES="$(sed -n '/^# Exit codes/,/^$/p' "$ROOT/run-epic.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 SELF_UPDATE_CODES="$(sed -n '/^# Exit codes/,/^$/p' "$ROOT/self-update.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
+EVO_DIGEST_CODES="$(sed -n '/^# Exit codes/,/^#$/p' "$ROOT/evolution-digest.sh" \
+  | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 PUBLISH_CODES=""
 if [ -f "$ROOT/publish-release.sh" ]; then
   PUBLISH_CODES="$(sed -n '/^# Exit codes/,/^$/p' "$ROOT/publish-release.sh" \
@@ -134,6 +136,7 @@ assert_exit_codes "status" "status.sh" "$STATUS_CODES"
 assert_exit_codes "stop-run" "stop-run.sh" "$STOP_CODES"
 assert_exit_codes "run-epic" "run-epic.sh" "$RUN_EPIC_CODES"
 assert_exit_codes "self-update" "self-update.sh" "$SELF_UPDATE_CODES"
+assert_exit_codes "evolution-digest" "evolution-digest.sh" "$EVO_DIGEST_CODES"
 # The maintainer tool is not shipped in the public mirror; its exit codes are
 # checked only where the script exists (the upstream).
 if [ -f "$ROOT/publish-release.sh" ]; then

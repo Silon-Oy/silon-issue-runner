@@ -221,3 +221,12 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | 1 | Käyttö- tai syötevirhe |
 | 2 | Tuntematon `schema_version` — ei lähetystä |
 | 3 | Lähetys epäonnistui; runko on silti stdoutissa |
+
+### Evolutionin havaintojen kooste (`evolution-digest.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Raportti tuotettu, myös silloin kun havaintoja ei ole |
+| 1 | Käyttövirhe (tuntematon lippu, virheellinen arvo, `--json` ja `--claude` yhdessä) tai `--out`-tiedostoa ei voi kirjoittaa |
+| 2 | Watchlist puuttuu, yksikään repo ei ole levyllä tai `jq` puuttuu |
+| 3 | `--claude`-ryhmittely epäonnistui. Mekaaninen raportti tuotettiin sen tilalle |

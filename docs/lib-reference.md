@@ -23,6 +23,7 @@ lukuihin.
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia. Myös jaettu aikarajallisen `git fetch`in primitiivi (`runner_git_fetch_bounded`), jota `worktree.sh:refresh_origin` ja `version.sh:runner_fetch_throttled` käyttävät |
 | `github-app-auth.sh` | Opt-in GitHub App -identiteetti. Kattaa kirjoitukset **ja** raskaimmat luvut |
 | `fix-rate.sh` | Koosteen jälkikorjausmittari (#314): watchlist-repojen jaksolla yhdistetyt `auto-run/`-PR:t sekä niistä peruutetut ja jälkikorjatut. Kolme REST-listausta per repo, sivutus vain jakson verran (§5.4); luokittelu on puhdas jq-funktio (`fix_rate_classify`). Fail-soft |
+| `evolution-findings.sh` | Evolution-vaiheen tuloksen (`EVOLUTION_RESULT`, `EVOLUTION_DELTA_PSI`) **ainoa** jäsennin. Orkestraattori (PR-kuvaus) ja `evolution-digest.sh` (kooste) lukevat saman funktion kautta, jotta kooste ei voi lakata näkemästä sitä, minkä PR näyttää |
 | `gitignore.sh` | Pitää **kohderepon** `.gitignore`n ignoroimassa ajoaikaiset artefaktit |
 | `host.sh` | `runner_host`: koneen lyhyt konenimi yhdestä paikasta, nelivaiheisella varapolulla (`hostname -s` → `hostname` ensimmäiseen pisteeseen → `$COMPUTERNAME` → `unknown`). **Ei koskaan palauta tyhjää** — §5.6:n fail-closed-portit lukisivat tyhjän hostin vieraaksi koneeksi |
 | `host-gate-notice.sh` | Host-portin "muuttuja puuttuu" -rivin toimitus: stderr **ja** skriptin oma loki, kerran. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
