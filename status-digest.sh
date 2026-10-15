@@ -28,6 +28,12 @@
 #                        (default 7). Silence must never read as "broken".
 #   --min-class <c>      lowest class to include: attention (only attention) or
 #                        stalled (attention + stalled). Default: stalled.
+#   --fix-rate           add the after-fix section (issue #314): per watchlist
+#                        repo, the auto-run PRs merged in the window and how many
+#                        were later reverted or needed an after-fix. The ONE part
+#                        of the digest that calls GitHub (REST, lib/fix-rate.sh);
+#                        fail-soft — a failure drops or marks the section, never
+#                        the exit code. Off by default.
 #
 # gws is NOT a package dependency. Without it (or without a recipient) the body
 # is printed to stdout and the exit is 0 — the same SKIP spirit as the tests, so
@@ -51,6 +57,9 @@
 #   RUN_ISSUES_DIGEST_GWS         gws command (default "gws"); test injection point
 #   RUN_ISSUES_DIGEST_STATE_FILE  fingerprint file (default
 #                                 ${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha)
+#   RUN_ISSUES_DIGEST_FIX_RATE    1 = --fix-rate on by default (default 0)
+#   RUN_ISSUES_DIGEST_FIX_WINDOW_DAYS  after-fix window in days (default 14)
+#   RUN_ISSUES_DIGEST_FIX_MAX_PAGES    page cap per REST listing (default 5)
 
 set -uo pipefail
 
@@ -66,7 +75,7 @@ if [ -f "$DIGEST_ENV_FILE" ]; then
 fi
 
 usage() {
-  sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 die_usage() {
   printf 'status-digest.sh: %s\n' "$1" >&2
@@ -80,6 +89,7 @@ OPT_FORCE=0
 OPT_DRY_RUN=0
 OPT_MAX_SILENCE=""
 OPT_MIN_CLASS=""
+OPT_FIX_RATE=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -87,6 +97,7 @@ while [ "$#" -gt 0 ]; do
     --to)        shift; [ "$#" -gt 0 ] || die_usage "--to needs a value"; OPT_TO="$1" ;;
     --force)     OPT_FORCE=1 ;;
     --dry-run)   OPT_DRY_RUN=1 ;;
+    --fix-rate)  OPT_FIX_RATE=1 ;;
     --max-silence)
       shift; [ "$#" -gt 0 ] || die_usage "--max-silence needs a value"
       case "$1" in ''|*[!0-9]*) die_usage "--max-silence must be a non-negative integer" ;; esac
@@ -111,6 +122,11 @@ case "$MAX_ROWS" in ''|*[!0-9]*) MAX_ROWS=10 ;; esac
 SUBJECT_PREFIX="${RUN_ISSUES_DIGEST_SUBJECT_PREFIX:-run-issues -kooste}"
 GWS_CMD="${RUN_ISSUES_DIGEST_GWS:-gws}"
 STATE_FILE="${RUN_ISSUES_DIGEST_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha}"
+FIX_RATE="${OPT_FIX_RATE:-${RUN_ISSUES_DIGEST_FIX_RATE:-0}}"
+FIX_WINDOW_DAYS="${RUN_ISSUES_DIGEST_FIX_WINDOW_DAYS:-14}"
+case "$FIX_WINDOW_DAYS" in ''|*[!0-9]*|0) die_usage "RUN_ISSUES_DIGEST_FIX_WINDOW_DAYS must be a positive integer" ;; esac
+FIX_MAX_PAGES="${RUN_ISSUES_DIGEST_FIX_MAX_PAGES:-5}"
+case "$FIX_MAX_PAGES" in ''|*[!0-9]*|0) FIX_MAX_PAGES=5 ;; esac
 
 # ---- hard dependency: jq ----
 # Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
@@ -392,6 +408,57 @@ build_ab_section() {
       end'
 }
 
+# ---- after-fix meter (issue #314) ----
+# Opt-in (--fix-rate / RUN_ISSUES_DIGEST_FIX_RATE=1) because it is the only part
+# of the digest that calls GitHub; the rest stays a pure function of status.sh's
+# local JSON. The repo set is the watchlist status.sh itself read
+# (.sources.watchlist), so the meter covers repos with no live run-dir too — a
+# merged run is usually archived within hours. The window ends at the input's
+# generated_at, like the usage section. Deliberately NOT part of the fingerprint:
+# the meter is context for the reader, not news that should trigger a send.
+# Fail-soft: every way this can fail prints a note on stderr and returns 0.
+build_fix_rate_section() {
+  [ "$FIX_RATE" = "1" ] || return 0
+  if ! command -v gh >/dev/null 2>&1; then
+    printf 'status-digest.sh: --fix-rate: gh not found — section skipped\n' >&2
+    return 0
+  fi
+  # shellcheck source=lib/rate-limit.sh
+  . "$_DIGEST_DIR/lib/rate-limit.sh"
+  # shellcheck source=lib/github-app-auth.sh
+  . "$_DIGEST_DIR/lib/github-app-auth.sh"
+  # shellcheck source=lib/git-remote.sh
+  . "$_DIGEST_DIR/lib/git-remote.sh"
+  set +e  # git-remote.sh turns -e on; this script collects, it does not abort
+  # shellcheck source=lib/fix-rate.sh
+  . "$_DIGEST_DIR/lib/fix-rate.sh"
+
+  local wl since results
+  local -a repos=()
+  wl="$(printf '%s' "$INPUT" | jq -r '.sources.watchlist // empty')"
+  while IFS= read -r r; do [ -n "$r" ] && repos+=("$r"); done \
+    < <(fix_rate_repos_from_watchlist "$wl")
+  if [ "${#repos[@]}" -eq 0 ]; then
+    printf 'status-digest.sh: --fix-rate: no GitHub repo resolved from watchlist %s — section skipped\n' \
+      "${wl:-<none in input>}" >&2
+    return 0
+  fi
+  since="$(printf '%s' "$INPUT" | jq -r --argjson d "$FIX_WINDOW_DAYS" '
+    ((.generated_at // "") | try fromdateiso8601 catch now) - ($d * 86400) | floor | todate')"
+  results="$(fix_rate_scan "$since" "$FIX_MAX_PAGES" "${repos[@]}")"
+  printf '%s' "$results" | jq -r --argjson days "$FIX_WINDOW_DAYS" '
+    def nums: if length == 0 then "" else " (" + (map("#\(.)") | join(", ")) + ")" end;
+    (["Jälkikorjaukset (yhdistetyt auto-run-PR:t, viimeiset \($days) vrk):"]
+     + [.[] | "    \(.repo)  "
+          + (if .error == "rate_limited" then "ei tietoa: GitHubin kutsuraja"
+             elif .error != null then "ei tietoa: haku epäonnistui"
+             else "yhdistetty \(.merged)  jälkikorjattu \(.fixed)\(.fixed_prs | nums)  peruutettu \(.reverted)\(.reverted_prs | nums)"
+                  + (if .truncated then "  ⚠ lista katkesi sivukattoon — luvut voivat olla vajaita" else "" end)
+             end)]
+     + ["    (Peruutettu = revert-commit tai revert-PR. Jälkikorjattu = myöhempi issue tai PR viittaa PR:ään.)", ""])
+    | join("\n")'
+}
+
 # ---- write the fingerprint state atomically (fp on line 1, send epoch on 2) ----
 write_state() {
   local sent_epoch="$1" dir tmp
@@ -423,6 +490,9 @@ $USAGE_SECTION"
 AB_SECTION="$(build_ab_section 2>/dev/null || true)"
 [ -n "$AB_SECTION" ] && BODY="$BODY
 $AB_SECTION"
+FIX_RATE_SECTION="$(build_fix_rate_section || true)"
+[ -n "$FIX_RATE_SECTION" ] && BODY="$BODY
+$FIX_RATE_SECTION"
 
 # An active GitHub backoff OWNS the subject line (issue #126). A rate-limited
 # factory produces no new attention runs, so N_SELECTED is typically 0 and the

@@ -251,6 +251,9 @@ joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
 | `RUN_ISSUES_DIGEST_MAX_ROWS` | `10` | Rivikatto per `class_reason`-ryhmä ennen "…ja M muuta" |
 | `RUN_ISSUES_DIGEST_SUBJECT_PREFIX` | `run-issues -kooste` | Otsikon etuliite |
 | `RUN_ISSUES_DIGEST_GWS` | `gws` | Lähetyskomento. Testien injektiopiste (osoita olemattomaan ⇒ stdout-polku) |
+| `RUN_ISSUES_DIGEST_FIX_RATE` | `0` | **#314.** `1` = jälkikorjausmittari päälle oletuksena (sama kuin `--fix-rate`). Koosteen **ainoa** GitHub-kutsuja tekevä osa: watchlistin (`status.sh`:n `sources.watchlist`) jokaiselle repolle jaksolla yhdistetyt `auto-run/`-PR:t, peruutetut (revert-commit tai revert-PR) ja jälkikorjatut (myöhempi issue tai PR viittaa PR:ään). Kolme REST-listausta per repo (`pulls`, `commits`, `issues`), lisäsivu vain jos jakso ulottuu sinne (§5.4, §5.2). Fail-soft: virhe merkitsee repon rivin eikä muuta exit-koodia; kutsuraja pysäyttää kierroksen eikä kirjoita takarajaa (§5.1). Ei sormenjäljessä |
+| `RUN_ISSUES_DIGEST_FIX_WINDOW_DAYS` | `14` | **#314.** Mittarin jakso vuorokausina, päättyy syötteen `generated_at`iin. Positiivinen kokonaisluku, muuten exit 1 |
+| `RUN_ISSUES_DIGEST_FIX_MAX_PAGES` | `5` | **#314.** Sivukatto (100 riviä/sivu) per REST-listaus. Katon ylittyessä repon rivi merkitään katkenneeksi, jottei vajaa lista näytä nollalta |
 | `RUN_ISSUES_DIGEST_STATE_FILE` | `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/last-digest.sha` | Sormenjälkitiedosto. Rivi 1 = sha256, rivi 2 = viimeisin lähetys-epoch. Kirjoitetaan atomisesti (`mktemp` + `mv -f`) |
 
 ### Statussivun renderöinti (`status-render.sh`, #62, #78)

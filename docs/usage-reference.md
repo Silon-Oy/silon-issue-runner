@@ -601,6 +601,19 @@ malleineen ja efforteineen. Tulokset luetaan `run.json`:n kentistä `implementer
 `evolution_result`, joita orkestraattori kirjoittaa jokaiselle ajolle. Osio puuttuu, jos
 ikkunassa ei ole yhtään haaraan jaettua ajoa.
 
+**Jälkikorjausmittari (#314).** Yhdistämisaste kertoo, että PR pääsi sisään, muttei sitä,
+kestikö muutos. `status-digest.sh --fix-rate` (tai `RUN_ISSUES_DIGEST_FIX_RATE=1`) lisää
+koosteeseen osion, joka näyttää jokaiselle watchlist-repolle jakson (oletus 14 vrk) aikana
+yhdistetyt `auto-run/`-PR:t ja niistä **peruutetut** ja **jälkikorjatut**. Peruutettu: oletushaaran
+myöhempi commit kantaa tekstin `This reverts commit <merge-sha>` tai alkaa `Revert "<PR:n otsikko>"`
+tai alkaa sanalla `Revert` ja viittaa PR:ään, tai myöhempi revert-PR. Jälkikorjattu: muu
+mergen jälkeen luotu issue tai PR viittaa PR:ään otsikossa tai rungossa (`#N`, `owner/repo#N` tai
+PR:n URL). Yksi PR kuuluu yhteen luokkaan, ja peruutus voittaa. Heuristiikka voi laskea myös
+pelkän maininnan ("jatkoa #N:lle") jälkikorjaukseksi, joten luku on yläraja eikä tarkka.
+Mittari vain raportoi, se ei käynnistä toimenpiteitä. Se on koosteen ainoa GitHub-kutsuja tekevä
+osa (kolme REST-listausta per repo, lisäsivu vain jakson verran), ja virhe merkitsee vain repon
+rivin.
+
 Sivu näyttää versiotilan yläosassa **vain kun se ei ole `up_to_date`**, suomenkielisin selittein. `pin_pending`
 on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsestään. Erottelu on
 olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka
