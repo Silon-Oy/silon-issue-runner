@@ -259,6 +259,7 @@ tuloste:
 | `provision_test_env_failed` | Repon oma testiympäristöhook kaatui |
 | `db_clone_rc_<n>` | Db-kloonaus epäonnistui |
 | toteuttaja palautti `BLOCKED` | Agentti ei pystynyt toteuttamaan issueta |
+| `diagnosis_unconfirmed` | `heavy-run`-bugin diagnostinen koe ei vahvistanut yhtäkään cycle reviewn hypoteesia (kumosi kaikki, oli odottamaton tai raakatulos puuttui). Korjausta ei arvattu; täydennä havainnot issueen ja kommentoi |
 
 Korjaa syy, siivoa ajo (`/issue-runner:cleanup-run`) ja päästä issue takaisin poimintaan.
 

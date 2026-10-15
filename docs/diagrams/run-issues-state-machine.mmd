@@ -131,6 +131,10 @@ stateDiagram-v2
     %% ----- Phase B: implementer → PR -----
     S8_Implementer --> S9_Evolution: implementer SUCCESS / PARTIAL
     S8_Implementer --> [*]: implementer BLOCKED → blocked/implementer_BLOCKED + needs-human (rc=5)
+    %% heavy-run bug (issue #313): the implementer must print DIAGNOSIS_RESULT:
+    %% CONFIRMED H<n> and record the raw experiment result; anything else blocks
+    %% BEFORE the IMPLEMENTER_RESULT line is considered.
+    S8_Implementer --> [*]: heavy-run diagnosis not confirmed → blocked/diagnosis_unconfirmed + needs-human (rc=5)
     %% Timeout (claude rc=124, or a hard-kill caught by the cleanup trap):
     %% finalize status=timed_out + timeout_phase=S8_Implementer, exit 7. The
     %% per-run current_state field (written by enter_state at every step) is the

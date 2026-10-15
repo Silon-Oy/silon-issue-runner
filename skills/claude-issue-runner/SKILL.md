@@ -57,7 +57,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `auto-merge` (`PR_WATCH_MERGE_LABEL`) | sinä issuelle, automaatio PR:lle; **epicin lapsille propagoituu oletuksena** | sinä | PR-vahti mergeää **vain** labeloidun PR:n |
 | `manual-merge` | sinä epicille tai sen lapselle | sinä | Opt-out `auto-merge`-propagoinnista: epicillä estää koko ketjulta, lapsella vain siltä lapselta. Lapsi ajetaan silti — vain automerge jää pois |
 | `light-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: kevyt polku. Ei poimintaehto eikä estä poimintaa. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
-| `heavy-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: raskas polku. Ei poimintaehto eikä estä poimintaa. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
+| `heavy-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: raskas polku. Ei poimintaehto eikä estä poimintaa. PR saa `manual-merge`n eikä yhdisty automaattisesti, vaikka issuella olisi `auto-merge`. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
 | `auto-claimed` | automaatio, kun ajo varaa issuen (S3) | automaatio, kun ajo perääntyy tai siivotaan | **Varaus**: estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Älä lisää tai poista käsin** |
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
 | `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä | sinä | Suodatettava merkintä epic-issuella |
@@ -122,6 +122,19 @@ vastaisi kukaan. Tämä osio on kriteerien **ainoa** kirjattu muoto — `/issue-
 **Labelia ei vaadita.** Issue ilman ajopolkulabelia kulkee tavallista polkua — puuttuva label
 on luokitus, ei puute. Kumpikaan label ei ole poimintaehto eikä estä poimintaa, joten niitä ei
 koskaan lisätä watchlistin poimintalabeleihin.
+
+**`heavy-run` muuttaa ajoa kahdella tavalla:**
+
+- **PR ei yhdisty automaattisesti.** Ajo jättää `auto-merge`n siirtämättä PR:lle ja lisää
+  sinne `manual-merge`n — myös silloin, kun issue ei ole bugi. Yhdistä PR itse tai lisää
+  `auto-merge` suoraan PR:lle.
+- **Bugia ei korjata ennen kuin syy on vahvistettu.** Cycle review luokittelee, onko issue bugi
+  (`HEAVY_RUN_KIND`-rivi; puuttuva rivi = bugi), ja kirjaa vähintään kolme kilpailevaa
+  hypoteesia sekä niitä erottelevan diagnostisen kokeen. Toteutus ajaa kokeen ensin. Jos koe
+  ei vahvista täsmälleen yhtä hypoteesia, ajo pysähtyy syyllä `diagnosis_unconfirmed`:
+  issuelle tulee `needs-human` ja vastattava kommentti. Täydennä havainnot tai hypoteesit
+  issueen ja kommentoi — ajo alkaa alusta. Vahvistettu hypoteesi ja kokeen raakatulos näkyvät
+  PR-kuvauksessa.
 
 ## Varaus on `auto-claimed`-label, assignaatio on kirjanpitoa
 
