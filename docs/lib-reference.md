@@ -14,6 +14,7 @@ lukuihin.
 | `action-service.py` | **Ainoa Python-tiedosto.** Ohjaamon HTTP + auth -ydin: fail-closed `tailscale whois`, kolmikerroksinen CSRF, audit-loki, `execve` dispatcheriin — ei koskaan koske gh:hun itse |
 | `action-token.sh` | Ohjaamon jaettu CSRF-token. Bearer-salaisuus: ei koskaan `status.json`iin, lokiin eikä kommenttiin |
 | `archive.sh` | Terminaalitilaisten run-dirien siirto `run-issues-archive/`iin. PR-suoja on paikallinen, ei gh-kutsu |
+| `ab-arm.sh` | A/B-kokeen haara (#308): onko koe määritelty (`RUN_ISSUES_AB_CLAUDE_*`), haaran arvonta, kirjaus `run.json`:iin kerran per ajo (`ab_arm_assign`) ja luku sieltä (`ab_arm_of`). Ei tunne malleja eikä efforteja — `claude-call.sh` valitsee haaran B arvot |
 | `claude-call.sh` | Yksittäisen orkestroidun askeleen claude-CLI-kutsu (timeout, lokitus, finalisointi, käyttörajan tekstipohjainen tunnistus ja oma paluukoodi) ja aina päällä olevan järjestelmäkehotteen toimitus: toimintasopimus + koodausstandardi yhdistettynä — myös PR-vahti kutsuu tästä `load_repo_principles_file`ia |
 | `claude-profiles.sh` | Claude-tilausprofiilien järjestetty lista (#295): jäsennys, tunnistetiedoston tarkistus, profiilikohtainen täysi-tila `deadline-file.sh`:n päällä, ensimmäisen vapaan valinta ja aikaisin nollautuminen. Vaihtosilmukka asuu `claude-call.sh`:n `call_claude`ssa |
 | `deadline-file.sh` | Koneen laajuisten perääntymisporttien yhteinen yksirivinen `<deadline> <tag>`-tilatiedosto: fail-soft luku, atominen kirjoitus. Jaettu `rate-limit.sh`:n ja `usage-limit.sh`:n kesken |

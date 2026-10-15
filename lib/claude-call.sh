@@ -30,6 +30,9 @@ fi
 # over between on a usage limit. Function-only as well.
 # shellcheck source=claude-profiles.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-profiles.sh"
+# ab_arm_of (issue #308): which A/B arm the run is in. Function-only.
+# shellcheck source=ab-arm.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ab-arm.sh"
 
 # The return code call_claude uses for "the subscription's usage limit was hit".
 # 75 is sysexits' EX_TEMPFAIL — "try again later" is exactly the contract — and
@@ -165,6 +168,18 @@ _claude_phase_var() {
     if [ -n "${!name:-}" ]; then printf '%s' "$name"; return 0; fi
   fi
   if [ -n "${!base:-}" ]; then printf '%s' "$base"; fi
+}
+
+# _claude_setting_var <setting> <phase> <arm> — the variable name for MODEL or
+# EFFORT. In A/B arm B (issue #308) the experiment's RUN_ISSUES_AB_CLAUDE_<setting>
+# family wins, with the same per-phase precedence; anything it leaves empty
+# falls through to the normal RUN_ISSUES_CLAUDE_<setting> family. Arm A and a
+# run without an arm use the normal family only.
+_claude_setting_var() {
+  local setting="$1" phase="$2" arm="$3" name=""
+  [ "$arm" = B ] && name=$(_claude_phase_var "RUN_ISSUES_AB_CLAUDE_$setting" "$phase")
+  [ -n "$name" ] || name=$(_claude_phase_var "RUN_ISSUES_CLAUDE_$setting" "$phase")
+  printf '%s' "$name"
 }
 
 # ---------- always-on system prompt: contract + coding standard ----------
@@ -636,11 +651,12 @@ call_claude() {
   local timeout_prefix
   timeout_prefix=$(_resolve_timeout)
 
-  local phase model_var model="" effort_var effort=""
+  local phase arm model_var model="" effort_var effort=""
   phase=$(_claude_step_phase "$step_id")
-  model_var=$(_claude_phase_var RUN_ISSUES_CLAUDE_MODEL "$phase")
+  arm=$(ab_arm_of "$run_dir")
+  model_var=$(_claude_setting_var MODEL "$phase" "$arm")
   [ -n "$model_var" ] && model="${!model_var}"
-  effort_var=$(_claude_phase_var RUN_ISSUES_CLAUDE_EFFORT "$phase")
+  effort_var=$(_claude_setting_var EFFORT "$phase" "$arm")
   [ -n "$effort_var" ] && effort="${!effort_var}"
 
   # An ARRAY, not a word-split string: a context-window alias such as opus[1m]
@@ -675,7 +691,7 @@ call_claude() {
         ;;
     esac
   fi
-  _claude_call_log "step $step_id${phase:+ (phase $phase)}: model=${model:-CLI default}${model_var:+ from $model_var} effort=${effort:-CLI default}${effort:+ from $effort_var}"
+  _claude_call_log "step $step_id${phase:+ (phase $phase)}${arm:+ ab_arm=$arm}: model=${model:-CLI default}${model_var:+ from $model_var} effort=${effort:-CLI default}${effort:+ from $effort_var}"
 
   # An ARRAY for the same reason: this one carries a
   # filesystem path, and a repo or operator may legitimately keep the package

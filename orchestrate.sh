@@ -922,6 +922,15 @@ phase_a() {
   # (poller finalize_stalled, cleanup-run.sh, auto-clean.sh) reads it back so it
   # releases the lock this run actually holds — and no other repo's.
   [ -n "$REPO_SLUG" ] && state_set "$RUN_DIR" "repo_slug" "$REPO_SLUG"
+  # A/B arm (issue #308): assigned once, here, on the only path that creates a
+  # run. --resume/--restart/--continue never reach this line; they and every
+  # call_claude read the arm back from run.json. No experiment = no field.
+  local ab_arm
+  ab_arm=$(ab_arm_assign "$RUN_DIR")
+  if [ -n "$ab_arm" ]; then
+    log "ab_arm=$ab_arm"
+    state_event "$RUN_DIR" "ab_arm_assigned" "arm=$ab_arm"
+  fi
   enter_state "S1_PickIssue"
   state_event "$RUN_DIR" "issue_picked" "issue_number=$ISSUE_NUM" "title=$ISSUE_TITLE" "remote=$REMOTE_NAME"
 
@@ -2410,6 +2419,9 @@ PROVISION_ENV
   local imp_result
   imp_result=$(_implementer_result "$imp_out")
   state_event "$RUN_DIR" "implementer_done" "result=${imp_result:-UNKNOWN}"
+  # The outcome class as a run.json scalar too (issue #308): reports read run.json,
+  # never state.jsonl in full (CLAUDE.md §5.3), and archived runs keep it.
+  state_set "$RUN_DIR" implementer_result "$(_result_class "$imp_result")"
 
   case "$imp_result" in
     SUCCESS*) : ;;
@@ -2431,6 +2443,13 @@ PROVISION_ENV
 # kill the script under `set -e` (issue #294).
 _implementer_result() {
   grep -E '^IMPLEMENTER_RESULT:' "$1" 2>/dev/null | tail -1 | sed 's/^IMPLEMENTER_RESULT: *//' || true
+}
+
+# _result_class <result-payload> — the leading keyword of an IMPLEMENTER_RESULT /
+# EVOLUTION_RESULT payload ("PARTIAL — why" -> PARTIAL), UNKNOWN when empty.
+_result_class() {
+  local w="${1%%[!A-Z_]*}"
+  printf '%s' "${w:-UNKNOWN}"
 }
 
 # phase_b_deliver — S9 evolution → S10 push → S11 PR → S12 finalize. Split from
@@ -2476,6 +2495,7 @@ phase_b_deliver() {
   # not a silent death of the orchestrator.
   evo_result=$(grep -E '^EVOLUTION_RESULT:' "$evo_out" 2>/dev/null | tail -1 | sed 's/^EVOLUTION_RESULT: *//' || true)
   state_event "$RUN_DIR" "evolution_done" "result=${evo_result:-UNKNOWN}"
+  state_set "$RUN_DIR" evolution_result "$(_result_class "$evo_result")"
   # Δψ observations: structural problems evolution saw but left out of this PR.
   # The PR is created only in S11, so evolution cannot edit its description;
   # these lines are its route into the body. Absent lines = no section.
