@@ -289,6 +289,8 @@ source "$SCRIPT_DIR/lib/host.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/claude-call.sh
 source "$SCRIPT_DIR/lib/claude-call.sh"
+# shellcheck source=lib/evolution-findings.sh
+source "$SCRIPT_DIR/lib/evolution-findings.sh"
 # shellcheck source=lib/preflight.sh
 source "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=lib/hook-runner.sh
@@ -2622,16 +2624,17 @@ phase_b_deliver() {
 
   local evo_out="$RUN_DIR/03-evolution.out"
   local evo_result
-  # `|| true` for the same reason as CR_DECISION: no result line is "UNKNOWN",
-  # not a silent death of the orchestrator.
-  evo_result=$(grep -E '^EVOLUTION_RESULT:' "$evo_out" 2>/dev/null | tail -1 | sed 's/^EVOLUTION_RESULT: *//' || true)
+  # No result line is "UNKNOWN", not a silent death of the orchestrator: the
+  # shared parser (lib/evolution-findings.sh, also read by evolution-digest.sh)
+  # never fails.
+  evo_result=$(evolution_result_payload "$evo_out")
   state_event "$RUN_DIR" "evolution_done" "result=${evo_result:-UNKNOWN}"
   state_set "$RUN_DIR" evolution_result "$(_result_class "$evo_result")"
   # Δψ observations: structural problems evolution saw but left out of this PR.
   # The PR is created only in S11, so evolution cannot edit its description;
   # these lines are its route into the body. Absent lines = no section.
   local evo_delta_psi
-  evo_delta_psi=$(grep -E '^EVOLUTION_DELTA_PSI:' "$evo_out" 2>/dev/null | sed 's/^EVOLUTION_DELTA_PSI: */- /' || true)
+  evo_delta_psi=$(evolution_delta_psi_payloads "$evo_out" | sed 's/^/- /')
 
   # ---------- S10: PR ----------
   enter_state "S10_PR"
