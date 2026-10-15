@@ -12,7 +12,8 @@
 #
 # Cases:
 #   (a) no new variables -> argv identical to the pre-#306 vector.
-#   (b) every step id maps to its phase; unknown id maps to nothing.
+#   (b) every step id maps to its phase; unknown id maps to nothing; the light
+#       review's id is not swallowed by the cycle review's prefix (#312).
 #   (c) phase model beats general model; other phase gets the general one.
 #   (d) phase effort beats general effort; general applies to other phases.
 #   (e) unknown effort -> exactly one warning, no --effort, rc 0.
@@ -96,11 +97,11 @@ fi
 PHASES=$(
   # shellcheck disable=SC1090
   . "$LIB"
-  for s in 01-cycle-review 02-implementer 03-evolution 04-conflict-resolution 05-ci-repair 99-other; do
+  for s in 01-cycle-review-light 01-cycle-review 02-implementer 03-evolution 04-conflict-resolution 05-ci-repair 99-other; do
     printf '%s=%s ' "$s" "$(_claude_step_phase "$s")"
   done
 )
-WANT="01-cycle-review=CYCLE_REVIEW 02-implementer=IMPLEMENTER 03-evolution=EVOLUTION 04-conflict-resolution=CONFLICT 05-ci-repair=CI_REPAIR 99-other= "
+WANT="01-cycle-review-light=LIGHT_REVIEW 01-cycle-review=CYCLE_REVIEW 02-implementer=IMPLEMENTER 03-evolution=EVOLUTION 04-conflict-resolution=CONFLICT 05-ci-repair=CI_REPAIR 99-other= "
 if [ "$PHASES" = "$WANT" ]; then
   ok b "step id -> phase mapping"
 else

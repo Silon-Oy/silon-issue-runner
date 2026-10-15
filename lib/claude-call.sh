@@ -140,9 +140,12 @@ RUN_ISSUES_CLAUDE_EFFORT_VALUES="low medium high xhigh max"
 
 # _claude_step_phase <step-id> — the ONE place a step id maps to a phase name.
 # Prefix match, so a suffixed id of the same step keeps its phase. Unknown ids
-# print nothing: the general settings apply.
+# print nothing: the general settings apply. ORDER MATTERS: the light review's
+# id shares the cycle review's prefix, so its narrower pattern must come first
+# or `01-cycle-review*` would claim it.
 _claude_step_phase() {
   case "$1" in
+    01-cycle-review-light*)  printf 'LIGHT_REVIEW' ;;
     01-cycle-review*)        printf 'CYCLE_REVIEW' ;;
     02-implementer*)         printf 'IMPLEMENTER' ;;
     03-evolution*)           printf 'EVOLUTION' ;;

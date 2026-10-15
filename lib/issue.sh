@@ -588,6 +588,19 @@ is_epic() {
   esac
 }
 
+# issue_json_has_label <issue-json-file> <label>
+# Returns 0 when the cached issue.json (fetch_issue_json) carries <label>, 1
+# otherwise — including a missing or unreadable file. Reads the run's own cached
+# copy rather than GitHub: every S6 entry (start, --continue, --restart) has a
+# fresh-enough issue.json in hand, so the routing decision costs no API call.
+# Callers must make "1" the conservative branch: an unreadable label list falls
+# back to the default behaviour, never to a cheaper one.
+issue_json_has_label() {
+  local file="$1" label="$2"
+  [ -f "$file" ] || return 1
+  jq -e --arg l "$label" 'any(.labels[]?; .name == $l)' "$file" >/dev/null 2>&1
+}
+
 # list_epic_children <repo-root> <N> [<owner/repo>] [OPTIONS]
 # Resolves the child issues of epic N and prints one TAB-separated line per
 # child on stdout:

@@ -117,6 +117,8 @@ vastaisi kukaan. Tämä osio on kriteerien **ainoa** kirjattu muoto — `/issue-
 | Tavallinen | ei labelia | Tavallinen ominaisuus tai bugikorjaus |
 | Raskas | `heavy-run` | Syy on epäselvä, muutos ylittää tila-, rinnakkaisuus- tai integraatiorajan, sitä on vaikea perua tai se muuttaa arkkitehtuuria |
 
+**Mitä label muuttaa ajossa:** `light-run` vaihtaa S6:n täyden cycle reviewin lyhyeen tarkistukseen (koodi vastaa issueta, muutos on rajattu). Jos tarkistus ei pidä, sama ajo jatkaa täyteen cycle reviewiin ilman ihmistä. Evolution ajetaan aina. `run.json`:n `run_path` kertoo kuljetun polun (`default`, `light` tai `light_escalated`).
+
 **Labelia ei vaadita.** Issue ilman ajopolkulabelia kulkee tavallista polkua — puuttuva label
 on luokitus, ei puute. Kumpikaan label ei ole poimintaehto eikä estä poimintaa, joten niitä ei
 koskaan lisätä watchlistin poimintalabeleihin.

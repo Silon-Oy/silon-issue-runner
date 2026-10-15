@@ -1169,12 +1169,72 @@ EOF
   state_event "$RUN_DIR" "issue_images_prepared" "count=${#arr[@]}" || true
 }
 
+# The run-path label that routes S6 through the light review (issue #312). Its
+# criteria live in skills/claude-issue-runner/SKILL.md ("Ajopolku"); the label
+# is written by the issue author, never by the runner.
+LIGHT_RUN_LABEL="light-run"
+
+# run_light_review — the light-run branch of S6 (issue #312). Runs a short
+# prompt that checks only two things — the code still matches the issue, and the
+# change is bounded — under its own step id (01-cycle-review-light), so the
+# LIGHT_REVIEW phase settings of lib/claude-call.sh apply without new machinery.
+# Returns 0 with CR_DECISION=PROCEED when the light classification holds; its
+# output then BECOMES 01-cycle-review.out, so S7/S8/S9 read it exactly where they
+# read a full review. Returns 1 when the run must escalate to the full review —
+# on an explicit ESCALATE and on anything unparseable (an empty .out, a crashed
+# CLI): escalating costs one full review, guessing "light" would skip it. The
+# escalation needs no human; the caller just carries on into the full review.
+run_light_review() {
+  local lr_prompt="$RUN_DIR/01-cycle-review-light.prompt"
+  render_prompt \
+    "$SCRIPT_DIR/prompts/01-cycle-review-light.md" \
+    "$lr_prompt" \
+    "ISSUE_BODY=$ISSUE_BODY" \
+    "ISSUE_COMMENTS=$ISSUE_COMMENTS" \
+    "ISSUE_IMAGES=$ISSUE_IMAGES" \
+    "REPO_ROOT=$REPO_ROOT"
+
+  local lr_rc=0
+  (
+    cd "$WORKTREE_PATH"
+    call_claude "$RUN_DIR" "01-cycle-review-light" "$lr_prompt"
+  ) || lr_rc=$?
+  [ "$lr_rc" = "$CLAUDE_USAGE_LIMIT_RC" ] && finalize_usage_limit "S6_CycleReview"
+
+  local lr_out="$RUN_DIR/01-cycle-review-light.out" lr_decision
+  lr_decision=$(grep -E '^LIGHT_REVIEW_DECISION:' "$lr_out" 2>/dev/null | tail -1 | awk '{print $2}' || true)
+  state_set "$RUN_DIR" "light_review_decision" "${lr_decision:-UNKNOWN}"
+  state_event "$RUN_DIR" "light_review_done" "decision=${lr_decision:-UNKNOWN}"
+
+  if [ "$lr_decision" = "LIGHT" ]; then
+    cp "$lr_out" "$RUN_DIR/01-cycle-review.out"
+    CR_DECISION="PROCEED"
+    state_set "$RUN_DIR" "cycle_review_decision" "$CR_DECISION"
+    state_event "$RUN_DIR" "cycle_review_done" "decision=$CR_DECISION" "path=light"
+    return 0
+  fi
+  local reason="escalate"
+  [ "$lr_decision" = "ESCALATE" ] || reason="no_decision"
+  log "light review did not hold (decision=${lr_decision:-UNKNOWN}) — escalating to the full cycle review"
+  state_set "$RUN_DIR" "run_path" "light_escalated"
+  state_event "$RUN_DIR" "light_review_escalated" "reason=$reason"
+  return 1
+}
+
 # run_cycle_review — S6. Renders and runs the cycle-review prompt, parses the
 # decision into CR_DECISION, and records it. Reads the optional global
 # CLARIFICATION_CONTEXT: phase_a leaves it empty (the prompt section collapses);
 # the --continue path fills it with the prior headline + the reply so the
 # review is re-evaluated in light of the answer. This is the single cycle-review
-# code path — there is no second one.
+# code path — there is no second one; the light review (issue #312) is a branch
+# in front of it that either replaces it or falls through into it.
+#
+# run.json's run_path records which path the run took — default, light, or
+# light_escalated — so consumption reports can tell them apart. The label is
+# read from the run's cached issue.json on every S6 entry, so --restart and the
+# usage-limit re-run follow the label as it stands. A --continue always takes
+# the full review and keeps the recorded run_path: only the full review asks for
+# clarification, and the reply must be re-evaluated by the analysis that asked.
 run_cycle_review() {
   enter_state "S6_CycleReview"
   log "S6_CycleReview"
@@ -1183,6 +1243,17 @@ run_cycle_review() {
 
   # Download any embedded issue images so the cycle-review agent can Read them.
   prepare_issue_images
+
+  # A --continue keeps the run_path its first S6 pass recorded.
+  if [ -z "$CLARIFICATION_CONTEXT" ]; then
+    if issue_json_has_label "$RUN_DIR/issue.json" "$LIGHT_RUN_LABEL"; then
+      log "S6_CycleReview: issue carries $LIGHT_RUN_LABEL — running the light review"
+      state_set "$RUN_DIR" "run_path" "light"
+      run_light_review && return 0
+    else
+      state_set "$RUN_DIR" "run_path" "default"
+    fi
+  fi
 
   local cr_prompt="$RUN_DIR/01-cycle-review.prompt"
   render_prompt \
