@@ -1194,7 +1194,7 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 `worktree_base_unresolved`, `worktree_leftover_branch`, `worktree_create_failed`,
 `env_bootstrap_node_unavailable`, `env_bootstrap_failed`, `env_bootstrap_timeout`,
 `provision_test_env_failed`,
-`implementer_BLOCKED`, `diagnosis_unconfirmed`, `clarification_loop_exhausted`, `git_push_failed`,
+`implementer_BLOCKED`, `clarification_loop_exhausted`, `git_push_failed`,
 `pr_create_failed`, `stalled_in_<vaihe>`. Näistä kaikki jättävät issuelle
 `needs-human`-labelin; kolme S4-syytä on avattu korjauskomentoineen kohdassa (e) yllä.
 Poikkeus on `blocked_by_dependency` (exit 9), joka on odotustila eikä labeloi mitään —
