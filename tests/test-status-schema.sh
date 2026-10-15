@@ -86,6 +86,10 @@ printf '{"run_id":"a-recent","issue_number":9,"status":"merged","finished_at":"2
 printf '{"run_id":"a-old","status":"merged","usage":{"02-implementer":{"calls":1}}}\n' > "$ARCH/a-old/run.json"
 touch -t 202001010000 "$ARCH/a-old/run.json"
 printf '{"run_id":"a-broken",' > "$ARCH/a-broken/run.json"
+# An A/B run without usage (issue #308: an overridden driver records none) still
+# reaches recent_usage[], carrying its arm and outcome fields.
+mkdir -p "$ARCH/a-arm"
+printf '{"run_id":"a-arm","status":"completed","started_at":"2026-06-01T00:00:00Z","finished_at":"2026-06-01T01:00:00Z","ab_arm":"B","implementer_result":"PARTIAL","evolution_result":"FIXED","timeout_phase":"S8_Implementer"}\n' > "$ARCH/a-arm/run.json"
 
 WL="$FX/watchlist.json"
 cat > "$WL" <<JSON
@@ -135,16 +139,19 @@ check "epics is an array" "$(jq -r '.epics | type' "$OUT")" "array"
 check "epics empty in local mode" "$(jq '.epics | length' "$OUT")" "0"
 
 # ---- every run carries the required fields ----
-REQUIRED_FIELDS='["run_id","run_dir","repo_path","repo_slug","owner_repo","remote","issue_number","issue_url","host","is_local","status","blocked_reason","current_state","cycle_review_decision","started_at","finished_at","awaiting_answer_since","age_seconds","idle_seconds","retry_count","clarification_round","branch","worktree_path","worktree_exists","pr_url","pr_number","usage","pr_local_verdict","pr_local_verdict_at","session_alive","lock_held","class","class_reason","class_confidence","schema_gaps","github"]'
+REQUIRED_FIELDS='["run_id","run_dir","repo_path","repo_slug","owner_repo","remote","issue_number","issue_url","host","is_local","status","blocked_reason","current_state","cycle_review_decision","started_at","finished_at","awaiting_answer_since","age_seconds","idle_seconds","retry_count","clarification_round","branch","worktree_path","worktree_exists","pr_url","pr_number","usage","ab_arm","implementer_result","evolution_result","timeout_phase","pr_local_verdict","pr_local_verdict_at","session_alive","lock_held","class","class_reason","class_confidence","schema_gaps","github"]'
 MISSING="$(jq -r --argjson req "$REQUIRED_FIELDS" '
   [ .runs[] | keys as $k | ($req - $k) ] | add // [] | unique | join(",")' "$OUT")"
 check "every run has all required fields" "$MISSING" ""
 
 # ---- recent_usage[]: archived run.json usage, by mtime (issue #307) ----
-check "recent_usage holds only the recent archived run" \
-  "$(jq -r '[.recent_usage[].run_id] | join(",")' "$OUT")" "a-recent"
+check "recent_usage holds only the recent archived runs" \
+  "$(jq -r '[.recent_usage[].run_id] | sort | join(",")' "$OUT")" "a-arm,a-recent"
 check "recent_usage carries the usage object" \
-  "$(jq -r '.recent_usage[0].usage["02-implementer"].input_tokens' "$OUT")" "5"
+  "$(jq -r '.recent_usage[] | select(.run_id == "a-recent") | .usage["02-implementer"].input_tokens' "$OUT")" "5"
+check "recent_usage carries the A/B arm and outcome fields (issue #308)" \
+  "$(jq -r '.recent_usage[] | select(.run_id == "a-arm") | [.ab_arm, .implementer_result, .evolution_result, .timeout_phase, .status, (.usage | tostring)] | join(" ")' "$OUT")" \
+  "B PARTIAL FIXED S8_Implementer completed null"
 check "archived runs never become runs[]" \
   "$(jq -r '[.runs[] | select(.run_id | startswith("a-"))] | length' "$OUT")" "0"
 check "broken archived run.json is not a read_error" "$(jq '.read_errors | length' "$OUT")" "0"

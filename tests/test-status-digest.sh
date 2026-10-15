@@ -312,6 +312,55 @@ rm -f "$STATE"
 run "$FXA" --force
 case "$OUT" in *"Kulutus vaiheittain"*) bad "usage section without data" ;; *) ok "usage: no section without data" ;; esac
 
+# ---- A/B comparison by arm (issue #308) ----
+# Arm A: two runs (one archived), one timed out once then completed (timeout_phase
+# set), one PARTIAL. Arm B: one finished run, one still running. A run without
+# ab_arm must not appear in either arm; the archive duplicate counts once.
+FXAB="$FX/ab.json"
+jq -n '
+  def u($m; $e; $i): {"02-implementer": {calls: 1, model: $m, effort: $e,
+    input_tokens: $i, output_tokens: 10, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, assistant_turns: 1, duration_seconds: 60}};
+  {schema_version: 1, generated_at: "2026-08-11T20:00:00Z", host: "example-host",
+   totals: {degraded: false}, read_errors: [],
+   runs: [
+     {run_id: "a1", class: "cleanup", class_reason: "pr_not_open", ab_arm: "A", status: "completed",
+      started_at: "2026-08-10T00:00:00Z", finished_at: "2026-08-10T01:00:00Z",
+      implementer_result: "SUCCESS", evolution_result: "CLEAN", timeout_phase: "S8_Implementer",
+      usage: u("opus"; "high"; 100)},
+     {run_id: "b1", class: "cleanup", class_reason: "pr_not_open", ab_arm: "B", status: "completed",
+      started_at: "2026-08-10T00:00:00Z", finished_at: "2026-08-10T00:30:00Z",
+      implementer_result: "SUCCESS", evolution_result: "FIXED", timeout_phase: null,
+      usage: u("sonnet"; "medium"; 40)},
+     {run_id: "b2", class: "running", class_reason: "running", ab_arm: "B", status: "initialized",
+      started_at: "2026-08-11T10:00:00Z", finished_at: null, usage: null},
+     {run_id: "noarm", class: "cleanup", class_reason: "pr_not_open", status: "completed",
+      finished_at: "2026-08-10T00:00:00Z", implementer_result: "BLOCKED", usage: u("x"; "low"; 5)}
+   ],
+   recent_usage: [
+     {run_id: "a2", ab_arm: "A", status: "completed", started_at: "2026-08-09T00:00:00Z",
+      finished_at: "2026-08-09T03:00:00Z", implementer_result: "PARTIAL",
+      evolution_result: "NEEDS_FOLLOWUP", timeout_phase: null, usage: u("opus"; "high"; 300)},
+     {run_id: "a1", ab_arm: "A", status: "completed", started_at: "2026-08-10T00:00:00Z",
+      finished_at: "2026-08-10T01:00:00Z", implementer_result: "SUCCESS", evolution_result: "CLEAN",
+      timeout_phase: "S8_Implementer", usage: u("opus"; "high"; 100)}
+   ]}' > "$FXAB"
+rm -f "$STATE"
+run "$FXAB" --force
+check "ab: exit 0" "$RC" "0"
+AB="$(printf '%s\n' "$OUT" | sed -n '/^A\/B-vertailu/,/^$/p')"
+case "$AB" in *"A/B-vertailu haaroittain (4 ajoa, viimeiset 7 vrk)"*) ok "ab: 4 arm runs (no-arm + duplicate excluded)" ;; *) bad "ab header: [$AB]" ;; esac
+case "$AB" in *"Haara A: 2 ajoa, kesto mediaani 120 min, aikakatkaisuja 1"*) ok "ab: arm A count, median duration, timeout survives restart" ;; *) bad "ab arm A line: [$AB]" ;; esac
+case "$AB" in *"Haara B: 2 ajoa, kesto mediaani 30 min, aikakatkaisuja 0"*) ok "ab: arm B duration from finished runs only" ;; *) bad "ab arm B line: [$AB]" ;; esac
+case "$AB" in *"PARTIAL/BLOCKED: 1/2 (50 %)"*"PARTIAL/BLOCKED: 0/1 (0 %)"*) ok "ab: implementer PARTIAL/BLOCKED share per arm" ;; *) bad "ab implementer share: [$AB]" ;; esac
+case "$AB" in *"CLEAN 1  FIXED 0  NEEDS_FOLLOWUP 1"*"CLEAN 0  FIXED 1  NEEDS_FOLLOWUP 0"*) ok "ab: evolution distribution per arm" ;; *) bad "ab evolution: [$AB]" ;; esac
+case "$AB" in *"02-implementer  n=2  malli opus  effort high  syöte 200"*"02-implementer  n=1  malli sonnet  effort medium  syöte 40"*) ok "ab: per-step tokens with the model/effort used" ;; *) bad "ab step lines: [$AB]" ;; esac
+case "$AB" in *"malli x "*|*"syöte 5 "*) bad "ab: run without arm leaked" ;; *) ok "ab: run without arm excluded" ;; esac
+# No ab_arm anywhere -> no section at all.
+rm -f "$STATE"
+run "$FXU" --force
+case "$OUT" in *"A/B-vertailu"*) bad "ab section without an experiment" ;; *) ok "ab: no section without an experiment" ;; esac
+
 # ---- usage errors -> exit 1 ----
 RUN_ISSUES_DIGEST_ENV_FILE="/nonexistent/digest.env" bash "$DIGEST" --min-class bogus < "$FXA" >/dev/null 2>&1; rc=$?
 check "bad --min-class -> exit 1" "$rc" "1"

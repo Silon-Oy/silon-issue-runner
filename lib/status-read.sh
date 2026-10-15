@@ -77,6 +77,10 @@ _STATUS_NORMALIZE_JQ='
       worktree_path: (.worktree_path // null),
       pr_url: (.pr_url // null),
       usage: (.usage // null),
+      ab_arm: (.ab_arm // null),
+      implementer_result: (.implementer_result // null),
+      evolution_result: (.evolution_result // null),
+      timeout_phase: (.timeout_phase // null),
       schema_gaps: ([
         (if (.remote // null) == null then "remote" else empty end),
         (if (.repo_slug // null) == null then "repo_slug" else empty end),

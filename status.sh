@@ -294,14 +294,19 @@ fi
 printf '%s' "$NORMALIZED" > "$TMPD/normalized.json"
 
 # ---- recent_usage[]: archived runs' consumption (issue #307) ----
+# Also carries the A/B arm and outcome fields (issue #308), and an A/B run without
+# usage (an overridden driver records none) still counts.
 # Per file, so one broken archived run.json is skipped instead of costing the
 # rest; it is history, not a live run, so it is not a read_error either.
 RECENT_USAGE="$(
   while IFS= read -r uj; do
     [ -n "$uj" ] || continue
-    jq -c 'select(type == "object" and .usage != null)
+    jq -c 'select(type == "object" and (.usage != null or .ab_arm != null))
       | {run_id, repo_slug: (.repo_slug // null), issue_number: (.issue_number // null),
-         started_at: (.started_at // null), finished_at: (.finished_at // null), usage}' \
+         status: (.status // null), started_at: (.started_at // null), finished_at: (.finished_at // null),
+         usage: (.usage // null), ab_arm: (.ab_arm // null),
+         implementer_result: (.implementer_result // null), evolution_result: (.evolution_result // null),
+         timeout_phase: (.timeout_phase // null)}' \
       "$uj" 2>/dev/null || true
   done < "$USAGE_ARCHIVE_LIST" | jq -s -c '.' 2>/dev/null || printf '[]'
 )"
@@ -932,6 +937,10 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
         pr_url: \$r.pr_url,
         pr_number: \$prnum,
         usage: \$r.usage,
+        ab_arm: \$r.ab_arm,
+        implementer_result: \$r.implementer_result,
+        evolution_result: \$r.evolution_result,
+        timeout_phase: \$r.timeout_phase,
         pr_local_verdict: (\$s.decision // null),
         pr_local_verdict_at: (\$s.pr_ts // null),
         session_alive: (\$p.session_alive // false),

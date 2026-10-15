@@ -311,8 +311,12 @@ build_body() {
 USAGE_DAYS="$MAX_SILENCE"
 [ "$USAGE_DAYS" -gt 0 ] || USAGE_DAYS=7
 
-build_usage_section() {
-  printf '%s' "$INPUT" | jq -r --argjson days "$USAGE_DAYS" '
+# Shared by the usage and A/B sections: number formatting, the median, and the
+# window — which runs (live runs[] + archived recent_usage[], one per run_id)
+# fall within $days of generated_at. One definition, so the two sections cannot
+# disagree on what "the period" is.
+# shellcheck disable=SC2016  # jq program text: $vars are jq's, not the shell's
+_DIGEST_RUNS_JQ='
     def _epoch: (try fromdateiso8601 catch null);
     def median: sort | length as $n
       | if $n == 0 then null
@@ -322,13 +326,18 @@ build_usage_section() {
       | [range(0; $n) | $s[.:.+1] + (if ($n - . - 1) > 0 and (($n - . - 1) % 3) == 0 then " " else "" end)]
       | join("");
     def fmt: if . == null then "?" else thousands end;
+    def window_runs($now; $days):
+      [(.runs // [])[], (.recent_usage // [])[]]
+      | unique_by(.run_id)
+      | map(select(((.finished_at // .started_at // "") | _epoch) as $t
+                   | $t != null and ($now - $t) <= ($days * 86400)));
+'
+
+build_usage_section() {
+  printf '%s' "$INPUT" | jq -r --argjson days "$USAGE_DAYS" "$_DIGEST_RUNS_JQ"'
     ((.generated_at // "") | _epoch) as $now
     | if $now == null then empty else
-      ([(.runs // [])[], (.recent_usage // [])[]]
-       | map(select(.usage != null))
-       | unique_by(.run_id)
-       | map(select(((.finished_at // .started_at // "") | _epoch) as $t
-                    | $t != null and ($now - $t) <= ($days * 86400)))) as $runs
+      (window_runs($now; $days) | map(select(.usage != null))) as $runs
       | [$runs[] | .usage | to_entries[]] | group_by(.key) as $steps
       | if ($steps | length) == 0 then empty else
           (["Kulutus vaiheittain (\($runs | length) ajoa, viimeiset \($days) vrk; mediaani tokeneina per ajo):"]
@@ -337,6 +346,47 @@ build_usage_section() {
               | map(.value) as $v
               | def med($k): [$v[] | .[$k] | select(type == "number")] | median | fmt;
                 "    \($step)  n=\($v | length)  syöte \(med("input_tokens"))  tuloste \(med("output_tokens"))  välimuistiluku \(med("cache_read_input_tokens"))  välimuistikirjoitus \(med("cache_creation_input_tokens"))"]
+           + [""]) | join("\n")
+        end
+      end'
+}
+
+# ---- A/B comparison by arm (issue #308) ----
+# Same source and window as the usage section. Only runs that carry run.json
+# .ab_arm take part, so the section is absent unless an experiment has run in
+# the period. Per arm: run count, per-step token medians with the model/effort
+# the calls actually used, median duration (finished runs only), Evolution's
+# outcome distribution, the implementer's PARTIAL/BLOCKED share and timeouts (a
+# recorded timeout_phase survives a successful --restart, so a run that timed
+# out once still counts). Not part of the fingerprint, like the usage section.
+build_ab_section() {
+  printf '%s' "$INPUT" | jq -r --argjson days "$USAGE_DAYS" "$_DIGEST_RUNS_JQ"'
+    def pct($k; $n): if $n == 0 then "?" else "\($k)/\($n) (\(($k * 100 / $n) | floor) %)" end;
+    def duration_s: ((.started_at // "") | _epoch) as $a | ((.finished_at // "") | _epoch) as $b
+      | if $a != null and $b != null and $b >= $a then $b - $a else empty end;
+    def minutes: if . == null then "?" else "\((. / 60) | floor) min" end;
+    ((.generated_at // "") | _epoch) as $now
+    | if $now == null then empty else
+      (window_runs($now; $days) | map(select(.ab_arm == "A" or .ab_arm == "B"))) as $runs
+      | if ($runs | length) == 0 then empty else
+          (["A/B-vertailu haaroittain (\($runs | length) ajoa, viimeiset \($days) vrk):"]
+           + [($runs | group_by(.ab_arm))[]
+              | .[0].ab_arm as $arm
+              | . as $a
+              | ($a | length) as $n
+              | [$a[] | .implementer_result | select(. != null)] as $imp
+              | [$a[] | .evolution_result | select(. != null)] as $evo
+              | def evo($k): [$evo[] | select(. == $k)] | length;
+                ["  Haara \($arm): \($n) ajoa, kesto mediaani \([$a[] | duration_s] | median | minutes), aikakatkaisuja \([$a[] | select(.timeout_phase != null or .status == "timed_out")] | length)",
+                 "    Toteutus PARTIAL/BLOCKED: \(pct([$imp[] | select(. == "PARTIAL" or . == "BLOCKED")] | length; $imp | length))",
+                 "    Evolution: CLEAN \(evo("CLEAN"))  FIXED \(evo("FIXED"))  NEEDS_FOLLOWUP \(evo("NEEDS_FOLLOWUP"))  muu \(($evo | length) - evo("CLEAN") - evo("FIXED") - evo("NEEDS_FOLLOWUP"))"]
+                + [[$a[] | .usage // {} | to_entries[]] | group_by(.key)[]
+                   | .[0].key as $step
+                   | map(.value) as $v
+                   | def med($k): [$v[] | .[$k] | select(type == "number")] | median | fmt;
+                     def names($k): [$v[] | .[$k] // empty | tostring | split(",")[]] | unique | join(",");
+                     "    \($step)  n=\($v | length)  malli \(names("model") | if . == "" then "?" else . end)  effort \(names("effort") | if . == "" then "?" else . end)  syöte \(med("input_tokens"))  tuloste \(med("output_tokens"))"]
+              | .[]]
            + [""]) | join("\n")
         end
       end'
@@ -370,6 +420,9 @@ BODY="$(build_body)"
 USAGE_SECTION="$(build_usage_section 2>/dev/null || true)"
 [ -n "$USAGE_SECTION" ] && BODY="$BODY
 $USAGE_SECTION"
+AB_SECTION="$(build_ab_section 2>/dev/null || true)"
+[ -n "$AB_SECTION" ] && BODY="$BODY
+$AB_SECTION"
 
 # An active GitHub backoff OWNS the subject line (issue #126). A rate-limited
 # factory produces no new attention runs, so N_SELECTED is typically 0 and the

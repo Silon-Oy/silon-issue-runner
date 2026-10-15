@@ -589,6 +589,17 @@ valmis ajo siirtyy arkistoon tunneissa. `status-digest.sh` laskee niistä vaihei
 token-mediaanit `--max-silence`-ikkunan ajoista (oletus 7 vrk) ja liittää ne koosteen loppuun.
 Kulutus ei vaikuta sormenjälkeen, joten se ei yksin laukaise lähetystä.
 
+**A/B-vertailu** (#308). Kun `RUN_ISSUES_AB_CLAUDE_{MODEL,EFFORT}[_<VAIHE>]` on asetettu
+(`docs/env-reference.md`), jokainen uusi ajo arvotaan haaraan A (nykyiset asetukset) tai B
+(kokeiltava arvo) ja haara kirjataan `run.json`:iin kenttään `ab_arm`. Sama vaihe ei koskaan aja
+kahdesti. `status-digest.sh` liittää koosteeseen osion "A/B-vertailu haaroittain" saman ikkunan
+ajoista: ajojen määrä, keston mediaani, aikakatkaisut (myös ajot, jotka aikakatkesivat ja
+valmistuivat `--restart`in jälkeen), toteutuksen PARTIAL/BLOCKED-osuus, Evolutionin
+CLEAN/FIXED/NEEDS_FOLLOWUP-jakauma sekä vaiheittaiset token-mediaanit kutsujen todellisine
+malleineen ja efforteineen. Tulokset luetaan `run.json`:n kentistä `implementer_result` ja
+`evolution_result`, joita orkestraattori kirjoittaa jokaiselle ajolle. Osio puuttuu, jos
+ikkunassa ei ole yhtään haaraan jaettua ajoa.
+
 Sivu näyttää versiotilan yläosassa **vain kun se ei ole `up_to_date`**, suomenkielisin selittein. `pin_pending`
 on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsestään. Erottelu on
 olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka
