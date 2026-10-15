@@ -5,15 +5,13 @@ annettu GitHub-issue ja repon CLAUDE.md, ja päättää onko tehtävä **valmis 
 nyt** vai puuttuuko jotain.
 
 > **Huom — tietoinen yksinkertaistus:** Alkuperäinen GoodReason-sykli ajaa Strategistin
-> (Σ/χ — päämäärä ja yleiskuva) ja Architectin (β/τ — rakenne ja integraatiopinnat)
-> erillisinä vaiheina. `/run-issues` **yhdistää nämä tähän yhteen cycle-review-vaiheeseen**:
-> alla oleva Σ/β/τ/φ/χ-rakenne kattaa molempien roolien analyysin (β ja τ ovat Architectin
-> osuus). Erillistä Architect-kutsua ei ole. Tämä pitää yhden issuen läpimenon kevyenä;
-> jos cycle-review-tuotokset alkavat osoittaa että β-laajuinen suunnittelu jää vajaaksi,
-> erillinen Architect-vaihe voidaan harkita myöhemmin (Phase 2).
-
-Käytä Claude Code -ympäristössä saatavilla olevaa `/goodreason:cycle-review`-skilliä,
-jos se on määritelty. Jos ei, noudata alla olevaa rakennetta suoraan.
+> (α×χ — tarkoitus ja todellisuus) ja Architectin (π×β — perustelu ja rakenne) erillisinä
+> vaiheina. `/run-issues` **yhdistää nämä tähän yhteen cycle-review-vaiheeseen**: alla oleva
+> rakenne kattaa molempien roolien analyysin, ja lisäksi se ennakoi Implementerin (φ, τ) ja
+> Evolutionin (Δψ, Ω) ankkurit, jotta alavirran vaiheilla on suunnitelma ja todennustapa
+> valmiina. Erillistä Architect-kutsua ei ole. Tämä pitää yhden issuen läpimenon kevyenä;
+> jos cycle-review-tuotokset alkavat osoittaa että π/β-laajuinen suunnittelu jää vajaaksi,
+> erillinen Architect-vaihe voidaan harkita myöhemmin.
 
 ## Issue
 
@@ -46,22 +44,42 @@ Repo: `{{REPO_ROOT}}`
 {{CLARIFICATION_CONTEXT}}
 
 Jos yllä on vastaus tarkennuspyyntöön, tämä on uudelleenarvioitu cycle-review: aiempi arviosi
-oli NEEDS_CLARIFICATION. Lue vastaus, päivitä Σ/β/τ/φ/χ sen valossa, päätä uudelleen.
+oli NEEDS_CLARIFICATION. Lue vastaus, päivitä analyysi (α … Ω) sen valossa, päätä uudelleen.
 Vastaus poistaa epäselvyyden → PROCEED. Tuo uuden esteen → BLOCKER. Yhä epäselvä →
 NEEDS_CLARIFICATION (kysy TARKEMPI kysymys, älä toista samaa).
 
 ## Tehtäväsi
 
-1. **Σ — strateginen jäsennys:** Mikä on issue-tikalin todellinen päämäärä? Onko se konkreettinen
-   muutos vai kysymys/keskustelunavaus?
-2. **β — rakenteellinen vastine:** Mitkä modulit, polut tai komponentit ovat muutoksen
-   keskiössä? Onko olemassa olevaa abstraktiota josta uusi koodi voisi periytyä?
-3. **τ — integraatiopinnat:** Mitkä rajapinnat (API-kentät, DB-skeema, UI-tilakomponentit,
-   ulkoiset palvelut) saattavat rikkoutua?
-4. **φ — toteutusvalmius:** Onko mitään blockerin tasoista epävarmuutta? Onko speksin
-   kentät — *tavoite, hyväksyntäkriteerit, edge-caset, scope-out* — olemassa edes
+Kirjoita analyysi alla olevilla otsikoilla tässä järjestyksessä. Jokainen otsikko alkaa
+ankkurin symbolilla (`## α — tarkoitus` jne.), jotta toteutus ja Evolution löytävät kohdat.
+
+1. **α — tarkoitus:** Kenelle ja miksi muutos tehdään? Onko se konkreettinen muutos vai
+   kysymys/keskustelunavaus?
+2. **Δψ — muutospaine:** Mikä paine tai poikkeama tehtävän synnytti — havaittu vika,
+   mitattu raja, puuttuva kyky, ristiriita dokumentaation ja koodin välillä?
+3. **χ — todennetut faktat:** Mitä luit tai ajoit itse, `tiedosto:rivi`-viittauksin. Ei
+   yhteenvetoa eikä oletuksia: jokainen rivi on havainto, jonka lukija voi tarkistaa.
+4. **β — rakenne:** Mitkä modulit, polut tai komponentit ovat muutoksen keskiössä? Onko
+   olemassa olevaa abstraktiota josta uusi koodi voisi periytyä?
+5. **τ — integraatiopinnat:** Mitkä rajapinnat (API-kentät, DB-skeema, UI-tilakomponentit,
+   ulkoiset palvelut, testit jotka assertoivat muutettavaa) saattavat rikkoutua?
+6. **π — lähestymistapa:** Valittu lähestymistapa ja sen perustelu. Hylätyt vaihtoehdot
+   yhdellä rivillä kukin: vaihtoehto ja miksi ei.
+7. **φ — suunniteltu ratkaisu:** Mitä Implementer tekee: muutokset tiedostoittain tai
+   askelittain, riittävän tarkasti että toteutus voi seurata suunnitelmaa.
+8. **Toteutusvalmius ja esteet:** Onko mitään blockerin tasoista epävarmuutta? Ovatko
+   speksin kentät — *tavoite, hyväksyntäkriteerit, edge-caset, scope-out* — olemassa edes
    implisiittisesti?
-5. **χ — yleiskuva:** Kerro lyhyesti yhdessä virkkeessä mitä Implementer tekee.
+
+Kirjoita lopuksi oma osionsa otsikolla **täsmälleen** `## Ω — todennussuunnitelma`:
+
+- Yksi rivi per hyväksyntäkriteeri: kriteeri ja komento tai testi, joka todentaa sen
+  (esim. `bash tests/test-x.sh`, `grep -n '…' polku`). Komennon on oltava ajettavissa
+  worktreessä sellaisenaan.
+- Jos issuessa ei ole muodollista hyväksyntäkriteerilistaa, johda kriteerit tavoitteesta ja
+  merkitse ne johdetuiksi.
+- Jos kriteeriä ei voi todentaa komennolla, kerro miten se tarkistetaan käsin ja miksi
+  komento ei riitä.
 
 ## Lopetus (PAKOLLINEN VIIMEINEN RIVI)
 
