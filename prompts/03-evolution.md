@@ -60,6 +60,8 @@ ennen PR:n avaamista.
 6. **Jos löydät ison ongelman**, älä yritä korjata sitä — kirjaa se PR-kuvaukseen ja
    lopeta `EVOLUTION_RESULT: NEEDS_FOLLOWUP -- <selitys>` -rivillä.
 
+{{RUN_PATH_SECTION}}
+
 ## Δψ — muutospaine tämän PR:n ulkopuolelle
 
 Jos huomasit toistuvan tai rakenteellisen ongelman, jonka korjaus ei kuulu tähän

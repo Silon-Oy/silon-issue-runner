@@ -81,6 +81,8 @@ Kirjoita lopuksi oma osionsa otsikolla **täsmälleen** `## Ω — todennussuunn
 - Jos kriteeriä ei voi todentaa komennolla, kerro miten se tarkistetaan käsin ja miksi
   komento ei riitä.
 
+{{RUN_PATH_SECTION}}
+
 ## Lopetus (PAKOLLINEN VIIMEINEN RIVI)
 
 Lopeta vastauksesi **TÄSMÄLLEEN YHDELLÄ** seuraavista riveistä. Mitään ei saa olla rivin

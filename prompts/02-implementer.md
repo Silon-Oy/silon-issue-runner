@@ -25,6 +25,8 @@ issuen Strategistin/Cycle Review:n hyväksymässä laajuudessa.
 {{CYCLE_REVIEW_OUTPUT}}
 ```
 
+{{RUN_PATH_SECTION}}
+
 ## Restart-konteksti
 
 ```

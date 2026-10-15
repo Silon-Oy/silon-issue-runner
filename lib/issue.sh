@@ -907,6 +907,37 @@ fetch_issue_json() {
   )
 }
 
+# Run-path labels: the issue author's classification of how much ceremony a run
+# gets (skills/claude-issue-runner "Ajopolku"). Neither is a pickup condition.
+# shellcheck disable=SC2034  # read by orchestrate.sh, not by this file
+RUN_PATH_LIGHT_LABEL="light-run"
+# shellcheck disable=SC2034
+RUN_PATH_HEAVY_LABEL="heavy-run"
+
+# issue_json_has_label <issue-json-file> <label> — exit 0 when the cached issue
+# payload carries <label>, 1 otherwise (also for a missing/unreadable file). The
+# ONE label reader for run-path decisions, so light-run and heavy-run cannot be
+# read two different ways.
+issue_json_has_label() {
+  local f="$1" want="$2"
+  [ -f "$f" ] || return 1
+  jq -e --arg w "$want" '[.labels[]?.name] | index($w) != null' "$f" >/dev/null 2>&1
+}
+
+# issue_run_path <issue-json-file> — echo "heavy", "light" or "standard".
+# heavy-run wins when both labels are present: the stricter path is the safe
+# reading of a contradictory classification.
+issue_run_path() {
+  local f="$1"
+  if issue_json_has_label "$f" "$RUN_PATH_HEAVY_LABEL"; then
+    echo heavy
+  elif issue_json_has_label "$f" "$RUN_PATH_LIGHT_LABEL"; then
+    echo light
+  else
+    echo standard
+  fi
+}
+
 # parse_marker <issue-json-file>
 # Scans the issue comments for the NEWEST `run-issues:awaiting-answer` marker
 # and prints "ts=<ISO> round=<n> run=<id>" on stdout, or nothing if absent.

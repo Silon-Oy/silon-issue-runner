@@ -297,6 +297,10 @@ source "$SCRIPT_DIR/lib/hook-runner.sh"
 source "$SCRIPT_DIR/lib/env-bootstrap.sh"
 # shellcheck source=lib/labels.sh
 source "$SCRIPT_DIR/lib/labels.sh"
+# shellcheck source=lib/poller-config.sh
+# For the ONE merge-label resolver (poller_merge_label) and the manual-merge
+# label name: a heavy-run PR swaps the former for the latter (issue #313).
+source "$SCRIPT_DIR/lib/poller-config.sh"
 # shellcheck source=lib/version.sh
 # Runner-version visibility (issue #32): read by _post_situation_to_issue so a
 # hand-off report names the code version that produced it, and by --version.
@@ -931,6 +935,9 @@ phase_a() {
     log "ab_arm=$ab_arm"
     state_event "$RUN_DIR" "ab_arm_assigned" "arm=$ab_arm"
   fi
+  # Record the run path now, from the same issue.json snapshot every later phase
+  # reads, so --continue / --restart cannot see a different path (issue #313).
+  current_run_path >/dev/null
   enter_state "S1_PickIssue"
   state_event "$RUN_DIR" "issue_picked" "issue_number=$ISSUE_NUM" "title=$ISSUE_TITLE" "remote=$REMOTE_NAME"
 
@@ -1273,7 +1280,8 @@ run_cycle_review() {
     "ISSUE_IMAGES=$ISSUE_IMAGES" \
     "REPO_ROOT=$REPO_ROOT" \
     "REPO_CLAUDE_MD=$repo_claude_md" \
-    "CLARIFICATION_CONTEXT=$CLARIFICATION_CONTEXT"
+    "CLARIFICATION_CONTEXT=$CLARIFICATION_CONTEXT" \
+    "RUN_PATH_SECTION=$(run_path_section 01-cycle-review)"
 
   local cr_rc=0
   (
@@ -1901,6 +1909,105 @@ _hand_to_human() {
   _add_needs_human_label
 }
 
+# ===========================================================================
+# Run path (issue #313): light-run / standard / heavy-run
+# ===========================================================================
+# current_run_path — echo this run's path ("heavy", "light" or "standard").
+# run.json is authoritative once recorded; the first call records it from the
+# cached issue.json (issue_run_path, the one shared label reader). A run that
+# predates the field gets it recorded on its first continue/restart.
+current_run_path() {
+  if [ -z "${RUN_PATH:-}" ]; then
+    RUN_PATH=$(jq -r '.run_path // empty' "$RUN_DIR/run.json" 2>/dev/null || true)
+    if [ -z "$RUN_PATH" ]; then
+      RUN_PATH=$(issue_run_path "$RUN_DIR/issue.json")
+      state_set "$RUN_DIR" "run_path" "$RUN_PATH"
+    fi
+  fi
+  printf '%s' "$RUN_PATH"
+}
+
+# heavy_run_kind — echo "BUG" or "NOT_BUG" from the cycle review's
+# HEAVY_RUN_KIND line. No label marks a bug, so the cycle review classifies.
+# Fail-closed: a missing or unreadable line is BUG — the hypothesis gate is the
+# stricter path, and only an explicit NOT_BUG opts out of it.
+heavy_run_kind() {
+  local kind
+  kind=$(grep -E '^HEAVY_RUN_KIND:' "$RUN_DIR/01-cycle-review.out" 2>/dev/null | tail -1 | awk '{print $2}' || true)
+  [ "$kind" = "NOT_BUG" ] && echo NOT_BUG || echo BUG
+}
+
+# diagnosis_gate_applies — exit 0 when this run must confirm a hypothesis
+# before fixing: a heavy-run whose cycle review did not classify it NOT_BUG.
+diagnosis_gate_applies() {
+  [ "$(current_run_path)" = "heavy" ] && [ "$(heavy_run_kind)" = "BUG" ]
+}
+
+# run_path_section <step> — echo the run-path-specific prompt section for
+# <step> (01-cycle-review / 02-implementer / 03-evolution), or nothing. The
+# section is its own template, rendered first, because render_prompt never
+# re-scans a substituted value for placeholders. Only heavy runs have sections;
+# the implementer and evolution ones apply only behind the diagnosis gate.
+DIAGNOSIS_FILE_NAME="diagnosis.md"
+run_path_section() {
+  local step="$1" tpl="$SCRIPT_DIR/prompts/heavy-run/$1.md"
+  [ "$(current_run_path)" = "heavy" ] || return 0
+  [ "$step" = "01-cycle-review" ] || diagnosis_gate_applies || return 0
+  [ -f "$tpl" ] || return 0
+  local out="$RUN_DIR/heavy-run-$step.section"
+  render_prompt "$tpl" "$out" "DIAGNOSIS_FILE=$RUN_DIR/$DIAGNOSIS_FILE_NAME"
+  cat "$out"
+}
+
+# diagnosis_result <implementer-out> — the DIAGNOSIS_RESULT payload, or empty.
+diagnosis_result() {
+  grep -E '^DIAGNOSIS_RESULT:' "$1" 2>/dev/null | tail -1 | sed 's/^DIAGNOSIS_RESULT: *//' || true
+}
+
+# enforce_diagnosis_gate <implementer-out> — behind the diagnosis gate, the
+# implementer must have run the diagnostic experiment, recorded its raw result
+# and confirmed one hypothesis. Anything else — refuted, unexpected, no result
+# line, no raw record — finalizes blocked through the same hand-off as every
+# other terminal block (needs-human + answerable situation comment), so a
+# guessed fix never reaches a PR. Returns 0 when the gate passes or does not
+# apply; never returns otherwise.
+enforce_diagnosis_gate() {
+  local imp_out="$1"
+  diagnosis_gate_applies || return 0
+  local diag_file="$RUN_DIR/$DIAGNOSIS_FILE_NAME"
+  local result
+  result=$(diagnosis_result "$imp_out")
+  state_event "$RUN_DIR" "diagnosis_done" "result=${result:-NONE}"
+  local why=""
+  case "$result" in
+    CONFIRMED\ ?*)
+      if [ ! -s "$diag_file" ]; then
+        why="Toteutus ilmoitti hypoteesin vahvistetuksi, mutta diagnostisen kokeen raakatulosta ei kirjattu tiedostoon \`$DIAGNOSIS_FILE_NAME\`."
+      fi
+      ;;
+    REFUTED*)
+      why="Diagnostinen koe kumosi kaikki cycle reviewn hypoteesit. Korjausta ei arvattu." ;;
+    UNEXPECTED*)
+      why="Diagnostisen kokeen tulos oli odottamaton eikä vahvistanut yhtäkään hypoteesia. Korjausta ei arvattu." ;;
+    *)
+      why="Toteutus ei raportoinut diagnostisen kokeen tulosta (\`DIAGNOSIS_RESULT\`-rivi puuttuu tai on tunnistamaton). Korjausta ei hyväksytä ilman vahvistettua syytä." ;;
+  esac
+  if [ -z "$why" ]; then
+    state_set "$RUN_DIR" "confirmed_hypothesis" "${result#CONFIRMED }"
+    log "diagnosis gate: confirmed ${result#CONFIRMED }"
+    return 0
+  fi
+  log "diagnosis gate: ${result:-no result} — finalizing blocked"
+  state_finalize "$RUN_DIR" "blocked" "diagnosis_unconfirmed"
+  local artifact="$imp_out"
+  [ -s "$diag_file" ] && artifact="$diag_file"
+  _post_situation_to_issue "diagnosis_unconfirmed" \
+    "heavy-run: $why Tarkista alla oleva diagnostiikka, täydennä issueen hypoteesit tai havainnot ja kommentoi — ajo yritetään uudelleen." \
+    "$artifact" blocked prose
+  _add_needs_human_label
+  exit 5
+}
+
 # propagate_pr_labels <pr-url> — best-effort: copy merge-relevant labels from
 # the source issue onto the freshly created PR. GitHub does not copy issue
 # labels to PRs automatically, so without this the pr-watch merge-policy
@@ -1932,6 +2039,21 @@ propagate_pr_labels() {
   done <<EOF
 $(printf '%s' "$PR_LABELS_CSV" | tr ',' '\n')
 EOF
+
+  # A heavy-run PR is never merged automatically (issue #313): the merge label
+  # is withheld even when the issue carries it, and manual-merge goes on the PR
+  # instead so the reason is visible where the merge decision is made.
+  if [ "$(current_run_path)" = "heavy" ]; then
+    local merge_label kept="" m
+    merge_label=$(poller_merge_label)
+    while IFS= read -r m; do
+      [ -n "$m" ] && [ "$m" != "$merge_label" ] && kept="${kept:+$kept,}$m"
+    done <<EOF
+$(printf '%s' "$matched" | tr ',' '\n')
+EOF
+    matched="${kept:+$kept,}$EPIC_MANUAL_MERGE_LABEL"
+    log "propagate_pr_labels: heavy-run — withholding $merge_label, adding $EPIC_MANUAL_MERGE_LABEL"
+  fi
 
   if [ -z "$matched" ]; then
     log "propagate_pr_labels: no propagatable labels on issue #$ISSUE_NUM (configured: $PR_LABELS_CSV)"
@@ -2377,7 +2499,8 @@ phase_b_implement() {
     "ISSUE_IMAGES=$ISSUE_IMAGES" \
     "RUN_ISSUES_DB_CLONE=$DB_CLONE_VALUE" \
     "CYCLE_REVIEW_OUTPUT=$cr_full" \
-    "RESTART_CONTEXT=$RESTART_CONTEXT"
+    "RESTART_CONTEXT=$RESTART_CONTEXT" \
+    "RUN_PATH_SECTION=$(run_path_section 02-implementer)"
 
   # rc-preserving: timeout(1) returns 124 when the claude child overruns its
   # budget. The Phase 0 probe (tests/test-timeout-detection.sh) confirms the
@@ -2422,6 +2545,13 @@ PROVISION_ENV
   # The outcome class as a run.json scalar too (issue #308): reports read run.json,
   # never state.jsonl in full (CLAUDE.md §5.3), and archived runs keep it.
   state_set "$RUN_DIR" implementer_result "$(_result_class "$imp_result")"
+
+  # Before the result line: an unconfirmed diagnosis is the more precise reason
+  # even when the implementer also reported BLOCKED (issue #313).
+  if [ "$(current_run_path)" = "heavy" ]; then
+    state_set "$RUN_DIR" "heavy_run_kind" "$(heavy_run_kind)"
+  fi
+  enforce_diagnosis_gate "$imp_out"
 
   case "$imp_result" in
     SUCCESS*) : ;;
@@ -2480,7 +2610,8 @@ phase_b_deliver() {
     "ISSUE_TITLE=$ISSUE_TITLE" \
     "ISSUE_BODY=$ISSUE_BODY" \
     "CYCLE_REVIEW_OUTPUT=$cr_full" \
-    "IMPLEMENTER_OUTPUT_TAIL=$imp_tail"
+    "IMPLEMENTER_OUTPUT_TAIL=$imp_tail" \
+    "RUN_PATH_SECTION=$(run_path_section 03-evolution)"
 
   local evo_rc=0
   (
@@ -2528,6 +2659,22 @@ phase_b_deliver() {
     echo "$cr_full"
     echo '```'
     echo
+    if [ "$(current_run_path)" = "heavy" ]; then
+      echo "> **heavy-run:** this PR is not merged automatically — it carries \`$EPIC_MANUAL_MERGE_LABEL\` instead of \`$(poller_merge_label)\`. Review and merge it by hand."
+      echo
+    fi
+    if diagnosis_gate_applies; then
+      echo "## Diagnosis (heavy-run)"
+      echo
+      echo "Confirmed hypothesis: $(jq -r '.confirmed_hypothesis // "?"' "$RUN_DIR/run.json" 2>/dev/null || echo "?")"
+      echo
+      echo "Raw result of the diagnostic experiment:"
+      echo
+      echo '```'
+      cat "$RUN_DIR/$DIAGNOSIS_FILE_NAME" 2>/dev/null || echo "(missing)"
+      echo '```'
+      echo
+    fi
     echo "## Evolution result"
     echo
     echo '```'
