@@ -2671,7 +2671,15 @@ phase_b_deliver() {
       echo "Raw result of the diagnostic experiment:"
       echo
       echo '```'
-      cat "$RUN_DIR/$DIAGNOSIS_FILE_NAME" 2>/dev/null || echo "(missing)"
+      # Agent-written and published: the implementer prompt forbids secrets in
+      # it. Capped to a third of GitHub's 65536-byte body limit, which it shares
+      # with the cycle review above.
+      if [ -s "$RUN_DIR/$DIAGNOSIS_FILE_NAME" ]; then
+        truncate_for_github 20000 < "$RUN_DIR/$DIAGNOSIS_FILE_NAME"
+        echo
+      else
+        echo "(missing)"
+      fi
       echo '```'
       echo
     fi

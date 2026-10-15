@@ -8,7 +8,9 @@ hypoteesi vahvistettu.** Tee tässä järjestyksessä:
    mittausrivit tai testit ovat sallittuja, kunhan poistat ne tai ne ovat osa korjausta.
 2. **Kirjaa raakatulos** tiedostoon `{{DIAGNOSIS_FILE}}` (ajon hakemistossa, ei worktreessä;
    älä committaa sitä): ajettu komento, sen tuloste muokkaamattomana ja lyhyt tulkinta siitä,
-   mikä hypoteesi tulos vahvistaa ja mitkä se kumoaa.
+   mikä hypoteesi tulos vahvistaa ja mitkä se kumoaa. Tiedosto julkaistaan PR-kuvauksessa
+   ja issuekommentissa: **poista tulosteesta salaisuudet ja henkilötiedot** (tokenit,
+   salasanat, yhteysosoitteet tunnuksineen, sähköpostiosoitteet) ennen kirjausta.
 3. **Tulosta välirivi** omalle rivilleen, täsmälleen yksi näistä:
 
    ```
