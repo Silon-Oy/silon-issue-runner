@@ -179,3 +179,46 @@ state_finalize() {
   fi
   mv -f "$tmp" "$run_dir/run.json"
 }
+
+# state_usage_add <run-dir> <step-id> <entry-json>
+# Merge one Claude call's consumption into run.json's .usage[<step-id>] (issue
+# #307). A re-run of the same step (restart, profile retry) ADDS to the record
+# instead of replacing it, which state_set cannot do — hence a sibling with the
+# same tmp+mv pattern as state_increment_retry.
+#
+# Merge rules, per key of <entry-json>:
+#   model, effort  — set union, comma-joined (a fallback model shows up as a
+#                    second name instead of overwriting the first)
+#   anything else  — number + number = sum; "unknown" on either side stays
+#                    "unknown", because a total that misses one call is not a
+#                    total. duration_seconds is measured locally, so it is
+#                    always a number and keeps summing.
+# .calls counts the merged entries.
+state_usage_add() {
+  local run_dir="$1"
+  local step_id="$2"
+  local entry="$3"
+
+  local tmp
+  tmp=$(mktemp "$run_dir/.run.json.XXXXXX")
+  if ! jq --arg step "$step_id" --argjson e "$entry" '
+    def addv($a; $b):
+      if $a == null then $b
+      elif ($a | type) == "number" and ($b | type) == "number" then $a + $b
+      else "unknown" end;
+    def joinset($a; $b):
+      [ (($a // "") | tostring | split(",")[]), (($b // "") | tostring | split(",")[]) ]
+      | map(select(. != "")) | unique | join(",");
+    .usage = (.usage // {})
+    | .usage[$step] = (
+        reduce ($e | to_entries[]) as $kv ((.usage[$step] // {calls: 0});
+          .[$kv.key] = (if $kv.key == "model" or $kv.key == "effort"
+                        then joinset(.[$kv.key]; $kv.value)
+                        else addv(.[$kv.key]; $kv.value) end))
+        | .calls = ((.calls // 0) + 1))
+    ' "$run_dir/run.json" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$run_dir/run.json"
+}

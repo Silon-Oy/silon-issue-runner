@@ -80,13 +80,14 @@ EXPECTED="$WORK/expected.txt"
 {
   printf '%s\n' --append-system-prompt-file "$RUNDIR/02-implementer.system-prompt.md"
   printf '%s\n' --strict-mcp-config --setting-sources project,local
+  printf '%s\n' --session-id '<uuid>'
   printf '%s\n' --dangerously-skip-permissions -p 'do the thing'
 } > "$EXPECTED"
-# The system-prompt path depends on which principles files exist; compare the
-# flag set structurally instead of the path itself.
-sed -i.bak '2s/.*/<sp>/' "$EXPECTED"; sed '2s/.*/<sp>/' "$ARGV" > "$WORK/argv.norm"
+# The system-prompt path depends on which principles files exist and the session
+# id (#307) is fresh per call; compare the flag set structurally instead.
+sed -i.bak '2s/.*/<sp>/' "$EXPECTED"; sed -e '2s/.*/<sp>/' -e '7s/.*/<uuid>/' "$ARGV" > "$WORK/argv.norm"
 if [ "$RC" = 0 ] && diff -q "$EXPECTED" "$WORK/argv.norm" >/dev/null; then
-  ok a "no new variables -> argv unchanged"
+  ok a "no new variables -> argv unchanged (plus #307 --session-id)"
 else
   bad a "rc=$RC; diff: $(diff "$EXPECTED" "$WORK/argv.norm" | tr '\n' ' ')"
 fi

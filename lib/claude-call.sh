@@ -525,6 +525,92 @@ _claude_all_profiles_full() {
   _claude_usage_limit_record "$run_dir" "$step_id" "${earliest%% *}" "${earliest#* }"
 }
 
+# ---------- per-call usage bookkeeping (issue #307) ----------
+# The model a step actually ran on and the tokens it spent exist only in Claude
+# Code's own session transcript. A native call is therefore started with a
+# session id we chose (--session-id), and after it returns that session's
+# transcript is read and summed into run.json's .usage[<step-id>]
+# (state_usage_add). Everything here is best effort: a missing uuid generator,
+# transcript or parseable line degrades to "unknown" values, never to a failed
+# step. The .out file and its parsing are untouched — --session-id changes
+# nothing on stdout.
+
+# The token counters summed from each assistant turn's message.usage.
+RUN_ISSUES_CLAUDE_USAGE_KEYS="input_tokens output_tokens cache_read_input_tokens cache_creation_input_tokens"
+
+# _claude_new_session_id — print a fresh lowercase UUID, or nothing when no
+# source is available (the call then runs without --session-id and its usage is
+# recorded as unknown).
+_claude_new_session_id() {
+  local id=""
+  if command -v uuidgen >/dev/null 2>&1; then
+    id=$(uuidgen 2>/dev/null) || id=""
+  elif [ -r /proc/sys/kernel/random/uuid ]; then
+    id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || id=""
+  fi
+  printf '%s' "$id" | tr '[:upper:]' '[:lower:]'
+}
+
+# _claude_transcript_file <session-id> — print the transcript path, or nothing.
+# Globbed by the session id rather than rebuilt from the sanitised working
+# directory: the CLI's sanitising (and its truncation of long paths) is its own
+# business, and the id is unique on its own. Derived from CLAUDE_CONFIG_DIR or
+# $HOME, never a tilde (CLAUDE.md §8).
+_claude_transcript_file() {
+  local id="$1" f
+  [ -n "$id" ] || return 0
+  for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$id.jsonl"; do
+    if [ -f "$f" ]; then printf '%s' "$f"; return 0; fi
+  done
+}
+
+# _claude_transcript_usage <transcript> — print a JSON object with the actual
+# model(s), the summed token counters and the assistant turn count, or fail.
+# The CLI writes one line PER CONTENT BLOCK, each repeating the same message id
+# and usage, so turns are deduplicated by message id before summing. Unparseable
+# lines (a call killed mid-write) are skipped; "<synthetic>" entries are the
+# CLI's own error notices, not model turns.
+_claude_transcript_usage() {
+  local keys
+  # shellcheck disable=SC2086  # deliberate word-split of the key list
+  keys=$(jq -nc '$ARGS.positional' --args $RUN_ISSUES_CLAUDE_USAGE_KEYS)
+  jq -n -R -c --argjson keys "$keys" '
+    [ inputs | (fromjson? // empty)
+      | select(type == "object" and .type == "assistant")
+      | select((.message.model // "") != "<synthetic>") ]
+    | group_by(.message.id // .uuid) | map(last) as $turns
+    | ($turns | map(.message.model // empty) | unique) as $models
+    | { model: (if ($models | length) == 0 then "unknown" else ($models | join(",")) end),
+        assistant_turns: ($turns | length) }
+      + (reduce $keys[] as $k ({}; .[$k] = ($turns | map(.message.usage[$k] // 0) | add // 0)))
+  ' < "$1"
+}
+
+# _claude_record_usage <run-dir> <step-id> <session-id> <effort> <duration-s>
+# Merge one native call's consumption into run.json. No run.json (a PR-watch
+# scratch dir) or no state library = nothing to record into.
+_claude_record_usage() {
+  local run_dir="$1" step_id="$2" session_id="$3" effort="$4" duration="$5"
+  [ -f "$run_dir/run.json" ] || return 0
+  declare -F state_usage_add >/dev/null 2>&1 || return 0
+
+  local transcript measured="" entry
+  transcript=$(_claude_transcript_file "$session_id")
+  if [ -n "$transcript" ]; then
+    measured=$(_claude_transcript_usage "$transcript" 2>/dev/null) || measured=""
+  fi
+  if [ -z "$measured" ]; then
+    _claude_call_log "usage for step $step_id unknown: no readable transcript for session ${session_id:-<none>}"
+    # shellcheck disable=SC2086  # deliberate word-split of the key list
+    measured=$(jq -nc '($ARGS.positional + ["model", "assistant_turns"])
+      | map({(.): "unknown"}) | add' --args $RUN_ISSUES_CLAUDE_USAGE_KEYS)
+  fi
+  entry=$(jq -c --arg effort "${effort:-default}" --argjson d "$duration" \
+    '. + {effort: $effort, duration_seconds: $d}' <<<"$measured") || return 0
+  state_usage_add "$run_dir" "$step_id" "$entry" \
+    || _claude_call_log "WARNING: could not record usage for step $step_id into $run_dir/run.json"
+}
+
 # call_claude <run-dir> <step-id> <prompt-file>
 # Returns the claude process exit code (0 on success), or CLAUDE_USAGE_LIMIT_RC
 # when the output is a usage-limit message (the .exit file still records the
@@ -653,6 +739,16 @@ call_claude() {
   # shellcheck disable=SC2206  # deliberate word-split of multi-token settings
   cmd=($timeout_prefix $RUN_ISSUES_CLAUDE_CMD ${model_args[@]+"${model_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} ${fallback_args[@]+"${fallback_args[@]}"})
 
+  # Usage bookkeeping is native-only (see _claude_record_usage): an operator's
+  # own driver has no transcript we know how to read, and its flag vocabulary is
+  # not assumed. One log line per call instead of a record.
+  local record_usage=0
+  if claude_cmd_is_native; then
+    record_usage=1
+  else
+    _claude_call_log "usage not recorded for step $step_id: RUN_ISSUES_CLAUDE_CMD is an overridden driver"
+  fi
+
   local use_profiles=0 profile="" profile_path="" tried="" token
   local last_deadline="" last_source=""
   claude_profiles_configured && use_profiles=1
@@ -685,6 +781,16 @@ call_claude() {
       _claude_profile_event "$run_dir" "$step_id" "claude_profile" "profile=$profile"
     fi
 
+    # A fresh session id per ATTEMPT: a profile retry is a second process, and
+    # the CLI refuses an id that is already in use.
+    local session_id="" call_start
+    local -a session_args=()
+    if [ "$record_usage" = 1 ]; then
+      session_id=$(_claude_new_session_id)
+      [ -n "$session_id" ] && session_args=(--session-id "$session_id")
+    fi
+    call_start=$(date +%s)
+
     rc=0
     # A subshell so the token reaches the claude process's environment only: it
     # is never exported into this shell, never on a command line (ps), and never
@@ -695,10 +801,15 @@ call_claude() {
         CLAUDE_CODE_OAUTH_TOKEN="$token"
         export CLAUDE_CODE_OAUTH_TOKEN
       fi
-      exec "${cmd[@]}" ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")"
+      exec "${cmd[@]}" ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} ${session_args[@]+"${session_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")"
     ) > "$out_file" 2>&1 || rc=$?
 
     printf '%s\n' "$rc" > "$exit_file"
+
+    # Every attempt is recorded, a usage-limited one included: it spent tokens.
+    if [ "$record_usage" = 1 ]; then
+      _claude_record_usage "$run_dir" "$step_id" "$session_id" "$effort" "$(( $(date +%s) - call_start ))" || true
+    fi
 
     # A timeout is its own outcome (finalize_timeout); everything else is checked,
     # including rc=0 — the CLI's exit code on a limit hit is not something to bet on.
