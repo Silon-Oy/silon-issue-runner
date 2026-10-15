@@ -73,6 +73,19 @@ Muoto ratkaisee kahden koneen jaon ilman toista repo-oikeuksin varustettua tunnu
 DENY-tunnukselta vaadita repo-oikeutta**. **Varoitus:** liian laaja DENY tuottaa **nolla osumaa
 yhtä hiljaa kuin väärä poimintalabel** (README §6.2) — repo lakkaa poimimasta ilman virhettä ja lokia.
 
+### Prioriteetti: `priority-high` (issue #316)
+
+Ehdokkaiden järjestys repon sisällä on **ensin prioriteetti, sitten vanhin**. Issue, jolla on
+label `priority-high`, poimitaan ennen saman repon muita ehdokkaita; kummankin ryhmän sisällä
+järjestys on ennallaan vanhin ensin. Label **ei ole poimintaehto eikä estä poimintaa** — se vain
+järjestää jo kelpaavat ehdokkaat, joten sen puuttuessa järjestys on täsmälleen sama kuin ennen.
+Se luetaan paikallisessa suodattimessa eikä REST-kyselyn `labels=`-parametrissa, joka
+JA-yhdistäisi sen ja kaventaisi poiminnan pelkkiin prioriteetti-issueihin. Estetty
+prioriteetti-issue ohitetaan kuten muutkin estetyt ehdokkaat, ja se kuluttaa yhden koetuksen
+budjetista `RUN_ISSUES_PICK_BLOCKED_PROBES`. Rajat: järjestys ei ulotu reposta toiseen
+(watchlistin repojärjestys ennallaan), ja poiminta lukee 100 vanhinta avointa issueta — sitä
+uudempi prioriteetti-issue ei näy ennen kuin jono lyhenee. Luo label repoon itse.
+
 ### Pollerin sisäinen järjestys ja rinnakkaisuus
 
 **Rinnakkaisuus.** Poller ajaa kerrallaan enintään `global_max_concurrent` ajoa (watchlistin

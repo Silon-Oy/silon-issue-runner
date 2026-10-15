@@ -52,6 +52,14 @@ set -euo pipefail
 # per-call. A human never adds it; assignment is left as pure bookkeeping.
 AUTO_CLAIMED_LABEL="auto-claimed"
 
+# PRIORITY_HIGH_LABEL — a human-written ordering hint (issue #316). An issue
+# carrying it is picked before every other candidate of the same repo; within
+# each group the order stays oldest-first. FIXED name like AUTO_CLAIMED_LABEL. It
+# neither qualifies nor disqualifies an issue — it only reorders the candidate
+# list, so it lives in the local jq filter and never in the REST `labels=`
+# parameter (which ANDs, and would narrow pickup to prioritised issues only).
+PRIORITY_HIGH_LABEL="priority-high"
+
 # _issue_gh [--remote <name>] -- <gh-args>...
 # Runs `gh` either through gha_with_token (App identity) or as a pass-through.
 # When the optional <remote> argument is "origin" or empty (the legacy
@@ -248,6 +256,14 @@ _labels_query_csv() {
 #
 # `.assignees` and `.user.login` are already in the REST payload, so none of
 # this costs an extra call.
+#
+# ORDER (issue #316). The REST listing arrives oldest-first. The survivors are
+# then ordered by (not prioritised, position in that listing): issues carrying
+# $ENV.RUN_ISSUES_PICK_PRIORITY come first, and the position key keeps
+# oldest-first inside both groups without relying on sort_by's stability. With
+# no prioritised issue every first key is equal, so the order is exactly the
+# listing order. Blocked-probing walks this list unchanged, so a blocked
+# prioritised issue is skipped like any other blocked candidate.
 _pick_filter_jq() {
   printf '%s' '[ .[]
      | select(.pull_request == null)
@@ -268,8 +284,11 @@ _pick_filter_jq() {
          | (if ($has | length) == 0 then [$author] else $has end) as $target
          | (($allow | length) == 0
             or ($target | any(. as $login | ($allow | index($login)) != null)))
-           and ($target | all(. as $login | ($deny | index($login)) == null)))
-     | .number ] | .[]'
+           and ($target | all(. as $login | ($deny | index($login)) == null))) ]
+   | ($ENV.RUN_ISSUES_PICK_PRIORITY // "") as $prio
+   | to_entries
+   | sort_by([ ($prio == "" or ([.value.labels[].name] | index($prio)) == null), .key ])
+   | .[].value.number'
 }
 
 pick_oldest_candidate() {
@@ -308,6 +327,7 @@ pick_oldest_candidate() {
     export RUN_ISSUES_PICK_CLEAN="$clean_label"
     export RUN_ISSUES_PICK_RESET="$reset_label"
     export RUN_ISSUES_PICK_ASSIGNEES="$assignees_csv"
+    export RUN_ISSUES_PICK_PRIORITY="$PRIORITY_HIGH_LABEL"
     _issue_gh --remote "$remote" -- api "$(_rest_issues_path "$owner_repo" "$qs")" \
       --jq "$(_pick_filter_jq)" 2>>"${RUN_ISSUES_GH_ERR:-/dev/null}"
   ); then

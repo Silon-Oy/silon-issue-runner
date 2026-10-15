@@ -1,6 +1,6 @@
 ---
 name: claude-issue-runner
-description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run or heavy-run label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
+description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run, heavy-run or priority-high label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
 version: 2.4.0
 ---
@@ -58,6 +58,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `manual-merge` | sinä epicille tai sen lapselle | sinä | Opt-out `auto-merge`-propagoinnista: epicillä estää koko ketjulta, lapsella vain siltä lapselta. Lapsi ajetaan silti — vain automerge jää pois |
 | `light-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: kevyt polku. Ei poimintaehto eikä estä poimintaa. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
 | `heavy-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: raskas polku. Ei poimintaehto eikä estä poimintaa. PR saa `manual-merge`n eikä yhdisty automaattisesti, vaikka issuella olisi `auto-merge`. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
+| `priority-high` | sinä | sinä | Järjestys, ei ehto: poimitaan ennen saman repon muita ehdokkaita, ryhmän sisällä vanhin ensin. Estetty prioriteetti-issue ohitetaan kuten muutkin estetyt. Luo label repoon itse |
 | `auto-claimed` | automaatio, kun ajo varaa issuen (S3) | automaatio, kun ajo perääntyy tai siivotaan | **Varaus**: estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Älä lisää tai poista käsin** |
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
 | `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä | sinä | Suodatettava merkintä epic-issuella |
@@ -91,7 +92,8 @@ ottanut käyttöön valinnaisen assignee-rajauksen, myös seitsemäs):
    Graafi luetaan suoraan riippuvuusrajapinnasta ehdokas kerrallaan, vanhimmasta alkaen.
 4. Issuella **ei ole** labelia `waiting`, `wip`, `epic`, `auto-clean` eikä `auto-reset`.
 5. Issuella on **kaikki** konfiguroidut poimintalabelit (oletus: yksi label, `auto-run`).
-6. Se on vanhin ehdot täyttävä issue — yksi issue per tikki per remote.
+6. Se on vanhin ehdot täyttävä issue — yksi issue per tikki per remote. Poikkeus: `priority-high`-labeloidut
+   ehdokkaat ohittavat jonon saman repon sisällä (keskenään vanhin ensin).
 7. **Vain jos repolla on watchlistin valinnainen `assignees`-lista:** issue on assignattu
    jollekin listatuista tunnuksista — tai sillä ei ole assigneeta lainkaan ja sen **avaaja** on
    listalla. Ilman avainta assigneita ei katsota lainkaan.

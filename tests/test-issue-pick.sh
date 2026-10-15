@@ -319,6 +319,64 @@ JSON
 check "unassigned issue by a DENY author is skipped" \
   "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "not:runner-a")" ""
 
+# --- 9d. priority-high reorders, never filters (issue #316) -----------------
+# The listing arrives oldest-first; 52 and 54 are the newer, prioritised ones.
+# 53 carries the label AND a disqualifier, so the ordering must run AFTER the
+# exclusions — a reorder that resurrected a filtered issue would return 53.
+cat > "$ISSUES" <<'JSON'
+[
+ {"number":50,"labels":[{"name":"auto-run"}]},
+ {"number":51,"labels":[{"name":"auto-run"}]},
+ {"number":52,"labels":[{"name":"auto-run"},{"name":"priority-high"}]},
+ {"number":53,"labels":[{"name":"auto-run"},{"name":"priority-high"},{"name":"wip"}]},
+ {"number":54,"labels":[{"name":"auto-run"},{"name":"priority-high"}]}
+]
+JSON
+check "priority-high is picked before older candidates" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r")" "52"
+# The full candidate order: prioritised group oldest-first, then the rest
+# oldest-first, and the disqualified 53 nowhere.
+check "order is (priority, then oldest) and exclusions still apply" \
+  "$(RUN_ISSUES_PICK_PRIORITY=priority-high RUN_ISSUES_PICK_CLEAN=auto-clean RUN_ISSUES_PICK_RESET=auto-reset \
+      jq -r "$(_pick_filter_jq)" < "$ISSUES" | tr '\n' ' ')" "52 54 50 51 "
+
+# A blocked prioritised issue must not hold up the queue: the probe walks on to
+# the next prioritised one, then to the ordinary candidates.
+printf '[{"state":"open"}]\n' > "$BLOCKDIR/52"
+check "blocked priority issue falls through to the next priority one" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r")" "54"
+printf '[{"state":"open"}]\n' > "$BLOCKDIR/54"
+check "all priority issues blocked => oldest ordinary candidate" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r")" "50"
+# Each blocked priority issue spends one probe, like any blocked candidate.
+check "blocked priority issues consume the probe budget" \
+  "$(RUN_ISSUES_PICK_BLOCKED_PROBES=2 pick_oldest_candidate "$REPO" "auto-run" "o/r")" ""
+rm -f "$BLOCKDIR/52" "$BLOCKDIR/54"
+
+# Without the label the order is EXACTLY the listing order — including a
+# listing that is not in numeric order, so the check cannot pass by sorting on
+# .number. Same filter, label absent from every issue.
+cat > "$ISSUES" <<'JSON'
+[
+ {"number":63,"labels":[{"name":"auto-run"}]},
+ {"number":61,"labels":[{"name":"auto-run"}]},
+ {"number":64,"labels":[{"name":"auto-run"},{"name":"bug"}]},
+ {"number":62,"labels":[{"name":"auto-run"}]}
+]
+JSON
+check "no priority label => listing order unchanged" \
+  "$(RUN_ISSUES_PICK_PRIORITY=priority-high RUN_ISSUES_PICK_CLEAN=auto-clean RUN_ISSUES_PICK_RESET=auto-reset \
+      jq -r "$(_pick_filter_jq)" < "$ISSUES" | tr '\n' ' ')" "63 61 64 62 "
+check "no priority label => oldest candidate as before" \
+  "$(pick_oldest_candidate "$REPO" "auto-run" "o/r")" "63"
+
+# The label must stay local: in labels= it would AND and narrow pickup.
+: > "$ARGV"
+pick_oldest_candidate "$REPO" "auto-run" "o/r" >/dev/null
+grep -q "priority-high" "$ARGV" && fail "priority-high leaked into the REST query"
+check "priority ordering issues exactly one listing call" \
+  "$(grep -c 'repos/o/r/issues?' "$ARGV")" "1"
+
 # --- 10. poller.sh still delegates; no second pickup query ------------------
 # Issue #99 converged the two pickup searches into one. This guards that
 # convergence AND the #133 move: an inline pickup in poller.sh would be both a
