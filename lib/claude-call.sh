@@ -126,6 +126,44 @@ RUN_ISSUES_CLAUDE_MODEL="${RUN_ISSUES_CLAUDE_MODEL:-}"
 # vocabulary is not assumed. Empty = no flag.
 RUN_ISSUES_CLAUDE_FALLBACK_MODEL="${RUN_ISSUES_CLAUDE_FALLBACK_MODEL:-}"
 
+# ---------- per-phase model and effort (issue #306) ----------
+# RUN_ISSUES_CLAUDE_MODEL_<PHASE> and RUN_ISSUES_CLAUDE_EFFORT_<PHASE> override
+# the general RUN_ISSUES_CLAUDE_MODEL / RUN_ISSUES_CLAUDE_EFFORT for one phase;
+# the general value overrides the CLI's own default. Empty = not set (falls
+# through). The per-phase names are read INDIRECTLY at call time, never as
+# source-time ${VAR:-} defaults, so a machine env file sourced after this module
+# still reaches them (CLAUDE.md §5.5's timing trap).
+#
+# Accepted --effort values. Anything else is logged once per call and dropped
+# rather than handed to the CLI, which would fail the whole step on it.
+RUN_ISSUES_CLAUDE_EFFORT_VALUES="low medium high xhigh max"
+
+# _claude_step_phase <step-id> — the ONE place a step id maps to a phase name.
+# Prefix match, so a suffixed id of the same step keeps its phase. Unknown ids
+# print nothing: the general settings apply.
+_claude_step_phase() {
+  case "$1" in
+    01-cycle-review*)        printf 'CYCLE_REVIEW' ;;
+    02-implementer*)         printf 'IMPLEMENTER' ;;
+    03-evolution*)           printf 'EVOLUTION' ;;
+    04-conflict-resolution*) printf 'CONFLICT' ;;
+    05-ci-repair*)           printf 'CI_REPAIR' ;;
+  esac
+}
+
+# _claude_phase_var <base-var> <phase> — print the NAME of the variable whose
+# value wins (<base-var>_<phase> if non-empty, else <base-var> if non-empty),
+# or nothing. A name rather than a value so a warning can say which setting it
+# is about. Shared by model and effort so the precedence exists once.
+_claude_phase_var() {
+  local base="$1" phase="$2" name
+  if [ -n "$phase" ]; then
+    name="${base}_${phase}"
+    if [ -n "${!name:-}" ]; then printf '%s' "$name"; return 0; fi
+  fi
+  if [ -n "${!base:-}" ]; then printf '%s' "$base"; fi
+}
+
 # ---------- always-on system prompt: contract + coding standard ----------
 # Every orchestrated step gets the package's coding standard as an APPENDED
 # system prompt. Before this, only 01-cycle-review.md injected anything
@@ -509,18 +547,46 @@ call_claude() {
   local timeout_prefix
   timeout_prefix=$(_resolve_timeout)
 
+  local phase model_var model="" effort_var effort=""
+  phase=$(_claude_step_phase "$step_id")
+  model_var=$(_claude_phase_var RUN_ISSUES_CLAUDE_MODEL "$phase")
+  [ -n "$model_var" ] && model="${!model_var}"
+  effort_var=$(_claude_phase_var RUN_ISSUES_CLAUDE_EFFORT "$phase")
+  [ -n "$effort_var" ] && effort="${!effort_var}"
+
   # An ARRAY, not a word-split string: a context-window alias such as opus[1m]
   # is a glob bracket expression, and unquoted it would expand to any matching
   # file name in the working directory.
   local -a model_args=()
-  if [ -n "$RUN_ISSUES_CLAUDE_MODEL" ]; then
-    model_args=(--model "$RUN_ISSUES_CLAUDE_MODEL")
-    case "$RUN_ISSUES_CLAUDE_MODEL" in
+  if [ -n "$model" ]; then
+    model_args=(--model "$model")
+    case "$model" in
       claude-*)
-        _claude_call_log "WARNING: RUN_ISSUES_CLAUDE_MODEL=$RUN_ISSUES_CLAUDE_MODEL is a versioned model id — it pins that version and will not move to a newer model; use a family alias (opus, sonnet, haiku) unless the pin is deliberate"
+        _claude_call_log "WARNING: $model_var=$model is a versioned model id — it pins that version and will not move to a newer model; use a family alias (opus, sonnet, haiku) unless the pin is deliberate"
         ;;
     esac
   fi
+
+  # --effort is native CLI vocabulary (same gate as --fallback-model below). An
+  # unknown value is a warning and no flag — never a failed step.
+  local -a effort_args=()
+  if [ -n "$effort" ]; then
+    case " $RUN_ISSUES_CLAUDE_EFFORT_VALUES " in
+      *" $effort "*)
+        if claude_cmd_is_native; then
+          effort_args=(--effort "$effort")
+        else
+          _claude_call_log "$effort_var=$effort not passed: --effort is native CLI vocabulary and RUN_ISSUES_CLAUDE_CMD is an overridden driver"
+          effort=""
+        fi
+        ;;
+      *)
+        _claude_call_log "WARNING: $effort_var=$effort is not a known effort ($RUN_ISSUES_CLAUDE_EFFORT_VALUES) — --effort omitted"
+        effort=""
+        ;;
+    esac
+  fi
+  _claude_call_log "step $step_id${phase:+ (phase $phase)}: model=${model:-CLI default}${model_var:+ from $model_var} effort=${effort:-CLI default}${effort:+ from $effort_var}"
 
   # An ARRAY for the same reason: this one carries a
   # filesystem path, and a repo or operator may legitimately keep the package
@@ -585,7 +651,7 @@ call_claude() {
       "$(date -u +%FT%TZ)" >&2
   fi
   # shellcheck disable=SC2206  # deliberate word-split of multi-token settings
-  cmd=($timeout_prefix $RUN_ISSUES_CLAUDE_CMD ${model_args[@]+"${model_args[@]}"} ${fallback_args[@]+"${fallback_args[@]}"})
+  cmd=($timeout_prefix $RUN_ISSUES_CLAUDE_CMD ${model_args[@]+"${model_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} ${fallback_args[@]+"${fallback_args[@]}"})
 
   local use_profiles=0 profile="" profile_path="" tried="" token
   local last_deadline="" last_source=""
