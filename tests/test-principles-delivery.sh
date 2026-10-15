@@ -598,5 +598,47 @@ if [ -n "$(setting_sources_value)" ]; then bad r "--setting-sources reached an o
 grep -q 'left to the overridden driver' "$WORK/stderr.txt" || { bad r "the override case is not logged"; R_OK=0; }
 [ "$R_OK" = "1" ] && ok r "overridden driver -> no plugin-context flags (default-driver seam holds)"
 
+# ===========================================================================
+# (s) the native CLI pinned by ABSOLUTE PATH is still the default driver
+# ===========================================================================
+# Production pins RUN_ISSUES_CLAUDE_CMD to an absolute path because launchd's
+# PATH lacks ~/.local/bin. A plain string comparison against the packaged
+# 'claude' classified that as an override and silently skipped the #282
+# isolation on the machine that runs the factory. A stub named exactly `claude`
+# in its own directory reproduces it; DEFAULT stays the packaged 'claude'.
+ABS="$WORK/abs-bin"; mkdir -p "$ABS"
+ln -sf "$BIN/claude-stub" "$ABS/claude"
+RC=$(invoke "RUN_ISSUES_CLAUDE_CMD='$ABS/claude'")
+S_OK=1
+[ "$RC" = "0" ] || { bad s "call_claude returned $RC (want 0)"; S_OK=0; }
+has_strict_mcp || { bad s "no --strict-mcp-config for an absolute-path claude"; S_OK=0; }
+[ "$(setting_sources_value)" = "project,local" ] \
+  || { bad s "setting-sources='$(setting_sources_value)' for an absolute-path claude (want project,local)"; S_OK=0; }
+grep -q 'plugin context declared' "$WORK/stderr.txt" \
+  || { bad s "absolute-path claude was logged as an overridden driver"; S_OK=0; }
+[ "$S_OK" = "1" ] && ok s "absolute-path claude -> treated as the native CLI (isolation declared)"
+
+# ===========================================================================
+# (t) claude_cmd_is_native classifies the documented invocation shapes
+# ===========================================================================
+native_verdict() {  # <cmd> -> native|override
+  (
+    # shellcheck disable=SC1090
+    . "$LIB"
+    RUN_ISSUES_CLAUDE_CMD="$1"
+    if claude_cmd_is_native; then echo native; else echo override; fi
+  ) 2>/dev/null
+}
+T_OK=1
+for case_ in "claude|native" "/opt/any/bin/claude|native" \
+             "npx --no-install @anthropic-ai/claude-code|override" \
+             "/home/u/.local/bin/claude-toshllm|override" \
+             "/usr/bin/env claude|override" "/x/claude-stub|override"; do
+  cmd="${case_%|*}"; want="${case_##*|}"
+  got=$(native_verdict "$cmd")
+  [ "$got" = "$want" ] || { bad t "'$cmd' -> $got (want $want)"; T_OK=0; }
+done
+[ "$T_OK" = "1" ] && ok t "claude_cmd_is_native: default and absolute-path claude native, wrappers and multi-token overrides"
+
 [ "$FAIL" -eq 0 ] && echo "principles-delivery: all passed" || echo "principles-delivery: FAILURES"
 exit "$FAIL"

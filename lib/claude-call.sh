@@ -82,6 +82,34 @@ claude_call_timeout() {
 RUN_ISSUES_CLAUDE_CMD_DEFAULT='claude'
 RUN_ISSUES_CLAUDE_CMD="${RUN_ISSUES_CLAUDE_CMD:-$RUN_ISSUES_CLAUDE_CMD_DEFAULT}"
 
+# claude_cmd_is_native — is RUN_ISSUES_CLAUDE_CMD the Claude Code CLI itself,
+# whose flag vocabulary we know, rather than the operator's own driver? Asked by
+# the plugin-context declaration in call_claude.
+#
+# Deliberately NOT the question the S0 preflight probe and the CI-repair
+# preflight (pr-watch.sh) ask. They compare against RUN_ISSUES_CLAUDE_CMD_DEFAULT
+# exactly, because theirs is "did the user accept our invocation?" — only then
+# may we fire `--version` at it; any explicit value gets the `have` check. The
+# isolation flags ask "does this command speak Claude Code's flags?", and an
+# absolute path to the same binary does.
+#
+# True for the packaged default and for a single-token path whose basename is
+# exactly `claude`. The second case is the same binary pinned by absolute path —
+# launchd's PATH lacks ~/.local/bin, so a production machine typically sets
+# RUN_ISSUES_CLAUDE_CMD=/Users/<user>/.local/bin/claude. Comparing strings alone
+# classified that as an override, which silently skipped the #282 plugin-context
+# isolation on exactly the machine that runs the factory. A wrapper under any
+# other name (docs/local-llm-runner.md's claude-toshllm) and any multi-token
+# invocation stay overrides.
+claude_cmd_is_native() {
+  local cmd="$RUN_ISSUES_CLAUDE_CMD"
+  [ "$cmd" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ] && return 0
+  case "$cmd" in
+    *[[:space:]]*) return 1 ;;
+  esac
+  [ "${cmd##*/}" = "claude" ]
+}
+
 # Optional model override. When set, passes --model <value> to the claude CLI.
 # Without this the CLI uses its configured default (currently claude-fable-5).
 # Set in ~/.config/run-issues/env to pin to a stable model and prevent a
@@ -509,14 +537,14 @@ call_claude() {
   # whole reason this module defaults to the native `claude` command: routing usage
   # through the Claude plan instead of API billing (see RUN_ISSUES_CLAUDE_CMD_DEFAULT).
   #
-  # Gated on the SAME default-driver seam as the S0 preflight probe (orchestrate.sh)
-  # and the CI-repair preflight (pr-watch.sh): an overridden RUN_ISSUES_CLAUDE_CMD
+  # Gated on claude_cmd_is_native (see there for why the preflight probes ask a
+  # narrower question): any other RUN_ISSUES_CLAUDE_CMD
   # is the operator's own driver (e.g. a local-LLM wrapper, docs/local-llm-runner.md)
   # whose flag vocabulary we must not assume — the same rule that keeps --version off
   # an override. Logged (not just applied) so the chosen context is readable from the
   # run trace, not only from this source: undeclaredness is the whole point of #282.
   local -a plugin_context_args=()
-  if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
+  if claude_cmd_is_native; then
     # `project,local` is a SINGLE element: --setting-sources takes one
     # comma-separated value, so the comma is deliberate, not an array separator.
     # shellcheck disable=SC2054
