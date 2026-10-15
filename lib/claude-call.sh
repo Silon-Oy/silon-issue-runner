@@ -110,12 +110,21 @@ claude_cmd_is_native() {
   [ "${cmd##*/}" = "claude" ]
 }
 
-# Optional model override. When set, passes --model <value> to the claude CLI.
-# Without this the CLI uses its configured default (currently claude-fable-5).
-# Set in ~/.config/run-issues/env to pin to a stable model and prevent a
-# single model's availability window from stalling the factory for 3600 s.
-# Example: RUN_ISSUES_CLAUDE_MODEL=claude-opus-4-8
+# Optional model override. When set, passes --model <value> to the claude CLI;
+# empty means the CLI's own configured default.
+# Recommended: a FAMILY alias (opus, sonnet, haiku — optionally with a context
+# window suffix such as opus[1m]), so a new model version is picked up without a
+# configuration change. A versioned id (claude-<family>-<version>) still works
+# but pins the version; call_claude logs one warning line per call saying so. It
+# is kept as an emergency brake for when a new model turns out to be a problem.
 RUN_ISSUES_CLAUDE_MODEL="${RUN_ISSUES_CLAUDE_MODEL:-}"
+
+# Optional fallback model, passed as --fallback-model <value> — the CLI switches
+# to it when the primary model is unavailable. This, not a pinned version, is what
+# keeps one model's availability window from stalling the factory for 3600 s.
+# Native CLI only (claude_cmd_is_native): an operator's own driver's flag
+# vocabulary is not assumed. Empty = no flag.
+RUN_ISSUES_CLAUDE_FALLBACK_MODEL="${RUN_ISSUES_CLAUDE_FALLBACK_MODEL:-}"
 
 # ---------- always-on system prompt: contract + coding standard ----------
 # Every orchestrated step gets the package's coding standard as an APPENDED
@@ -500,10 +509,20 @@ call_claude() {
   local timeout_prefix
   timeout_prefix=$(_resolve_timeout)
 
-  local model_flag=""
-  [ -n "$RUN_ISSUES_CLAUDE_MODEL" ] && model_flag="--model $RUN_ISSUES_CLAUDE_MODEL"
+  # An ARRAY, not a word-split string: a context-window alias such as opus[1m]
+  # is a glob bracket expression, and unquoted it would expand to any matching
+  # file name in the working directory.
+  local -a model_args=()
+  if [ -n "$RUN_ISSUES_CLAUDE_MODEL" ]; then
+    model_args=(--model "$RUN_ISSUES_CLAUDE_MODEL")
+    case "$RUN_ISSUES_CLAUDE_MODEL" in
+      claude-*)
+        _claude_call_log "WARNING: RUN_ISSUES_CLAUDE_MODEL=$RUN_ISSUES_CLAUDE_MODEL is a versioned model id — it pins that version and will not move to a newer model; use a family alias (opus, sonnet, haiku) unless the pin is deliberate"
+        ;;
+    esac
+  fi
 
-  # An ARRAY, not a word-split string like model_flag: this one carries a
+  # An ARRAY for the same reason: this one carries a
   # filesystem path, and a repo or operator may legitimately keep the package
   # somewhere with a space in it. The ${arr[@]+"${arr[@]}"} form expands to zero
   # words when empty without tripping `set -u` on bash 3.2 (macOS system bash).
@@ -554,13 +573,19 @@ call_claude() {
     _claude_call_log "plugin context left to the overridden driver: RUN_ISSUES_CLAUDE_CMD=$RUN_ISSUES_CLAUDE_CMD"
   fi
 
+  # Same gate, same reason: --fallback-model is native CLI vocabulary.
+  local -a fallback_args=()
+  if [ -n "$RUN_ISSUES_CLAUDE_FALLBACK_MODEL" ] && claude_cmd_is_native; then
+    fallback_args=(--fallback-model "$RUN_ISSUES_CLAUDE_FALLBACK_MODEL")
+  fi
+
   local -a cmd=()
   if [ -z "$timeout_prefix" ]; then
     printf '[claude-call %s] WARNING: no timeout binary available (timeout/gtimeout), claude calls may hang indefinitely — install coreutils (brew install coreutils)\n' \
       "$(date -u +%FT%TZ)" >&2
   fi
   # shellcheck disable=SC2206  # deliberate word-split of multi-token settings
-  cmd=($timeout_prefix $RUN_ISSUES_CLAUDE_CMD $model_flag)
+  cmd=($timeout_prefix $RUN_ISSUES_CLAUDE_CMD ${model_args[@]+"${model_args[@]}"} ${fallback_args[@]+"${fallback_args[@]}"})
 
   local use_profiles=0 profile="" profile_path="" tried="" token
   local last_deadline="" last_source=""

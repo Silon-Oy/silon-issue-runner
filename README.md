@@ -533,10 +533,9 @@ repossa on oma työnsä siinä repossa.
 
 ## 5. Ympäristömuuttujat (asennus- ja konfigurointiaika)
 
-Alla vain ne muuttujat, jotka ihminen tosiasiassa asettaa ennen ensimmäistä ajoa. **Täysi
-lista kaikista muuttujista on [`docs/env-reference.md`](docs/env-reference.md):ssä** — sitä ei
-toisteta tässä, jotta kaksi listaa ei ajaudu erilleen. Lähde on koodin `${VAR:-oletus}` ja
-skriptin `# Env:`-otsikkokommentti.
+Alla vain ne muuttujat, jotka ihminen asettaa ennen ensimmäistä ajoa. **Täysi
+lista kaikista muuttujista on [`docs/env-reference.md`](docs/env-reference.md):ssä**, jonka
+lähde on koodin `${VAR:-oletus}`.
 
 ### Orkestraattori
 
@@ -545,6 +544,8 @@ skriptin `# Env:`-otsikkokommentti.
 | `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Salaisuustiedoston polku |
 | `RUN_ISSUES_CLAUDE_CMD` | `claude` | Claude-CLI:n kutsu. npm-paketti ⇒ npx-kutsu, ks. osio 3.2 |
 | `RUN_ISSUES_CLAUDE_TIMEOUT` | `3600` | Aikabudjetti per claude-kutsu |
+| `RUN_ISSUES_CLAUDE_MODEL` | *(CLI:n oletus)* | Perhealias `opus`/`sonnet`/`haiku`, ei versiotunnusta |
+| `RUN_ISSUES_CLAUDE_FALLBACK_MODEL` | *(ei)* | Varamalli saatavuuskatkoon |
 | `RUN_ISSUES_PR_LABELS_CSV` | `auto-merge` | Issuelta PR:lle kopioitavat labelit (6.3) |
 | `RUN_ISSUES_MAX_RETRIES` | `1` | Montako kertaa aikakatkaistu ajo yritetään uudelleen (6.6 d) |
 | `RUN_ISSUES_MAX_CLARIFICATIONS` | `3` | Tarkennuskierrosten katto (6.6 c) |

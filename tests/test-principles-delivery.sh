@@ -46,7 +46,7 @@
 #       default), never an error.
 #   (i) nothing configured and BOTH packaged pages missing -> no flag, no crash.
 #   (j) a run-dir containing a space survives as ONE argv element (the reason the
-#       flag is built as an array and not word-split like model_flag).
+#       flag is built as an array and not word-split).
 #   (k) structural: every orchestrated step routes through call_claude, so all
 #       five call sites are covered by one seam.
 #   (l) sourcing lib/claude-call.sh leaves RUN_ISSUES_PRINCIPLES_FILE UNSET.
