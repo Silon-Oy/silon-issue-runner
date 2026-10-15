@@ -51,7 +51,7 @@
 #
 # Exit codes (own space):
 #   0  report produced (also when there are no findings)
-#   1  usage error (unknown flag / bad value)
+#   1  usage error (unknown flag / bad value), or --out is not writable
 #   2  no watchlist, no readable repo on disk, or jq missing
 #   3  --claude grouping failed — the deterministic report was produced instead
 #
@@ -254,7 +254,6 @@ render_human() {
 }
 
 # emit can fail (unwritable --out); with pipefail the pipeline reports it.
-
 emit() {
   if [ -n "$OUT_FILE" ]; then
     cat > "$OUT_FILE" || { printf 'evolution-digest.sh: cannot write %s\n' "$OUT_FILE" >&2; return 1; }
