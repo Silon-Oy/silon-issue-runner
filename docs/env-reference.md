@@ -243,7 +243,7 @@ joten sen arvot ovat oletuksia joita lippu yhä ohittaa.
 |---|---|---|
 | `RUN_ISSUES_DIGEST_ENV_FILE` | `$HOME/.config/run-issues/digest.env` | Ensin sourcettava konfiguraatiotiedosto. Puuttuva = oletukset. **Ei salaisuuksia** — `gws` kantaa omat tunnisteensa |
 | `RUN_ISSUES_DIGEST_TO` | *(tyhjä)* | Vastaanottaja(t), pilkuin. `--to` ohittaa. Tyhjä (eikä `--to`) ⇒ runko stdoutiin |
-| `RUN_ISSUES_DIGEST_MAX_SILENCE` | `7` | Hiljaisuusraja vuorokausina: muuttumatonkin tilanne lähetetään tämän jälkeen (hiljaisuus ≠ rikki). `--max-silence` ohittaa; `0` poistaa heartbeatin. Mitataan aina aiempaa lähetystä/baselinea vasten (epoch 0 = ensiajo ≠ ylitys) |
+| `RUN_ISSUES_DIGEST_MAX_SILENCE` | `7` | Hiljaisuusraja vuorokausina: muuttumatonkin tilanne lähetetään tämän jälkeen (hiljaisuus ≠ rikki). `--max-silence` ohittaa; `0` poistaa heartbeatin. Mitataan aina aiempaa lähetystä/baselinea vasten (epoch 0 = ensiajo ≠ ylitys). Sama ikkuna rajaa koosteen vaiheittaiset kulutusmediaanit (#307); `0` ⇒ 7 vrk |
 | `RUN_ISSUES_DIGEST_MIN_CLASS` | `stalled` | Alin mukaan otettava luokka: `attention` (vain ihmistä vaativat) tai `stalled` (attention + jumittuneet/orvot). `--min-class` ohittaa |
 | `RUN_ISSUES_DIGEST_MAX_ROWS` | `10` | Rivikatto per `class_reason`-ryhmä ennen "…ja M muuta" |
 | `RUN_ISSUES_DIGEST_SUBJECT_PREFIX` | `run-issues -kooste` | Otsikon etuliite |

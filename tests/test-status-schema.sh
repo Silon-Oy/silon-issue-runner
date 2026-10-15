@@ -77,6 +77,16 @@ JSON
 printf '{"event":"claude_started","ts":"2026-01-01T00:01:00Z","data":{}}\n' \
   > "$RUNS/20260101-000000-issue-6/state.jsonl"
 
+# Archived runs (issue #307): a recently touched one with usage reaches
+# recent_usage[]; an old one and a broken one do not, and neither becomes a run
+# or a read_error.
+ARCH="$REPO/.claude/run-issues-archive"
+mkdir -p "$ARCH/a-recent" "$ARCH/a-old" "$ARCH/a-broken"
+printf '{"run_id":"a-recent","issue_number":9,"status":"merged","finished_at":"2026-06-02T00:00:00Z","usage":{"02-implementer":{"calls":1,"input_tokens":5}}}\n' > "$ARCH/a-recent/run.json"
+printf '{"run_id":"a-old","status":"merged","usage":{"02-implementer":{"calls":1}}}\n' > "$ARCH/a-old/run.json"
+touch -t 202001010000 "$ARCH/a-old/run.json"
+printf '{"run_id":"a-broken",' > "$ARCH/a-broken/run.json"
+
 WL="$FX/watchlist.json"
 cat > "$WL" <<JSON
 {"global_max_concurrent":2,"default_labels":["auto-run"],"repos":[{"path":"$REPO","labels":["auto-run"],"remotes":["origin"]}]}
@@ -90,7 +100,7 @@ check "exit code clean" "$rc" "0"
 if jq -e . "$OUT" >/dev/null 2>&1; then ok "output is valid JSON"; else bad "output is not valid JSON"; fi
 
 # ---- top-level required keys ----
-for k in schema_version generated_at host stale_after_seconds runner enrichment sources totals runs epics read_errors; do
+for k in schema_version generated_at host stale_after_seconds runner enrichment sources totals runs recent_usage epics read_errors; do
   if jq -e "has(\"$k\")" "$OUT" >/dev/null 2>&1; then ok "top-level key: $k"; else bad "missing top-level key: $k"; fi
 done
 
@@ -125,10 +135,19 @@ check "epics is an array" "$(jq -r '.epics | type' "$OUT")" "array"
 check "epics empty in local mode" "$(jq '.epics | length' "$OUT")" "0"
 
 # ---- every run carries the required fields ----
-REQUIRED_FIELDS='["run_id","run_dir","repo_path","repo_slug","owner_repo","remote","issue_number","issue_url","host","is_local","status","blocked_reason","current_state","cycle_review_decision","started_at","finished_at","awaiting_answer_since","age_seconds","idle_seconds","retry_count","clarification_round","branch","worktree_path","worktree_exists","pr_url","pr_number","pr_local_verdict","pr_local_verdict_at","session_alive","lock_held","class","class_reason","class_confidence","schema_gaps","github"]'
+REQUIRED_FIELDS='["run_id","run_dir","repo_path","repo_slug","owner_repo","remote","issue_number","issue_url","host","is_local","status","blocked_reason","current_state","cycle_review_decision","started_at","finished_at","awaiting_answer_since","age_seconds","idle_seconds","retry_count","clarification_round","branch","worktree_path","worktree_exists","pr_url","pr_number","usage","pr_local_verdict","pr_local_verdict_at","session_alive","lock_held","class","class_reason","class_confidence","schema_gaps","github"]'
 MISSING="$(jq -r --argjson req "$REQUIRED_FIELDS" '
   [ .runs[] | keys as $k | ($req - $k) ] | add // [] | unique | join(",")' "$OUT")"
 check "every run has all required fields" "$MISSING" ""
+
+# ---- recent_usage[]: archived run.json usage, by mtime (issue #307) ----
+check "recent_usage holds only the recent archived run" \
+  "$(jq -r '[.recent_usage[].run_id] | join(",")' "$OUT")" "a-recent"
+check "recent_usage carries the usage object" \
+  "$(jq -r '.recent_usage[0].usage["02-implementer"].input_tokens' "$OUT")" "5"
+check "archived runs never become runs[]" \
+  "$(jq -r '[.runs[] | select(.run_id | startswith("a-"))] | length' "$OUT")" "0"
+check "broken archived run.json is not a read_error" "$(jq '.read_errors | length' "$OUT")" "0"
 
 # ---- github is ALWAYS null in local mode ----
 NON_NULL_GH="$(jq '[.runs[] | select(.github != null)] | length' "$OUT")"

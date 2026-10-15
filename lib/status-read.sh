@@ -76,6 +76,7 @@ _STATUS_NORMALIZE_JQ='
       branch: (.branch // null),
       worktree_path: (.worktree_path // null),
       pr_url: (.pr_url // null),
+      usage: (.usage // null),
       schema_gaps: ([
         (if (.remote // null) == null then "remote" else empty end),
         (if (.repo_slug // null) == null then "repo_slug" else empty end),

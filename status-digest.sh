@@ -299,6 +299,49 @@ build_body() {
     | join("\n")'
 }
 
+# ---- per-step token medians (issue #307) ----
+# Source is each run's run.json .usage, carried by status.sh in runs[] (live
+# run-dirs) and recent_usage[] (recently archived ones) — never state.jsonl
+# (CLAUDE.md §5.3). "The period" is the heartbeat window: runs whose
+# finished_at (else started_at) lies within --max-silence days of the input's
+# generated_at (7 when the heartbeat is off). One sample per run and step; an
+# "unknown" counter is left out of that counter's median, not counted as 0.
+# Deliberately NOT part of the fingerprint: consumption is context for the
+# reader, not news that should trigger a send on its own.
+USAGE_DAYS="$MAX_SILENCE"
+[ "$USAGE_DAYS" -gt 0 ] || USAGE_DAYS=7
+
+build_usage_section() {
+  printf '%s' "$INPUT" | jq -r --argjson days "$USAGE_DAYS" '
+    def _epoch: (try fromdateiso8601 catch null);
+    def median: sort | length as $n
+      | if $n == 0 then null
+        elif $n % 2 == 1 then .[($n - 1) / 2]
+        else ((.[$n / 2 - 1] + .[$n / 2]) / 2 | floor) end;
+    def thousands: tostring as $s | ($s | length) as $n
+      | [range(0; $n) | $s[.:.+1] + (if ($n - . - 1) > 0 and (($n - . - 1) % 3) == 0 then " " else "" end)]
+      | join("");
+    def fmt: if . == null then "?" else thousands end;
+    ((.generated_at // "") | _epoch) as $now
+    | if $now == null then empty else
+      ([(.runs // [])[], (.recent_usage // [])[]]
+       | map(select(.usage != null))
+       | unique_by(.run_id)
+       | map(select(((.finished_at // .started_at // "") | _epoch) as $t
+                    | $t != null and ($now - $t) <= ($days * 86400)))) as $runs
+      | [$runs[] | .usage | to_entries[]] | group_by(.key) as $steps
+      | if ($steps | length) == 0 then empty else
+          (["Kulutus vaiheittain (\($runs | length) ajoa, viimeiset \($days) vrk; mediaani tokeneina per ajo):"]
+           + [$steps[]
+              | .[0].key as $step
+              | map(.value) as $v
+              | def med($k): [$v[] | .[$k] | select(type == "number")] | median | fmt;
+                "    \($step)  n=\($v | length)  syöte \(med("input_tokens"))  tuloste \(med("output_tokens"))  välimuistiluku \(med("cache_read_input_tokens"))  välimuistikirjoitus \(med("cache_creation_input_tokens"))"]
+           + [""]) | join("\n")
+        end
+      end'
+}
+
 # ---- write the fingerprint state atomically (fp on line 1, send epoch on 2) ----
 write_state() {
   local sent_epoch="$1" dir tmp
@@ -324,6 +367,9 @@ if [ "$SHOULD_SEND" -eq 0 ]; then
 fi
 
 BODY="$(build_body)"
+USAGE_SECTION="$(build_usage_section 2>/dev/null || true)"
+[ -n "$USAGE_SECTION" ] && BODY="$BODY
+$USAGE_SECTION"
 
 # An active GitHub backoff OWNS the subject line (issue #126). A rate-limited
 # factory produces no new attention runs, so N_SELECTED is typically 0 and the

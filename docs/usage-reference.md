@@ -573,6 +573,22 @@ Samalla periaatteella objekti kertoo **Clauden käyttörajan** (#294): `usage_li
 `usage_limit_wait_seconds` ovat `null`, ellei raja ole juuri nyt voimassa, ja sivu näyttää silloin
 oman bannerinsa (käsittelytapa: käyttötapaus d2).
 
+**Kulutus vaiheittain (#307).** Jokainen natiivi Claude-kutsu käynnistetään omalla
+`--session-id`:llä, ja kutsun jälkeen sen transkriptista
+(`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/*/<sessio>.jsonl`) luetaan todellinen malli ja
+token-kulutus. Ne summataan `run.json`in `usage`-objektiin vaiheen tunnisteella (esim.
+`02-implementer`): `model` ja `effort` (pilkuin eroteltu joukko, jos vaihe ajettiin useammalla),
+`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`,
+`assistant_turns`, `duration_seconds` ja `calls`. Uudelleenkäynnistetyn vaiheen kulutus
+**summautuu**. Kirjaus on best effort: puuttuva tai lukukelvoton transkripti kirjataan arvolla
+`unknown` (joka pysyy summassa `unknown`ina, koska vajaa summa ei ole summa), eikä ajo kaadu.
+Omalle ajurille (`RUN_ISSUES_CLAUDE_CMD` ei ole natiivi CLI) kulutusta ei kirjata; siitä jää yksi
+lokirivi per kutsu. `status.sh --json` kantaa `usage`n jokaisessa `runs[]`-rivissä sekä
+top-level-listassa `recent_usage[]` viimeisen 31 vrk:n aikana arkistoiduille ajoille, koska
+valmis ajo siirtyy arkistoon tunneissa. `status-digest.sh` laskee niistä vaiheittaiset
+token-mediaanit `--max-silence`-ikkunan ajoista (oletus 7 vrk) ja liittää ne koosteen loppuun.
+Kulutus ei vaikuta sormenjälkeen, joten se ei yksin laukaise lähetystä.
+
 Sivu näyttää versiotilan yläosassa **vain kun se ei ole `up_to_date`**, suomenkielisin selittein. `pin_pending`
 on **neutraali**, ei varoitus: sen sanamuoto kertoo että tila korjaantuu itsestään. Erottelu on
 olemassa siksi, että ennen kaikki kolme muuta-kuin-tasan-tilaa tuottivat saman pollerilokirivin, joka

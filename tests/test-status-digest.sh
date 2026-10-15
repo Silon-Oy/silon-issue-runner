@@ -275,6 +275,43 @@ else
   echo "SKIP: timeout not installed (large-input regression)"
 fi
 
+# ---- per-step token medians from run.json .usage (issue #307) ----
+# Three live runs and one archived (recent_usage[]) inside the 7-day window, one
+# run outside it, one duplicate of a live run in the archive, and one "unknown"
+# counter that must drop out of its median rather than count as zero.
+FXU="$FX/usage.json"
+jq -n '
+  def u($i; $o): {"02-implementer": {calls: 1, model: "m", effort: "high",
+    input_tokens: $i, output_tokens: $o, cache_read_input_tokens: 1000000,
+    cache_creation_input_tokens: 5, assistant_turns: 3, duration_seconds: 60}};
+  {schema_version: 1, generated_at: "2026-08-11T20:00:00Z", host: "example-host",
+   totals: {degraded: false}, read_errors: [],
+   runs: [
+     {run_id: "r1", class: "cleanup", class_reason: "pr_not_open", finished_at: "2026-08-10T00:00:00Z", usage: u(10; 100)},
+     {run_id: "r2", class: "cleanup", class_reason: "pr_not_open", finished_at: "2026-08-09T00:00:00Z",
+      usage: (u(20; 300) + {"01-cycle-review": {input_tokens: 7, output_tokens: "unknown", cache_read_input_tokens: 1, cache_creation_input_tokens: 1}})},
+     {run_id: "old", class: "cleanup", class_reason: "pr_not_open", finished_at: "2026-07-01T00:00:00Z", usage: u(999999; 999999)},
+     {run_id: "nousage", class: "cleanup", class_reason: "pr_not_open", finished_at: "2026-08-10T00:00:00Z", usage: null}
+   ],
+   recent_usage: [
+     {run_id: "a1", finished_at: "2026-08-11T00:00:00Z", usage: u(30; 200)},
+     {run_id: "r1", finished_at: "2026-08-10T00:00:00Z", usage: u(10; 100)},
+     {run_id: "a2", finished_at: null, started_at: "2026-08-11T10:00:00Z", usage: u(40; 400)}
+   ]}' > "$FXU"
+rm -f "$STATE"
+run "$FXU" --force
+check "usage: exit 0" "$RC" "0"
+case "$OUT" in *"Kulutus vaiheittain (4 ajoa, viimeiset 7 vrk"*) ok "usage: 4 runs in window (old + duplicate excluded)" ;; *) bad "usage header: $OUT" ;; esac
+IMPL_LINE="$(printf '%s\n' "$OUT" | grep '02-implementer')"
+case "$IMPL_LINE" in *"n=4  syöte 25  tuloste 250  välimuistiluku 1 000 000  välimuistikirjoitus 5"*) ok "usage: even-n medians + thousands" ;; *) bad "usage implementer line: [$IMPL_LINE]" ;; esac
+CR_LINE="$(printf '%s\n' "$OUT" | grep '01-cycle-review')"
+case "$CR_LINE" in *"n=1  syöte 7  tuloste ?"*) ok "usage: unknown counter -> ? (not 0)" ;; *) bad "usage cycle-review line: [$CR_LINE]" ;; esac
+case "$OUT" in *999*) bad "usage: out-of-window run leaked" ;; *) ok "usage: out-of-window run excluded" ;; esac
+# No usage anywhere -> no section at all (fixture A predates #307).
+rm -f "$STATE"
+run "$FXA" --force
+case "$OUT" in *"Kulutus vaiheittain"*) bad "usage section without data" ;; *) ok "usage: no section without data" ;; esac
+
 # ---- usage errors -> exit 1 ----
 RUN_ISSUES_DIGEST_ENV_FILE="/nonexistent/digest.env" bash "$DIGEST" --min-class bogus < "$FXA" >/dev/null 2>&1; rc=$?
 check "bad --min-class -> exit 1" "$rc" "1"

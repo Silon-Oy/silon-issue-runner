@@ -221,6 +221,14 @@ ABSENT_FILE="$TMPD/absent.txt"
 RUN_JSON_LIST="$TMPD/run_json_list.txt"
 : > "$RUN_JSON_LIST"
 ARCHIVED=0
+# Archived run.json files touched within this many days: their .usage (#307)
+# reaches recent_usage[]. A finished run is torn down into the archive within
+# hours, so without these the digest's per-step medians would see almost no
+# finished run. Selected by mtime (a stat, not a read — §5.4); 31 days covers
+# any sane digest heartbeat window.
+USAGE_ARCHIVE_DAYS=31
+USAGE_ARCHIVE_LIST="$TMPD/usage_archive_list.txt"
+: > "$USAGE_ARCHIVE_LIST"
 
 while IFS= read -r rp; do
   [ -n "$rp" ] || continue
@@ -249,6 +257,8 @@ while IFS= read -r rp; do
       [ -d "$ad" ] || continue
       ARCHIVED=$((ARCHIVED + 1))
     done
+    find "$archive_dir" -mindepth 2 -maxdepth 2 -name run.json -mtime "-$USAGE_ARCHIVE_DAYS" \
+      >> "$USAGE_ARCHIVE_LIST" 2>/dev/null || true
   fi
 done < "$REPO_PATHS_FILE"
 
@@ -282,6 +292,20 @@ if [ "${#RUN_JSON_PATHS[@]}" -gt 0 ]; then
   fi
 fi
 printf '%s' "$NORMALIZED" > "$TMPD/normalized.json"
+
+# ---- recent_usage[]: archived runs' consumption (issue #307) ----
+# Per file, so one broken archived run.json is skipped instead of costing the
+# rest; it is history, not a live run, so it is not a read_error either.
+RECENT_USAGE="$(
+  while IFS= read -r uj; do
+    [ -n "$uj" ] || continue
+    jq -c 'select(type == "object" and .usage != null)
+      | {run_id, repo_slug: (.repo_slug // null), issue_number: (.issue_number // null),
+         started_at: (.started_at // null), finished_at: (.finished_at // null), usage}' \
+      "$uj" 2>/dev/null || true
+  done < "$USAGE_ARCHIVE_LIST" | jq -s -c '.' 2>/dev/null || printf '[]'
+)"
+[ -n "$RECENT_USAGE" ] || RECENT_USAGE="[]"
 
 # read_errors[] as a JSON array (empty when the bulk path succeeded).
 if [ -s "$ERRORS_FILE" ]; then
@@ -907,6 +931,7 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
         worktree_exists: (\$p.worktree_exists // false),
         pr_url: \$r.pr_url,
         pr_number: \$prnum,
+        usage: \$r.usage,
         pr_local_verdict: (\$s.decision // null),
         pr_local_verdict_at: (\$s.pr_ts // null),
         session_alive: (\$p.session_alive // false),
@@ -957,6 +982,7 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
       degraded: (\$read_errors | length > 0)
     },
     runs: \$runs_final,
+    recent_usage: \$recent_usage,
     epics: \$epics,
     read_errors: \$read_errors
   }
@@ -977,6 +1003,7 @@ DOC="$(jq -n \
   --argjson repos_absent "$REPOS_ABSENT" \
   --argjson archived "$ARCHIVED" \
   --argjson read_errors "$READ_ERRORS" \
+  --argjson recent_usage "$RECENT_USAGE" \
   --arg enrich_mode "$ENRICH_MODE" \
   --argjson enrich_fetched_at "$ENRICH_FETCHED_AT" \
   --argjson enrich_cache_age "$ENRICH_CACHE_AGE" \
