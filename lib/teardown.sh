@@ -103,7 +103,8 @@ teardown_branch_prs() {
   [ -n "$owner_repo" ] && route=(--repo "$owner_repo")
   json=$(cd "$repo" && gh pr list --head "$branch" --state all --limit 100 \
            --json state ${route[@]+"${route[@]}"} 2>/dev/null) || return 1
-  jq -er 'if type == "array" then [.[].state | ascii_upcase] | join(",") else error end'     <<<"$json" 2>/dev/null || return 1
+  jq -er 'if type == "array" then [.[].state | ascii_upcase] | join(",") else error end' \
+    <<<"$json" 2>/dev/null || return 1
 }
 
 # _teardown_git_remote <repo> <remote> <git-args…> — run a git command that talks
@@ -129,7 +130,8 @@ _teardown_git_remote() {
 # anything else: the remote could not be read.
 teardown_remote_branch_exists() {
   local repo="$1" remote="$2" branch="$3"
-  _teardown_git_remote "$repo" "$remote" ls-remote --exit-code --heads "$remote" "refs/heads/$branch"     >/dev/null 2>&1
+  _teardown_git_remote "$repo" "$remote" ls-remote --exit-code --heads "$remote" "refs/heads/$branch" \
+    >/dev/null 2>&1
 }
 
 # _teardown_delete_remote_branches <repo> <remote> <dry-run> <branch:reason>…

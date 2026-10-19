@@ -21,16 +21,15 @@
 # Every safety gate lives in lib/teardown.sh, shared with auto-clean.sh. The two
 # verbs differ in five values only: trigger label, skipped label, whether the
 # issue is closed, whether the remote branch is deleted, and the comment wording
-# below.
+# below. Copying the gates per verb would put the safety-critical part of the
+# system in two places, where the second copy drifts silently.
 #
 # WHY THE REMOTE BRANCH TOO (issue #329). The fresh run gets the same branch name
 # as the old one. If a closed PR's branch is still on GitHub, the new run's push
 # is rejected as non-fast-forward and every further reset fails the same way. So
 # the reset deletes the remote branch when all its PRs are MERGED/CLOSED (or it
 # has none and is runner-owned, `auto-run/…`), and refuses (exit 4) while the
-# branch has an OPEN PR — deleting that would close a live PR. Copying the gates per verb
-# would put the safety-critical part of the system in two places, where the
-# second copy drifts silently.
+# branch has an OPEN PR — deleting that would close a live PR.
 #
 # Usage:
 #   auto-reset.sh --repo <repo-root> --issue <N> [--remote <name>] [--dry-run]
