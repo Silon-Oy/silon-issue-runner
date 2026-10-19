@@ -3,12 +3,17 @@
 # run's LOCAL artefacts (issue #202).
 #
 # WHY THIS LAYER EXISTS. There are two teardown VERBS and they differ in exactly
-# four values; everything else — the lock, the run-dir inventory, the completed-run
+# five values; everything else — the lock, the run-dir inventory, the completed-run
 # PR gate, the cleanup-run.sh delegation, the loop-guard label — is identical:
 #
-#   verb         trigger label             skipped label        closes issue?
-#   auto-clean   RUN_ISSUES_CLEAN_LABEL    auto-clean-skipped   yes  (a finishing verb)
-#   auto-reset   RUN_ISSUES_RESET_LABEL    auto-reset-skipped   no   (a re-run verb)
+#   verb         trigger label             skipped label        closes issue?  deletes remote branch?
+#   auto-clean   RUN_ISSUES_CLEAN_LABEL    auto-clean-skipped   yes            no
+#   auto-reset   RUN_ISSUES_RESET_LABEL    auto-reset-skipped   no             yes
+#
+# (the fifth value is the comment wording). auto-reset deletes the remote branch
+# because a reset run gets the SAME branch name (orchestrate.sh derives it from
+# the issue): a leftover branch of a closed PR would reject its S10 push as
+# non-fast-forward, and no number of resets would help (issue #329).
 #
 # Copying the gates per verb would put the safety-critical part of the system in
 # two places, where the second copy drifts silently: a gate that is merely absent
@@ -22,8 +27,15 @@
 #   3. every `completed` run's PR state, read from run.json .pr_url. OPEN — or
 #      unresolvable — protects the run. An unnecessary skip is recoverable; a
 #      torn-down open PR is not.
+#   3b. (TEARDOWN_DELETE_REMOTE_BRANCH=1 only) every run's branch's PRs, read
+#      with `gh pr list --head`. An OPEN PR on the branch — or an unreadable
+#      answer — refuses like gate 3: deleting an open PR's head closes the PR,
+#      and NOT deleting it would replay the same push rejection on the next run.
 #   4. teardown delegated to cleanup-run.sh, which owns the HOW (worktree,
 #      branch, run-dir, DB clone, assignment, labels, lock, archive)
+#   4b. (TEARDOWN_DELETE_REMOTE_BRANCH=1 only) the remote branch is deleted when
+#      every PR on it is MERGED/CLOSED, or it has no PR and is runner-owned
+#      (`auto-run/` prefix). Best effort: a failed delete is logged, not fatal.
 #
 # CONFIGURATION — the caller sets these before calling teardown_run:
 #   TEARDOWN_VERB            log prefix and skipped-label description ("auto-clean")
@@ -31,21 +43,26 @@
 #   TEARDOWN_SKIPPED_LABEL   loop guard added on the non-cleanable terminal cases
 #   TEARDOWN_CLOSE_ISSUE     1 => `gh issue close` on success, 0 => leave it open
 #   TEARDOWN_CLEANUP         absolute path to cleanup-run.sh
+#   TEARDOWN_DELETE_REMOTE_BRANCH  1 => gates 3b/4b on, 0 (default) => off
 #
 # COMMENTS — the caller defines three functions, each printing a Finnish body.
 # They are what makes an outcome layer thin rather than empty: the gates are
 # shared, the words a human reads are not. Context is in the TD_* variables set
 # before the call (TD_ISSUE, TD_REMOTE, TD_HOST, TD_TOTAL, TD_COMPLETED,
-# TD_BLOCKING):
+# TD_BLOCKING, and with gates 3b/4b TD_BRANCH_BLOCKING — the refusing branches,
+# space-separated — and TD_REMOTE_BRANCHES — one "<branch>|<outcome>|<reason>"
+# line per existing remote branch handled at 4b; outcome is deleted, failed or
+# unreadable, reason "all PRs closed/merged" or "no PR, runner-owned"):
 #   teardown_comment_no_rundirs   gate 2 refused
-#   teardown_comment_open_pr      gate 3 refused
+#   teardown_comment_open_pr      gate 3 or 3b refused
 #   teardown_comment_success      teardown done
 #
 # RETURN CODES (the callers map them onto their own exit-code spaces — the spaces
 # are deliberately NOT unified, see CLAUDE.md §6):
 #   0  torn down; trigger label removed
 #   3  per-issue lock held by another run — safe to retry on a later tick
-#   4  a completed run has an OPEN (or unresolvable) PR — skipped label added
+#   4  a completed run has an OPEN (or unresolvable) PR, or (gate 3b) a run's
+#      branch has an OPEN PR or its PRs could not be read — skipped label added
 #   5  no local run-dirs for this issue (cross-machine) — skipped label added
 #   6  cleanup-run.sh teardown failed
 #
@@ -73,6 +90,81 @@ teardown_pr_state() {
   local url="$1"
   [ -n "$url" ] || { printf ''; return 0; }
   gh pr view "$url" --json state --jq '(.state // "") | ascii_upcase' 2>/dev/null || printf ''
+}
+
+# teardown_branch_prs <repo> <owner/repo> <branch> — prints the states of every
+# PR whose head is <branch> (any state), upper-cased and comma-joined; empty when
+# the branch has no PR. Returns 1 on ANY failure (gh missing, network/API error,
+# a non-array answer) so the caller can tell "no PRs" from "could not tell" —
+# gate 3b treats the latter as fail-closed. Read-only.
+teardown_branch_prs() {
+  local repo="$1" owner_repo="$2" branch="$3" json
+  local route=()
+  [ -n "$owner_repo" ] && route=(--repo "$owner_repo")
+  json=$(cd "$repo" && gh pr list --head "$branch" --state all --limit 100 \
+           --json state ${route[@]+"${route[@]}"} 2>/dev/null) || return 1
+  jq -er 'if type == "array" then [.[].state | ascii_upcase] | join(",") else error end'     <<<"$json" 2>/dev/null || return 1
+}
+
+# _teardown_git_remote <repo> <remote> <git-args…> — run a git command that talks
+# to <remote>, authenticated as the GitHub App when the caller has loaded
+# lib/github-app-auth.sh and the remote is origin — the same rule as
+# orchestrate.sh's S10 push, so a branch pushed as the App is deleted as the App.
+# The header lives in a local and goes only into `git -c`, never into a log or
+# .git/config.
+_teardown_git_remote() {
+  local repo="$1" remote="$2"; shift 2
+  local hdr=""
+  if [ "$remote" = "origin" ] && declare -F gha_git_push_header >/dev/null 2>&1; then
+    hdr=$(gha_git_push_header 2>/dev/null) || hdr=""
+  fi
+  if [ -n "$hdr" ]; then
+    git -C "$repo" -c "http.extraheader=$hdr" "$@"
+  else
+    git -C "$repo" "$@"
+  fi
+}
+
+# teardown_remote_branch_exists <repo> <remote> <branch> — rc 0 exists, 2 absent,
+# anything else: the remote could not be read.
+teardown_remote_branch_exists() {
+  local repo="$1" remote="$2" branch="$3"
+  _teardown_git_remote "$repo" "$remote" ls-remote --exit-code --heads "$remote" "refs/heads/$branch"     >/dev/null 2>&1
+}
+
+# _teardown_delete_remote_branches <repo> <remote> <dry-run> <branch:reason>…
+# Gate 4b. Best effort per branch; every outcome is one log line naming the branch
+# and the reason, and (unless the branch was already absent) one
+# TD_REMOTE_BRANCHES line for the caller's comment.
+_teardown_delete_remote_branches() {
+  local repo="$1" remote="$2" dry="$3"; shift 3
+  local entry b why rc
+  TD_REMOTE_BRANCHES=""
+  for entry in "$@"; do
+    b="${entry%%|*}"; why="${entry#*|}"
+    if [ "$dry" = "1" ]; then
+      teardown_log "[dry] would delete remote branch $b on $remote if present (reason: $why)"
+      continue
+    fi
+    if teardown_remote_branch_exists "$repo" "$remote" "$b"; then rc=0; else rc=$?; fi
+    if [ "$rc" -eq 2 ]; then
+      teardown_log "remote branch $b not on $remote — nothing to delete"
+      continue
+    fi
+    if [ "$rc" -ne 0 ]; then
+      teardown_log "WARN: could not read $remote for branch $b (rc=$rc) — remote branch left as is"
+      TD_REMOTE_BRANCHES="${TD_REMOTE_BRANCHES}${b}|unreadable|${why}"$'\n'
+      continue
+    fi
+    if _teardown_git_remote "$repo" "$remote" push "$remote" --delete "$b" >/dev/null 2>&1; then
+      teardown_log "deleted remote branch $b on $remote (reason: $why)"
+      TD_REMOTE_BRANCHES="${TD_REMOTE_BRANCHES}${b}|deleted|${why}"$'\n'
+    else
+      teardown_log "WARN: failed to delete remote branch $b on $remote (reason: $why) — the next run's push may be rejected"
+      TD_REMOTE_BRANCHES="${TD_REMOTE_BRANCHES}${b}|failed|${why}"$'\n'
+    fi
+  done
+  return 0
 }
 
 # _teardown_add_skipped_label <repo> <issue> <owner/repo> <dry-run>
@@ -125,8 +217,8 @@ teardown_run() {
   # Count run-dirs whose run.json .issue_number matches AND whose .remote matches
   # (legacy run.json without .remote is treated as "origin" so the default remote
   # picks them up). bash 3.2 compatible — plain counters.
-  local total=0 completed=0 rj n r s
-  local completed_prs=()
+  local total=0 completed=0 rj n r s x
+  local completed_prs=() branches=() b seen
   TEARDOWN_FORCE=0
   shopt -s nullglob
   for rj in "$runs_dir"/*/run.json; do
@@ -135,6 +227,14 @@ teardown_run() {
     r=$(jq -r '.remote // "origin"' "$rj" 2>/dev/null || echo "origin")
     [ "$r" = "$remote" ] || continue
     total=$((total + 1))
+    # The run's branch, for gates 3b/4b. Empty (legacy run.json) is skipped;
+    # duplicates (several runs of one issue share a name) are kept once.
+    b=$(jq -r '.branch // ""' "$rj" 2>/dev/null || echo "")
+    if [ -n "$b" ]; then
+      seen=0
+      for x in ${branches[@]+"${branches[@]}"}; do [ "$x" = "$b" ] && seen=1; done
+      [ "$seen" = "1" ] || branches+=("$b")
+    fi
     s=$(jq -r '.status // ""' "$rj" 2>/dev/null || echo "")
     if [ "$s" = "completed" ]; then
       completed=$((completed + 1))
@@ -151,6 +251,7 @@ teardown_run() {
     TD_ISSUE="$issue"; TD_REMOTE="$remote"
     TD_HOST="$(runner_host)"
     TD_TOTAL="$total"; TD_COMPLETED="$completed"; TD_BLOCKING=0
+    TD_BRANCH_BLOCKING=""; TD_REMOTE_BRANCHES=""
   }
 
   if [ "$total" -eq 0 ]; then
@@ -215,6 +316,51 @@ teardown_run() {
     TEARDOWN_FORCE=1
   fi
 
+  # ---------- 3b. branch PR gate (opt-in) ----------
+  # Decide BEFORE any teardown what happens to each run's remote branch. Checking
+  # only after cleanup-run.sh would be too late: the issue would already be back
+  # in pickup, and its next run would hit the same push rejection on an open PR's
+  # branch. Entries are "<branch>|<reason>" for gate 4b.
+  local delete_branches=() prs
+  if [ "${TEARDOWN_DELETE_REMOTE_BRANCH:-0}" = "1" ]; then
+    local branch_blocking=""
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if ! prs=$(teardown_branch_prs "$repo" "$owner_repo" "$b"); then
+        branch_blocking="$branch_blocking $b"
+        teardown_log "issue #$issue: PRs of branch $b could not be read — fail-closed, protecting"
+        continue
+      fi
+      case ",$prs," in
+        *,OPEN,*)
+          branch_blocking="$branch_blocking $b"
+          teardown_log "issue #$issue: branch $b has an OPEN PR — protecting it"
+          ;;
+        ,,)
+          case "$b" in
+            auto-run/*) delete_branches+=("$b|no PR, runner-owned") ;;
+            *) teardown_log "issue #$issue: branch $b has no PR and is not runner-owned — remote branch left alone" ;;
+          esac
+          ;;
+        *) delete_branches+=("$b|all PRs closed/merged") ;;
+      esac
+    done
+
+    if [ -n "$branch_blocking" ]; then
+      # shellcheck disable=SC2034
+      TD_BRANCH_BLOCKING="${branch_blocking# }"
+      teardown_log "issue #$issue: branch(es) with an open/unknown PR: $TD_BRANCH_BLOCKING — skipping"
+      if [ "$dry" = "1" ]; then
+        teardown_log "[dry] would post open-PR notice + label $TEARDOWN_SKIPPED_LABEL"
+      else
+        comment_issue "$repo" "$issue" "$(teardown_comment_open_pr)" "$owner_repo" "$remote" \
+          || teardown_log "comment post failed (non-fatal)"
+      fi
+      _teardown_add_skipped_label "$repo" "$issue" "$owner_repo" "$dry"
+      unlock_issue "$issue" "$remote" "$repo_slug"
+      return 4
+    fi
+  fi
+
   # ---------- 4. teardown ----------
   teardown_log "tearing down issue #$issue remote=$remote ($total run-dir(s), force=$TEARDOWN_FORCE)"
   local cleanup_args=(--repo "$repo" --issue "$issue" --remote "$remote" --yes)
@@ -234,6 +380,13 @@ teardown_run() {
     # failed; unlock_issue is idempotent so this is safe either way.
     unlock_issue "$issue" "$remote" "$repo_slug"
     return 6
+  fi
+
+  # ---------- 4b. remote branch deletion (opt-in) ----------
+  # After the local teardown (cleanup-run.sh has deleted the local branch, so
+  # nothing here still checks it out) and before the comment that reports it.
+  if [ "${#delete_branches[@]}" -gt 0 ]; then
+    _teardown_delete_remote_branches "$repo" "$remote" "$dry" "${delete_branches[@]}"
   fi
 
   # ---------- 5. success: close (or not), comment, remove the trigger label ----

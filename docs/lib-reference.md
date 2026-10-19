@@ -44,7 +44,7 @@ lukuihin.
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-github.sh` | `status.sh --github`-rikastus. Ei omaa CI-rollupia eikä merge-päätöstä — kutsuu `pr-watch-lib.sh`:n omia |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot. `_iso_to_epoch` asuu täällä, jotta poller ja näkymä laskevat iän identtisesti |
-| `teardown.sh` | Label-vetoisen purun turvaportit **kutsuttavana funktiona**: lukko, run-dir-inventaario, `completed`-ajon PR-portti, `cleanup-run.sh`-delegaatti. `auto-clean.sh` ja `auto-reset.sh` ovat sen ohuita lopputuloskerroksia |
+| `teardown.sh` | Label-vetoisen purun turvaportit **kutsuttavana funktiona**: lukko, run-dir-inventaario, `completed`-ajon PR-portti, haaran PR-portti ja remote-haaran poisto (opt-in, `auto-reset`), `cleanup-run.sh`-delegaatti. `auto-clean.sh` ja `auto-reset.sh` ovat sen ohuita lopputuloskerroksia |
 | `usage-limit.sh` | Clauden käyttörajan koneen laajuinen portti (#294): takarajan tallennus (myöhempi voittaa), voimassaolo ja `status.sh`:n kentät. Tunnistus asuu `claude-call.sh`:ssa kutsun vieressä |
 | `version.sh` | Ajossa olevan version ja submodule-pinnin näkyväksi teko. Fail-soft: puuttuva `.git` ⇒ `?` |
 | `worktree.sh` | Ajokohtaiset git-worktreet kohderepossa |

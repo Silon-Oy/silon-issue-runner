@@ -111,13 +111,16 @@ yhtenäistetty eikä pidä yhtenäistää.
 | 0 | Purettu, **issue jätetty auki**, `auto-reset`-label poistettu — issue palaa poimintaan |
 | 1 | Käyttövirhe tai remotea ei voitu selvittää |
 | 3 | Issuen lukko on toisella ajolla — turvallista yrittää seuraavalla tikillä |
-| 4 | Issuen `completed`-ajolla on **avoin** (tai selvittämätön) PR — ei purettu, `auto-reset-skipped` lisätty. Nollaus tuottaisi samalle issuelle toisen PR:n, joten sulje PR ensin |
+| 4 | Issuen `completed`-ajolla on **avoin** (tai selvittämätön) PR, tai ajon haaralla on avoin PR tai sen PR:ien tilaa ei saatu luettua — ei purettu, `auto-reset-skipped` lisätty. Nollaus tuottaisi samalle issuelle toisen PR:n (tai uuden ajon push hylättäisiin avoimen PR:n haaraan), joten sulje PR ensin |
 | 5 | Tältä koneelta ei löydy ajoja tälle issuelle — `auto-reset-skipped` lisätty ja kommenttiin kirjattu konekohtainen ohje |
 | 6 | Purku (`cleanup-run.sh`) epäonnistui |
 
 Portit ovat kirjaimellisesti samat rivit kuin siivouksessa (`lib/teardown.sh`), joten myös
 kieltäytymiset osuvat samoihin kohtiin. Ero on lopputuloksessa: **issueta ei suljeta eikä avata
-uudelleen**, ja onnistuneen purun jälkeen issue täyttää poimintaehdot heti.
+uudelleen**, ja onnistuneen purun jälkeen issue täyttää poimintaehdot heti. Lisäksi nollaus
+poistaa ajon remote-haaran, kun sen kaikki PR:t on suljettu tai mergetty (tai PR:ää ei ole ja
+haara on runnerin oma `auto-run/…`), koska uusi ajo saa saman haaranimen ja jäänne hylkäisi sen
+pushin (`blocked/git_push_failed`). Poisto kirjataan pollerin lokiin ja nollauskommenttiin.
 
 ### Yksittäisen ajon pysäytys (`stop-run.sh`)
 

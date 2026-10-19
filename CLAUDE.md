@@ -361,8 +361,9 @@ että `run.json.host`-kirjaus kulkevat siitä, joten portti ja kirjaus eivät vo
 koneen nimestä) ja **purun turvaportit** (`teardown_run` + pollerin `scan_teardown`).
 
 Viimeinen on eri luokkaa kuin muut: purkuverbejä on kaksi (`auto-clean` sulkee issuen,
-`auto-reset` jättää sen auki poimintaan) ja ne eroavat **neljässä arvossa** — liipaisulabel,
-skipped-label, suljetaanko issue, kommenttiteksti. Portit ovat turvakriittisiä, ja **puuttuva
+`auto-reset` jättää sen auki poimintaan) ja ne eroavat **viidessä arvossa** — liipaisulabel,
+skipped-label, suljetaanko issue, poistetaanko remote-haara (vain `auto-reset`: uusi ajo saa
+saman haaranimen, ja suljetun PR:n jäänne hylkäisi sen pushin) ja kommenttiteksti. Portit ovat turvakriittisiä, ja **puuttuva
 portti näyttää läpäisseeltä portilta**: kopiossa ajautuminen ei näy mistään. Siksi verbi on
 lopputuloskerros, ei toinen toteutus. Sama koskee skannausta — toinen label on toinen
 parametri, ei toinen skannausmuoto, jottei §5.4:n kustannusinvariantti kahdennu.

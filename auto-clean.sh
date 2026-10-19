@@ -12,8 +12,10 @@
 # completed-run PR gate and the cleanup-run.sh delegation. auto-clean is the
 # FINISHING verb — it closes the issue. Its sibling auto-reset.sh runs the very
 # same teardown and leaves the issue open so pickup starts it over. The gates are
-# not copied between them; only these four values differ: trigger label, skipped
-# label, whether the issue is closed, and the comment wording below.
+# not copied between them; only these five values differ: trigger label, skipped
+# label, whether the issue is closed, whether the remote branch is deleted (no,
+# here: a finished issue's branch is not in anyone's way), and the comment
+# wording below.
 #
 # Usage:
 #   auto-clean.sh --repo <repo-root> --issue <N> [--remote <name>] [--dry-run]
@@ -123,11 +125,12 @@ esac
 # from) another repo's run with the same issue number.
 REPO_SLUG=$(repo_slug "$REPO_ROOT" "$REMOTE_NAME")
 
-# ---------- the four values that make this verb auto-clean ----------
+# ---------- the five values that make this verb auto-clean ----------
 TEARDOWN_VERB="auto-clean"
 TEARDOWN_TRIGGER_LABEL="$RUN_ISSUES_CLEAN_LABEL"
 TEARDOWN_SKIPPED_LABEL="$SKIPPED_LABEL"
 TEARDOWN_CLOSE_ISSUE=1
+TEARDOWN_DELETE_REMOTE_BRANCH=0
 TEARDOWN_CLEANUP="$SCRIPT_DIR/cleanup-run.sh"
 
 # The comment bodies. Context comes from the TD_* variables the shared layer

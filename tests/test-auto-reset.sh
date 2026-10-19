@@ -12,6 +12,10 @@
 # The mocks mirror test-auto-clean.sh:
 #   gh            — every verb is a no-op that appends itself to $CALLS.
 #                   'gh pr view' answers from MOCK_PR_STATE_<num>.
+#                   'gh pr list' (the branch PR gate) answers MOCK_PR_LIST
+#                   (default '[]'), or fails when MOCK_PR_LIST_FAIL=1.
+#   git remote    — a local bare repo stands in for GitHub, so the remote branch
+#                   deletion and the follow-up push are real git operations.
 #   cleanup-run.sh — invoked by absolute path ($SCRIPT_DIR/cleanup-run.sh), so it
 #                   cannot be PATH-stubbed. Instead auto-reset.sh runs from a temp
 #                   SCRIPT_DIR that symlinks the real script + lib and provides a
@@ -30,6 +34,12 @@
 #   F cleanup fails  — cleanup rc=1 → exit 6, no label removed
 #   G skipped labels are per-verb — auto-reset writes auto-reset-skipped, never
 #                      auto-clean-skipped; the two loop guards must not collide
+#   H closed PR, branch on remote — remote branch deleted and logged; a new
+#                      branch of the same name with other history then pushes
+#   I open PR on the branch — exit 4, remote branch kept, no teardown
+#   J no remote branch — exit 0, no error
+#   K branch PRs unreadable — fail-closed exit 4, nothing deleted
+#   L no PR, not runner-owned — torn down, remote branch left alone
 #
 # Run: bash tests/test-auto-reset.sh
 
@@ -56,6 +66,11 @@ cat > "$BIN/gh" <<'SH'
 #!/usr/bin/env bash
 echo "gh $*" >> "__CALLS__"
 case "$1 $2" in
+  "pr list")
+    [ "${MOCK_PR_LIST_FAIL:-0}" = "1" ] && { echo "mock: api error" >&2; exit 1; }
+    printf '%s\n' "${MOCK_PR_LIST:-[]}"
+    exit 0
+    ;;
   "pr view")
     url="$3"; num="${url##*/}"
     var="MOCK_PR_STATE_${num}"
@@ -66,7 +81,7 @@ esac
 # 'gh issue comment ... --body-file -' reads stdin; drain it so the pipe in
 # comment_issue does not SIGPIPE the producer.
 case "$*" in
-  *"--body-file -"*) cat >/dev/null 2>&1 || true ;;
+  *"--body-file -"*) cat >> "__CALLS__.body" 2>/dev/null || true ;;
 esac
 exit 0
 SH
@@ -130,13 +145,45 @@ mk_run_pr() {  # <repo> <issue> <status> <pr-num> [<suffix>]
   state_finalize "$rd" "$status"
 }
 
+# A real git repo with a bare "origin" — GitHub's stand-in for the remote branch
+# cases. Hermetic: everything lives in $WORK, and git reads no global config.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+mk_git_repo() {  # -> prints repo path; its origin is "$repo.remote.git"
+  local r="$WORK/grepo-$RANDOM"
+  git init -q "$r"
+  git init -q --bare "$r.remote.git"
+  git -C "$r" remote add origin "$r.remote.git"
+  git -C "$r" commit -q --allow-empty -m base
+  printf '%s' "$r"
+}
+
+push_branch() {  # <repo> <branch> — a branch with its own commit, pushed
+  git -C "$1" checkout -q -b "$2"
+  git -C "$1" commit -q --allow-empty -m "old run of $2"
+  git -C "$1" push -q origin "$2" 2>/dev/null
+  git -C "$1" checkout -q -
+}
+
+remote_has() { git -C "$1" ls-remote --exit-code --heads origin "refs/heads/$2" >/dev/null 2>&1; }
+
+mk_run_branch() {  # <repo> <issue> <status> <branch>
+  local repo="$1" n="$2" status="$3" branch="$4"
+  local rid="20260521-00${n}a-issue-$n"
+  local rd="$repo/.claude/run-issues/$rid"
+  state_init "$rd" "$rid" "$repo" "$n"
+  state_set "$rd" "branch" "$branch"
+  state_finalize "$rd" "$status"
+}
+
+ERR="$WORK/stderr.log"
 run_ar() {  # <cleanup-rc> <repo> <issue> -> sets RC, resets the ledgers
   local rc="$1" repo="$2" issue="$3"
-  : > "$CALLS"; : > "$ARGV"
+  : > "$CALLS"; : > "$CALLS.body"; : > "$ARGV"
   local sd; sd=$(make_scriptdir "$rc")
   set +e
   RUN_ISSUES_LOCK_ROOT="$RUN_ISSUES_LOCK_ROOT" \
-    bash "$sd/auto-reset.sh" --repo "$repo" --issue "$issue" >/dev/null 2>&1
+    bash "$sd/auto-reset.sh" --repo "$repo" --issue "$issue" >/dev/null 2>"$ERR"
   RC=$?
   set -e
 }
@@ -221,6 +268,71 @@ R=$(mk_repo)
 run_ar 0 "$R" 18
 expect_call "labels[]=auto-reset-skipped" "G writes its own skipped label"
 expect_nocall "auto-clean-skipped" "G never writes auto-clean's skipped label"
+
+echo "=== Case H: closed PR, its branch still on the remote ==="
+# The production bug (#329): the reset run gets the same branch name, and a
+# leftover branch of a closed PR rejects its push as non-fast-forward.
+R=$(mk_git_repo); BR="auto-run/acme-repo-issue-19-fix"
+push_branch "$R" "$BR"; mk_run_branch "$R" 19 "blocked" "$BR"
+# Precondition: the new run's branch (same name, other history) IS rejected now.
+git -C "$R" checkout -q -b "fresh-19"; git -C "$R" commit -q --allow-empty -m "new run"
+if git -C "$R" push -q origin "fresh-19:$BR" 2>/dev/null; then
+  echo "FAIL: H precondition — the stale remote branch did not reject the push"; FAIL=1
+else echo "PASS: H precondition — stale remote branch rejects the new run's push"; fi
+MOCK_PR_LIST='[{"state":"CLOSED"}]' run_ar 0 "$R" 19
+expect_rc 0 "H closed-PR exit 0"
+expect_call "pr list --head $BR --state all" "H reads the branch's PRs"
+if remote_has "$R" "$BR"; then echo "FAIL: H remote branch still there"; FAIL=1
+else echo "PASS: H remote branch deleted"; fi
+if grep -qF "deleted remote branch $BR on origin (reason: all PRs closed/merged)" "$ERR"; then
+  echo "PASS: H deletion logged with branch and reason"
+else echo "FAIL: H no deletion log line"; cat "$ERR"; FAIL=1; fi
+if grep -qF "Remote-haara \`$BR\`: poistettu" "$CALLS.body"; then
+  echo "PASS: H the reset comment reports the deleted remote branch"
+else echo "FAIL: H the reset comment does not report the remote branch"; FAIL=1; fi
+# cleanup-run.sh is stubbed, so drop the old local branch the way it would.
+git -C "$R" branch -q -D "$BR"
+git -C "$R" branch -q -m "fresh-19" "$BR"
+if git -C "$R" push -q --set-upstream origin "$BR" 2>/dev/null; then
+  echo "PASS: H the next run's push succeeds without manual deletion"
+else echo "FAIL: H the next run's push is still rejected"; FAIL=1; fi
+
+echo "=== Case I: OPEN PR on the run's branch ==="
+R=$(mk_git_repo); BR="auto-run/acme-repo-issue-20-fix"
+push_branch "$R" "$BR"; mk_run_branch "$R" 20 "blocked" "$BR"
+MOCK_PR_LIST='[{"state":"CLOSED"},{"state":"OPEN"}]' run_ar 0 "$R" 20
+expect_rc 4 "I open-PR-on-branch exit 4"
+if remote_has "$R" "$BR"; then echo "PASS: I remote branch kept"
+else echo "FAIL: I an open PR's branch was deleted"; FAIL=1; fi
+expect_nocall "cleanup-run --issue 20" "I does NOT run teardown"
+expect_call "labels[]=auto-reset-skipped" "I adds auto-reset-skipped"
+expect_nocall "labels/auto-reset" "I does NOT remove auto-reset"
+
+echo "=== Case J: no remote branch ==="
+R=$(mk_git_repo); BR="auto-run/acme-repo-issue-21-fix"
+mk_run_branch "$R" 21 "blocked" "$BR"
+run_ar 0 "$R" 21
+expect_rc 0 "J no-remote-branch exit 0"
+expect_call "cleanup-run --issue 21" "J runs teardown"
+if grep -q "WARN" "$ERR"; then echo "FAIL: J logged a warning"; cat "$ERR"; FAIL=1
+else echo "PASS: J no warning"; fi
+
+echo "=== Case K: branch PRs unreadable ==="
+R=$(mk_git_repo); BR="auto-run/acme-repo-issue-22-fix"
+push_branch "$R" "$BR"; mk_run_branch "$R" 22 "blocked" "$BR"
+MOCK_PR_LIST_FAIL=1 run_ar 0 "$R" 22
+expect_rc 4 "K unreadable exit 4 (fail-closed)"
+if remote_has "$R" "$BR"; then echo "PASS: K remote branch kept"
+else echo "FAIL: K deleted a branch it could not read the PRs of"; FAIL=1; fi
+expect_nocall "cleanup-run --issue 22" "K does NOT run teardown"
+
+echo "=== Case L: no PR, branch not runner-owned ==="
+R=$(mk_git_repo); BR="feature/hand-made"
+push_branch "$R" "$BR"; mk_run_branch "$R" 23 "blocked" "$BR"
+run_ar 0 "$R" 23
+expect_rc 0 "L exit 0"
+if remote_has "$R" "$BR"; then echo "PASS: L foreign branch left alone"
+else echo "FAIL: L deleted a branch the runner does not own"; FAIL=1; fi
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "auto-reset: all passed" || echo "auto-reset: FAILURES"
