@@ -134,6 +134,10 @@ Lue kuvaus ja perehdy repoon sen verran, että pilkkominen osuu todelliseen kood
   - <mitä tämä issue ei tee — mihin toiseen alaissueeseen se kuuluu>
   ```
 
+  Alaissueen hyväksyntäkriteerit noudattavat `/issue-runner:new-issue`-komennon sääntöä
+  kohderepon `CLAUDE.md`:stä: kriteeri ei vaadi sen päivitystä, ellei alaissue tuo uutta koko
+  repoa koskevaa sääntöä. Ominaisuuskuvaukset kuuluvat repon aihekohtaisiin dokumentteihin.
+
 - **Riippuvuudet:** mitkä lapset ovat `blocked_by` mihinkin lapseen. Vain aitoja
   järjestysriippuvuuksia — löysä ketjutus jonottaa ajot turhaan sarjaan. **Graafi ei saa olla
   syklinen** (`/issue-runner:run-epic` kieltäytyy syklistä exit-koodilla 4).

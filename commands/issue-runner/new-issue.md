@@ -214,6 +214,15 @@ juuri sen — vapaamuotoinen kuvaus ei ole ajokelpoinen speksi:
 - <mitä tämä issue ei tee>
 ```
 
+**Hyväksyntäkriteeri ei vaadi kohderepon `CLAUDE.md`:n päivitystä**, ellei issue tuo uutta koko
+repoa koskevaa sääntöä, jonka jokainen sessio tarvitsee. `CLAUDE.md` ladataan jokaiseen
+sessioon, joten ominaisuuden kuvaus, suunnitteluperustelu tai aihekohtainen sudenkuoppa kuuluu
+repon aihekohtaiseen dokumenttiin (esim. `docs/<aihe>.md`) ja muutoksen tausta PR-kuvaukseen.
+Kun kriteeri koskee `CLAUDE.md`:tä, se nimeää lisättävän säännön, ei osiota, jota "päivitetään".
+Malli kopioituu muuten luonnoksesta toiseen: kun tiedostossa on jo kappale jokaisesta
+ominaisuudesta, uusi issue vaatii samaa, ja tiedosto kasvaa joka ajossa. Repon oma
+`CLAUDE.md`-ohje dokumentaation sijainnista voittaa tämän.
+
 Otsikko kertoo lopputuloksen, ei toiminnan: *"status.sh erottelee arkistoidut ajot omaan
 osioonsa"*, ei *"korjaa status.sh"*.
 
