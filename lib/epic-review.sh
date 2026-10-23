@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# lib/epic-review.sh — collect an epic's review material (issue #272).
+# lib/epic-review.sh — collect an epic's review material (issue #272) and run
+# the review agent over it (issue #273).
 #
 # Answers "what did the epic ask for, and what did its children produce
 # together": the epic body's acceptance criteria, the child set (number, title,
@@ -21,7 +22,25 @@
 # silent: the block ends with a line naming the cut and the variable. The cap is
 # resolved at CALL time, not source time (CLAUDE.md §5.5's timing trap).
 #
-# Scope: read-only. No agent call, no GitHub writes, not called from the poller.
+# THE REVIEW (epic_review_run). One question: do the children's changes TOGETHER
+# meet the epic's acceptance criteria (prompts/09-epic-review.md names the three
+# failure modes). The call goes through call_claude, so the system prompt carries
+# both principles pages. The agent runs in a scratch work dir, never a worktree:
+# the review is read-only and the dir makes that structural.
+#
+# Result format the prompt must produce (scoped to the END of the output, the
+# same narrow-matching rule lib/merge-gate.sh applies):
+#
+#   EPIC_FINDING: <criterion> | <description>
+#   ...
+#   EPIC_REVIEW_RESULT: CRITERIA_MET | FINDINGS
+#
+# Three outcomes, fail-closed: criteria_met | findings | launch_failed. A launch
+# failure is never a verdict (CLAUDE.md §9): non-zero exit (127 CLI missing, 124
+# timeout, 75 usage limit), empty output, a missing or contradictory marker or a
+# malformed finding line all read as launch_failed — never criteria_met.
+#
+# Scope: read-only. No GitHub writes, not called from the poller.
 # Shared primitives only (CLAUDE.md §7): the child set comes from
 # list_epic_children, PR references from _epic_child_pr_refs.
 #
@@ -35,6 +54,15 @@ _EPIC_REVIEW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # _epic_parse_child_line / _epic_child_ref / _epic_child_pr_refs.
 # shellcheck source=epic.sh
 . "$_EPIC_REVIEW_DIR/epic.sh"
+# call_claude / render_prompt (the single agent seam) and _merge_gate_result_lines
+# (the shared tail reader: trailing blanks and bare fences dropped).
+# shellcheck source=claude-call.sh
+. "$_EPIC_REVIEW_DIR/claude-call.sh"
+# shellcheck source=merge-gate.sh
+. "$_EPIC_REVIEW_DIR/merge-gate.sh"
+
+EPIC_REVIEW_STEP="09-epic-review"
+EPIC_REVIEW_TIMEOUT_DEFAULT=1800
 
 # _epic_review_criteria <body> — print the acceptance-criteria section of an
 # issue body: the lines under the first markdown heading naming
@@ -205,4 +233,88 @@ CHILDREN
   else
     printf '%s\n' "$notice"
   fi
+}
+
+# epic_review_timeout — the review call's budget in seconds. Read at CALL time
+# (CLAUDE.md §5.5's timing trap); a non-numeric or zero value => the default.
+epic_review_timeout() {
+  local t="${RUN_ISSUES_EPIC_REVIEW_TIMEOUT:-$EPIC_REVIEW_TIMEOUT_DEFAULT}"
+  case "$t" in ''|*[!0-9]*|0) t="$EPIC_REVIEW_TIMEOUT_DEFAULT" ;; esac
+  printf '%s\n' "$t"
+}
+
+# epic_review_findings <out-file> — prints every EPIC_FINDING line normalised to
+# "criterion|description" (trimmed fields; a "|" inside the description is
+# kept). rc 1 if any line lacks a criterion or a description: a finding that
+# names no criterion is not one we may report or ignore.
+epic_review_findings() {
+  local f="$1"
+  [ -s "$f" ] || return 0
+  { grep -E '^[[:space:]]*EPIC_FINDING:' "$f" 2>/dev/null || true; } | awk '
+    function trim(s) { gsub(/^[ \t`*]+|[ \t`*]+$/, "", s); return s }
+    BEGIN { bad = 0 }
+    {
+      line = $0
+      sub(/^[ \t]*EPIC_FINDING:[ \t]*/, "", line)
+      i = index(line, "|")
+      if (!i) { bad = 1; next }
+      crit = trim(substr(line, 1, i - 1)); desc = trim(substr(line, i + 1))
+      if (crit == "" || desc == "") { bad = 1; next }
+      print crit "|" desc
+    }
+    END { exit bad }'
+}
+
+# epic_review_parse <out-file> [<exit-file>] — prints exactly one of
+# criteria_met | findings | launch_failed (see the header for the rules).
+epic_review_parse() {
+  local out="$1" exit_file="${2:-}"
+  if [ -n "$exit_file" ]; then
+    local rc
+    rc=$(tr -dc '0-9' < "$exit_file" 2>/dev/null || true)
+    if [ "${rc:-1}" != "0" ]; then printf 'launch_failed'; return 0; fi
+  fi
+  [ -s "$out" ] || { printf 'launch_failed'; return 0; }
+
+  local last marker
+  last=$(_merge_gate_result_lines "$out" | tail -n 1)
+  marker=$(printf '%s' "$last" | sed -nE 's/^[[:space:]`*]*EPIC_REVIEW_RESULT:[[:space:]]*([A-Za-z_]+)[[:space:]`*]*$/\1/p')
+
+  local findings count frc=0
+  findings=$(epic_review_findings "$out") || frc=$?
+  [ "$frc" -eq 0 ] || { printf 'launch_failed'; return 0; }
+  count=$(printf '%s' "$findings" | grep -c . || true)
+
+  case "$marker" in
+    CRITERIA_MET) [ "${count:-0}" -eq 0 ] && printf 'criteria_met' || printf 'launch_failed' ;;
+    FINDINGS)     [ "${count:-0}" -gt 0 ] && printf 'findings' || printf 'launch_failed' ;;
+    *)            printf 'launch_failed' ;;
+  esac
+}
+
+# epic_review_run <work-dir> <epic-ref> <material>
+# Render prompts/09-epic-review.md with the material (epic_review_collect's
+# block), call the agent in <work-dir> and print the parsed outcome. The agent's
+# output stays in <work-dir>/09-epic-review.out for epic_review_findings.
+# rc 0 with an outcome on stdout; rc 1 and nothing on stdout when there is no
+# material or the prompt could not be rendered (no agent was called).
+epic_review_run() {
+  local work_dir="$1" epic_ref="$2" material="$3"
+  [ -n "$material" ] || return 1
+  [ -d "$work_dir" ] || return 1
+
+  local prompt="$work_dir/$EPIC_REVIEW_STEP.prompt"
+  render_prompt "$_EPIC_REVIEW_DIR/../prompts/$EPIC_REVIEW_STEP.md" "$prompt" \
+    EPIC_REF="$epic_ref" MATERIAL="$material" || return 1
+  [ -s "$prompt" ] || return 1
+
+  local arc=0 timeout
+  timeout=$(epic_review_timeout)
+  ( cd "$work_dir" && RUN_ISSUES_CLAUDE_TIMEOUT="$timeout" call_claude "$work_dir" "$EPIC_REVIEW_STEP" "$prompt" ) >&2 || arc=$?
+
+  if [ "$arc" -ne 0 ]; then
+    printf 'launch_failed\n'
+    return 0
+  fi
+  printf '%s\n' "$(epic_review_parse "$work_dir/$EPIC_REVIEW_STEP.out" "$work_dir/$EPIC_REVIEW_STEP.exit")"
 }

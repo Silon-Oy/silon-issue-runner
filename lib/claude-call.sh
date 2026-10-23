@@ -156,6 +156,7 @@ _claude_step_phase() {
     05-ci-repair*)           printf 'CI_REPAIR' ;;
     06-security-review*)     printf 'SECURITY_REVIEW' ;;
     07-security-fix*)        printf 'SECURITY_FIX' ;;
+    09-epic-review*)         printf 'EPIC_REVIEW' ;;
   esac
 }
 
