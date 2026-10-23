@@ -84,6 +84,14 @@ stateDiagram-v2
 
     %% ----- Review gate: auto resolves in-process; interactive exits 10 -----
     S7_ReviewGate --> S7b_EnvBootstrap: auto + PROCEED
+    %% SERIALIZE #N (issue #338): accepted only for a sibling listed in S6 that
+    %% started before this run (acyclic by construction). The blocked_by edge is
+    %% written first and verified; then comment, unclaim, local teardown. No
+    %% needs-human: S2b resumes the issue once #N closes. A rejected SERIALIZE or
+    %% a failed edge write continues as PROCEED (serialize_rejected /
+    %% serialize_edge_failed).
+    S7_ReviewGate --> S7b_EnvBootstrap: auto + SERIALIZE rejected or edge write failed → PROCEED
+    S7_ReviewGate --> [*]: auto + SERIALIZE #N accepted → blocked/serialized_behind_sibling (rc=14, no label)
     S7_ReviewGate --> [*]: auto + BLOCKER → blocked/cycle_review_BLOCKER + needs-human (rc=4)
     S7_ReviewGate --> S_AwaitingClarification: auto + NEEDS_CLARIFICATION (rc=11)
     S7_ReviewGate --> S_AwaitingReview: interactive (rc=10)

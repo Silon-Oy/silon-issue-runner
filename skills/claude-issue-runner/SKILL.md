@@ -184,6 +184,12 @@ Automaatio etenee ketjussa yksi lenkki kerrallaan itsestään: kun viimeinen est
 issue vapautuu poimintaan seuraavalla tikillä. Yksi avoin estäjä riittää pitämään issuen
 poiminnan ulkopuolella, eikä estoa voi vahingossa poistaa labelia poistamalla.
 
+**Runner voi lisätä kaaren itse.** Jos cycle review toteaa, että aiemmin aloitettu saman repon
+ajo tekee olennaisesti saman muutoksen, runner sarjoittaa ajon (`SERIALIZE #N`): issuelle
+ilmestyy "blocked by #N" ja perustelukommentti, varaus vapautuu, eikä `needs-human`-labelia
+lisätä. Odotus jatkuu itsestään, kun `#N` sulkeutuu. Jos sarjoitus on mielestäsi väärä,
+poista kaari issuen näkymästä — issue lähtee ajoon seuraavalla tikillä.
+
 **Epic** on kokoava issue, jolla on alaissueita (GitHubin sub-issues tai rungon task-lista):
 
 - `epic`-label **estää poiminnan** — epic ei ole itse ajettava tehtävä.
@@ -209,6 +215,7 @@ poiminnan ulkopuolella, eikä estoa voi vahingossa poistaa labelia poistamalla.
 | `needs-human` PR:llä | Vahti luovutti CI-korjauksen eikä koske PR:ään | Korjaa kommentissa nimetty syy, **poista label** — vahti mergeää jos CI on vihreä |
 | PR auki, ei mergeydy | Puuttuva `auto-merge`-label, punainen CI tai konflikti | Tarkista label ja CI; loput vahti hoitaa itse |
 | Ajo näyttää jumittuneen | Ei rakenteellista edistymää | **Odota ensin**: poller finalisoi jumiutuneen ajon itse noin tunnin rajalla. Kiireessä `stop-run.sh` |
+| Issueen ilmestyi "blocked by" -kaari ja sarjoituskommentti, ei `needs-human`-labelia | Ajo sarjoitettiin aiemman sisarajon perään (exit 14) | Ei mitään: ajo jatkuu itsestään, kun estäjä sulkeutuu. Väärän sarjoituksen kumoat poistamalla kaaren |
 | Issue ei lähde ajoon lainkaan | Jokin poimintaehto ei täyty | Ks. triage alla |
 
 **Yhden kommentin vastaussääntö.** Automaatio ei lue koko keskusteluketjua, vaan **vain
@@ -227,7 +234,8 @@ jatka listaa pidemmälle kuin on pakko.
    olevaa tai siivoamatonta ajoa, joka on varannut issuen — ylivoimaisesti yleisin syy. Siivoa
    vanha ajo, mikä poistaa varauslabelin. **Assignaatio ei estä poimintaa.**
 2. **Riippuvuudet.** Onko issue merkitty "blocked by" johonkin avoimeen issueen? Katso issuen
-   omasta näkymästä — **esto ei näy labeleissa.** Yksikin avoin estäjä riittää.
+   omasta näkymästä — **esto ei näy labeleissa.** Yksikin avoin estäjä riittää. Kaaren voi
+   olla lisännyt myös runner itse sarjoittaessaan ajon (sarjoituskommentti issuella).
 3. **Estolabelit.** Onko issuella `waiting`, `wip`, `epic`, `auto-clean` tai `auto-reset`?
    Kaikki viisi estävät poiminnan. Huom: `needs-human` **ei** estä poimintaa — varaus
    (`auto-claimed`) estää. `auto-reset` on odotustila, ei vika: se poistuu itsestään, kun

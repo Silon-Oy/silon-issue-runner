@@ -179,16 +179,24 @@ $prs
 EOF
 }
 
-# sibling_runs_section <repo-root> <owner/repo> <remote> <self-run-dir> <self-issue>
+# sibling_runs_section <repo-root> <owner/repo> <remote> <self-run-dir> <self-issue> [<rows-out-file>]
 # Renders the prompt section body in one of three states: the list, the empty
 # list said out loud, or the read failure said out loud. Always rc 0 — the
 # section is an optimisation, never a reason for the caller to stop.
+#
+# <rows-out-file>, when given, receives the same rows the section was rendered
+# from (list_sibling_runs' JSON lines; empty file = no siblings) so the caller
+# can validate a review's SERIALIZE #N against exactly the set the review saw
+# (issue #338). On a read failure the file is NOT created: absent = unknown.
 sibling_runs_section() {
-  local rows rc=0
-  rows=$(list_sibling_runs "$@" 2>/dev/null) || rc=$?
+  local rows rc=0 rows_out="${6:-}"
+  rows=$(list_sibling_runs "${@:1:5}" 2>/dev/null) || rc=$?
   if [ "$rc" != 0 ]; then
     printf '_Sisarajoja ei voitu lukea (avoimien PR:ien listaus epäonnistui). Rinnakkaisten ajojen tilaa ei tiedetä — tämä ei tarkoita, ettei niitä ole._\n'
     return 0
+  fi
+  if [ -n "$rows_out" ]; then
+    if [ -n "$rows" ]; then printf '%s\n' "$rows" > "$rows_out"; else : > "$rows_out"; fi
   fi
   if [ -z "$rows" ]; then
     printf '_Ei rinnakkaisia ajoja: tässä repossa ei ole muita käynnissä olevia ajoja eikä avoimia runnerin PR:iä._\n'

@@ -53,6 +53,16 @@ Kirjaa Implementerille selvästi, **mitä ei toteuteta itse, koska sisarajo teke
 mihin tämän ajon muutos silloin rajautuu. Tieto on optimointi, ei päätösperuste: pelkkä
 päällekkäisyys ei yksin ole BLOCKER. Jos sisarajoja ei voitu lukea, älä oleta, ettei niitä ole.
 
+**Sarjoitus.** Jos sisarajo toteuttaa **olennaisesti saman muutoksen** kuin tämä issue *ja* se
+on aloitettu ennen tätä ajoa (vertaa sen `aloitettu`-aikaa yllä mainittuun tämän ajon
+aloitusaikaan), palauta `CYCLE_REVIEW_DECISION: SERIALIZE #<N>`, jossa `N` on yllä listatun
+sisarajon issue. Kirjaa silti φ-osioon myös rajaus (mitä ei toteuteta itse): jos
+orkestraattori hylkää sarjoituksen, ajo jatkuu `PROCEED`ina juuri sen varassa.
+Runner lisää silloin tälle issuelle riippuvuuden "blocked by #N", vapauttaa sen ja ajaa sen
+uudelleen, kun #N on valmis. Pelkkä tiedostopäällekkäisyys ei riitä: silloin rajaa työ
+φ-osiossa kuten yllä. Orkestraattori hyväksyy sarjoituksen vain yllä listattuun, tätä ajoa
+aiemmin aloitettuun sisarajoon; muu `SERIALIZE` luetaan `PROCEED`iksi.
+
 ## Issuen kirjoittaja vastasi aiempaan tarkennuspyyntöön
 
 {{CLARIFICATION_CONTEXT}}
@@ -114,10 +124,16 @@ CYCLE_REVIEW_DECISION: BLOCKER
 CYCLE_REVIEW_DECISION: NEEDS_CLARIFICATION
 ```
 
+```
+CYCLE_REVIEW_DECISION: SERIALIZE #<N>
+```
+
 - **PROCEED** = issue on tarpeeksi tarkka, Implementer voi aloittaa heti.
 - **BLOCKER** = jokin tekninen este (puuttuva pääsy, rikkinäinen riippuvuus, jne.) joka
   vaatii ihmisen manuaalisen toimenpiteen ennen jatkamista.
 - **NEEDS_CLARIFICATION** = issue-speksissä on liian iso epäselvyys; pyydä issuen kirjoittajaa
   täydentämään issuella ennen toteutusta.
+- **SERIALIZE #<N>** = yllä listattu, ennen tätä ajoa aloitettu sisarajo #N toteuttaa
+  olennaisesti saman muutoksen; tämä ajo odottaa sen valmistumista (ks. *Sarjoitus*).
 
 Älä laita tähän mitään muuta tekstiä. Orkestraattori parsii vain tämän rivin.
