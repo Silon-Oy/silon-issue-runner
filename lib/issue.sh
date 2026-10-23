@@ -574,6 +574,45 @@ list_blocked_by() {
   return 0
 }
 
+# add_blocked_by <repo-root> <N> <blocker-N> [<owner/repo>] [<remote>]
+# The writing pair of list_blocked_by (issue #338): adds the dependency edge
+# "issue N is blocked by issue <blocker-N>". The REST body takes the blocker's
+# database id, not its number, so the issue is read first. Returns 0 only when a
+# re-read of N's blocked_by graph lists <blocker-N>, and 2 otherwise — whatever
+# the POST itself returned. The re-read makes an already-existing edge (422) a
+# success and a write whose response was lost in transit a verified one; the
+# caller never has to guess from a status code. Writes through _issue_gh so the
+# edge is attributed like the run's comments (App identity on origin).
+add_blocked_by() {
+  local repo="$1" n="$2" blocker="$3" owner_repo="${4:-}" remote="${5:-}"
+  local id="" path edges
+  id=$(cd "$repo" && _issue_gh --remote "$remote" -- api \
+    "$(_rest_issue_path "$owner_repo" "$blocker")" --jq '.id' 2>/dev/null) || id=""
+  case "$id" in
+    ''|*[!0-9]*) ;;
+    *)
+      path="$(_rest_issue_path "$owner_repo" "$n")/dependencies/blocked_by"
+      ( cd "$repo" && _issue_gh --remote "$remote" -- api -X POST "$path" \
+          -F "issue_id=$id" >/dev/null 2>&1 ) || true
+      ;;
+  esac
+  edges=$(list_blocked_by "$repo" "$n" "$owner_repo") || return 2
+  printf '%s\n' "$edges" | cut -f1 | grep -qx "$blocker" || return 2
+  return 0
+}
+
+# issue_label_names <repo-root> <N> [<owner/repo>] [<remote>]
+# Prints issue N's current label names, one per line, read live from REST (not
+# the cached issue.json). rc 2 (printing nothing) when the read fails, so a
+# caller can tell "label absent" from "could not tell".
+issue_label_names() {
+  local repo="$1" n="$2" owner_repo="${3:-}" remote="${4:-}" out
+  out=$(cd "$repo" && _issue_gh --remote "$remote" -- api \
+    "$(_rest_issue_path "$owner_repo" "$n")" --jq '.labels[].name' 2>/dev/null) || return 2
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 # is_epic <repo-root> <N> [<owner/repo>]
 # Prints "1" when issue N carries the `epic` label, "0" when it demonstrably
 # does not, and returns 0 in both cases. Returns 2 (printing nothing) when the

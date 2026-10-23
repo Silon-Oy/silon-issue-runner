@@ -98,6 +98,19 @@
 #       run.json (usage_limit_reset_at), NO needs-human label and no comment; the
 #       poller resumes it via --restart once the reset has passed, and starts no
 #       other claude work on this machine until then.
+#  14   serialized behind an older sibling run (S7, auto mode only, issue #338) —
+#       the cycle review returned SERIALIZE #N for a same-repo sibling run that
+#       started BEFORE this one; the runner added the blocked_by edge "this issue
+#       is blocked by #N", posted a non-answerable comment, released the claim
+#       and tore the local artefacts down (cleanup-run.sh). The run is finalized
+#       blocked/serialized_behind_sibling with NO needs-human label: S2b lets the
+#       issue run again once #N closes. If the auto-claimed label could not be
+#       verified gone, the run is instead finalized
+#       blocked/serialize_unclaim_failed, keeps its artefacts and is handed to a
+#       human (needs-human + answerable comment). A rejected SERIALIZE (not an
+#       older listed sibling, unparseable) or a failed edge write never exits 14:
+#       it is logged as serialize_rejected / serialize_edge_failed and the run
+#       continues as PROCEED.
 #
 # --restart <run-dir> resumes a timed_out run with a ramped, capped timeout
 # (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). It skips pick/claim
@@ -289,6 +302,10 @@ source "$SCRIPT_DIR/lib/host.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/sibling-runs.sh
 source "$SCRIPT_DIR/lib/sibling-runs.sh"
+# shellcheck source=lib/status-read.sh
+# For _iso_to_epoch: the S7 serialize gate compares a sibling's start with this
+# run's in the same epoch arithmetic the poller and status.sh use (issue #338).
+source "$SCRIPT_DIR/lib/status-read.sh"
 # shellcheck source=lib/claude-call.sh
 source "$SCRIPT_DIR/lib/claude-call.sh"
 # shellcheck source=lib/evolution-findings.sh
@@ -688,6 +705,7 @@ BRANCH=""
 WORKTREE_PATH=""
 BASE_BRANCH=""
 CR_DECISION=""
+CR_SERIALIZE_TARGET=""
 DB_CLONE_VALUE=""
 # PROVISION_TEST_ENV_PAIRS holds the KEY=VALUE lines emitted by the opt-in
 # per-run test-env provisioning hook (S7c). It is repopulated on every path that
@@ -1192,10 +1210,17 @@ EOF
 # prepare_sibling_runs — fills SIBLING_RUNS with the cycle-review section of
 # the same repo's sibling runs (lib/sibling-runs.sh, issue #337) and logs the
 # outcome. Never fatal: the section is an optimisation, not a gate.
+#
+# The rows the section was rendered from are kept in $RUN_DIR/sibling-runs.jsonl
+# so the S7 serialize gate validates SERIALIZE #N against exactly the set the
+# review saw (issue #338). Removed first: a --continue's fresh S6 must never read
+# the previous pass's list, and an absent file means "unknown".
 SIBLING_RUNS=""
 prepare_sibling_runs() {
+  local rows_file="$RUN_DIR/sibling-runs.jsonl"
+  rm -f "$rows_file"
   SIBLING_RUNS=$(sibling_runs_section "$REPO_ROOT" "$OWNER_REPO" "$REMOTE_NAME" \
-    "$RUN_DIR" "$ISSUE_NUM" 2>/dev/null) || true
+    "$RUN_DIR" "$ISSUE_NUM" "$rows_file" 2>/dev/null) || true
   local count
   count=$(printf '%s\n' "$SIBLING_RUNS" | grep -c '^- \*\*' || true)
   case "$SIBLING_RUNS" in
@@ -1325,9 +1350,124 @@ run_cycle_review() {
   # makes grep exit 1, and under `set -euo pipefail` that used to kill the
   # orchestrator right here — silently, with no finalization (issue #294). An
   # empty decision is handled by review_gate as a blocker instead.
-  CR_DECISION=$(grep -E '^CYCLE_REVIEW_DECISION:' "$cr_out" 2>/dev/null | tail -1 | awk '{print $2}' || true)
+  local cr_line
+  cr_line=$(grep -E '^CYCLE_REVIEW_DECISION:' "$cr_out" 2>/dev/null | tail -1 || true)
+  CR_DECISION=$(printf '%s\n' "$cr_line" | awk '{print $2}')
+  # SERIALIZE #N (issue #338): the target is taken only from the exact form; any
+  # other shape leaves it empty and the serialize gate rejects it as unparseable.
+  CR_SERIALIZE_TARGET=""
+  if [[ "$cr_line" =~ ^CYCLE_REVIEW_DECISION:[[:space:]]+SERIALIZE[[:space:]]+#([0-9]+)[[:space:]]*$ ]]; then
+    CR_SERIALIZE_TARGET="${BASH_REMATCH[1]}"
+  fi
   state_set "$RUN_DIR" "cycle_review_decision" "${CR_DECISION:-UNKNOWN}"
+  [ "$CR_DECISION" = "SERIALIZE" ] \
+    && state_set "$RUN_DIR" "cycle_review_serialize_target" "${CR_SERIALIZE_TARGET:-}"
   state_event "$RUN_DIR" "cycle_review_done" "decision=${CR_DECISION:-UNKNOWN}"
+}
+
+# _serialize_reject <reason> — a SERIALIZE that is not taken: the run carries on
+# as PROCEED (the behaviour before issue #338), the reason is logged and kept.
+_serialize_reject() {
+  log "serialize gate: SERIALIZE #${CR_SERIALIZE_TARGET:-?} rejected ($1) — continuing as PROCEED"
+  state_event "$RUN_DIR" "serialize_rejected" "reason=$1" "target=${CR_SERIALIZE_TARGET:-}"
+  CR_DECISION="PROCEED"
+  state_set "$RUN_DIR" "cycle_review_decision" "$CR_DECISION"
+}
+
+# serialize_gate — S7, auto mode, CR_DECISION=SERIALIZE (issue #338). Turns an
+# overlap with a sibling run into a dependency: "this issue is blocked by #N",
+# after which S2b runs it once #N closes. Either exits 14 or returns with
+# CR_DECISION=PROCEED.
+#
+# Acyclic by construction: the edge is written only when the sibling's start key
+# (a local run's started_at, a PR's created_at — never earlier than that run's
+# own start) is STRICTLY earlier than this run's started_at. Every edge points to
+# an earlier start, so no chain of edges can return to where it began. The key
+# comes from the rows S6 recorded, never from the review's text.
+#
+# Order is what keeps the issue out of a half state: the edge is written first
+# (and verified by a re-read); if it fails nothing has been written to GitHub
+# and the run carries on as PROCEED — exactly the pre-#338 behaviour. Only after
+# the edge holds are the comment, the unclaim and the local teardown done.
+serialize_gate() {
+  local target="${CR_SERIALIZE_TARGET:-}"
+  local rows_file="$RUN_DIR/sibling-runs.jsonl"
+  local cr_out="$RUN_DIR/01-cycle-review.out"
+
+  [ -n "$target" ] || { _serialize_reject unparseable; return 0; }
+  [ "$target" != "$ISSUE_NUM" ] || { _serialize_reject self; return 0; }
+  [ -f "$rows_file" ] || { _serialize_reject siblings_unknown; return 0; }
+  local sibling
+  sibling=$(jq -c --argjson n "$target" 'select(.issue == $n)' "$rows_file" 2>/dev/null | head -1 || true)
+  [ -n "$sibling" ] || { _serialize_reject not_a_sibling; return 0; }
+
+  local sib_started own_started sib_epoch own_epoch
+  sib_started=$(printf '%s' "$sibling" | jq -r '.started_at // ""')
+  own_started=$(jq -r '.started_at // ""' "$RUN_DIR/run.json" 2>/dev/null || true)
+  sib_epoch=$(_iso_to_epoch "$sib_started")
+  own_epoch=$(_iso_to_epoch "$own_started")
+  if [ -z "$sib_epoch" ] || [ -z "$own_epoch" ] || [ "$sib_epoch" -ge "$own_epoch" ]; then
+    _serialize_reject not_older
+    return 0
+  fi
+  # Belt and braces for edges a human drew: never block on an issue that is
+  # already blocked by this one. An unreadable graph does not stop the gate —
+  # the start-time order above already rules out a cycle among runner edges.
+  local sib_blockers
+  if sib_blockers=$(list_blocked_by "$REPO_ROOT" "$target" "$OWNER_REPO"); then
+    if printf '%s\n' "$sib_blockers" | cut -f1 | grep -qx "$ISSUE_NUM"; then
+      _serialize_reject would_cycle
+      return 0
+    fi
+  fi
+
+  # (b) The edge, verified. A failure leaves GitHub untouched: carry on.
+  if ! add_blocked_by "$REPO_ROOT" "$ISSUE_NUM" "$target" "$OWNER_REPO" "$REMOTE_NAME"; then
+    log "serialize gate: could not add the blocked_by edge #$ISSUE_NUM -> #$target — continuing as PROCEED"
+    state_event "$RUN_DIR" "serialize_edge_failed" "target=$target"
+    CR_DECISION="PROCEED"
+    state_set "$RUN_DIR" "cycle_review_decision" "$CR_DECISION"
+    return 0
+  fi
+  log "serialize gate: #$ISSUE_NUM is now blocked by #$target (sibling started $sib_started)"
+  state_set "$RUN_DIR" "serialized_behind" "$target"
+
+  # (c) Why — not answerable: the wait ends by itself when #N closes.
+  local src
+  src=$(printf '%s' "$sibling" | jq -r 'if .source == "pr" then "PR #\(.pr)" else "paikallinen ajo" end')
+  _post_situation_to_issue "serialized" \
+    "Ajo sarjoitettiin sisarajon #$target perään. Cycle review totesi, että #$target (aloitettu $sib_started, lähde: $src) toteuttaa saman muutoksen, joten tätä ei toteuteta rinnakkain. Issuelle lisättiin riippuvuus \"blocked by #$target\" ja varaus vapautettiin: ajo käynnistyy uudelleen automaattisesti, kun #$target suljetaan. Tämä ei vaadi toimenpiteitä." \
+    "$cr_out" 0 prose
+
+  # (d) Release the claim and verify the reservation label is gone: a blocked
+  # issue that stays auto-claimed would never re-enter pickup.
+  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
+  [ "$IS_CONTINUE" = "1" ] && _remove_waiting_label
+  local labels
+  if ! labels=$(issue_label_names "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME") \
+     || printf '%s\n' "$labels" | grep -qx "$AUTO_CLAIMED_LABEL"; then
+    # The one half state left: blocked AND still reserved — the wait no longer
+    # ends by itself. Keep the artefacts and hand to a human with an answerable
+    # comment; a reply tears the run down (scan_blocked_answered) and S2b takes
+    # it from there.
+    state_finalize "$RUN_DIR" "blocked" "serialize_unclaim_failed"
+    state_event "$RUN_DIR" "serialized" "behind=$target" "unclaim=failed"
+    _hand_to_human \
+      "Ajo sarjoitettiin sisarajon #$target perään, mutta varauslabelin \`$AUTO_CLAIMED_LABEL\` poistoa ei voitu varmistaa, joten issue ei palaa poimintaan itsestään. Poista label tai kommentoi tähän issueen — ajo siivotaan ja issue odottaa #$target:n sulkeutumista." \
+      "" blocked
+    exit 14
+  fi
+
+  # (e) Finalize, then (f) tear the local artefacts down so the next run of
+  # this issue does not trip over the leftover branch (worktree_leftover_branch).
+  # cleanup-run.sh archives the run-dir, so nothing is written to it afterwards;
+  # the EXIT trap's lock release is idempotent.
+  state_finalize "$RUN_DIR" "blocked" "serialized_behind_sibling"
+  state_event "$RUN_DIR" "serialized" "behind=$target"
+  local cl_rc=0
+  "$SCRIPT_DIR/cleanup-run.sh" --repo "$REPO_ROOT" "$RUN_ID" --yes >&2 || cl_rc=$?
+  [ "$cl_rc" = 0 ] || log "serialize gate: cleanup-run.sh exited $cl_rc — local artefacts may remain"
+  exit 14
 }
 
 # ===========================================================================
@@ -1338,6 +1478,8 @@ review_gate() {
   log "S7_ReviewGate decision=$CR_DECISION mode=$RUN_ISSUES_REVIEW_GATE"
   case "$RUN_ISSUES_REVIEW_GATE" in
     auto)
+      # SERIALIZE (issue #338): exits 14, or falls through as PROCEED.
+      [ "$CR_DECISION" = "SERIALIZE" ] && serialize_gate
       if [ "$CR_DECISION" = "PROCEED" ]; then
         state_event "$RUN_DIR" "review_gate_auto_proceed"
         # A continue that now PROCEEDs clears the waiting label so the issue is
