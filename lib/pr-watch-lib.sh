@@ -297,12 +297,15 @@ pr_ci_state() {
 #   - headRefOid must equal the pushed SHA; anything else (empty, old head) is
 #     PENDING, so an old head's green list never vouches for the new head.
 #   - an empty rollup is PENDING until it has stayed empty for <grace-secs>,
-#     then GREEN — a checkless repo still merges, just not instantly.
+#     then GREEN — a checkless repo still merges, just not instantly. Unless
+#     <had-checks> is 1: the PR had checks before the push, so the repo has CI
+#     and an empty rollup only means GitHub has not registered them yet. It
+#     stays PENDING for good, and a wait that runs out hands to a human.
 # A non-empty rollup on the right SHA delegates to pr_ci_state, so "green" keeps
 # a single definition (CLAUDE.md §7). The timing lives HERE, not in pr_decide:
 # the merge classifier stays a pure function of the PR snapshot.
 pr_ci_wait_state() {
-  local json="$1" expected_sha="$2" elapsed="${3:-0}" grace="${4:-0}"
+  local json="$1" expected_sha="$2" elapsed="${3:-0}" grace="${4:-0}" had_checks="${5:-0}"
   local head count
   head=$(jq -r '.headRefOid // ""' <<<"$json" 2>/dev/null) || head=""
   if [ -z "$expected_sha" ] || [ "$head" != "$expected_sha" ]; then
@@ -313,7 +316,7 @@ pr_ci_wait_state() {
     ''|*[!0-9]*) echo "PENDING"; return 0 ;;
   esac
   if [ "$count" -eq 0 ]; then
-    if [ "$elapsed" -ge "$grace" ]; then echo "GREEN"; else echo "PENDING"; fi
+    if [ "$had_checks" != "1" ] && [ "$elapsed" -ge "$grace" ]; then echo "GREEN"; else echo "PENDING"; fi
     return 0
   fi
   pr_ci_state "$json"

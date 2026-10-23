@@ -121,8 +121,18 @@ wait_case "(d') old head red -> not red either"     3 10 0 "$SHA" 1 3 "$(rollup 
 # (e) the head catches up to the pushed sha -> green.
 wait_case "(e) old head -> new head green -> 0"     10 10 120 "$SHA" 0 1 \
   "$(rollup "$OLD" "$GREEN_R")" "$(rollup "$SHA" "$GREEN_R")"
-# (f) no expected sha -> fail closed, even on a green list.
-wait_case "(f) empty expected sha -> 1"             2 10 0 "" 1 2 "$(rollup "$SHA" "$GREEN_R")"
+# (f) no expected sha -> fail closed at once, even on a green list: green is
+# impossible, so no budget is spent waiting for it.
+wait_case "(f) empty expected sha -> 1, no budget"  2 10 0 "" 1 0 "$(rollup "$SHA" "$GREEN_R")"
+# (g) the PR had checks before the push, so the repo has CI: an empty rollup is
+# GitHub being slow, never a checkless repo — it times out to a human instead
+# of merging the pushed head unchecked.
+PR_HAD_CHECKS=1
+wait_case "(g) had checks: empty stays pending -> 1" 10 10 30 "$SHA" 1 10 "$(rollup "$SHA" '[]')"
+wait_case "(g') had checks: checks appear -> 0"     10 10 30 "$SHA" 0 5 \
+  "$(rollup "$SHA" '[]')" "$(rollup "$SHA" '[]')" "$(rollup "$SHA" '[]')" "$(rollup "$SHA" '[]')" \
+  "$(rollup "$SHA" '[]')" "$(rollup "$SHA" "$GREEN_R")"
+PR_HAD_CHECKS=0
 # a payload without headRefOid (old --json shape) never verifies.
 wait_case "missing headRefOid -> not green"         2 10 0 "$SHA" 1 2 "{\"statusCheckRollup\":$GREEN_R}"
 
@@ -136,7 +146,7 @@ check "failed fetch -> never green" "$rc" 1
 echo "--- pr_ci_wait_state (pure) ---"
 # state_case <name> <json> <expected-sha> <elapsed> <grace> <want>
 state_case() {
-  local got; got=$(pr_ci_wait_state "$2" "$3" "$4" "$5")
+  local got; got=$(pr_ci_wait_state "$2" "$3" "$4" "$5" "${7:-0}")
   if [ "$got" = "$6" ]; then printf 'PASS  %-52s -> %s\n' "$1" "$got"
   else FAIL=1; printf 'FAIL  %-52s -> %s (want %s)\n' "$1" "$got" "$6"; fi
 }
@@ -149,6 +159,8 @@ state_case "pending on sha"               "$(rollup "$SHA" "$PENDING_R")" "$SHA"
 state_case "old sha green"                "$(rollup "$OLD" "$GREEN_R")"   "$SHA" 999 0   PENDING
 state_case "empty expected sha"           "$(rollup "$SHA" "$GREEN_R")"   ""     999 0   PENDING
 state_case "unparseable json"             "not json"                      "$SHA" 999 0   PENDING
+state_case "empty, had checks, grace long gone" "$(rollup "$SHA" '[]')"    "$SHA" 999 0   PENDING 1
+state_case "green, had checks"            "$(rollup "$SHA" "$GREEN_R")"   "$SHA" 0   120 GREEN   1
 
 # CLAUDE.md §7: on the pushed sha with a non-empty rollup the wait's verdict is
 # pr_ci_state's — one definition of "green". The empty rollup is the deliberate

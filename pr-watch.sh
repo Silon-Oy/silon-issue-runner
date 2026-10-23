@@ -50,7 +50,9 @@
 #                                        statusCheckRollup on the pushed SHA is
 #                                        PENDING until it has stayed empty this
 #                                        long, then GREEN (checkless repo, #354).
-#                                        Keep below PR_WATCH_CI_MAX_POLLS ×
+#                                        Never GREEN when the PR had checks
+#                                        before the push (the repo has CI).
+#                                        Keep below (PR_WATCH_CI_MAX_POLLS - 1) ×
 #                                        PR_WATCH_CI_POLL_SECS or a checkless
 #                                        repo times out instead.
 #   PR_WATCH_ENABLE_SECURITY_GATE        default 0 — OFF. When 1, every merge
@@ -494,6 +496,12 @@ watch_one() {
     _release
     return 4
   fi
+  # Whether this PR had CI checks before any push this invocation makes: if it
+  # did, the repo has CI and an empty rollup after the push is never "checkless"
+  # (pr_ci_wait_state). Read once from the snapshot already in hand.
+  PR_HAD_CHECKS=0
+  [ "$(jq -r '(.statusCheckRollup // []) | length' <<<"$pr_json" 2>/dev/null)" -gt 0 ] 2>/dev/null \
+    && PR_HAD_CHECKS=1
 
   # ----- Un-stick a handover (issues #45 + #276, symptom B) --------------
   # A run this watcher previously handed to a human — via the CI-repair path
@@ -1086,21 +1094,25 @@ _pr_abort_to_human() {
 # head's check runs seconds after the push, so a rollup that is empty or still
 # carries the old headRefOid is PENDING, not GREEN. A checkless repo is still
 # accepted — once its rollup has stayed empty for PR_WATCH_CI_EMPTY_GRACE_SECS —
-# so #276's 10-minute spin does not return. Elapsed time is counted in polls
+# so #276's 10-minute spin does not return — but never when the PR had checks
+# before the push (PR_HAD_CHECKS, set by watch_one): then the repo has CI, and an
+# empty rollup only means GitHub is slow to register it. Elapsed time is counted in polls
 # (i * interval), not wall clock, so the wait is deterministic under test.
-# An empty <expected-sha> fails closed: the SHA condition never holds and the
-# wait times out to 1. Bounded so a stuck/queued pipeline doesn't hang forever.
+# An empty <expected-sha> fails closed at once (rc 1): green is impossible, so
+# there is nothing to wait for. Bounded so a stuck/queued pipeline doesn't hang forever.
 pr_wait_ci_green() {
   local pr_num="$1" expected_sha="${2:-}"
   local max_polls="${PR_WATCH_CI_MAX_POLLS:-40}"   # 40 * 15s = 10 min
   local interval="${PR_WATCH_CI_POLL_SECS:-15}"
   local grace="${PR_WATCH_CI_EMPTY_GRACE_SECS:-120}"
   local i=0 json ci
-  [ -n "$expected_sha" ] || \
+  if [ -z "$expected_sha" ]; then
     log "pr_wait_ci_green: no expected SHA for PR #$pr_num — CI cannot be verified (fail-closed)"
+    return 1
+  fi
   while [ "$i" -lt "$max_polls" ]; do
     if json=$(gh_route pr view "$pr_num" --json headRefOid,statusCheckRollup 2>/dev/null); then
-      ci=$(pr_ci_wait_state "$json" "$expected_sha" "$((i * interval))" "$grace")
+      ci=$(pr_ci_wait_state "$json" "$expected_sha" "$((i * interval))" "$grace" "${PR_HAD_CHECKS:-0}")
       case "$ci" in
         GREEN)
           if [ "$(jq -r '(.statusCheckRollup // []) | length' <<<"$json" 2>/dev/null)" = "0" ]; then
