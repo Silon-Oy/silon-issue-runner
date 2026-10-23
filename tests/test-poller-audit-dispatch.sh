@@ -13,6 +13,8 @@
 #   g  a repo the watchlist does not list is never audited; a foreign host
 #      spawns nothing
 #   h  a usage-limited tick starts no audit
+#   k  the coherence kind (#342): its own interval and session, the same
+#      spawn arguments; each kind's interval schedules only that kind
 #
 # Run: bash tests/test-poller-audit-dispatch.sh
 
@@ -200,6 +202,21 @@ run_poller "$WORK/hh" "$WORK/logs-h" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DA
 [ "$(audit_spawns)" = 0 ] && ok "h a usage-limited tick starts no audit" || bad "h audit started under the usage limit"
 grep -qF "Claude usage limit in force" "$WORK/logs-h/run-issues-poller.log" \
   && ok "h the usage limit was in force" || bad "h the usage limit fixture did not take effect"
+
+# ---- k: the coherence kind --------------------------------------------------------
+echo 0 > "$LS_SEQ"
+run_poller "$WORK/hk" "$WORK/logs-k" "$WL" RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS=7
+[ "$(audit_spawns)" = 1 ] && ok "k coherence interval: exactly one audit spawn" || bad "k coherence: $(audit_spawns) spawns"
+line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)
+case "$line" in
+  *"-s run-issues-audit-coherence-example-org-repoa "*"'$ROOT/coherence-audit.sh' '$REPO' --remote 'origin' --watchlist '$WL'"*)
+    ok "k spawns coherence-audit.sh in its own session with the shared arguments" ;;
+  *) bad "k unexpected spawn: $line" ;;
+esac
+[ -s "$WORK/logs-k/.audit-last-coherence-example-org-repoa" ] && ok "k coherence start recorded under its own kind" \
+                                                              || bad "k no coherence state file"
+[ ! -e "$WORK/logs-k/.audit-last-security-example-org-repoa" ] && ok "k the coherence interval does not schedule security" \
+                                                              || bad "k security scheduled by the coherence interval"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "poller-audit-dispatch: all passed" || echo "poller-audit-dispatch: FAILURES"

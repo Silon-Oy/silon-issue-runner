@@ -14,6 +14,10 @@
 # (kind, repo × remote), read in O(1). Nothing here reads run-dirs, state.jsonl,
 # logs or GitHub.
 #
+# Kinds: security (security-audit.sh, #339) and coherence (coherence-audit.sh,
+# #342). Every kind's script takes the same arguments (<repo> --remote <name>
+# --watchlist <path>), so the spawn needs no per-kind branch.
+#
 # The time is recorded when the audit STARTS, not when it ends: an audit that
 # fails every time (no remote HEAD, agent cannot launch) then costs a bounded
 # number of attempts instead of one agent call per tick. Its OUTCOME is recorded
@@ -29,7 +33,7 @@ _AUDIT_SCHEDULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # audit_kinds — the audit kinds the poller schedules, space-separated.
 audit_kinds() {
-  printf 'security'
+  printf 'security coherence'
 }
 
 # audit_kind_script <kind> — the package-root script that runs <kind>. An
@@ -37,7 +41,8 @@ audit_kinds() {
 # launch a guessed path. rc 1 (and no output) for an unknown kind.
 audit_kind_script() {
   case "${1:-}" in
-    security) printf 'security-audit.sh' ;;
+    security)  printf 'security-audit.sh' ;;
+    coherence) printf 'coherence-audit.sh' ;;
     *) return 1 ;;
   esac
 }
@@ -48,7 +53,8 @@ audit_kind_script() {
 # example variable that no reader names. rc 1 for an unknown kind.
 audit_kind_env_var() {
   case "${1:-}" in
-    security) printf 'RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS' ;;
+    security)  printf 'RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS' ;;
+    coherence) printf 'RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS' ;;
     *) return 1 ;;
   esac
 }

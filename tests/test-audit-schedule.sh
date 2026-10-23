@@ -30,10 +30,12 @@ WORK=$(mktemp -d -t audit-schedule.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- kind table -----------------------------------------------------------------
-check "security is a scheduled kind" "$(audit_kinds)" "security"
+check "security and coherence are the scheduled kinds" "$(audit_kinds)" "security coherence"
 check "security runs security-audit.sh" "$(audit_kind_script security)" "security-audit.sh"
 check "the script exists in the package root" "$([ -x "$ROOT/$(audit_kind_script security)" ] && echo y)" "y"
 check "security interval variable" "$(audit_kind_env_var security)" "RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS"
+check "coherence runs coherence-audit.sh" "$(audit_kind_script coherence)" "coherence-audit.sh"
+check "coherence interval variable" "$(audit_kind_env_var coherence)" "RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS"
 check "unknown kind has no script" "$(audit_kind_script nosuch)" ""
 check "unknown kind fails" "$(rc_of audit_kind_script nosuch)" "1"
 check "unknown kind has no variable" "$(rc_of audit_kind_env_var nosuch)" "1"
@@ -61,6 +63,9 @@ check "absurdly large is off" "$(audit_interval_days '' security 99999999)" ""
 check "invalid JSON is off, even with a machine value" "$(audit_interval_days '{not json' security 7)" ""
 check "non-object config is off" "$(audit_interval_days '[1,2]' security 7)" ""
 check "another kind's key does not apply" "$(audit_interval_days '{"coherence":{"audit_interval_days":1}}' security '')" ""
+check "coherence reads its own key" "$(audit_interval_days '{"coherence":{"audit_interval_days":3}}' coherence 7)" "3"
+check "security's key does not apply to coherence" "$(audit_interval_days '{"security":{"audit_interval_days":1}}' coherence '')" ""
+check "coherence 0 switches the machine's schedule off" "$(audit_interval_days '{"coherence":{"audit_interval_days":0}}' coherence 7)" ""
 check "unknown kind is never scheduled" "$(audit_interval_days '{"nosuch":{"audit_interval_days":1}}' nosuch 1)" ""
 
 # ---- state file -------------------------------------------------------------------
