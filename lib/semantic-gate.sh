@@ -23,6 +23,33 @@ PR_WATCH_SEMANTIC_CONTEXT_MAX="${PR_WATCH_SEMANTIC_CONTEXT_MAX:-60000}"
 # The head-branch prefix of the runner's own PRs (orchestrate.sh's branch name).
 SEMANTIC_SIBLING_PREFIX="auto-run/"
 
+# How many of the base's newest first-parent commits the window looks at. A
+# bound, so the walk is O(work) (CLAUDE.md §5.4); a window that fills it is
+# reported as cut short, never as complete.
+SEMANTIC_WINDOW_MAX=500
+
+# semantic_window <since-iso> — reads "<sha> <committer-time>" lines of the base's
+# first-parent chain on stdin, newest first, the time as YYYY-MM-DDTHH:MM:SSZ in
+# UTC (comparable as a string with run.json's started_at). Prints the shas
+# committed at or after <since-iso>, oldest first.
+#
+# Every line is filtered; the walk does not stop at the first older commit.
+# `git rev-list --since` does stop there, so a commit a human made before the
+# run and pushed during it hid every sibling merged before it — a silent pass.
+# (`--since-as-filter` would do this in git, but needs git 2.42.)
+#
+# rc 2 when all SEMANTIC_WINDOW_MAX lines are in the window: the walk may have
+# cut it short, and a partial window is not a pass.
+semantic_window() {
+  local since="${1:-}"
+  awk -v since="$since" -v max="$SEMANTIC_WINDOW_MAX" '
+    NF >= 2 { n++; if ($2 >= since) { keep[++k] = $1 } else { older = 1 } }
+    END {
+      for (i = k; i >= 1; i--) print keep[i]
+      if (n >= max && !older) exit 2
+    }'
+}
+
 # semantic_dirs_of — paths on stdin, their directories on stdout, sorted and
 # unique. A root-level file is `.`.
 semantic_dirs_of() {

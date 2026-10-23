@@ -2002,8 +2002,9 @@ _pr_gate_hold_to_human() {
 # rebased (P5) has the base's tip as its merge-base, so `merge-base..base` would be
 # empty exactly when siblings landed under it. The base's commits are dated by
 # their merge (GitHub rewrites the committer on rebase and squash merges), so
-# `--since=<started_at>` is that window. A run-dir without started_at falls back to
-# merge-base..base.
+# the commits dated at or after <started_at> are that window (semantic_window,
+# which filters rather than stopping at the first older commit). A run-dir without
+# started_at falls back to merge-base..base.
 #
 # Cost (CLAUDE.md §5.2/§5.4): at most ONE gh call, a REST listing, and only when
 # the base has gained commits in the window; everything else is local git.
@@ -2019,7 +2020,12 @@ _pr_semantic_trigger() {
   local started range mb
   started=$(run_field "$rid" '.started_at')
   if [ -n "$started" ]; then
-    range=$( cd "$worktree" && git rev-list --first-parent --reverse --since="$started" "$base" 2>/dev/null ) || return 2
+    range=$( cd "$worktree" && TZ=UTC git log --first-parent -n "$SEMANTIC_WINDOW_MAX" \
+               --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%H %cd' "$base" 2>/dev/null \
+             | semantic_window "$started" ) || {
+      log "semantic gate: could not read a complete window of '$base' since $started for PR #$pr_num — not a pass"
+      return 2
+    }
   else
     mb=$( cd "$worktree" && git merge-base HEAD "$base" 2>/dev/null ) || return 2
     range=$( cd "$worktree" && git rev-list --first-parent --reverse "$mb..$base" 2>/dev/null ) || return 2
