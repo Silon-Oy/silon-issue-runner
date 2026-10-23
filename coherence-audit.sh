@@ -14,7 +14,7 @@
 #   2. their combined change surface (lib/pr-surface.sh, shared with the epic
 #      review)
 #   3. one agent pass over the repo at <remote>/<default-branch>
-#      (prompts/09-coherence-audit.md), with the merge gate's result format
+#      (prompts/12-coherence-audit.md), with the merge gate's result format
 #   4. every finding → one issue with the `coherence` label and a fingerprint
 #      marker (lib/finding-issues.sh). NEVER pickup labels: whether and when to
 #      refactor is a human's choice.
@@ -81,7 +81,7 @@ machine_env_capture
 AUDIT_KIND="coherence"
 # The label every coherence issue carries — also the finding kind in the marker.
 COHERENCE_AUDIT_LABEL="coherence"
-AUDIT_STEP="09-coherence-audit"
+AUDIT_STEP="12-coherence-audit"
 RUNNER_BRANCH_PREFIX="auto-run/"
 DEFAULT_WINDOW_DAYS=7
 
