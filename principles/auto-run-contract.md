@@ -32,7 +32,11 @@ interaktiiviseen työhön kirjoitettu ohje taistelisi automaatiota vastaan, ja a
 kysymykseen, jota kukaan ei näe.
 
 Rajoittimet eivät ole lupakyselyssä vaan rakenteessa: ajo tapahtuu omassa git-worktreessään
-omalla feature-haarallaan, ja pull request on ihmisen katselmoitavissa ennen mergeä.
+omalla feature-haarallaan, ja pull request on ihmisen katselmoitavissa ennen mergeä — **paitsi
+kun issuella on `auto-merge`-label** (epicin alaissueilla oletuksena, ellei `manual-merge`
+estä). Silloin pull request mergeytyy ilman ihmisen katselmusta heti kun vaaditut
+CI-tarkistukset ovat vihreät, ja voimassa ovat vain rakenteelliset rajat: oma worktree, oma
+feature-haara ja CI:n läpäisy. Älä siis oleta, että joku lukee muutoksesi ennen kuin se on oletushaarassa.
 
 ## Rajat
 

@@ -70,23 +70,21 @@ ajon ajaksi selaimella ladattavan sivuston (esim. WordPress/Bedrock-worktree per
 
 ## Committaaminen (kriittinen)
 
-Tämä ajo on osa `/run-issues`-pipelineä. Post-commit-hookit (doc-update +
-codex-security) ajetaan **synkronisesti** samalla haaralla, jotta niiden mahdolliset
-korjauscommitit päätyvät samaan PR:ään.
-
-Käytä jompaakumpaa seuraavista:
+Tämä ajo on osa `/run-issues`-pipelineä. Committaa `sync_commit`illa, jotta commit-ketju
+pysyy synkronisena: jos kohdeympäristössä on post-commit-hook, joka tunnistaa lipun
+`POST_COMMIT_SYNC=1`, se ajetaan loppuun ennen kuin commit palaa, ja sen mahdolliset
+korjauscommitit päätyvät samalle haaralle ja samaan PR:ään. **Paketti ei takaa, että
+tällaista hookia on** — ilman sitä lippu on merkityksetön ympäristömuuttuja, eikä yksikään
+tarkistus aja commitin yhteydessä tämän ohjeen puolesta.
 
 ```bash
-# Vaihtoehto A: ympäristömuuttuja-prefix
-POST_COMMIT_SYNC=1 git commit -m "feat: ..."
-
-# Vaihtoehto B: jaettu funktio
 source "$HOME/.claude/scripts/run-issues/lib/hook-runner.sh"
 sync_commit "feat: ..."
 ```
 
-ÄLÄ käytä paljasta `git commit`-komentoa — silloin hookit ajetaan taustalla ja
-korjauscommitit eivät ehdi PR:ään ennen sen avaamista.
+`sync_commit` ei stageaa mitään — aja `git add` ensin. Paljas `git commit` ohittaa lipun:
+jos hook on olemassa, se voi ajaa taustalla, ja sen korjauscommitit eivät ehdi PR:ään ennen
+sen avaamista.
 
 ## Päämäärä
 

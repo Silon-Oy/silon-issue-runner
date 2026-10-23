@@ -816,7 +816,12 @@ komentoihin tai verkkokutsuihin sen jälkeen kun ajo on käynnistetty.
 Tämä on koko paketin toimintaperiaate, ei asetus: ihmistä ei ole silmukassa, joten
 lupakysely jäisi vastaamatta ja ajo jäisi roikkumaan. Rajoittimet ovat muualla: ajo tapahtuu
 omassa git-worktreessään omalla feature-haarallaan, ja PR on ihmisen katselmoitavissa ennen
-mergeä.
+mergeä — **paitsi kun issuella on `auto-merge`-label**. Orkestraattori siirtää labelin
+PR:lle, ja PR-vahti mergeää PR:n ilman ihmisen katselmusta heti kun vaaditut CI-tarkistukset
+ovat vihreät ja PR on mergeattavissa. Epicin alaissueet saavat labelin oletuksena, ellei
+epic tai alaissue kanna `manual-merge`-labelia. Ilman katselmusta voimassa
+ovat vain rakenteelliset rajat: oma worktree, oma feature-haara (ei koskaan suoraan
+oletushaaraan) ja CI:n läpäisy.
 
 ### 7.2 Kohderepon oma shell-koodi ajetaan
 
