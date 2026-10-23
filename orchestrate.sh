@@ -287,6 +287,8 @@ source "$SCRIPT_DIR/lib/gitignore.sh"
 source "$SCRIPT_DIR/lib/host.sh"
 # shellcheck source=lib/state.sh
 source "$SCRIPT_DIR/lib/state.sh"
+# shellcheck source=lib/sibling-runs.sh
+source "$SCRIPT_DIR/lib/sibling-runs.sh"
 # shellcheck source=lib/claude-call.sh
 source "$SCRIPT_DIR/lib/claude-call.sh"
 # shellcheck source=lib/evolution-findings.sh
@@ -1187,6 +1189,25 @@ EOF
   state_event "$RUN_DIR" "issue_images_prepared" "count=${#arr[@]}" || true
 }
 
+# prepare_sibling_runs — fills SIBLING_RUNS with the cycle-review section of
+# the same repo's sibling runs (lib/sibling-runs.sh, issue #337) and logs the
+# outcome. Never fatal: the section is an optimisation, not a gate.
+SIBLING_RUNS=""
+prepare_sibling_runs() {
+  SIBLING_RUNS=$(sibling_runs_section "$REPO_ROOT" "$OWNER_REPO" "$REMOTE_NAME" \
+    "$RUN_DIR" "$ISSUE_NUM" 2>/dev/null) || true
+  local count
+  count=$(printf '%s\n' "$SIBLING_RUNS" | grep -c '^- \*\*' || true)
+  case "$SIBLING_RUNS" in
+    *"ei voitu lukea"*)
+      log "sibling-runs: could not be read — the review prompt says so"
+      state_event "$RUN_DIR" "sibling_runs_read" "result=error" || true ;;
+    *)
+      log "sibling-runs: $count sibling run(s)"
+      state_event "$RUN_DIR" "sibling_runs_read" "result=ok" "count=$count" || true ;;
+  esac
+}
+
 # The run-path label that routes S6 through the light review (issue #312). Its
 # criteria live in skills/claude-issue-runner/SKILL.md ("Ajopolku"); the label
 # is written by the issue author, never by the runner.
@@ -1210,7 +1231,8 @@ run_light_review() {
     "ISSUE_BODY=$ISSUE_BODY" \
     "ISSUE_COMMENTS=$ISSUE_COMMENTS" \
     "ISSUE_IMAGES=$ISSUE_IMAGES" \
-    "REPO_ROOT=$REPO_ROOT"
+    "REPO_ROOT=$REPO_ROOT" \
+    "SIBLING_RUNS=$SIBLING_RUNS"
 
   local lr_rc=0
   (
@@ -1262,6 +1284,11 @@ run_cycle_review() {
   # Download any embedded issue images so the cycle-review agent can Read them.
   prepare_issue_images
 
+  # The same repo's other live runs and open runner PRs (issue #337), computed
+  # once for both review branches. Advisory: a read failure renders as such in
+  # the prompt and never stops the run.
+  prepare_sibling_runs
+
   # A --continue keeps the run_path its first S6 pass recorded.
   if [ -z "$CLARIFICATION_CONTEXT" ]; then
     if issue_json_has_label "$RUN_DIR/issue.json" "$LIGHT_RUN_LABEL"; then
@@ -1283,6 +1310,7 @@ run_cycle_review() {
     "REPO_ROOT=$REPO_ROOT" \
     "REPO_CLAUDE_MD=$repo_claude_md" \
     "CLARIFICATION_CONTEXT=$CLARIFICATION_CONTEXT" \
+    "SIBLING_RUNS=$SIBLING_RUNS" \
     "RUN_PATH_SECTION=$(run_path_section 01-cycle-review)"
 
   local cr_rc=0

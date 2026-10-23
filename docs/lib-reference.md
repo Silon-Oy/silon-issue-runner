@@ -41,6 +41,7 @@ lukuihin.
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
 | `rate-limit.sh` | Rate-limitin **tekstuaalinen** tunnistus ja jaettu perääntyminen (§5.1) |
 | `run-terminate.sh` | Elävän ajon turvallinen lopetus **kutsuttavana funktiona**. Irrotettu pollerista, joka `exit 0`si source-hetkellä; `stop-run.sh` ja `run-epic.sh --stop` käyttävät samaa polkua monistamatta turvalogiikkaa |
+| `sibling-runs.sh` | Saman repon sisarajot cycle reviewlle (#337): avoimet runnerin PR:t **yhdellä** REST-listauksella per repo ja tämän koneen elävät run-dirit, muuttuneet tiedostot paikallisista refeistä. Neuvoa-antava: lukuvirhe renderöityy promptiin virheenä, ei tyhjänä listana eikä estä ajoa. `list_sibling_runs` on irrotettu S6:sta sarjoitusta varten |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-github.sh` | `status.sh --github`-rikastus. Ei omaa CI-rollupia eikä merge-päätöstä — kutsuu `pr-watch-lib.sh`:n omia |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot. `_iso_to_epoch` asuu täällä, jotta poller ja näkymä laskevat iän identtisesti |

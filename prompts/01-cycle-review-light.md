@@ -25,6 +25,13 @@ pitääkö luokitus.
 
 Repo: `{{REPO_ROOT}}`
 
+## Saman repon rinnakkaiset ajot
+
+Muut tällä hetkellä käynnissä olevat ajot samassa repossa: tämän koneen elävät ajot ja avoimet
+runnerin PR:t (`auto-run/`-haarat).
+
+{{SIBLING_RUNS}}
+
 ## Tarkistukset
 
 1. **Koodi vastaa yhä issuen kuvausta.** Lue issuen nimeämät tiedostot, funktiot tai
@@ -33,6 +40,11 @@ Repo: `{{REPO_ROOT}}`
 2. **Muutos on rajattu.** Mahtuuko toteutus kevyen polun kriteereihin: syy on tiedossa,
    enintään noin 3 tiedostoa tai 50 riviä, helppo perua? Jos muutos ylittää tila-,
    rinnakkaisuus- tai integraatiorajan, luokitus ei pidä.
+
+Jos jokin sisarajo toteuttaa osan tästä muutoksesta tai muuttaa samoja tiedostoja, nimeä
+päällekkäisyys φ-osiossa ja kirjaa Implementerille, **mitä ei toteuteta itse, koska sisarajo
+tekee sen**. Päällekkäisyys ei yksin kaada luokitusta. Jos sisarajoja ei voitu lukea, älä
+oleta, ettei niitä ole.
 
 Älä tee täyttä analyysiä. Kirjoita lyhyesti:
 
