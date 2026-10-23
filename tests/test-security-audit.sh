@@ -31,6 +31,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 AUDIT="$HERE/../security-audit.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
