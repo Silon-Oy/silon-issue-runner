@@ -209,6 +209,20 @@ CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
 # disable. Rides on the per-repo command below like the conflict flag.
 CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
 
+# Likewise enable the security merge gate (issue #334): pr-watch.sh defaults it
+# OFF, the poller flips it ON, poller.env can export 0 to disable. The machine's
+# hold threshold rides along ONLY when set: an empty prefix would count as "set"
+# under lib/machine-env.sh and mask a value in the machine env file. A target
+# repo's own .security.hold_min_severity still wins over both.
+SECURITY_GATE="${PR_WATCH_ENABLE_SECURITY_GATE:-1}"
+# Letters only: the value is spliced into the tmux command line, and an unknown
+# word still fails closed in pr-watch.sh (strictest threshold).
+SECURITY_HOLD_PREFIX=""
+SECURITY_HOLD_MIN="$(printf '%s' "${PR_WATCH_SECURITY_HOLD_MIN_SEVERITY:-}" | tr -cd 'A-Za-z')"
+if [ -n "$SECURITY_HOLD_MIN" ]; then
+  SECURITY_HOLD_PREFIX="PR_WATCH_SECURITY_HOLD_MIN_SEVERITY='$SECURITY_HOLD_MIN' "
+fi
+
 # Materialise the watchlist repos into an array so the rotation cursor below can
 # resume iteration from an arbitrary offset. while-read (not mapfile) for bash
 # 3.2 compatibility.
@@ -369,7 +383,7 @@ for (( i=0; i<N; i++ )); do
       echo "$(date -u +%FT%TZ) pr-watch-poller: launching $SESSION for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
 
       tmux new-session -d -s "$SESSION" \
-        "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' '$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
+        "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' PR_WATCH_ENABLE_SECURITY_GATE='$SECURITY_GATE' ${SECURITY_HOLD_PREFIX}'$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
     done
   fi
 

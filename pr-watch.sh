@@ -46,6 +46,32 @@
 #                                        the AI CI-repair claude call.
 #   PR_WATCH_CI_LOG_MAX                  default 60000 — byte cap on the failed-CI
 #                                        log excerpt fed to the agent's prompt.
+#   PR_WATCH_ENABLE_SECURITY_GATE        default 0 — OFF. When 1, every merge
+#                                        (MERGE, and REBASE / FIX_CI once they are
+#                                        green) first passes the security MERGE
+#                                        GATE (issue #334): an agent reviews the
+#                                        PR's FINAL diff (base...head) in a fresh
+#                                        context. Findings at or above the hold
+#                                        threshold are fixed by an agent in the
+#                                        feature worktree, CI is revalidated and
+#                                        the new head is reviewed again. If the fix
+#                                        fails, the cap is spent or the review
+#                                        cannot run, the PR is held for a human
+#                                        (exit 10). The result is recorded per head
+#                                        SHA, so a head is reviewed once.
+#   PR_WATCH_MAX_SECURITY_FIXES          default 1 — fix-attempt cap per PR
+#                                        (merge_gate_fix_attempted events, read
+#                                        from the tail of state.jsonl).
+#   PR_WATCH_SECURITY_REVIEW_TIMEOUT     default 1800 — budget (s) for the review call.
+#   PR_WATCH_SECURITY_FIX_TIMEOUT        default 1800 — budget (s) for the fix call.
+#   PR_WATCH_SECURITY_HOLD_MIN_SEVERITY  default high — the least severe finding
+#                                        that holds the merge (critical|high|
+#                                        medium|low). The target repo's
+#                                        .claude/run-issues.json
+#                                        `.security.hold_min_severity`, read from
+#                                        the BASE branch, WINS over this value.
+#   PR_WATCH_GATE_TAIL_LINES             default 1000 — state.jsonl tail window
+#                                        the gate reads (lib/merge-gate.sh).
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
 #   PR_WATCH_LABELS_CSV                  optional scan filter (unused gate today;
 #                                        the merge label is the real gate).
@@ -67,6 +93,9 @@
 #   9  gh is missing or unauthenticated (checked once per run before the first PR
 #      call, same lib/preflight.sh mechanism as the orchestrator's S0 gate) — a
 #      durable condition, not the transient "retry next poll" of code 4
+#   10 a merge gate held the PR for a human (findings at or above the hold
+#      threshold the agent could not fix, fix cap spent, or the review could not
+#      run — PR commented with the findings, needs-human label added)
 
 set -euo pipefail
 
@@ -111,6 +140,10 @@ machine_env_capture
 . "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/pr-watch-lib.sh
 . "$SCRIPT_DIR/lib/pr-watch-lib.sh"
+# shellcheck source=lib/merge-gate.sh
+# The merge gate's pure parts (issue #334): result parsing, the head-SHA and
+# attempt bookkeeping read from state.jsonl's tail, the severity threshold.
+. "$SCRIPT_DIR/lib/merge-gate.sh"
 
 # rate_limit_* (issue #126): the watcher spends the SAME GitHub quota as the
 # pollers, so it must be able to trip the shared backoff. Functions only.
@@ -150,8 +183,17 @@ PR_WATCH_ENABLE_CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-0}"
 PR_WATCH_MAX_CI_REPAIRS="${PR_WATCH_MAX_CI_REPAIRS:-1}"
 PR_WATCH_CI_REPAIR_TIMEOUT="${PR_WATCH_CI_REPAIR_TIMEOUT:-1800}"
 PR_WATCH_CI_LOG_MAX="${PR_WATCH_CI_LOG_MAX:-60000}"
+PR_WATCH_ENABLE_SECURITY_GATE="${PR_WATCH_ENABLE_SECURITY_GATE:-0}"
+PR_WATCH_MAX_SECURITY_FIXES="${PR_WATCH_MAX_SECURITY_FIXES:-1}"
+PR_WATCH_SECURITY_REVIEW_TIMEOUT="${PR_WATCH_SECURITY_REVIEW_TIMEOUT:-1800}"
+PR_WATCH_SECURITY_FIX_TIMEOUT="${PR_WATCH_SECURITY_FIX_TIMEOUT:-1800}"
+PR_WATCH_SECURITY_HOLD_MIN_SEVERITY="${PR_WATCH_SECURITY_HOLD_MIN_SEVERITY:-}"
 PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
 PR_WATCH_LABELS_CSV="${PR_WATCH_LABELS_CSV:-}"
+
+# The merge gates, in the order they run before P6 (issue #334). Each name has
+# its content in _merge_gate_spec; the mechanism (pr_run_merge_gate) is shared.
+MERGE_GATES="security"
 
 usage() {
   echo "usage: pr-watch.sh [--remote <name>] <repo-root> <pr-number|scan>" >&2
@@ -320,7 +362,9 @@ scan_candidates() {
       blocked)
         reason=$(run_field "$rid" '.blocked_reason')
         case "$reason" in
-          ci_repair_failed*) : ;;
+          # *_gate_failed*: a merge-gate hold (issue #334), re-armed like the
+          # CI-repair handover once a human removes needs-human.
+          ci_repair_failed*|*_gate_failed*) : ;;
           *) continue ;;
         esac
         ;;
@@ -440,7 +484,7 @@ watch_one() {
   # ci_red_after_resolution*, pr_conflicted/rebase_conflict*), so gating on the
   # reason alone is sufficient.
   case "$run_blocked_reason" in
-    ci_repair_failed*|ci_red_after_resolution*|rebase_conflict*)
+    ci_repair_failed*|ci_red_after_resolution*|rebase_conflict*|*_gate_failed*)
       if pr_has_label "$pr_json" needs-human; then
         log "PR #$pr_num held by needs-human (automation handover) — skipping until a human removes the label"
         [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
@@ -550,6 +594,34 @@ watch_one() {
       ;;
   esac
 
+  # ----- P5c: Merge gates (issue #334) -----------------------------------
+  # Every path that reaches P6 — MERGE, and REBASE / FIX_CI once green — passes
+  # here, so code the watcher's own agents changed is reviewed in its FINAL form.
+  # pr_decide stays pure: whether a gate runs is read here, in the caller. A gate
+  # that fixes a finding moves the head, which makes an earlier gate's review
+  # stale — so with more than one gate the pass repeats until no gate moved the
+  # head (bounded: every move costs a capped fix attempt).
+  PR_GATE_HEAD_SHA=""
+  local gate grc gates_on=0 gate_moved
+  for gate in $MERGE_GATES; do
+    _merge_gate_spec "$gate" && [ "$GATE_ENABLED" = "1" ] && gates_on=$((gates_on + 1))
+  done
+  while [ "$gates_on" -gt 0 ]; do
+    gate_moved=0
+    for gate in $MERGE_GATES; do
+      _merge_gate_spec "$gate" || continue
+      [ "$GATE_ENABLED" = "1" ] || continue
+      grc=0
+      pr_run_merge_gate "$gate" "$pr_num" "$rid" "$run_dir" "$pr_json" || grc=$?
+      if [ "$grc" -ne 0 ]; then
+        _release
+        return "$grc"
+      fi
+      [ "$PR_GATE_START_SHA" = "$PR_GATE_HEAD_SHA" ] || gate_moved=1
+    done
+    [ "$gate_moved" = 1 ] && [ "$gates_on" -gt 1 ] || break
+  done
+
   # ----- P6: Merge --------------------------------------------------------
   # Merge as the App so the "Merged by" attribution on the PR is <app>[bot].
   #
@@ -570,9 +642,14 @@ watch_one() {
   # auto-merge run left another one behind. The remote branch is deleted on its
   # own in P6b; the local one dies in P9, where cleanup-run.sh removes the
   # worktree first — the order that script has documented all along.
+  #
+  # A merge gate reviewed one exact head; --match-head-commit makes GitHub refuse
+  # the merge if the branch moved after that review (issue #334).
   local merge_out
+  local -a head_args=()
+  [ -n "$PR_GATE_HEAD_SHA" ] && head_args=(--match-head-commit "$PR_GATE_HEAD_SHA")
   log "merging PR #$pr_num (--rebase)"
-  if ! merge_out=$(gh_route pr merge "$pr_num" --rebase 2>&1); then
+  if ! merge_out=$(gh_route pr merge "$pr_num" --rebase ${head_args[@]+"${head_args[@]}"} 2>&1); then
     # A merge that reports failure may still have happened, and the fallback is
     # for a branch GitHub will not rebase (issue #41) — firing it at a merged PR
     # only yields "was already merged", a second wrong diagnosis on top of the
@@ -583,7 +660,7 @@ watch_one() {
       log "PR #$pr_num: gh reported an error but the PR is MERGED — continuing: ${merge_out:-<no output>}"
     else
       log "PR #$pr_num: rebase merge failed (merge commit on branch?) — retrying with --merge: ${merge_out:-<no output>}"
-      if ! merge_out=$(gh_route pr merge "$pr_num" --merge 2>&1); then
+      if ! merge_out=$(gh_route pr merge "$pr_num" --merge ${head_args[@]+"${head_args[@]}"} 2>&1); then
         log "merge failed for PR #$pr_num: ${merge_out:-<no output>}"
         [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
           state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=merge_failed"
@@ -778,32 +855,12 @@ pr_resolve() {
 
   # Fetch first so a network/auth failure is distinguishable from a conflict
   # (transient — retry next poll, do not claim a conflict or comment).
-  # When App mode is on we pass the App token via http.extraheader so the
-  # fetch credential matches the eventual push credential (otherwise a repo
-  # configured to only accept the App's PAT-equivalent would refuse fetch).
-  local _watch_auth_header=""
-  local _h=""
-  if _h=$(gha_git_push_header 2>/dev/null); then
-    _watch_auth_header="$_h"
+  if ! _pr_fetch "$worktree" "$base_ref"; then
+    log "git fetch $PR_ROUTE_REMOTE $base_ref failed for PR #$pr_num — retrying next poll"
+    [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+      state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
+    return 4
   fi
-  _h=""
-  if [ -n "$_watch_auth_header" ]; then
-    if ! ( cd "$worktree" && git -c "http.extraheader=$_watch_auth_header" fetch "$PR_ROUTE_REMOTE" "$base_ref" --quiet ); then
-      log "git fetch $PR_ROUTE_REMOTE $base_ref failed for PR #$pr_num — retrying next poll"
-      [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
-        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
-      _watch_auth_header=""
-      return 4
-    fi
-  else
-    if ! ( cd "$worktree" && git fetch "$PR_ROUTE_REMOTE" "$base_ref" --quiet ); then
-      log "git fetch $PR_ROUTE_REMOTE $base_ref failed for PR #$pr_num — retrying next poll"
-      [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
-        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
-      return 4
-    fi
-  fi
-  _watch_auth_header=""
 
   # Attempt the rebase INSIDE the feature worktree, never on the base branch.
   local rebase_rc=0
@@ -1053,6 +1110,28 @@ _pr_call_agent() {
   return "$crc"
 }
 
+# _pr_fetch <worktree> <ref>... — fetch refs from the PR's OWN remote
+# (PR_ROUTE_REMOTE, issue #33). When App mode is on the App token goes via
+# http.extraheader so the fetch credential matches the eventual push credential
+# (otherwise a repo configured to only accept the App's PAT-equivalent would
+# refuse the fetch); the header is captured to a local and never echoed.
+# Returns 0 on success, 1 on failure.
+_pr_fetch() {
+  local worktree="$1"; shift
+  local remote="${PR_ROUTE_REMOTE:-origin}"
+  local _hdr="" _h=""
+  if _h=$(gha_git_push_header 2>/dev/null); then _hdr="$_h"; fi
+  _h=""
+  local ok=1
+  if [ -n "$_hdr" ]; then
+    ( cd "$worktree" && git -c "http.extraheader=$_hdr" fetch "$remote" "$@" --quiet ) && ok=0
+  else
+    ( cd "$worktree" && git fetch "$remote" "$@" --quiet ) && ok=0
+  fi
+  _hdr=""
+  return "$ok"
+}
+
 # _pr_force_push <worktree> <branch> — push the branch with --force-with-lease,
 # using the App token via http.extraheader when App mode is on (same pattern as
 # the orchestrator's push; the header is captured to a local and never echoed).
@@ -1086,8 +1165,11 @@ _pr_force_push() {
 # --version we must neither guess nor fire, so we only verify its first token is
 # callable (same policy as S0's `have` mode). Logs the reason once on failure.
 # Returns 0 usable, 1 not.
+#
+# Also the merge gate's launch check (issue #334); [<what>] names the caller in
+# the log line.
 pr_ci_repair_preflight() {
-  local reason=""
+  local what="${1:-CI-repair}" reason=""
   if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
     # shellcheck disable=SC2086
     if ! preflight_probe_claude $RUN_ISSUES_CLAUDE_CMD; then
@@ -1100,7 +1182,7 @@ pr_ci_repair_preflight() {
     fi
   fi
   [ -z "$reason" ] && return 0
-  log "CI-repair unavailable: $reason"
+  log "$what unavailable: $reason"
   return 1
 }
 
@@ -1304,6 +1386,315 @@ _pr_ci_handover_to_human() {
     "(AI-CI-korjaus on päällä \`PR_WATCH_ENABLE_CI_REPAIR=1\`. Poista \`needs-human\`-label kun asia on hoidettu — valvoja käsittelee PR:n uudelleen ja mergaa sen kun CI on vihreä.)")
   printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
     log "failed to post ci-repair comment on PR #$pr_num"
+}
+
+# ===== P5c: Merge gates (issue #334) ======================================
+# A merge gate is an agent review of the PR's FINAL head right before P6. The
+# MECHANISM below is gate-agnostic: head sync, the per-SHA record, the review /
+# fix / revalidate loop, the attempt cap and the hold. A gate contributes only its
+# CONTENT through _merge_gate_spec — prompts, switch, cap, timeouts, threshold —
+# and the result format of lib/merge-gate.sh. Adding a gate = two prompts, one
+# spec case, one name in MERGE_GATES.
+
+# _merge_gate_spec <gate> — set the gate's content into GATE_* globals; rc 1 for
+# an unknown gate.
+_merge_gate_spec() {
+  case "$1" in
+    security)
+      GATE_TITLE="Tietoturvakatselmus"
+      GATE_ENABLED="$PR_WATCH_ENABLE_SECURITY_GATE"
+      GATE_SWITCH="PR_WATCH_ENABLE_SECURITY_GATE"
+      GATE_REVIEW_STEP="06-security-review"
+      GATE_FIX_STEP="07-security-fix"
+      GATE_MAX_FIXES="$PR_WATCH_MAX_SECURITY_FIXES"
+      GATE_REVIEW_TIMEOUT="$PR_WATCH_SECURITY_REVIEW_TIMEOUT"
+      GATE_FIX_TIMEOUT="$PR_WATCH_SECURITY_FIX_TIMEOUT"
+      GATE_HOLD_MACHINE="$PR_WATCH_SECURITY_HOLD_MIN_SEVERITY"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# pr_run_merge_gate <gate> <pr-number> <run-id> <run-dir> <pr-json>
+# Runs one gate against the PR's current head. Sets PR_GATE_START_SHA (the head
+# it found) and PR_GATE_HEAD_SHA (the head it passed — differs after a fix).
+#
+# Returns: 0  the head passed (clean, or only findings below the threshold)
+#          10 held for a human (needs-human + comment listing the findings)
+#          4  not actionable this tick (no run-dir / worktree, fetch failed,
+#             worktree not at the PR head) — fail-closed: never a merge
+pr_run_merge_gate() {
+  local gate="$1" pr_num="$2" rid="$3" run_dir="$4" pr_json="$5"
+  PR_GATE_START_SHA=""
+  PR_GATE_HEAD_SHA=""
+  _merge_gate_spec "$gate" || return 4
+
+  # The per-head record lives in the run-dir: without it a head could be reviewed
+  # (and fixed) on every tick, and a review we cannot record is not a pass.
+  if [ -z "$run_dir" ] || [ ! -d "$run_dir" ]; then
+    log "merge gate '$gate': no run-dir for PR #$pr_num — cannot record a review against a head; not merging"
+    return 4
+  fi
+  local worktree branch base_ref
+  worktree=$(run_field "$rid" '.worktree_path')
+  branch=$(run_field "$rid" '.branch')
+  base_ref=$(jq -r '.baseRefName // "main"' <<<"$pr_json")
+  if [ -z "$worktree" ] || [ ! -d "$worktree" ] || [ -z "$branch" ]; then
+    log "merge gate '$gate': no usable worktree/branch for PR #$pr_num (worktree='$worktree') — not merging"
+    state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=no_worktree"
+    return 4
+  fi
+
+  # Review exactly what GitHub would merge: the remote head. A worktree behind it
+  # is fast-forwarded; one that diverges is not ours to reconcile.
+  if ! _pr_fetch "$worktree" "$base_ref" "$branch"; then
+    log "merge gate '$gate': git fetch failed for PR #$pr_num — retrying next poll"
+    state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
+    return 4
+  fi
+  local sha remote_sha
+  sha=$( cd "$worktree" && git rev-parse HEAD 2>/dev/null || true )
+  remote_sha=$( cd "$worktree" && git rev-parse --verify -q "$PR_ROUTE_REMOTE/$branch" 2>/dev/null || true )
+  if [ -z "$sha" ] || [ "$sha" != "$remote_sha" ]; then
+    if [ -n "$sha" ] && [ -n "$remote_sha" ] \
+       && ! ( cd "$worktree" && git status --porcelain 2>/dev/null | grep -q . ) \
+       && ( cd "$worktree" && git merge --ff-only -q "$remote_sha" >/dev/null 2>&1 ); then
+      sha="$remote_sha"
+    else
+      log "merge gate '$gate': worktree head '${sha:-?}' is not the PR head '${remote_sha:-?}' for PR #$pr_num — not reviewing a head GitHub would not merge"
+      state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=gate_head_mismatch"
+      return 4
+    fi
+  fi
+  PR_GATE_START_SHA="$sha"
+
+  # The threshold comes from the BASE branch's config: the PR under review must
+  # not be able to lower the gate that reviews it.
+  local cfg hold_min
+  cfg=$( cd "$worktree" && git show "$PR_ROUTE_REMOTE/$base_ref:.claude/run-issues.json" 2>/dev/null || true )
+  hold_min=$(merge_gate_hold_min "$cfg" "$gate" "$GATE_HOLD_MACHINE")
+
+  local jsonl="$run_dir/state.jsonl" prior result holding findings attempts
+  while :; do
+    prior=$(merge_gate_last_result "$jsonl" "$gate" "$sha")
+    result="${prior%% *}"
+    holding="${prior##* }"
+    case "$result" in
+      clean)
+        log "merge gate '$gate': head $sha already reviewed clean — passing"
+        PR_GATE_HEAD_SHA="$sha"
+        return 0
+        ;;
+      findings)
+        findings=$(cat "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")" 2>/dev/null || true)
+        if [ "${holding:-0}" -eq 0 ]; then
+          log "merge gate '$gate': head $sha already reviewed, no finding at or above '$hold_min' — passing"
+          PR_GATE_HEAD_SHA="$sha"
+          return 0
+        fi
+        log "merge gate '$gate': head $sha already reviewed with $holding holding finding(s) — not reviewing it again"
+        ;;
+      *)
+        # No record, or a review that never happened (launch_failed): review.
+        _pr_gate_review "$gate" "$pr_num" "$run_dir" "$worktree" "$branch" "$base_ref" "$sha" "$hold_min"
+        case "$GATE_RESULT" in
+          launch_failed)
+            _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "$sha" "$GATE_WHY" "" launch_failed
+            return 10
+            ;;
+          clean)
+            PR_GATE_HEAD_SHA="$sha"
+            return 0
+            ;;
+        esac
+        findings="$GATE_FINDINGS"
+        holding="$GATE_HOLDING"
+        if [ "$holding" -eq 0 ]; then
+          _pr_gate_report "$gate" "$pr_num" "$sha" "$hold_min" "$findings"
+          PR_GATE_HEAD_SHA="$sha"
+          return 0
+        fi
+        ;;
+    esac
+
+    # Holding findings: fix within the cap, or hold.
+    attempts=$(merge_gate_attempts "$jsonl" "$gate")
+    if [ "$attempts" -ge "$GATE_MAX_FIXES" ]; then
+      _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "$sha" \
+        "korjausyritysten katto ($attempts/$GATE_MAX_FIXES) on täynnä" "$findings"
+      return 10
+    fi
+    if ! _pr_gate_fix "$gate" "$pr_num" "$run_dir" "$worktree" "$branch" "$base_ref" "$sha" \
+           "$(merge_gate_holding "$hold_min" "$findings")" "$((attempts + 1))"; then
+      _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "$sha" "$GATE_WHY" "$findings" "$GATE_KIND"
+      return 10
+    fi
+    sha="$GATE_NEW_SHA"   # the new head is reviewed on the next pass
+  done
+}
+
+# _merge_gate_findings_file <run-dir> <gate> <sha> — where a head's findings are
+# kept, so a later tick can list them without reviewing the head again.
+_merge_gate_findings_file() {
+  printf '%s/merge-gate-%s-%s.findings' "$1" "$2" "$3"
+}
+
+# _pr_gate_review <gate> <pr> <run-dir> <worktree> <branch> <base-ref> <sha> <hold-min>
+# One review call in a fresh context. Sets GATE_RESULT (clean | findings |
+# launch_failed), GATE_FINDINGS, GATE_HOLDING and GATE_WHY, and records the
+# result against the head in state.jsonl.
+_pr_gate_review() {
+  local gate="$1" pr_num="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="$6" sha="$7" hold_min="$8"
+  GATE_RESULT="launch_failed"
+  GATE_FINDINGS=""
+  GATE_HOLDING=0
+  GATE_WHY=""
+
+  # Preflight BEFORE the call, so a CLI that cannot start is reported as exactly
+  # that (CLAUDE.md §9) — and, unlike FIX_CI, it holds: there is no "wait" for a
+  # merge that would otherwise go through unreviewed.
+  if ! pr_ci_repair_preflight "merge gate '$gate'"; then
+    GATE_WHY="katselmointiagenttia ei voitu käynnistää (claude-CLI ei ole käytettävissä pr-watchin ympäristössä)"
+  else
+    log "merge gate '$gate': reviewing PR #$pr_num head $sha (hold threshold '$hold_min')"
+    local prompt_file="$run_dir/$GATE_REVIEW_STEP.prompt"
+    render_prompt "$SCRIPT_DIR/prompts/$GATE_REVIEW_STEP.md" "$prompt_file" \
+      PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
+      HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE"
+    local arc=0
+    _pr_call_agent "$run_dir" "$worktree" "$GATE_REVIEW_STEP" "$prompt_file" \
+      "$GATE_REVIEW_TIMEOUT" || arc=$?
+    log "merge gate '$gate': review call for PR #$pr_num returned rc=$arc"
+
+    local out="$run_dir/$GATE_REVIEW_STEP.out"
+    local head_after
+    head_after=$( cd "$worktree" && git rev-parse HEAD 2>/dev/null || true )
+    if [ "$head_after" != "$sha" ] || ( cd "$worktree" && git status --porcelain 2>/dev/null | grep -q . ); then
+      # A read-only review that wrote is not a review of $sha.
+      GATE_WHY="katselmointiagentti muutti worktreetä, vaikka sen piti vain lukea (head \`${head_after:-?}\`), joten katselmusta ei hyväksytty"
+    else
+      GATE_RESULT=$(merge_gate_parse "$out" "$run_dir/$GATE_REVIEW_STEP.exit")
+      case "$GATE_RESULT" in
+        launch_failed)
+          if [ "$arc" -ne 0 ]; then
+            GATE_WHY="katselmointiagentti päättyi virheeseen (rc=$arc; 127 = ei käynnistynyt, 124 = aikakatkaisu)"
+          else
+            GATE_WHY="katselmuksen tulos oli tyhjä tai jäsentymätön (\`MERGE_GATE_RESULT\`-rivi puuttui tai oli ristiriidassa löydösten kanssa)"
+          fi
+          ;;
+        findings)
+          GATE_FINDINGS=$(merge_gate_findings "$out")
+          GATE_HOLDING=$(merge_gate_holding "$hold_min" "$GATE_FINDINGS" | grep -c . || true)
+          printf '%s\n' "$GATE_FINDINGS" > "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")"
+          ;;
+      esac
+    fi
+  fi
+  [ "$GATE_RESULT" = "launch_failed" ] && log "merge gate '$gate': review of PR #$pr_num did not complete — $GATE_WHY"
+  state_event "$run_dir" "merge_gate_reviewed" "gate=$gate" "pr=$pr_num" "sha=$sha" \
+    "result=$GATE_RESULT" "holding=${GATE_HOLDING:-0}" "hold_min=$hold_min"
+}
+
+# _pr_gate_fix <gate> <pr> <run-dir> <worktree> <branch> <base-ref> <sha> <findings> <attempt>
+# One fix attempt with the same machinery as CI repair: agent in the feature
+# worktree, independent check of the result, force-push, mandatory CI
+# revalidation. rc 0 sets GATE_NEW_SHA; rc 1 sets GATE_WHY and GATE_KIND.
+_pr_gate_fix() {
+  local gate="$1" pr_num="$2" run_dir="$3" worktree="$4" branch="$5" base_ref="$6" sha="$7" findings="$8" attempt="$9"
+  GATE_NEW_SHA=""
+  GATE_WHY=""
+  GATE_KIND="agent_ran"
+
+  # The spend is recorded BEFORE the call: a crash mid-fix still counts.
+  state_event "$run_dir" "merge_gate_fix_attempted" "gate=$gate" "pr=$pr_num" "sha=$sha" "attempt=$attempt"
+  log "merge gate '$gate': fix attempt $attempt for PR #$pr_num head $sha"
+
+  local prompt_file="$run_dir/$GATE_FIX_STEP.prompt"
+  render_prompt "$SCRIPT_DIR/prompts/$GATE_FIX_STEP.md" "$prompt_file" \
+    PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
+    HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE" \
+    FINDINGS="$(printf '%s\n' "$findings" | sed 's/|/ | /g')"
+  local arc=0
+  _pr_call_agent "$run_dir" "$worktree" "$GATE_FIX_STEP" "$prompt_file" \
+    "$GATE_FIX_TIMEOUT" || arc=$?
+  log "merge gate '$gate': fix call for PR #$pr_num returned rc=$arc"
+  if [ "$arc" -eq 127 ]; then
+    GATE_WHY="korjausagenttia ei voitu käynnistää (rc=127)"
+    GATE_KIND="launch_failed"
+    return 1
+  fi
+
+  local head_after
+  head_after=$( cd "$worktree" && git rev-parse HEAD 2>/dev/null || true )
+  if [ -z "$head_after" ] || [ "$head_after" = "$sha" ]; then
+    GATE_WHY="korjausagentti ei tuottanut korjaavaa committia"
+    return 1
+  fi
+  if ( cd "$worktree" && git status --porcelain 2>/dev/null | grep -q . ); then
+    GATE_WHY="korjausagentti jätti työpuun likaiseksi (committaamattomia muutoksia)"
+    return 1
+  fi
+  if ! _pr_force_push "$worktree" "$branch"; then
+    GATE_WHY="korjauksen push epäonnistui"
+    return 1
+  fi
+  if ! pr_wait_ci_green "$pr_num"; then
+    GATE_WHY="CI ei vihreytynyt korjauksen jälkeen"
+    return 1
+  fi
+  state_event "$run_dir" "merge_gate_fix_pushed" "gate=$gate" "pr=$pr_num" "sha=$head_after"
+  GATE_NEW_SHA="$head_after"
+  return 0
+}
+
+# _pr_gate_report <gate> <pr> <sha> <hold-min> <findings> — comment findings
+# below the threshold. They do not hold the merge; the comment is posted once per
+# head, because a reviewed head is never reviewed again.
+_pr_gate_report() {
+  local gate="$1" pr_num="$2" sha="$3" hold_min="$4" findings="$5"
+  log "merge gate '$gate': PR #$pr_num head $sha has findings below '$hold_min' only — reporting, merging"
+  local body
+  body=$(printf '%s\n\n%s\n\n%s\n' \
+    "$GATE_TITLE (head \`$sha\`) löysi havaintoja, jotka jäävät pidätysrajan \`$hold_min\` alle. PR mergetään, mutta tarkista nämä:" \
+    "$(merge_gate_format_findings "$findings")" \
+    "(Merge-portti \`$gate\` on päällä \`$GATE_SWITCH=1\`. Pidätysraja: kohderepon \`.claude/run-issues.json\` \`.$gate.hold_min_severity\` tai koneen asetus.)")
+  printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
+    log "failed to post $gate gate report on PR #$pr_num"
+}
+
+# _pr_gate_hold_to_human <gate> <pr> <run-dir> <worktree> <sha> <why> <findings> [<kind>]
+# The gate's handover — same idiom as _pr_ci_handover_to_human: needs-human
+# label, run finalized blocked with a reason scan_candidates re-emits
+# (<gate>_gate_failed_pr_<n>), and a comment listing what is left. The branch is
+# left as-is. <kind> launch_failed says plainly that no review happened.
+_pr_gate_hold_to_human() {
+  local gate="$1" pr_num="$2" run_dir="$3" worktree="$4" sha="$5" why="$6" findings="$7" kind="${8:-agent_ran}"
+
+  log "merge gate '$gate': holding PR #$pr_num for a human — $why"
+  _pr_mark_needs_human "$pr_num"
+  state_finalize "$run_dir" "blocked" "${gate}_gate_failed_pr_$pr_num"
+  state_event "$run_dir" "merge_gate_held" "gate=$gate" "pr=$pr_num" "sha=$sha" "reason=$why"
+
+  local opening list
+  if [ "$kind" = "launch_failed" ]; then
+    opening="$GATE_TITLE **ei toteutunut** headille \`$sha\`: $why. Koodia ei siis katselmoitu, joten PR:ää ei mergetä ilman ihmistä."
+  else
+    opening="$GATE_TITLE löysi headista \`$sha\` pidätysrajan ylittäviä löydöksiä, eikä automaattinen korjaus onnistunut: $why."
+  fi
+  if [ -n "$findings" ]; then
+    list="Jäljelle jääneet löydökset:"$'\n\n'"$(merge_gate_format_findings "$findings")"
+  else
+    list="Löydöslistaa ei ole: katselmus ei valmistunut, tai headin löydöstiedosto puuttuu run-diristä."
+  fi
+
+  local body
+  body=$(printf '%s\n\n%s\n\n%s\n%s\n' \
+    "$opening" \
+    "$list" \
+    "PR:ää **ei mergetty**. Haara on ennallaan worktreessä \`$worktree\`." \
+    "(Merge-portti \`$gate\` on päällä \`$GATE_SWITCH=1\`. Korjaa ja pushaa, ja poista sitten \`needs-human\`-label: valvoja katselmoi uuden headin. Samaa headia ei katselmoida uudelleen, joten ilman uutta committia PR pidätetään taas. Hyväksytyt löydökset mergetään käsin.)")
+  printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
+    log "failed to post $gate gate hold comment on PR #$pr_num"
 }
 
 # ----- P0: dependency gate (issue #279) -----------------------------------
