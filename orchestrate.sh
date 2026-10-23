@@ -52,6 +52,8 @@
 #                           (escape hatch; default 1 — issue #294)
 #   RUN_ISSUES_USAGE_LIMIT_BACKOFF  seconds to wait when the usage-limit message
 #                           carries no parseable reset time (default 3600)
+#   RUN_ISSUES_CLAIM_VERIFY_DELAY  seconds S3 waits between the claim and
+#                           verify_claim (default 5; test injection point)
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
@@ -1077,7 +1079,9 @@ phase_a() {
   state_set "$RUN_DIR" "self_preassigned" "$SELF_PREASSIGNED"
   claim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
   state_event "$RUN_DIR" "claim_attempted"
-  sleep 5
+  # Give a competing claim time to become visible before verify_claim reads the
+  # assignees. Tests set the delay to 0 (issue #358); production keeps 5 s.
+  sleep "${RUN_ISSUES_CLAIM_VERIFY_DELAY:-5}"
   if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$before_assignees" "$REMOTE_NAME"; then
     log "claim race lost after verification — unclaiming and exiting"
     unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$SELF_PREASSIGNED"
