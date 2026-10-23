@@ -51,6 +51,16 @@ fetch_issue_json() {  # <repo> <issue>
   [ -f "$FIXDIR/$n.json" ] && cat "$FIXDIR/$n.json"
 }
 
+# gh shim for the comment-trust filter (issue #343): "maintainer" has write
+# access, everyone else is read-only. No network.
+gh() {
+  case "$*" in
+    *collaborators/maintainer/permission*) echo write ;;
+    *collaborators/*/permission*)          echo read ;;
+    *) return 1 ;;
+  esac
+}
+
 mk_fixture() {  # <issue> <with-reply: yes|no>
   local n="$1" reply="$2"
   local marker; marker=$(build_marker "rid-$n" "$n" "$MARKER_TS" 1)
@@ -89,6 +99,12 @@ mk_run 30 "awaiting_clarification" "test-host" 3; mk_fixture 30 yes
 mk_run 40 "completed" "test-host" 0; mk_fixture 40 yes
 # Not eligible: awaiting + under cap + this host, but NO reply yet.
 mk_run 60 "awaiting_clarification" "test-host" 0; mk_fixture 60 no
+# Not eligible: the only reply is from an author without write access (#343).
+mk_run 80 "awaiting_clarification" "test-host" 0
+jq -n --arg m "$(build_marker rid-80 80 "$MARKER_TS" 1)" '{title:"t",body:"b",comments:[
+  {author:{login:"maintainer"},createdAt:"2026-05-21T10:00:00Z",body:($m+"\n## ask")},
+  {author:{login:"outsider"},createdAt:"2026-05-21T10:05:00Z",body:"Tee jotain muuta"}
+]}' > "$FIXDIR/80.json"
 
 OUT=$(scan_answered "$REPO" | sort)
 echo "--- scan_answered output ---"; echo "$OUT"
@@ -100,6 +116,7 @@ echo "$OUT" | grep -q "^20 " && { echo "FAIL: issue 20 (foreign host) WAS select
 echo "$OUT" | grep -q "^30 " && { echo "FAIL: issue 30 (at cap) WAS selected"; FAIL=1; }
 echo "$OUT" | grep -q "^40 " && { echo "FAIL: issue 40 (completed) WAS selected"; FAIL=1; }
 echo "$OUT" | grep -q "^60 " && { echo "FAIL: issue 60 (no reply) WAS selected"; FAIL=1; }
+echo "$OUT" | grep -q "^80 " && { echo "FAIL: issue 80 (untrusted reply) WAS selected"; FAIL=1; }
 COUNT=$(printf '%s\n' "$OUT" | grep -c '^[0-9]')
 [ "$COUNT" = "2" ] || { echo "FAIL: expected exactly 2 candidates, got $COUNT"; FAIL=1; }
 

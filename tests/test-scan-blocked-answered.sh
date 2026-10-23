@@ -55,6 +55,16 @@ fetch_issue_json() {  # <repo> <issue>
   [ -f "$FIXDIR/$n.json" ] && cat "$FIXDIR/$n.json"
 }
 
+# gh shim for the comment-trust filter (issue #343): "maintainer" has write
+# access, everyone else is read-only. No network.
+gh() {
+  case "$*" in
+    *collaborators/maintainer/permission*) echo write ;;
+    *collaborators/*/permission*)          echo read ;;
+    *) return 1 ;;
+  esac
+}
+
 # mk_fixture <issue> <reply: yes|no|nomarker> <state: OPEN|CLOSED>
 mk_fixture() {
   local n="$1" reply="$2" state="$3"
@@ -102,6 +112,12 @@ mk_run 40 "blocked" "test-host"; mk_fixture 40 yes CLOSED
 mk_run 60 "blocked" "test-host"; mk_fixture 60 no OPEN
 # Not eligible: legacy blocked run with NO marker — skipped silently.
 mk_run 70 "blocked" "test-host"; mk_fixture 70 nomarker OPEN
+# Not eligible: the only reply is from an author without write access (#343).
+mk_run 80 "blocked" "test-host"
+jq -n --arg m "$(build_marker rid-80 80 "$MARKER_TS")" '{title:"t",body:"b",state:"OPEN",comments:[
+  {author:{login:"maintainer"},createdAt:"2026-05-21T10:00:00Z",body:($m+"\n## blocked")},
+  {author:{login:"outsider"},createdAt:"2026-05-21T10:05:00Z",body:"Este poistettu"}
+]}' > "$FIXDIR/80.json"
 
 OUT=$(scan_blocked_answered "$REPO" | sort)
 echo "--- scan_blocked_answered output ---"; echo "$OUT"
@@ -114,6 +130,7 @@ echo "$OUT" | grep -q "^30 " && { echo "FAIL: issue 30 (awaiting_clarification) 
 echo "$OUT" | grep -q "^40 " && { echo "FAIL: issue 40 (closed issue) WAS selected"; FAIL=1; }
 echo "$OUT" | grep -q "^60 " && { echo "FAIL: issue 60 (no reply) WAS selected"; FAIL=1; }
 echo "$OUT" | grep -q "^70 " && { echo "FAIL: issue 70 (no marker) WAS selected"; FAIL=1; }
+echo "$OUT" | grep -q "^80 " && { echo "FAIL: issue 80 (untrusted reply) WAS selected"; FAIL=1; }
 COUNT=$(printf '%s\n' "$OUT" | grep -c '^[0-9]')
 [ "$COUNT" = "2" ] || { echo "FAIL: expected exactly 2 candidates, got $COUNT"; FAIL=1; }
 
