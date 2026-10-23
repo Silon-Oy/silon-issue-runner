@@ -571,6 +571,7 @@ lähde on koodin `${VAR:-oletus}`.
 | `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` poistaa GitHubin kutsurajan perääntymisen käytöstä (#126). Oletuksena pollerit odottavat kasvavan ajan (5→60 min) rajaan törmättyään, koska torjuttu pyyntö pidentää estoa |
 | `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | Purkulabelin (`auto-clean` ja `auto-reset`) repo-laajuisen listauksen rivikatto (#124); ylittyessä kattamattomat issuet luetaan yksitellen ja lokiin tulee WARNING |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Kuinka vanha ajo tulkitaan jumiutuneeksi ja tapetaan (6.6 f) |
+| `RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS` | *(ei ajastusta)* | `security-audit.sh`-ajojen väli päivinä per repo. Repon `.security.audit_interval_days` voittaa (`0` = pois). Lasketaan `global_max_concurrent`-kattoon |
 
 ### PR-vahti
 
