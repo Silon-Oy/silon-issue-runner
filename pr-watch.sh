@@ -156,6 +156,9 @@ machine_env_capture
 # The merge gate's pure parts (issue #334): result parsing, the head-SHA and
 # attempt bookkeeping read from state.jsonl's tail, the severity threshold.
 . "$SCRIPT_DIR/lib/merge-gate.sh"
+# shellcheck source=lib/security-scan.sh
+# Optional deterministic scanners (issue #336) a gate can feed its reviewer.
+. "$SCRIPT_DIR/lib/security-scan.sh"
 
 # rate_limit_* (issue #126): the watcher spends the SAME GitHub quota as the
 # pollers, so it must be able to trip the shared backoff. Functions only.
@@ -1477,8 +1480,10 @@ _pr_ci_handover_to_human() {
 # _merge_gate_spec <gate> — set the gate's content into GATE_* globals; rc 1 for
 # an unknown gate.
 _merge_gate_spec() {
+  GATE_SCANNERS=0
   case "$1" in
     security)
+      GATE_SCANNERS=1   # lib/security-scan.sh, diff mode, before the review
       GATE_TITLE="Tietoturvakatselmus"
       GATE_ENABLED="$PR_WATCH_ENABLE_SECURITY_GATE"
       GATE_SWITCH="PR_WATCH_ENABLE_SECURITY_GATE"
@@ -1676,10 +1681,20 @@ _pr_gate_review() {
   esac
   if [ "$ready" -eq 1 ]; then
     log "merge gate '$gate': reviewing PR #$pr_num head $sha with $reviewer (hold threshold '$hold_min')"
+    # Deterministic scanners run first, by the watcher itself, and write only
+    # into the run-dir: the read-only check after the review covers them too.
+    local scan_dir="$run_dir/scan-$gate-$sha" scanner_results="Tälle portille ei ole deterministisiä skannereita."
+    if [ "$GATE_SCANNERS" = 1 ]; then
+      rm -rf "$scan_dir"
+      security_scan diff "$worktree" "$scan_dir" "$PR_ROUTE_REMOTE/$base_ref" >&2 \
+        || { log "merge gate '$gate': security scan did not start for PR #$pr_num — recorded as a failed scan"; rm -rf "$scan_dir"; }
+      [ -f "$scan_dir/scan.summary" ] && log "merge gate '$gate': scan: $(tr '\n' ';' < "$scan_dir/scan.summary")"
+      scanner_results=$(security_scan_prompt_text "$scan_dir")
+    fi
     local prompt_file="$run_dir/$GATE_REVIEW_STEP.prompt"
     render_prompt "$SCRIPT_DIR/prompts/$GATE_REVIEW_STEP.md" "$prompt_file" \
       PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
-      HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE"
+      HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE" SCANNER_RESULTS="$scanner_results"
     # A previous review's output must never be parsed as this one's, so the
     # call starts without it; repo principles are not loaded (see _pr_call_agent).
     rm -f "$run_dir/$GATE_REVIEW_STEP.out" "$run_dir/$GATE_REVIEW_STEP.exit"
@@ -1713,10 +1728,24 @@ _pr_gate_review() {
           ;;
         findings)
           GATE_FINDINGS=$(merge_gate_findings "$out")
-          GATE_HOLDING=$(merge_gate_holding "$hold_min" "$GATE_FINDINGS" | grep -c . || true)
-          printf '%s\n' "$GATE_FINDINGS" > "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")"
           ;;
       esac
+      # Scanner rows join the verdict AFTER parsing (a CLEAN marker next to
+      # finding lines would parse as launch_failed) and deterministically: a
+      # secret the scanner found holds whatever the reviewer said, and a failed
+      # scanner turns a clean review into a reported one, never a silent pass.
+      if [ "$GATE_RESULT" != "launch_failed" ] && [ "$GATE_SCANNERS" = 1 ]; then
+        local scan_rows
+        scan_rows=$(security_scan_gate_findings "$scan_dir")
+        if [ -n "$scan_rows" ]; then
+          GATE_FINDINGS=$(printf '%s\n%s\n' "$GATE_FINDINGS" "$scan_rows" | awk 'NF && !seen[$0]++')
+          GATE_RESULT="findings"
+        fi
+      fi
+      if [ "$GATE_RESULT" = "findings" ]; then
+        GATE_HOLDING=$(merge_gate_holding "$hold_min" "$GATE_FINDINGS" | grep -c . || true)
+        printf '%s\n' "$GATE_FINDINGS" > "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")"
+      fi
     fi
   fi
   [ "$GATE_RESULT" = "launch_failed" ] && log "merge gate '$gate': review of PR #$pr_num did not complete — $GATE_WHY"

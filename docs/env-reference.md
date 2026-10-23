@@ -322,6 +322,9 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 | `PR_WATCH_SECURITY_REVIEWER` | `claude` | Tietoturvakatselmuksen katselmoija: `claude` tai `codex` (#335). Toinen malliperhe näkee eri asioita kuin koodin kirjoittaja. Korjaukset tekee aina Claude-agentti. Codex on valinnainen, eikä paketti asenna sitä. Jos `codex` on valittu mutta CLI puuttuu, kaatuu tai tuottaa jäsentymättömän tuloksen, tai arvo on tuntematon, katselmus ei toteutunut ⇒ PR pidätetään (exit 10). **Portti ei koskaan vaihda hiljaa Claudeen eikä päästä läpi.** Preflight tarkistaa Codexin vain, kun se on valittu |
 | `PR_WATCH_CODEX_CMD` | `codex` | Codex-CLI:n kutsu (tokenit); ajuri lisää `exec --sandbox read-only --skip-git-repo-check --color never --output-last-message <step>.out -`. Oletus tarkistetaan `--version`-koettimella, ylikirjoitetusta vain ensimmäisen tokenin löytyminen. Testien injektiopiste tai oma ajuri |
 | `PR_WATCH_GATE_TAIL_LINES` | `1000` | Montako riviä `state.jsonl`in hännästä merge-portti lukee (headin aiempi tulos, yritysmäärä). Hännän ulkopuolelle jäänyt kirjaus johtaa uuteen katselmukseen, ei ohitettuun |
+| `RUN_ISSUES_GITLEAKS_BIN` | *(tyhjä)* = `command -v gitleaks` | Salaisuusskanneri (`lib/security-scan.sh`, #336). Polku, joka ei ole suoritettava ⇒ skanneri on "ei asennettu" (testit piilottavat koneen oikean skannerin näin). Vaatii `gitleaks git` -alikomennon (8.19+) |
+| `RUN_ISSUES_OSV_SCANNER_BIN` | *(tyhjä)* = `command -v osv-scanner` | Riippuvuushaavoittuvuusskanneri, sama sääntö. Tarvitsee verkon; katkos näkyy epäonnistuneena skannerina (`low`-rivi), ei puhtaana tuloksena |
+| `RUN_ISSUES_SECURITY_SCAN_TIMEOUT` | `600` | Yhden skannerikutsun aikakatto sekunteina (vain kun `timeout`/`gtimeout` on saatavilla). Aikakatkaisu = epäonnistunut skanneri |
 
 **Pidätysrajassa repo voittaa koneen — tietoinen poikkeus §8:n "kutsuja voittaa" -säännöstä.**
 Muualla konekohtainen arvo voittaa, koska asetus kuvaa konetta: aikakattoja, kiintiöitä,

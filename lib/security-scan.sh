@@ -326,10 +326,10 @@ security_scan() {
     echo "security_scan: '$repo' is not a git repository" >&2
     return 1
   fi
-  mkdir -p "$out" 2>/dev/null && : > "$out/scan.findings" 2>/dev/null || {
+  if ! { mkdir -p "$out" && : > "$out/scan.findings"; } 2>/dev/null; then
     echo "security_scan: cannot write to '$out'" >&2
     return 1
-  }
+  fi
   out=$(cd "$out" && pwd)
   repo=$(cd "$repo" && pwd)
   : > "$out/scan.summary"

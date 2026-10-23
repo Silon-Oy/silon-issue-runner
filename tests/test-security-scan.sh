@@ -123,7 +123,7 @@ chmod +x "$BIN/gitleaks" "$BIN/osv-scanner"
 REPO="$WORK/repo"
 git init -q "$REPO"
 (
-  cd "$REPO"
+  cd "$REPO" || exit 1
   git symbolic-ref HEAD refs/heads/main
   git config user.email t@t.t; git config user.name t
   printf 'left-pad 1.0.0 9.8\nold-dep 2.0.0 7.5\n' > package-lock.json

@@ -79,6 +79,9 @@ tarkistetaan komennolla `gh auth token` eikä `gh auth status`:lla
 ei virhettä — mutta silloin claude-kutsut ajetaan **ilman aikakattoa** ja voivat jäädä
 roikkumaan. Poller nojaa erikseen omaan liveness-rajaansa (`RUN_ISSUES_STALE_AFTER`).
 
+`gitleaks` ja `osv-scanner`: paketti ei asenna niitä, mutta asennettuina merge-portti
+käyttää niitä (osio 7.12).
+
 ### Pollerikäyttö (edellisten lisäksi)
 
 | Vaatimus | Huomio |
@@ -1120,6 +1123,8 @@ agentit muuttavat sitä vielä ajon jälkeen. Siksi `pr-watch.sh` ajaa ennen jok
   arvo **voittaa koneen asetuksen**. Arvo luetaan base-haarasta, joten PR ei voi laskea omaa
   rajaansa ([perustelu](docs/env-reference.md#pr-vahti)). Katselmoija ei lue PR:n
   `principles_file`ä; PR:n `CLAUDE.md` on jäännösriski, jonka prompti käsittelee datana.
+- Asennetut skannerit (osio 2) ajetaan diffille ennen katselmusta, ja niiden löydökset
+  lisätään päätökseen. Salaisuus on aina `high`, epäonnistunut skanneri `low`-rivi.
 
 ---
 
