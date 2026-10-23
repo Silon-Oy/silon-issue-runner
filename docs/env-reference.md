@@ -367,6 +367,23 @@ Valvo repoa auditoinnin osalta yhdellä koneella. Repon väli luetaan remoten ol
 (`<remote>/HEAD`) ilman verkkokutsua. Skannerit ja agentti käyttävät yllä kuvattuja
 `RUN_ISSUES_GITLEAKS_BIN`-, `RUN_ISSUES_OSV_SCANNER_BIN`- ja `RUN_ISSUES_CLAUDE_*`-asetuksia.
 
+### Koherenssiauditointi (`coherence-audit.sh`, #342)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus samalla mekanismilla kuin tietoturva-auditoinnissa (`lib/audit-schedule.sh`, oma tilatiedosto `.audit-last-coherence-<repo-slug>`). **Kohderepon `.claude/run-issues.json` `.coherence.audit_interval_days` voittaa tämän** (`0` = pois). Sama arvo on ensimmäisen ajon ikkuna, kun kursoria ei vielä ole; käsiajossa ilman kumpaakaan ikkuna on 7 päivää. Skripti lukee arvon ympäristöstä, muuten `poller.env`:stä |
+| `RUN_ISSUES_COHERENCE_AUDIT_TIMEOUT` | `3600` | Auditointiagentin kutsun aikakatto sekunteina |
+| `RUN_ISSUES_COHERENCE_AUDIT_FETCH_TIMEOUT` | `300` | Remoten `git fetch`in aikakatto ennen auditointia |
+| `RUN_ISSUES_COHERENCE_AUDIT_MAX` | `60000` | Promptiin menevän muutospinnan kokokatto tavuina. Katkaisu näkyy aineistossa itsessään; ei-numeerinen arvo ⇒ oletus |
+
+Katselmoitava joukko on runnerin PR:t (head-haara `auto-run/`), jotka on mergetty remoten
+oletushaaraan kursorin jälkeen, epicistä riippumatta. **Kursori on auditoinnin oma**
+(`$RUN_ISSUES_LOG_DIR/.audit-coherence-cursor-<repo-slug>`: uusimman katselmoidun PR:n
+`merged_at`), ja se siirtyy vain exit 0:lla. Ajastuksen tilatiedosto ei kelpaa siihen, koska se
+kirjaa auditoinnin *aloitusajan*: epäonnistunut auditointi pudottaisi muuten PR:nsä
+katselmoinnista hiljaa. Kursorin poistaminen palauttaa ikkunan välin mittaiseksi. Löydösissuet
+saavat `coherence`-labelin eikä koskaan poimintalabeleita: refaktorointi on ihmisen valinta.
+
 ### Julkaisu julkiseen peiliin (`publish-release.sh`, #155)
 
 Kaikki kolme ovat **testien injektiopisteitä**, eivät käyttäjäkonfiguraatiota: tuotannossa arvot ovat skriptin omia vakioita, koska asiakasnimiä sisältävä konfiguraatiotiedosto olisi itsessään vuotopinta.

@@ -78,8 +78,9 @@ machine_env_capture
 # shellcheck source=lib/jq-binary.sh
 . "$SCRIPT_DIR/lib/jq-binary.sh"
 
-# The label every coherence issue carries — also the finding kind in the marker.
 AUDIT_KIND="coherence"
+# The label every coherence issue carries — also the finding kind in the marker.
+COHERENCE_AUDIT_LABEL="coherence"
 AUDIT_STEP="09-coherence-audit"
 RUNNER_BRANCH_PREFIX="auto-run/"
 DEFAULT_WINDOW_DAYS=7
@@ -212,7 +213,7 @@ fi
 repo_audit_worktree || exit $?
 say "auditing $OWNER_REPO at $BASE_REF ($HEAD_SHA): $N_PRS runner PR(s) merged since $SINCE"
 repo_audit_preflight || exit $?
-repo_audit_index "$AUDIT_KIND" || exit $?
+repo_audit_index "$COHERENCE_AUDIT_LABEL" || exit $?
 
 # ---- the agent ----------------------------------------------------------------
 PROMPT="$WORK/$AUDIT_STEP.prompt"
@@ -238,7 +239,7 @@ _coherence_key() {
 # _coherence_labels <severity> — the coherence label and nothing else, at any
 # severity: a refactoring is a human's choice, so no finding is picked up.
 _coherence_labels() {
-  printf '%s' "$AUDIT_KIND"
+  printf '%s' "$COHERENCE_AUDIT_LABEL"
 }
 
 _coherence_title() {

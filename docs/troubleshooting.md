@@ -254,6 +254,16 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
 | 5 | Auditointi valmis, mutta vähintään yksi skanneri epäonnistui: sen luokka jäi tarkistamatta deterministisesti. Epäonnistumisesta ei luoda issueta |
 
+### Koherenssiauditointi (`coherence-audit.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole tai uusia runnerin PR:iä ei ole mergetty), tai `--dry-run` valmis. Kursori siirtyy vain tällä koodilla, eikä `--dry-run`illa |
+| 1 | Käyttövirhe |
+| 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, kursori ei siirry, eikä tämä ole "ei löydöksiä" |
+| 4 | GitHub-luku tai -kirjoitus epäonnistui: PR-joukko, muutospinta, issue-indeksi tai issuen kirjoitus. Kursori ei siirry, joten seuraava ajo katselmoi samat PR:t; dedup estää duplikaatit |
+
 ### Evolutionin havaintojen kooste (`evolution-digest.sh`)
 
 | Koodi | Merkitys |
