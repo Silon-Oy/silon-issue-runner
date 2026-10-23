@@ -23,7 +23,7 @@
 #   (d) unparseable SERIALIZE lines → reason=unparseable, PROCEED.
 #   (e) a number that is not a listed sibling → reason=not_a_sibling.
 #   (f) the sibling list could not be read → reason=siblings_unknown.
-#   (g) the reservation label survives the unclaim → exit 14 as
+#   (g) the reservation label survives the unclaim → exit 15 as
 #       serialize_unclaim_failed, needs-human, artefacts kept.
 #
 # Run: bash tests/test-serialize.sh
@@ -235,11 +235,11 @@ fi
 
 # (g)
 run_case "SERIALIZE #12" "$OLD" ok ok stuck
-if [ "$RC" = 14 ] \
+if [ "$RC" = 15 ] \
    && [ "$(jq -r '.blocked_reason' "$RD/run.json")" = serialize_unclaim_failed ] \
    && grep -qF 'labels[]=needs-human' "$GH_LOG" \
    && [ -d "$REPO/.claude/run-issues/$(basename "$RD")" ]; then
-  ok g "reservation label survives: needs-human, artefacts kept, exit 14"
+  ok g "reservation label survives: needs-human, artefacts kept, exit 15"
 else
   bad g "rc=$RC rd=$RD out=$(echo "$OUT" | tail -5)"
 fi

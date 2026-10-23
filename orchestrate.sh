@@ -105,12 +105,14 @@
 #       and tore the local artefacts down (cleanup-run.sh). The run is finalized
 #       blocked/serialized_behind_sibling with NO needs-human label: S2b lets the
 #       issue run again once #N closes. If the auto-claimed label could not be
-#       verified gone, the run is instead finalized
-#       blocked/serialize_unclaim_failed, keeps its artefacts and is handed to a
-#       human (needs-human + answerable comment). A rejected SERIALIZE (not an
-#       older listed sibling, unparseable) or a failed edge write never exits 14:
-#       it is logged as serialize_rejected / serialize_edge_failed and the run
-#       continues as PROCEED.
+#       verified gone, the run exits 15 instead. A rejected SERIALIZE (not an
+#       older listed sibling, unparseable) or a failed edge write never exits
+#       14 or 15: it is logged as serialize_rejected / serialize_edge_failed and
+#       the run continues as PROCEED.
+#  15   serialized, but the auto-claimed label could not be verified gone (S7,
+#       issue #355) — the run is finalized blocked/serialize_unclaim_failed,
+#       keeps its artefacts and is handed to a human (needs-human + answerable
+#       comment); a reply tears the run down via scan_blocked_answered.
 #
 # --restart <run-dir> resumes a timed_out run with a ramped, capped timeout
 # (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). It skips pick/claim
@@ -1397,7 +1399,7 @@ _serialize_reject() {
 
 # serialize_gate — S7, auto mode, CR_DECISION=SERIALIZE (issue #338). Turns an
 # overlap with a sibling run into a dependency: "this issue is blocked by #N",
-# after which S2b runs it once #N closes. Either exits 14 or returns with
+# after which S2b runs it once #N closes. Either exits 14 (or 15) or returns with
 # CR_DECISION=PROCEED.
 #
 # Acyclic by construction: the edge is written only when the sibling's start key
@@ -1485,7 +1487,7 @@ serialize_gate() {
     _hand_to_human \
       "Ajo sarjoitettiin sisarajon #$target perään, mutta varauslabelin \`$AUTO_CLAIMED_LABEL\` poistoa ei voitu varmistaa, joten issue ei palaa poimintaan itsestään. Kommentoi tähän issueen — ajo siivotaan ja issue odottaa #$target:n sulkeutumista. (Pelkkä labelin poisto jättäisi ajon jäänteet, joihin seuraava ajo kaatuisi.)" \
       "" blocked
-    exit 14
+    exit 15
   fi
 
   # (e) Finalize, then (f) tear the local artefacts down so the next run of
@@ -1508,7 +1510,7 @@ review_gate() {
   log "S7_ReviewGate decision=$CR_DECISION mode=$RUN_ISSUES_REVIEW_GATE"
   case "$RUN_ISSUES_REVIEW_GATE" in
     auto)
-      # SERIALIZE (issue #338): exits 14, or falls through as PROCEED.
+      # SERIALIZE (issue #338): exits 14/15, or falls through as PROCEED.
       [ "$CR_DECISION" = "SERIALIZE" ] && serialize_gate
       if [ "$CR_DECISION" = "PROCEED" ]; then
         state_event "$RUN_DIR" "review_gate_auto_proceed"

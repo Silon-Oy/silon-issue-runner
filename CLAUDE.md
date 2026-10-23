@@ -160,11 +160,11 @@ joka portissa, ei sattumaa.
   ettei ajo käynnisty toimivalla koneella. Sama periaate koskee muidenkin porttien
   ohitusmuuttujia (`docs/env-reference.md`).
 
-### Claimin jälkeinen esto labeloidaan aina
+### Claimin jälkeinen esto labeloidaan — paitsi odotustila
 
-Terminaalinen esto claimin jälkeen lisää issuelle situation-kommentin lisäksi **aina**
-`needs-human`-labelin (`_add_needs_human_label`) — paitsi sarjoitus (exit 14), joka on S2b:n
-tavoin itsestään jatkuva odotustila. **Pelkkä kommentti ei riitä: se ei ole
+Terminaalinen esto claimin jälkeen lisää issuelle situation-kommentin lisäksi `needs-human`-labelin
+(`_add_needs_human_label`). Poikkeus on sarjoitus (exit 14): se on S2b:n tavoin itsestään
+jatkuva odotustila, joten se ei labeloidu — mutta jos varaus jää voimaan, se labeloituu (exit 15). **Pelkkä kommentti ei riitä: se ei ole
 suodatettava**, joten jumiin jäänyt ajo näytti GitHubissa samalta kuin normaali kesken oleva —
 yksi hiljainen esto pysäytti kuuden issuen riippuvuusketjun yön yli. `cleanup-run.sh` poistaa
 labelin, joten elinkaari on suljettu.
