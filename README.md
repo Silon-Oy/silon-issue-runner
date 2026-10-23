@@ -577,6 +577,7 @@ lähde on koodin `${VAR:-oletus}`.
 | `PR_WATCH_ENABLE_CONFLICT_RESOLUTION` | `0` (poller nostaa `1`:ksi) | AI-avusteinen konfliktinratkaisu (ks. osio 7.4) |
 | `PR_WATCH_ENABLE_CI_REPAIR` | `0` (poller nostaa `1`:ksi) | AI-avusteinen punaisen CI:n korjaus (ks. osio 7.5) |
 | `PR_WATCH_MAX_CI_REPAIRS` | `1` | CI-korjauksen yrityskatto per PR |
+| `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (ks. osio 7.12) |
 
 ### Asennin
 
@@ -1089,6 +1090,42 @@ katselmointiin. Kehittäjäkoneella tämä tarkoittaa: jokainen `main`iin merget
 koneellesi tunnin sisällä. Jos et halua sitä, älä bootstrappaa self-update-agenttia — tai aja klooni
 submodulena, jolloin pull ohitetaan ja päivitys on eksplisiittinen pinnin nosto.
 
+### 7.11 Agentin kehotteeseen pääsevät vain kirjoitusoikeudellisten kommentit
+
+Agentti toimii ilman lupakyselyjä (§7.1), joten jokainen kehotteeseen päätyvä issue-kommentti on
+ohje agentille. Siksi kehotteeseen, tarkennus- ja blocked-vastaukseksi (6.6 c) ja kuvien lähteeksi
+kelpaavat **vain kommentit, joiden kirjoittajalla on kirjoitusoikeus repoon** (`admin`, `maintain`,
+`write`). Pois jätetyistä kehote kertoo vain lukumäärän, ei tekstiä eikä kirjoittajia. Oikeudettoman
+vastaus ei käynnistä ajoa eikä kuluta tarkennuskierrosta, eikä sen kirjoittama markeri siirrä
+vastausrajaa. **Lukukelvoton oikeus luetaan oikeudettomaksi** (fail-closed, WARNING-lokirivi).
+Issuen runkoa ei suodateta: `auto-run`-labelin lisääjällä on jo kirjoitusoikeus, joten hän on
+ottanut rungon vastuulleen. Oikeuden luku, välimuisti ja App-tila:
+[`docs/usage-reference.md`](docs/usage-reference.md#kommenttien-luottamussuodatus).
+
+### 7.12 Merge-hetken tietoturvaportti
+
+Auto-merge-PR:n koodia ei katselmoi ihminen, ja rebasen, konfliktinratkaisun ja CI-korjauksen
+agentit muuttavat sitä vielä ajon jälkeen. Siksi `pr-watch.sh` ajaa ennen jokaista mergeä
+**tietoturvakatselmuksen PR:n lopullisesta diffistä** erillisessä agenttikutsussa
+([`prompts/06-security-review.md`](prompts/06-security-review.md)). Kytkin
+`PR_WATCH_ENABLE_SECURITY_GATE` on skriptissä `0`, ja poller nostaa sen päälle.
+
+- Pidätysrajan ylittävät löydökset (oletus `critical` ja `high`) korjaa agentti
+  feature-worktreessä ([`prompts/07-security-fix.md`](prompts/07-security-fix.md)). Sen
+  jälkeen CI revalidoidaan ja **uusi head katselmoidaan** ennen mergeä. Rajan alittavat
+  löydökset raportoidaan PR-kommentissa, eivätkä ne estä mergeä.
+- Epäonnistunut korjaus, täyttynyt yrityskatto (`PR_WATCH_MAX_SECURITY_FIXES`, oletus `1`) tai
+  katselmus, joka ei käynnisty tai ei tuota jäsennettävää tulosta ⇒ `needs-human`, kommentti
+  löydöksineen ja exit 10. **Käynnistysvirhe ei ole koskaan puhdas tulos.**
+- Tulos kirjataan head-SHA:han sidottuna, joten samaa headia ei katselmoida kahdesti. Merge
+  sidotaan katselmoituun headiin (`--match-head-commit`). Pidätys toimii kuten CI-korjauksen
+  luovutus: kun poistat labelin, uusi head katselmoidaan. Sama head pidätetään uudelleen, joten
+  hyväksytyt löydökset mergetään käsin.
+- Kohderepo asettaa rajan `.claude/run-issues.json`issa (`security.hold_min_severity`), ja
+  arvo **voittaa koneen asetuksen**. Arvo luetaan base-haarasta, joten PR ei voi laskea omaa
+  rajaansa ([perustelu](docs/env-reference.md#pr-vahti)). Katselmoija ei lue PR:n
+  `principles_file`ä; PR:n `CLAUDE.md` on jäännösriski, jonka prompti käsittelee datana.
+
 ---
 
 ## 8. Perehdytys — miksi se käyttäytyy noin
@@ -1098,9 +1135,10 @@ Viisi asiaa, jotka selittävät ensimmäisen viikon yllätykset.
 ### Tarkennuskysymykseen vastataan **yhdellä** kommentilla
 
 Vastauksesta poimitaan vain uusin markerin jälkeinen ei-bottikommentti, ja se katkaistaan 8000
-merkkiin. Sääntö on **rakenteellinen, ei tyylisuositus**: bot ja ihminen käyttävät samaa
-GitHub-tiliä, joten kommentin kirjoittaja ei kelpaa erottimeksi — ainoa luotettava raja on
-markerin aikaleima. Koko kulku: kohta 6.6 c).
+merkkiin. Sääntö on **rakenteellinen, ei tyylisuositus**: bot ja ihminen voivat käyttää samaa
+GitHub-tiliä, joten kommentin kirjoittaja ei kelpaa erottimeksi botin ja ihmisen välillä — raja on
+markerin aikaleima. Kirjoittajan oikeus on lisäehto: vastauksen on tultava tililtä, jolla on
+kirjoitusoikeus repoon (§7.11). Koko kulku: kohta 6.6 c).
 
 ### Assignaatio on varaus, ei kirjanpitoa
 
@@ -1179,6 +1217,7 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | Poller ei tee mitään eikä kerro miksi | Väärä konenimi, puuttuva `tmux`, puuttuva tai viallinen watchlist — kaikki exittaavat hiljaa nollalla | Lue pollerin loki; ks. "Mistä lokit löytyvät" |
 | Ajo alkoi mutta mitään ei tapahdu | Rinnakkaisuuskatto täynnä | Lokissa `at cap (n/m)`; nosta `global_max_concurrent` tai odota |
 | Vastasin tarkennuskysymykseen, mutta mitään ei tapahtunut | Vastaus ennen markeria, tai useampi kommentti (vain uusin luetaan) | Kirjoita vastaus uudelleen **yhtenä** kommenttina (6.6 c) |
+| — sama, ja vastaus oli oikein | Vastaajalla ei ole kirjoitusoikeutta repoon, tai oikeutta ei voitu lukea (§7.11) | Vastaa kirjoitusoikeudellisella tilillä; etsi lokista `comment-trust: WARNING` |
 | PR on auki, CI vihreä, mutta ei mergeydy | `auto-merge`-label puuttuu **PR:ltä**, tai PR on draft | Lisää label PR:lle; draft merkitään valmiiksi käsin |
 | Ajo epäonnistui, korjasin syyn, issue ei palaa | Assignaatio ja `needs-human` jäivät | `/issue-runner:cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
 | Siivous ei löydä ajoa | Ajo tapahtui toisella koneella | Aja siivous siellä; PR-vahti tulostaa lokiin valmiin komennon |

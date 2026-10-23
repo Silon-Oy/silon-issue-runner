@@ -29,7 +29,7 @@ lukuihin.
 | `host-gate-notice.sh` | Host-portin "muuttuja puuttuu" -rivin toimitus: stderr **ja** skriptin oma loki, kerran. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot. Sisältää paketin **ainoan** poimintakyselyn (`pick_oldest_candidate`), lapsijoukon **ainoan** resolvoinnin (`list_epic_children`) ja ajopolkulabelien **ainoan** lukijan (`issue_run_path`) |
+| `issue.sh` | GitHub-issue-operaatiot. Sisältää paketin **ainoan** poimintakyselyn (`pick_oldest_candidate`), lapsijoukon **ainoan** resolvoinnin (`list_epic_children`) ja ajopolkulabelien **ainoan** lukijan (`issue_run_path`) sekä kommenttien luottamussuodatuksen (`issue_trusted_json`) ja kehotteen kommenttiosion **ainoan** muotoilijan (`issue_comments_block`) |
 | `jq-binary.sh` | `jq --binary` Windowsissa (§5.8). Paketin ainoa exportattava funktio; entry pointit sourcettavat sen |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
@@ -37,6 +37,7 @@ lukuihin.
 | `machine-env.sh` | Koneen env-tiedoston sourceaus **kutsujan etuoikeudella** (§5.5). Jaettu `orchestrate.sh`:n ja `pr-watch.sh`:n kesken, jotta sääntö on yhdessä paikassa |
 | `paths.sh` | Lukkojuuren ja lokihakemiston **alustakohtaiset oletukset** (`uname -s`: Darwin ⇒ macOS-polut, kaikki muu ⇒ XDG state). Haara on tarkoituksella ei-valkolista, jotta `MINGW64_NT-*` osuu XDG-haaraan |
 | `poller-config.sh` | Host-portti, watchlistin resolvointi ja repon poimintaehdot (labelit, valinnainen `assignees`). Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa. Kirjoittaa levylle ei koskaan; ainoa ulkoinen komento on watchlistin `jq`-luku |
+| `merge-gate.sh` | Yleisen merge-portin puhtaat osat (#334): tulosmuodon jäsennys (käynnistysvirhe ei ole koskaan puhdas), vakavuusraja (repo voittaa koneen) sekä headin aiempi tulos ja yritysmäärä `state.jsonl`in hännästä. Silmukka ja pidätys ovat `pr-watch.sh`:n `pr_run_merge_gate`ssa |
 | `pr-watch-lib.sh` | PR:n luokittelu ja merge-päätös irrotettuna testattavaksi |
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
 | `rate-limit.sh` | Rate-limitin **tekstuaalinen** tunnistus ja jaettu perääntyminen (§5.1) |

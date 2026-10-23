@@ -880,6 +880,21 @@ resolve_owner_repo() {
   log "remote: routing gh via --repo $OWNER_REPO (remote=$REMOTE_NAME)"
 }
 
+# trust_filter_issue_json <issue-json> — narrow the run's issue snapshot, in
+# place, to comments whose authors have write access (issue #343). Every prompt,
+# the clarification-reply detection and the image download read this file, so
+# filtering it once here covers all of them. The author cache is per run.
+trust_filter_issue_json() {
+  local f="$1"
+  if ! issue_trusted_json "$f" "$f" "$REPO_ROOT" "$REMOTE_NAME" "$RUN_DIR/comment-authors.tsv" "$OWNER_REPO"; then
+    log "WARNING: issue snapshot $f unreadable — comment trust filter not applied (nothing to leak)"
+    return 0
+  fi
+  local omitted
+  omitted=$(jq -r '.omitted_untrusted_comments // 0' "$f" 2>/dev/null || echo 0)
+  [ "$omitted" = "0" ] || log "comment-trust: $omitted comment(s) left out — author lacks write access"
+}
+
 # resolve_repo_slug — derive REPO_SLUG from REPO_ROOT + REMOTE_NAME (issue #67).
 # Called only on the NEW-run path: resume/restart/continue read the slug from
 # run.json instead, so a run's identity never changes under it (a remote URL
@@ -933,9 +948,10 @@ phase_a() {
   mkdir -p "$RUN_DIR"
   local issue_json="$RUN_DIR/issue.json"
   fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
+  trust_filter_issue_json "$issue_json"
   ISSUE_TITLE=$(jq -r '.title // empty' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
   local slug
   slug=$(slugify_title "$ISSUE_TITLE")
   [ -n "$slug" ] || slug="issue_${ISSUE_NUM}"
@@ -1588,9 +1604,11 @@ resume_load_state() {
     log "issue.json missing in $RUN_DIR — re-fetching from GitHub"
     fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
   fi
+  # Also re-filters a legacy run's unfiltered snapshot; idempotent otherwise.
+  trust_filter_issue_json "$issue_json"
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
 
   # The original run held the lock and the GitHub assignee; the trap kept
   # them alive on exit 10. Mark our globals so cleanup behaves correctly.
@@ -1724,9 +1742,11 @@ restart_load_state() {
     log "issue.json missing in $RUN_DIR — re-fetching from GitHub"
     fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
   fi
+  # Also re-filters a legacy run's unfiltered snapshot; idempotent otherwise.
+  trust_filter_issue_json "$issue_json"
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
 
   # Refresh the chosen remote so RESTART_CONTEXT (git log <remote>/<base>..HEAD)
   # compares the branch against the real remote tip. Soft: a failed fetch only
@@ -1849,6 +1869,10 @@ continue_load_state() {
   # Fetch the freshest issue payload and locate the human reply via the marker.
   local issue_json="$RUN_DIR/issue.json"
   fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
+  # Marker and reply are read from the trusted comments only: an untrusted reply
+  # neither continues the run nor spends a clarification round, and an untrusted
+  # (forged) marker cannot move the boundary.
+  trust_filter_issue_json "$issue_json"
 
   local marker_line marker_ts answer
   marker_line=$(parse_marker "$issue_json")
@@ -1880,7 +1904,7 @@ continue_load_state() {
   # Restore issue text fields for the cycle-review prompt.
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
 
   # Refresh the chosen remote so the re-run cycle-review reasons against the
   # real remote tip. Soft: a failed fetch only means cycle-review sees a

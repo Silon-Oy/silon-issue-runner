@@ -17,17 +17,27 @@ stateDiagram-v2
     P3_Classify --> NOT_MERGEABLE: gh pr view failed
 
     P4_Decide: P4 Decide\npr_decide()
-    P4_Decide --> P6_Merge: MERGE
+    P4_Decide --> P5c_Gate: MERGE
     P4_Decide --> P5_Resolve: REBASE (conflict-res ON)
+    P4_Decide --> P5b_FixCI: FIX_CI (ci-repair ON)
     P4_Decide --> NOT_MERGEABLE: SKIP_* / WAIT_*
 
     P5_Resolve: P5 Resolve\nrebase origin/main in feature worktree\nconflict -> AI resolves in worktree\nthen force-push + mandatory CI revalidation
-    P5_Resolve --> P6_Merge: rebase clean (direct or AI-resolved) + CI green
+    P5_Resolve --> P5c_Gate: rebase clean (direct or AI-resolved) + CI green
     P5_Resolve --> CONFLICT: AI could not resolve -> abort + comment
     P5_Resolve --> CONFLICT: CI not green after rebase
     P5_Resolve --> NOT_MERGEABLE: no worktree / fetch failed / blocked
 
-    P6_Merge: P6 Merge\ngh pr merge --rebase (no --delete-branch: the worktree holds it until P9)\nrebase rejected (merge commit on branch) -> retry --merge\nremote branch deleted separately after the merge
+    P5b_FixCI: P5b FixCI\nAI repairs red CI in feature worktree\nthen force-push + mandatory CI revalidation
+    P5b_FixCI --> P5c_Gate: fixed + CI green
+    P5b_FixCI --> CI_HELD: no fix / CI still red / cap reached
+
+    P5c_Gate: P5c Merge gates (PR_WATCH_ENABLE_SECURITY_GATE)\nagent reviews the final diff base...head, result per head SHA\nholding finding -> AI fix in worktree + CI revalidation + re-review\n(fix-attempt cap; a reviewed head is never reviewed again)
+    P5c_Gate --> P6_Merge: clean / below threshold (gate OFF: pass-through)
+    P5c_Gate --> GATE_HELD: fix failed / cap spent / review did not run
+    P5c_Gate --> NOT_MERGEABLE: no run-dir / worktree, fetch failed, head mismatch
+
+    P6_Merge: P6 Merge\ngh pr merge --rebase [--match-head-commit] (no --delete-branch: the worktree holds it until P9)\nrebase rejected (merge commit on branch) -> retry --merge\nremote branch deleted separately after the merge
     P6_Merge --> P7_PostMerge: merged
     P6_Merge --> MERGE_FAIL: merge failed
 
@@ -51,6 +61,8 @@ stateDiagram-v2
     MERGE_FAIL: exit 5
     CONFLICT: exit 6 (human needed)
     MIGRATE_FAIL: exit 7
+    CI_HELD: exit 8 (needs-human)
+    GATE_HELD: exit 10 (needs-human, findings commented)
 
     DONE --> [*]
     SCAN_EMPTY --> [*]
@@ -59,3 +71,5 @@ stateDiagram-v2
     MERGE_FAIL --> [*]
     CONFLICT --> [*]
     MIGRATE_FAIL --> [*]
+    CI_HELD --> [*]
+    GATE_HELD --> [*]

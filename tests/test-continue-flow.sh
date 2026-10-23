@@ -32,7 +32,9 @@ BIN="$WORK/bin"
 mkdir -p "$BIN"
 
 # gh mock: `issue view` returns a fixture issue JSON (so fetch_issue_json /
-# parse_marker / detect_answer work offline); everything else is recorded.
+# parse_marker / detect_answer work offline); the collaborator permission read
+# answers "write" so the comment trust filter (issue #343) keeps the fixture's
+# comments; everything else is recorded.
 GH_LOG="$WORK/gh-calls.log"
 ISSUE_FIXTURE="$WORK/issue-fixture.json"
 cat > "$BIN/gh" <<SH
@@ -42,6 +44,12 @@ case "\$1" in
   issue)
     case "\$2" in
       view) cat "$ISSUE_FIXTURE" ;;
+      *) : ;;
+    esac
+    ;;
+  api)
+    case "\$2" in
+      */collaborators/*/permission) echo write ;;
       *) : ;;
     esac
     ;;

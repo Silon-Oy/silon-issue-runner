@@ -118,6 +118,30 @@ haaralla ole pushaamattomia committeja. Yksikin epävarmuus (verkkovirhe, lukuke
 estää purun — portit ovat fail-closed. Jokainen päätös, myös ohitus syineen, kirjataan pollerin
 lokiin.
 
+## Kommenttien luottamussuodatus
+
+README §7.11 kertoo säännön; tässä on koneisto (`lib/issue.sh`: `issue_trusted_json`,
+`issue_author_can_write`, `issue_comments_block`).
+
+- **Lähde:** `repos/{owner}/{repo}/collaborators/<login>/permission`, kenttä `.permission`.
+  `admin`, `maintain` ja `write` kelpaavat; `read`, `triage`, `none`, HTTP-virhe ja tyhjä vastaus
+  eivät.
+- **Missä suodatetaan:** orkestraattori suodattaa ajon `issue.json`-tilannekuvan heti haun
+  jälkeen (uusi ajo, `--resume`, `--restart`, `--continue`), joten kehote, kuvien lataus ja
+  vastauksen tunnistus lukevat samaa suodatettua tiedostoa. Poller suodattaa `scan_answered`- ja
+  `scan_blocked_answered`-skannauksissa ennen markerin ja vastauksen etsintää.
+- **Välimuisti:** ajon hakemiston `comment-authors.tsv`. Kukin kirjoittaja kysytään kerran per ajo,
+  myös pollerin tikkien yli, joten tikin hinta on uusien kirjoittajien määrä eikä kommenttien.
+  Vain varma vastaus tallennetaan: lukuvirhe jättää kommentin pois tällä kertaa, mutta seuraava
+  luku yrittää uudelleen, jottei ohimenevä verkkovirhe vaienna ylläpitäjää loppuajoksi.
+- **App-tila:** runnerin omat kommentit kirjoittaa App, jolle oikeusrajapinta palauttaa `none`, ja
+  `gh issue view` näyttää sen loginin ilman `[bot]`-päätettä. Siksi Appin kommentit tunnistetaan
+  tarkasta slugista, joka luetaan Appin asennustiedoista (`app_slug`) ja tallennetaan samaan
+  välimuistiin. GitHub ei salli tiliä, jonka nimi on toisen omistajan App. Henkilökohtaisen tilin
+  tilassa runner kommentoi ylläpitäjän tilillä, joka läpäisee tavallisen tarkistuksen.
+- **Oikeus lukea:** oikeusrajapinta vaatii kutsujalta push-oikeuden repoon. Jos luku epäonnistuu
+  kaikille, jokainen ihmisen kommentti putoaa pois ja lokiin tulee `comment-trust: WARNING`.
+
 ## Epicit — usean issuen ketjun ajaminen `auto-run`illa
 
 Kun kokonaisuus koostuu monesta issuesta, voit koota ne **epic-issueen** ja ajaa koko ketjun
