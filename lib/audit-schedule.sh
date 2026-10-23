@@ -15,8 +15,11 @@
 # logs or GitHub.
 #
 # The time is recorded when the audit STARTS, not when it ends: an audit that
-# fails every time (no remote HEAD, agent cannot launch) then costs one attempt
-# per interval instead of one agent call per tick.
+# fails every time (no remote HEAD, agent cannot launch) then costs a bounded
+# number of attempts instead of one agent call per tick. Its OUTCOME is recorded
+# next to it when the audit ends (audit_run): a start without a successful
+# outcome — a failure, or a session that never got to write one — is retried
+# after RUN_ISSUES_AUDIT_RETRY_HOURS instead of waiting a whole interval.
 #
 # Defines functions only; no top-level work and no `set`.
 
@@ -95,19 +98,66 @@ audit_state_file() {
   printf '%s/.audit-last-%s-%s' "${1:-}" "${2:-}" "${3:-}"
 }
 
+# audit_result_file <state-file> — where the outcome of the recorded start is
+# kept: "<start-epoch> <exit-code>".
+audit_result_file() {
+  printf '%s.result' "${1:-}"
+}
+
+# _audit_succeeded <state-file> <start-epoch> — rc 0 when the start at
+# <start-epoch> ended in an audit that happened: exit 0, or 5 (done, one scanner
+# failed — the agent review itself ran). Anything else, a result for another
+# start, or no result at all is not a success.
+_audit_succeeded() {
+  local r start rc
+  r=$(deadline_file_read "$(audit_result_file "${1:-}")")
+  start="${r%% *}"
+  rc="${r#* }"
+  [ "$start" = "${2:-}" ] || return 1
+  case "$rc" in 0|5) return 0 ;; esac
+  return 1
+}
+
+# audit_retry_secs — how long after an unsuccessful start the audit is retried:
+# RUN_ISSUES_AUDIT_RETRY_HOURS (default 24). Junk reads as the default.
+audit_retry_secs() {
+  local h="${RUN_ISSUES_AUDIT_RETRY_HOURS:-24}"
+  case "$h" in ''|*[!0-9]*) h=24 ;; esac
+  h=$((10#$h))
+  [ "$h" -gt 0 ] || h=24
+  printf '%s' "$((h * 3600))"
+}
+
 # audit_due <state-file> <interval-days> <now-epoch> — rc 0 when the audit is
 # due. A missing or unreadable file means "never audited", i.e. due; so does a
 # recorded time in the future, which a clock jump or a bad write could leave
-# behind and which must not postpone the audit forever.
+# behind and which must not postpone the audit forever. A start without a
+# successful outcome is due again after audit_retry_secs (a running audit is
+# not restarted: the caller checks its session first).
 audit_due() {
-  local f="${1:-}" days="${2:-}" now="${3:-0}" last
+  local f="${1:-}" days="${2:-}" now="${3:-0}" last age
   days=$(_audit_positive_days "$days")
   [ -n "$days" ] || return 1
   last=$(deadline_file_read "$f")
   last="${last%% *}"
   [ "$last" -gt 0 ] || return 0
   [ "$last" -le "$now" ] || return 0
-  [ $((now - last)) -ge $((days * 86400)) ]
+  age=$((now - last))
+  [ "$age" -ge $((days * 86400)) ] && return 0
+  _audit_succeeded "$f" "$last" && return 1
+  [ "$age" -ge "$(audit_retry_secs)" ]
+}
+
+# audit_run <state-file> <start-epoch> <script> [args...] — run one audit and
+# record its outcome against <start-epoch>. The poller's tmux session runs this,
+# so the outcome is written by the audit's own process and never by the tick.
+# Returns the script's exit code.
+audit_run() {
+  local f="${1:-}" start="${2:-0}" rc=0
+  shift 2
+  "$@" || rc=$?
+  deadline_file_write "$(audit_result_file "$f")" "$start" "$rc" || true
+  return "$rc"
 }
 
 # audit_record <state-file> <now-epoch> <kind> — atomically record a start.

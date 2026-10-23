@@ -71,6 +71,8 @@ DAY=86400
 F="$WORK/.audit-last-security-x"
 check "never audited is due" "$(rc_of audit_due "$F" 7 "$NOW")" "0"
 check "record succeeds" "$(rc_of audit_record "$F" "$NOW" security)" "0"
+# The interval checks below are about a start that ended well.
+printf '%s 0\n' "$NOW" > "$(audit_result_file "$F")"
 check "record content" "$(cat "$F")" "$NOW security"
 check "just recorded is not due" "$(rc_of audit_due "$F" 7 "$NOW")" "1"
 check "one second before the interval is not due" "$(rc_of audit_due "$F" 7 $((NOW + 7 * DAY - 1)))" "1"
@@ -80,8 +82,29 @@ echo garbage > "$F"
 check "a corrupt state file is due" "$(rc_of audit_due "$F" 7 "$NOW")" "0"
 echo "$((NOW + 10 * DAY)) security" > "$F"
 check "a recorded time in the future is due" "$(rc_of audit_due "$F" 7 "$NOW")" "0"
+# ---- outcome and retry --------------------------------------------------------------
+G="$WORK/.audit-last-security-retry"
+audit_record "$G" "$NOW" security
+check "result file sits next to the state file" "$(audit_result_file "$G")" "$G.result"
+check "no outcome yet: not due within the retry delay" "$(rc_of audit_due "$G" 30 $((NOW + DAY - 1)))" "1"
+check "no outcome after the retry delay: due (killed session)" "$(rc_of audit_due "$G" 30 $((NOW + DAY)))" "0"
+printf '%s 3\n' "$NOW" > "$G.result"
+check "failed audit: due again after the retry delay, not the interval" "$(rc_of audit_due "$G" 30 $((NOW + DAY)))" "0"
+check "failed audit: not due before the retry delay" "$(rc_of audit_due "$G" 30 $((NOW + 3600)))" "1"
+check "retry delay follows RUN_ISSUES_AUDIT_RETRY_HOURS" "$(RUN_ISSUES_AUDIT_RETRY_HOURS=2 rc_of audit_due "$G" 30 $((NOW + 7200)))" "0"
+check "junk retry hours read as the default" "$(RUN_ISSUES_AUDIT_RETRY_HOURS=soon audit_retry_secs)" "86400"
+printf '%s 5\n' "$NOW" > "$G.result"
+check "exit 5 (a scanner failed, the review ran) counts as done" "$(rc_of audit_due "$G" 30 $((NOW + DAY)))" "1"
+printf '%s 0\n' "$((NOW - 99))" > "$G.result"
+check "an outcome of an earlier start does not count" "$(rc_of audit_due "$G" 30 $((NOW + DAY)))" "0"
+H="$WORK/.audit-last-security-run"
+check "audit_run returns the script's code" "$(rc_of audit_run "$H" "$NOW" sh -c 'exit 4')" "4"
+check "audit_run records it against the start" "$(cat "$H.result")" "$NOW 4"
+audit_run "$H" "$NOW" true
+check "audit_run records success" "$(cat "$H.result")" "$NOW 0"
+
 check "record into a missing directory fails" "$(rc_of audit_record "$WORK/no/such/dir/f" "$NOW" security)" "1"
-check "no temp files are left behind" "$(find "$WORK" -name '.audit-last-security-x.*' | wc -l | tr -d ' ')" "0"
+check "no temp files are left behind" "$(find "$WORK" -name '.audit-last-security-x.*' ! -name '*.result' | wc -l | tr -d ' ')" "0"
 
 # ---- cost guard (CLAUDE.md §5.3, §5.4) ------------------------------------------
 if grep -nE 'state\.jsonl|runs\.log|gh ' "$ROOT/lib/audit-schedule.sh" | grep -v '^[0-9]*:#' >/dev/null; then

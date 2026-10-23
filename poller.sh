@@ -872,8 +872,10 @@ _dispatch_audit_pass() {
     return 0
   fi
   echo "$(date -u +%FT%TZ) poller: auditing ($kind, every ${days}d) $session for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
+  # audit_run records the outcome against this start, so a failed audit is
+  # retried after RUN_ISSUES_AUDIT_RETRY_HOURS rather than a whole interval.
   tmux new-session -d -s "$session" \
-    "$ORCH_ENV '${RUN_ISSUES_HOME}/$script' '$REPO_PATH' --remote '$REMOTE' --watchlist '$WATCHLIST' 2>&1 | tee -a '$RUNS_LOG'"
+    "$ORCH_ENV bash -c '. \"\$0\"; audit_run \"\$@\"' '${RUN_ISSUES_HOME}/lib/audit-schedule.sh' '$state' '$now' '${RUN_ISSUES_HOME}/$script' '$REPO_PATH' --remote '$REMOTE' --watchlist '$WATCHLIST' 2>&1 | tee -a '$RUNS_LOG'"
   return 0
 }
 
