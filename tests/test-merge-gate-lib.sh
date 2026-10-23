@@ -115,6 +115,26 @@ for _ in $(seq 1 30); do echo '{"event":"pr_watch_skipped","data":{}}' >> "$J"; 
 check "record outside the tail window is not read" "" "$(PR_WATCH_GATE_TAIL_LINES=10 merge_gate_last_result "$J" security aaa)"
 check "attempts outside the tail window are not read" 0 "$(PR_WATCH_GATE_TAIL_LINES=10 merge_gate_attempts "$J" security)"
 
+# ----- permanent trigger failures in a row (issue #370) ----------------------
+F="$WORK/fails.jsonl"
+perm() { echo '{"event":"pr_watch_skipped","data":{"reason":"gate_trigger_failed","kind":"permanent","gate":"'"$1"'"}}'; }
+{
+  perm semantic
+  echo '{"event":"merge_gate_reviewed","data":{"gate":"semantic","sha":"a","result":"clean"}}'
+  perm semantic
+  echo '{"event":"pr_watch_skipped","data":{"reason":"gate_trigger_failed","kind":"transient","gate":"semantic"}}'
+  echo '{"event":"pr_watch_skipped","data":{"pr":"5","reason":"WAIT_CI"}}'
+  perm semantic
+  perm security
+} > "$F"
+check "trigger failures: counted since the gate's last merge_gate_* event" 2 "$(merge_gate_trigger_failures "$F" semantic)"
+check "trigger failures: per gate" 1 "$(merge_gate_trigger_failures "$F" security)"
+echo '{"event":"merge_gate_held","data":{"gate":"semantic","reason":"x"}}' >> "$F"
+check "trigger failures: a hold resets the count" 0 "$(merge_gate_trigger_failures "$F" semantic)"
+{ perm semantic; echo '{"event":"pr_watch_skipped","data":{"gate":"sem'; } >> "$F"
+check "trigger failures survive a torn line" 1 "$(merge_gate_trigger_failures "$F" semantic)"
+check "trigger failures on a missing file" 0 "$(merge_gate_trigger_failures "$WORK/none.jsonl" semantic)"
+
 # ----- comment formatting ------------------------------------------------
 GOT=$(merge_gate_format_findings $'low|high|d|w\ncritical|high|a.php:1|x')
 check "most severe first" '- **critical** (varmuus: high) `a.php:1` — x' "$(printf '%s\n' "$GOT" | head -n 1)"

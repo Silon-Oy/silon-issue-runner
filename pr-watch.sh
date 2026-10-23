@@ -114,6 +114,10 @@
 #                                        diffs in the prompt (lib/semantic-gate.sh).
 #   PR_WATCH_GATE_TAIL_LINES             default 1000 — state.jsonl tail window
 #                                        the gate reads (lib/merge-gate.sh).
+#   PR_WATCH_GATE_TRIGGER_FAIL_MAX       default 3 — a gate trigger's permanent
+#                                        failures (e.g. the sibling listing's
+#                                        403/404) in a row before the PR is held
+#                                        for a human instead of retried.
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
 #   PR_WATCH_LABELS_CSV                  optional scan filter (unused gate today;
 #                                        the merge label is the real gate).
@@ -242,6 +246,8 @@ PR_WATCH_MAX_SEMANTIC_FIXES="${PR_WATCH_MAX_SEMANTIC_FIXES:-1}"
 PR_WATCH_SEMANTIC_REVIEW_TIMEOUT="${PR_WATCH_SEMANTIC_REVIEW_TIMEOUT:-1800}"
 PR_WATCH_SEMANTIC_FIX_TIMEOUT="${PR_WATCH_SEMANTIC_FIX_TIMEOUT:-1800}"
 PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY="${PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY:-low}"
+PR_WATCH_GATE_TRIGGER_FAIL_MAX="${PR_WATCH_GATE_TRIGGER_FAIL_MAX:-3}"
+case "$PR_WATCH_GATE_TRIGGER_FAIL_MAX" in ''|*[!0-9]*|0) PR_WATCH_GATE_TRIGGER_FAIL_MAX=3 ;; esac
 PR_WATCH_CODEX_CMD_DEFAULT="codex"
 PR_WATCH_CODEX_CMD="${PR_WATCH_CODEX_CMD:-$PR_WATCH_CODEX_CMD_DEFAULT}"
 PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
@@ -661,8 +667,12 @@ watch_one() {
   # here, so code the watcher's own agents changed is reviewed in its FINAL form.
   # pr_decide stays pure: whether a gate runs is read here, in the caller. A gate
   # that fixes a finding moves the head, which makes an earlier gate's review
-  # stale — so with more than one gate the pass repeats until no gate moved the
-  # head (bounded: every move costs a capped fix attempt).
+  # stale — so the pass repeats until no gate moved the head (bounded: every
+  # move costs a capped fix attempt). It repeats with a single gate too: a fix
+  # waits for CI, and a base-keyed gate (semantic) must judge the base as it is
+  # after that wait — a sibling merged meanwhile is exactly what it looks for.
+  # For a gate not keyed by the base the repeat costs one fetch and finds the
+  # new head's own record.
   PR_GATE_HEAD_SHA=""
   local gate grc gates_on=0 gate_moved
   for gate in $MERGE_GATES; do
@@ -681,7 +691,7 @@ watch_one() {
       fi
       [ "$PR_GATE_START_SHA" = "$PR_GATE_HEAD_SHA" ] || gate_moved=1
     done
-    [ "$gate_moved" = 1 ] && [ "$gates_on" -gt 1 ] || break
+    [ "$gate_moved" = 1 ] || break
   done
 
   # ----- P6: Merge --------------------------------------------------------
@@ -1586,8 +1596,10 @@ _merge_gate_spec() {
 #   <fn> <pr-number> <run-id> <run-dir> <worktree> <base-ref> <context-file>
 # after the head sync, with the base fetched. rc 0 = review (it may write
 # <context-file>), 1 = nothing to review (the gate passes with no agent call),
-# anything else = it could not decide (rc 4: a failed lookup is never a pass). It
-# may set GATE_CONTEXT_SUMMARY, one line the hold comment quotes.
+# 3 = it failed permanently (it sets GATE_TRIGGER_WHY: rc 4, and a hold once
+# PR_WATCH_GATE_TRIGGER_FAIL_MAX of them come in a row), anything else = it could
+# not decide this time (rc 4: a failed lookup is never a pass). It may set
+# GATE_CONTEXT_SUMMARY, one line the hold comment quotes.
 pr_run_merge_gate() {
   local gate="$1" pr_num="$2" rid="$3" run_dir="$4" pr_json="$5"
   PR_GATE_START_SHA=""
@@ -1595,6 +1607,7 @@ pr_run_merge_gate() {
   GATE_BASE_SHA=""
   GATE_CONTEXT_FILE=""
   GATE_CONTEXT_SUMMARY=""
+  GATE_TRIGGER_WHY=""
   _merge_gate_spec "$gate" || return 4
 
   # The per-head record lives in the run-dir: without it a head could be reviewed
@@ -1672,9 +1685,27 @@ pr_run_merge_gate() {
         PR_GATE_HEAD_SHA="$sha"
         return 0
         ;;
+      3)
+        # A permanent failure does not heal on a later tick, so retrying it
+        # forever would park the PR without telling anyone. One is not yet
+        # proof (a fresh 404 can be replication lag): hold after it repeats.
+        local fails
+        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=gate_trigger_failed" \
+          "kind=permanent" "gate=$gate" "why=${GATE_TRIGGER_WHY:-}"
+        fails=$(merge_gate_trigger_failures "$run_dir/state.jsonl" "$gate")
+        case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
+        if [ "$fails" -ge "$PR_WATCH_GATE_TRIGGER_FAIL_MAX" ]; then
+          _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "$sha" \
+            "portin laukaisin ei voinut lukea tarvitsemaansa tietoa: ${GATE_TRIGGER_WHY:-tuntematon virhe} (toistui $fails kertaa peräkkäin)" "" launch_failed
+          return 10
+        fi
+        log "merge gate '$gate': trigger failed permanently for PR #$pr_num ($fails/$PR_WATCH_GATE_TRIGGER_FAIL_MAX) — not merging, retrying next poll"
+        return 4
+        ;;
       *)
         log "merge gate '$gate': trigger could not decide for PR #$pr_num (rc=$trc) — not merging, retrying next poll"
-        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=gate_trigger_failed"
+        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=gate_trigger_failed" \
+          "kind=transient" "gate=$gate"
         return 4
         ;;
     esac
@@ -2006,8 +2037,10 @@ _pr_gate_hold_to_human() {
 # which filters rather than stopping at the first older commit). A run-dir without
 # started_at falls back to merge-base..base.
 #
-# Cost (CLAUDE.md §5.2/§5.4): at most ONE gh call, a REST listing, and only when
-# the base has gained commits in the window; everything else is local git.
+# Cost (CLAUDE.md §5.2/§5.4): REST listing pages, only when the base has gained
+# commits in the window — normally ONE, at most SEMANTIC_LIST_MAX_PAGES when more
+# than a page of closed PRs was updated within the window; everything else is
+# local git.
 _pr_semantic_trigger() {
   local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" base_ref="$5" ctx="$6"
   local base="$PR_ROUTE_REMOTE/$base_ref"
@@ -2040,14 +2073,49 @@ _pr_semantic_trigger() {
   boundary=$( cd "$worktree" && git rev-parse --verify -q "${range%%$'\n'*}^1" 2>/dev/null ) \
     || boundary=$( cd "$worktree" && git hash-object -t tree /dev/null )
 
-  local owner_repo="$PR_OWNER_REPO" json siblings
+  # Without started_at the window starts at its oldest commit: a sibling merged
+  # in it was updated no earlier than that commit was made.
+  local since="$started"
+  [ -n "$since" ] || since=$( cd "$worktree" && TZ=UTC git log -1 \
+      --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%cd' "${range%%$'\n'*}" 2>/dev/null )
+  [ -n "$since" ] || return 2
+
+  # The listing, page by page while the last page still reaches into the window
+  # (semantic_page_needs_more). A failed page is classified: a permanent answer
+  # (401/403/404, not a rate limit) is rc 3 so the gate can hold after it
+  # repeats; anything else is rc 2, retried next poll.
+  local owner_repo="$PR_OWNER_REPO" page=1 json siblings="" page_sibs errf err more=0
   [ -n "$owner_repo" ] || owner_repo='{owner}/{repo}'
-  if ! json=$(gh_route api "repos/$owner_repo/pulls?state=closed&base=$base_ref&sort=updated&direction=desc&per_page=100"); then
-    log "semantic gate: listing closed PRs failed for PR #$pr_num"
-    return 2
-  fi
-  if ! siblings=$(semantic_merged_siblings "$json" "$pr_num"); then
-    log "semantic gate: closed-PR listing for PR #$pr_num is not a JSON array — not a pass"
+  errf=$(mktemp -t pr-watch-semantic-err.XXXXXX)
+  while :; do
+    : > "$errf"
+    if ! json=$(gh_route api "repos/$owner_repo/pulls?state=closed&base=$base_ref&sort=updated&direction=desc&per_page=$SEMANTIC_LIST_PER_PAGE&page=$page" 2>"$errf"); then
+      err=$(cat "$errf" 2>/dev/null || true)
+      rm -f "$errf"
+      [ -n "$err" ] && printf '%s\n' "$err" >&2
+      if [ "$(semantic_list_error_kind "$err")" = permanent ]; then
+        GATE_TRIGGER_WHY="suljettujen PR:ien listaus epäonnistui pysyvästi ($(printf '%s' "$err" | grep -oE 'HTTP [0-9]{3}[^(]*' | head -n 1 | sed 's/[[:space:]]*$//'))"
+        log "semantic gate: listing closed PRs failed permanently for PR #$pr_num (page $page): $(printf '%s' "$err" | head -n 1)"
+        return 3
+      fi
+      log "semantic gate: listing closed PRs failed for PR #$pr_num (page $page) — retrying next poll"
+      return 2
+    fi
+    if ! page_sibs=$(semantic_merged_siblings "$json" "$pr_num"); then
+      rm -f "$errf"
+      GATE_TRIGGER_WHY="suljettujen PR:ien listaus ei ollut JSON-taulukko"
+      log "semantic gate: closed-PR listing for PR #$pr_num is not a JSON array — not a pass"
+      return 3
+    fi
+    [ -n "$page_sibs" ] && siblings="${siblings:+$siblings$'\n'}$page_sibs"
+    more=0
+    semantic_page_needs_more "$json" "$since" && more=1
+    [ "$more" = 1 ] && [ "$page" -lt "$SEMANTIC_LIST_MAX_PAGES" ] || break
+    page=$((page + 1))
+  done
+  rm -f "$errf"
+  if [ "$more" = 1 ]; then
+    log "semantic gate: $SEMANTIC_LIST_MAX_PAGES pages of closed PRs for PR #$pr_num still reach into the window since $since — cannot see every sibling, not a pass"
     return 2
   fi
 

@@ -14,7 +14,14 @@
 # base. GitHub's merge_commit_sha is the commit the base was updated to, for every
 # merge method, and it lies on the base's first-parent chain.
 #
-# Functions only, no top-level work.
+# Functions only, no top-level work — except loading lib/rate-limit.sh when the
+# caller has not (semantic_list_error_kind needs rate_limit_matches; pr-watch.sh
+# loads it itself).
+
+if ! command -v rate_limit_matches >/dev/null 2>&1; then
+  # shellcheck source=rate-limit.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rate-limit.sh"
+fi
 
 # Byte cap on the sibling diffs fed to the review prompt (same order as the CI
 # log excerpt): a sweeping sibling must not crowd the review out of its context.
@@ -27,6 +34,14 @@ SEMANTIC_SIBLING_PREFIX="auto-run/"
 # bound, so the walk is O(work) (CLAUDE.md §5.4); a window that fills it is
 # reported as cut short, never as complete.
 SEMANTIC_WINDOW_MAX=500
+
+# The closed-PR listing is read page by page, newest update first, and only as
+# far as the window reaches: a sibling updated since the window started is on a
+# page whose last row is not older than the window. A bound, not --paginate
+# (CLAUDE.md §5.4) — a listing that still reaches into the window on its last
+# page is "could not decide", never a pass.
+SEMANTIC_LIST_PER_PAGE=100
+SEMANTIC_LIST_MAX_PAGES=3
 
 # semantic_window <since-iso> — reads "<sha> <committer-time>" lines of the base's
 # first-parent chain on stdin, newest first, the time as YYYY-MM-DDTHH:MM:SSZ in
@@ -98,4 +113,32 @@ semantic_sibling_spans() {
       if (prev == "") { prev = $1; next }
       if ($1 in num) { printf "%s\t%s\t%s\t%s\n", num[$1], ref[$1], prev, $1; prev = $1 }
     }' <(printf '%s\n' "$siblings") <(printf '%s\n' "$range")
+}
+
+# semantic_page_needs_more <pulls-json> <since-iso> — whether the next page of an
+# updated-desc listing may still hold a PR updated at or after <since-iso>: rc 0
+# when the page is full (SEMANTIC_LIST_PER_PAGE rows) and its last row's
+# updated_at is not older than <since-iso>; rc 1 otherwise. rc 2 if the page is
+# not a JSON array. A sibling's updated_at is never older than its merge, so a
+# page that ends before the window has listed every sibling merged in it.
+semantic_page_needs_more() {
+  local json="$1" since="$2" out
+  out=$(jq -r --argjson n "$SEMANTIC_LIST_PER_PAGE" --arg s "$since" '
+    if type != "array" then error("not an array") else . end
+    | if length >= $n and ((last.updated_at // "") >= $s) then "more" else "done" end'     <<<"$json" 2>/dev/null) || return 2
+  [ "$out" = more ]
+}
+
+# semantic_list_error_kind <stderr-text> — "permanent" or "transient" for a
+# failed listing. Permanent is an authorization / not-found answer (HTTP 401,
+# 403, 404) that is not a rate-limit rejection: GitHub throttles with 403 too, and
+# the match is textual (CLAUDE.md §5.1). Everything else — network, 5xx, an
+# unknown message — is transient: a retry next poll may succeed.
+semantic_list_error_kind() {
+  local err="${1:-}"
+  if rate_limit_matches "$err"; then printf 'transient'; return 0; fi
+  case "$err" in
+    *"HTTP 401"*|*"HTTP 403"*|*"HTTP 404"*) printf 'permanent' ;;
+    *) printf 'transient' ;;
+  esac
 }

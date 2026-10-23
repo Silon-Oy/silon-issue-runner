@@ -80,6 +80,30 @@ check "window: every line inside at the cap is cut short (rc 2)" "2" "$rc"
 rc=0; out=$(printf 'c1 2026-10-23T11:00:00Z\nc0 2026-10-23T10:30:00Z\n' | semantic_window "$S") || rc=$?
 check "window: a short history all inside is complete (rc 0)" "0" "$rc"
 
+# ----- listing pages (issue #370) ------------------------------------------
+# page <n> <last-updated_at> — a JSON array of n rows, the last one updated then.
+page() {
+  jq -nc --argjson n "$1" --arg u "$2" '[range(0; $n) | {number: ., updated_at: "2026-10-24T00:00:00Z"}] | .[-1].updated_at = $u'
+}
+pg_rc() { local rc=0; SEMANTIC_LIST_PER_PAGE=3 semantic_page_needs_more "$1" "$S" || rc=$?; printf '%s' "$rc"; }
+check "page: full, oldest row inside the window -> more (0)" 0 "$(pg_rc "$(page 3 2026-10-23T10:30:00Z)")"
+check "page: full, oldest row at the start instant -> more (0)" 0 "$(pg_rc "$(page 3 "$S")")"
+check "page: full, oldest row before the window -> done (1)" 1 "$(pg_rc "$(page 3 2026-10-22T00:00:00Z)")"
+check "page: short page -> done (1)" 1 "$(pg_rc "$(page 2 2026-10-23T10:30:00Z)")"
+check "page: empty page -> done (1)" 1 "$(pg_rc '[]')"
+check "page: not an array -> rc 2" 2 "$(pg_rc '{"message":"Not Found"}')"
+check "page: not JSON -> rc 2" 2 "$(pg_rc 'garbage')"
+
+# ----- listing error kinds (issue #370) ------------------------------------
+check "error: 404 is permanent" permanent "$(semantic_list_error_kind 'gh: Not Found (HTTP 404)')"
+check "error: 403 is permanent" permanent "$(semantic_list_error_kind 'gh: Resource not accessible by integration (HTTP 403)')"
+check "error: 401 is permanent" permanent "$(semantic_list_error_kind 'gh: Bad credentials (HTTP 401)')"
+check "error: 403 rate limit is transient" transient \
+  "$(semantic_list_error_kind 'gh: You have exceeded a secondary rate limit. (HTTP 403)')"
+check "error: 502 is transient" transient "$(semantic_list_error_kind 'gh: Bad Gateway (HTTP 502)')"
+check "error: network is transient" transient "$(semantic_list_error_kind 'error connecting to api.github.com')"
+check "error: empty is transient" transient "$(semantic_list_error_kind '')"
+
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "semantic-gate-lib: all passed" || echo "semantic-gate-lib: FAILURES"
 [ "$FAIL" -eq 0 ]

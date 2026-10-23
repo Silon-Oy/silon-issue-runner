@@ -180,6 +180,24 @@ merge_gate_attempts() {
   printf '%s' "${n:-0}"
 }
 
+# merge_gate_trigger_failures <state-jsonl> <gate> — how many PERMANENT trigger
+# failures (pr_watch_skipped reason=gate_trigger_failed kind=permanent) this gate
+# has recorded in a row. Any later merge_gate_* event of the gate (a review, a
+# pass without one, a hold) resets the count; transient failures neither count
+# nor reset it, so a flaky network between two 404s does not hide the repeat.
+merge_gate_trigger_failures() {
+  local jsonl="$1" gate="$2" n
+  [ -f "$jsonl" ] || { printf '0'; return 0; }
+  n=$(tail -n "$PR_WATCH_GATE_TAIL_LINES" "$jsonl" 2>/dev/null \
+    | jq -Rrn --arg g "$gate" '
+        reduce (inputs | fromjson? | select(.data.gate == $g)) as $e (0;
+          if ($e.event | startswith("merge_gate_")) then 0
+          elif $e.event == "pr_watch_skipped" and $e.data.reason == "gate_trigger_failed"
+               and $e.data.kind == "permanent" then . + 1
+          else . end)' 2>/dev/null) || n=0
+  printf '%s' "${n:-0}"
+}
+
 # merge_gate_format_findings <normalised-findings> — a Markdown list for a PR
 # comment, most severe first.
 merge_gate_format_findings() {
