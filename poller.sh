@@ -279,6 +279,12 @@ LIB_EPIC="${RUN_ISSUES_HOME}/lib/epic.sh"
 # shellcheck source=lib/epic.sh
 . "$LIB_EPIC"
 
+# audit_kinds / audit_interval_days / audit_due / audit_record live in
+# lib/audit-schedule.sh (issue #340): when a whole-repo audit is due for a repo ×
+# remote. _dispatch_audit_pass below spawns it. Functions only; safe to source.
+# shellcheck source=lib/audit-schedule.sh
+. "${RUN_ISSUES_HOME}/lib/audit-schedule.sh"
+
 # _running_session_name <prefix> <remote> <repo-slug> <issue>
 # Prints the name of an existing tmux session for this (repo, remote, issue) and
 # returns 0, or returns 1 when none is running.
@@ -818,6 +824,56 @@ _dispatch_teardown_pass() {
     tmux new-session -d -s "$session" \
       "'$delegate' --repo '$repo' --issue '$issue' --remote '$REMOTE' 2>&1 | tee -a '$RUNS_LOG'"
   done
+  return 0
+}
+
+# _dispatch_audit_pass <kind> — starts the whole-repo audit of <kind> for the
+# current repo × remote when its interval has passed (issue #340). Reads
+# REPO_PATH / REMOTE / REPO_SLUG / WATCHLIST / GLOBAL_MAX / LOG / LOG_DIR /
+# RUNS_LOG / ORCH_ENV from the loop scope, like _dispatch_teardown_pass.
+#
+# Local reads only — no gh call: the interval comes from the environment
+# (poller.env is already sourced) and from .claude/run-issues.json at the
+# remote's default branch as the last fetch left it, which is where the audit
+# itself reads its policy. The audit runs detached in tmux, so the tick never
+# waits for its agent call, and its session name starts with `run-issues-` so
+# it counts against GLOBAL_MAX like every other spawn.
+_dispatch_audit_pass() {
+  local kind="$1" script var days ref cfg="" state session active now
+  # The slug keys both the state file and the session; without one, every repo
+  # would share a single "last audited" time.
+  [ -n "$REPO_SLUG" ] || return 0
+  script=$(audit_kind_script "$kind") || return 0
+  var=$(audit_kind_env_var "$kind") || return 0
+  if ref=$(git -C "$REPO_PATH" rev-parse --verify -q "refs/remotes/$REMOTE/HEAD" 2>/dev/null); then
+    cfg=$(git -C "$REPO_PATH" show "$ref:.claude/run-issues.json" 2>/dev/null || true)
+  fi
+  days=$(audit_interval_days "$cfg" "$kind" "${!var:-}")
+  [ -n "$days" ] || return 0
+  now=$(date +%s)
+  state=$(audit_state_file "$LOG_DIR" "$kind" "$REPO_SLUG")
+  audit_due "$state" "$days" "$now" || return 0
+  session="run-issues-audit-${kind}-${REPO_SLUG}"
+  if tmux has-session -t "=$session" 2>/dev/null; then
+    echo "$(date -u +%FT%TZ) poller: audit session $session already running" >> "$LOG"
+    return 0
+  fi
+  if [ ! -x "${RUN_ISSUES_HOME}/$script" ]; then
+    echo "$(date -u +%FT%TZ) poller: $kind audit script not executable at ${RUN_ISSUES_HOME}/$script" >> "$LOG"
+    return 0
+  fi
+  active=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || active=0
+  if [ "$active" -ge "$GLOBAL_MAX" ]; then
+    echo "$(date -u +%FT%TZ) poller: at cap ($active/$GLOBAL_MAX), deferring $kind audit of $REPO_PATH (remote=$REMOTE)" >> "$LOG"
+    return 0
+  fi
+  if ! audit_record "$state" "$now" "$kind"; then
+    echo "$(date -u +%FT%TZ) poller: cannot record $kind audit start in $state — not starting it" >> "$LOG"
+    return 0
+  fi
+  echo "$(date -u +%FT%TZ) poller: auditing ($kind, every ${days}d) $session for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
+  tmux new-session -d -s "$session" \
+    "$ORCH_ENV '${RUN_ISSUES_HOME}/$script' '$REPO_PATH' --remote '$REMOTE' --watchlist '$WATCHLIST' 2>&1 | tee -a '$RUNS_LOG'"
   return 0
 }
 
@@ -1408,8 +1464,15 @@ while IFS= read -r repo_json; do
     # the first rejection rather than repeating it for the remaining repos.
     if _rl_hit; then break 2; fi
 
-    # Usage limit in force: no pickup (logged once above, not per repo).
+    # Usage limit in force: no pickup and no audit (logged once above, not per repo).
     _claude_work_allowed || continue
+
+    # ----- Scheduled whole-repo audits (issue #340) ------------------------
+    # Before pickup, and local-only: an audit that is not due costs one file
+    # read. A due one takes a GLOBAL_MAX slot like any run.
+    for AUDIT_KIND in $(audit_kinds); do
+      _dispatch_audit_pass "$AUDIT_KIND"
+    done
 
     # ----- Pick a new candidate issue (per remote) -------------------------
     # The ONLY pickup search in the package lives in lib/issue.sh (issue #99): the

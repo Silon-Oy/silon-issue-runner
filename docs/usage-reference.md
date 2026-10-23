@@ -401,7 +401,7 @@ käytettävissä.
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
 | `evolution-digest.sh` | `evolution-digest.sh [--since <vrk>] [--claude]` | Evolutionin toistuvat havainnot jakson ajoista ja kohde-ehdotus kullekin. Puhtaasti lukeva, ajetaan käsin |
-| `security-audit.sh` | `security-audit.sh <repo> [--remote <nimi>] [--dry-run]` | Koko repon tietoturva-auditointi oletushaarasta väliaikaisessa worktreessä: skannerit ja agentin uhkamalli, löydös → yksi issue sormenjäljellä (`lib/finding-issues.sh`). Avointa ei monisteta, korjattu avataan vain toistuessa, *not planned* -tilaan suljettua ei koskaan. Ei ajastusta |
+| `security-audit.sh` | `security-audit.sh <repo> [--remote <nimi>] [--dry-run]` | Koko repon tietoturva-auditointi oletushaarasta väliaikaisessa worktreessä: skannerit ja agentin uhkamalli, löydös → yksi issue sormenjäljellä (`lib/finding-issues.sh`). Avointa ei monisteta, korjattu avataan vain toistuessa, *not planned* -tilaan suljettua ei koskaan. Poller ajastaa sen repokohtaisella välillä (`RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS`, `.security.audit_interval_days`, #340) |
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run` |
 | `cleanup-run.sh` | `cleanup-run.sh --issue <N> --yes` | Ajojäänteiden purku. `--list`, `--all`, `--force`, `--dry-run`, `--remote` |
 | `auto-clean.sh` | *(pollerin kutsuma)* | Label-vetoinen siivous + issuen sulkeminen. Käsin: `--repo <polku> --issue <N>` |

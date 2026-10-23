@@ -48,3 +48,7 @@ toiminnon ja labelit.
 Auto-run-raja: kohderepon `.claude/run-issues.json` `.security.audit_auto_run_min_severity`
 (oletushaarasta) voittaa koneen `RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY`:n. Arvo
 `none` estää poimintalabelit kokonaan.
+
+Ajastus: poller ajaa saman auditoinnin itse, kun repolle on asetettu väli
+(`.security.audit_interval_days` tai koneen `RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS`).
+Tämä komento on käsiajo, eikä se siirrä ajastettua auditointia.

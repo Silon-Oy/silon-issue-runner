@@ -342,9 +342,21 @@ kun se on mergetty. Kelvoton JSON tai tuntematon arvo tulkitaan tiukimmaksi (`lo
 | `RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY` | `high` | Lievin vakavuus, jonka löydösissue saa poimintalabelit (`critical`, `high`, `medium`, `low` tai `none`). Rajan alittavat luodaan ilman niitä. Luetaan ympäristöstä (kutsuja tai `env`-tiedosto), muuten `poller.env`:stä — vain tämä yksi muuttuja, alikuoressa. **Kohderepon `.claude/run-issues.json` `.security.audit_auto_run_min_severity` voittaa tämän** samalla perusteella kuin pidätysrajassa; repon arvo luetaan remoten oletushaarasta. Tuntematon arvo tai kelvoton JSON ⇒ `none`: issuet luodaan, mutta mikään ei käynnisty itsestään (turvallinen suunta on päinvastainen kuin merge-portissa) |
 | `RUN_ISSUES_SECURITY_AUDIT_TIMEOUT` | `3600` | Auditointiagentin kutsun aikakatto sekunteina |
 | `RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT` | `300` | Remoten `git fetch`in aikakatto ennen auditointia |
+| `RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus (#340): montako päivää edellisen auditoinnin **käynnistyksestä** on kuluttava, ennen kuin poller käynnistää uuden repo×remote-parille. Luetaan `poller.env`:stä. **Kohderepon `.claude/run-issues.json` `.security.audit_interval_days` voittaa tämän**, kun avain on asetettu: repo voi ajastaa auditoinnin, jota kone ei ajasta, ja `0` poistaa koneen ajastuksen. Arvoksi kelpaa positiivinen kokonaisluku. `0`, muu arvo tai kelvoton JSON tarkoittaa, ettei repoa auditoida (§9) |
 
 Poimintalabelit tulevat watchlististä (`poller_pick_labels`); repo, jota watchlist ei listaa,
-saa sisäänrakennetun oletuksen. Skannerit ja agentti käyttävät yllä kuvattuja
+saa sisäänrakennetun oletuksen.
+
+**Ajastus pollerista** (`lib/audit-schedule.sh`). Poller ajaa auditoinnin irrallisessa
+tmux-istunnossa `run-issues-audit-<laji>-<repo-slug>`. Istunto lasketaan samaan
+`global_max_concurrent`-kattoon kuin orkestraattoriajot. Täysi katto lykkää auditoinnin
+seuraavaan tikkiin, eikä lykkäystä kirjata. Ajastus koskee vain watchlistin repoja, se on
+host-portin takana, eikä se käynnisty Clauden käyttörajan aikana. Käynnistyshetki kirjataan
+yksiriviseen tiedostoon `$RUN_ISSUES_LOG_DIR/.audit-last-<laji>-<repo-slug>`. Sen poistaminen
+pakottaa auditoinnin seuraavalla tikillä. Kirjaus tehdään käynnistyksessä eikä
+onnistumisessa, joten aina kaatuva auditointi maksaa yhden yrityksen väliä kohden, ei yhtä per
+tikki. Repon väli luetaan remoten oletushaaran viimeksi haetusta tilasta
+(`<remote>/HEAD`) ilman verkkokutsua. Skannerit ja agentti käyttävät yllä kuvattuja
 `RUN_ISSUES_GITLEAKS_BIN`-, `RUN_ISSUES_OSV_SCANNER_BIN`- ja `RUN_ISSUES_CLAUDE_*`-asetuksia.
 
 ### Julkaisu julkiseen peiliin (`publish-release.sh`, #155)
