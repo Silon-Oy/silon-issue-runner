@@ -157,6 +157,8 @@ _claude_step_phase() {
     06-security-review*)     printf 'SECURITY_REVIEW' ;;
     07-security-fix*)        printf 'SECURITY_FIX' ;;
     09-epic-review*)         printf 'EPIC_REVIEW' ;;
+    10-semantic-review*)     printf 'SEMANTIC_REVIEW' ;;
+    11-semantic-fix*)        printf 'SEMANTIC_FIX' ;;
   esac
 }
 

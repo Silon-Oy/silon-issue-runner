@@ -223,6 +223,10 @@ if [ -n "$SECURITY_HOLD_MIN" ]; then
   SECURITY_HOLD_PREFIX="PR_WATCH_SECURITY_HOLD_MIN_SEVERITY='$SECURITY_HOLD_MIN' "
 fi
 
+# Likewise enable the semantic-conflict merge gate (issue #341): OFF in
+# pr-watch.sh, ON here, poller.env can export 0 to disable.
+SEMANTIC_CHECK="${PR_WATCH_ENABLE_SEMANTIC_CHECK:-1}"
+
 # Materialise the watchlist repos into an array so the rotation cursor below can
 # resume iteration from an arbitrary offset. while-read (not mapfile) for bash
 # 3.2 compatibility.
@@ -383,7 +387,7 @@ for (( i=0; i<N; i++ )); do
       echo "$(date -u +%FT%TZ) pr-watch-poller: launching $SESSION for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
 
       tmux new-session -d -s "$SESSION" \
-        "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' PR_WATCH_ENABLE_SECURITY_GATE='$SECURITY_GATE' ${SECURITY_HOLD_PREFIX}'$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
+        "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' PR_WATCH_ENABLE_SECURITY_GATE='$SECURITY_GATE' PR_WATCH_ENABLE_SEMANTIC_CHECK='$SEMANTIC_CHECK' ${SECURITY_HOLD_PREFIX}'$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
     done
   fi
 

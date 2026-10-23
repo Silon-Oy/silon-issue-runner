@@ -91,6 +91,27 @@
 #   PR_WATCH_CODEX_CMD                   default "codex" — the Codex CLI invocation
 #                                        (tokens; `exec …` is appended). Override =
 #                                        own driver or a test stub.
+#   PR_WATCH_ENABLE_SEMANTIC_CHECK       default 0 — OFF. When 1, a second merge
+#                                        gate (issue #341) looks for a SEMANTIC
+#                                        conflict: a sibling runner PR (auto-run/
+#                                        head) merged into the base since this run
+#                                        started, whose changes share a directory
+#                                        with this PR's. That trigger is one REST
+#                                        listing + local git and calls no agent;
+#                                        no overlap => the gate passes. On overlap
+#                                        an agent compares this PR with the
+#                                        siblings' diffs; a duplicate is fixed IN
+#                                        THIS PR (the merged code wins), CI is
+#                                        revalidated, or the PR is held (exit 10).
+#                                        The record is keyed by head AND base SHA.
+#   PR_WATCH_MAX_SEMANTIC_FIXES          default 1 — fix-attempt cap per PR.
+#   PR_WATCH_SEMANTIC_REVIEW_TIMEOUT     default 1800 — budget (s) for the review call.
+#   PR_WATCH_SEMANTIC_FIX_TIMEOUT        default 1800 — budget (s) for the fix call.
+#   PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY  default low — every reported conflict
+#                                        is fixed or held. The base branch's
+#                                        `.semantic.hold_min_severity` wins.
+#   PR_WATCH_SEMANTIC_CONTEXT_MAX        default 60000 — byte cap on the sibling
+#                                        diffs in the prompt (lib/semantic-gate.sh).
 #   PR_WATCH_GATE_TAIL_LINES             default 1000 — state.jsonl tail window
 #                                        the gate reads (lib/merge-gate.sh).
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
@@ -165,6 +186,9 @@ machine_env_capture
 # The merge gate's pure parts (issue #334): result parsing, the head-SHA and
 # attempt bookkeeping read from state.jsonl's tail, the severity threshold.
 . "$SCRIPT_DIR/lib/merge-gate.sh"
+# shellcheck source=lib/semantic-gate.sh
+# The semantic gate's trigger (issue #341): sibling listing filter, spans, dirs.
+. "$SCRIPT_DIR/lib/semantic-gate.sh"
 # shellcheck source=lib/security-scan.sh
 # Optional deterministic scanners (issue #336) a gate can feed its reviewer.
 . "$SCRIPT_DIR/lib/security-scan.sh"
@@ -213,6 +237,11 @@ PR_WATCH_SECURITY_REVIEW_TIMEOUT="${PR_WATCH_SECURITY_REVIEW_TIMEOUT:-1800}"
 PR_WATCH_SECURITY_FIX_TIMEOUT="${PR_WATCH_SECURITY_FIX_TIMEOUT:-1800}"
 PR_WATCH_SECURITY_HOLD_MIN_SEVERITY="${PR_WATCH_SECURITY_HOLD_MIN_SEVERITY:-}"
 PR_WATCH_SECURITY_REVIEWER="${PR_WATCH_SECURITY_REVIEWER:-claude}"
+PR_WATCH_ENABLE_SEMANTIC_CHECK="${PR_WATCH_ENABLE_SEMANTIC_CHECK:-0}"
+PR_WATCH_MAX_SEMANTIC_FIXES="${PR_WATCH_MAX_SEMANTIC_FIXES:-1}"
+PR_WATCH_SEMANTIC_REVIEW_TIMEOUT="${PR_WATCH_SEMANTIC_REVIEW_TIMEOUT:-1800}"
+PR_WATCH_SEMANTIC_FIX_TIMEOUT="${PR_WATCH_SEMANTIC_FIX_TIMEOUT:-1800}"
+PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY="${PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY:-low}"
 PR_WATCH_CODEX_CMD_DEFAULT="codex"
 PR_WATCH_CODEX_CMD="${PR_WATCH_CODEX_CMD:-$PR_WATCH_CODEX_CMD_DEFAULT}"
 PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
@@ -220,7 +249,7 @@ PR_WATCH_LABELS_CSV="${PR_WATCH_LABELS_CSV:-}"
 
 # The merge gates, in the order they run before P6 (issue #334). Each name has
 # its content in _merge_gate_spec; the mechanism (pr_run_merge_gate) is shared.
-MERGE_GATES="security"
+MERGE_GATES="security semantic"
 
 usage() {
   echo "usage: pr-watch.sh [--remote <name>] <repo-root> <pr-number|scan>" >&2
@@ -1496,10 +1525,20 @@ _pr_ci_handover_to_human() {
 # claude | codex) only swaps the review call's driver; fixes are always claude's.
 # Adding a gate = two prompts, one
 # spec case, one name in MERGE_GATES.
+#
+# Two optional, gate-agnostic seams (issue #341):
+#   GATE_TRIGGER   a function deciding, without an agent, whether there is
+#                  anything to review (see pr_run_merge_gate for its contract).
+#                  Empty = always review. It may write a context file that both
+#                  prompts receive as {{GATE_CONTEXT}}.
+#   GATE_KEY_BASE  1 = the per-head record is also keyed by the base's SHA, for a
+#                  gate whose verdict depends on what the base already holds.
 
 # _merge_gate_spec <gate> — set the gate's content into GATE_* globals; rc 1 for
 # an unknown gate.
 _merge_gate_spec() {
+  GATE_TRIGGER=""
+  GATE_KEY_BASE=0
   GATE_SCANNERS=0
   case "$1" in
     security)
@@ -1515,6 +1554,20 @@ _merge_gate_spec() {
       GATE_HOLD_MACHINE="$PR_WATCH_SECURITY_HOLD_MIN_SEVERITY"
       GATE_REVIEWER="$PR_WATCH_SECURITY_REVIEWER"
       ;;
+    semantic)
+      GATE_TITLE="Semanttisen konfliktin tarkistus"
+      GATE_ENABLED="$PR_WATCH_ENABLE_SEMANTIC_CHECK"
+      GATE_SWITCH="PR_WATCH_ENABLE_SEMANTIC_CHECK"
+      GATE_REVIEW_STEP="10-semantic-review"
+      GATE_FIX_STEP="11-semantic-fix"
+      GATE_MAX_FIXES="$PR_WATCH_MAX_SEMANTIC_FIXES"
+      GATE_REVIEW_TIMEOUT="$PR_WATCH_SEMANTIC_REVIEW_TIMEOUT"
+      GATE_FIX_TIMEOUT="$PR_WATCH_SEMANTIC_FIX_TIMEOUT"
+      GATE_HOLD_MACHINE="$PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY"
+      GATE_REVIEWER="claude"
+      GATE_TRIGGER="_pr_semantic_trigger"
+      GATE_KEY_BASE=1
+      ;;
     *) return 1 ;;
   esac
 }
@@ -1526,11 +1579,22 @@ _merge_gate_spec() {
 # Returns: 0  the head passed (clean, or only findings below the threshold)
 #          10 held for a human (needs-human + comment listing the findings)
 #          4  not actionable this tick (no run-dir / worktree, fetch failed,
-#             worktree not at the PR head) — fail-closed: never a merge
+#             worktree not at the PR head, the trigger could not decide) —
+#             fail-closed: never a merge
+#
+# GATE_TRIGGER contract: called as
+#   <fn> <pr-number> <run-id> <run-dir> <worktree> <base-ref> <context-file>
+# after the head sync, with the base fetched. rc 0 = review (it may write
+# <context-file>), 1 = nothing to review (the gate passes with no agent call),
+# anything else = it could not decide (rc 4: a failed lookup is never a pass). It
+# may set GATE_CONTEXT_SUMMARY, one line the hold comment quotes.
 pr_run_merge_gate() {
   local gate="$1" pr_num="$2" rid="$3" run_dir="$4" pr_json="$5"
   PR_GATE_START_SHA=""
   PR_GATE_HEAD_SHA=""
+  GATE_BASE_SHA=""
+  GATE_CONTEXT_FILE=""
+  GATE_CONTEXT_SUMMARY=""
   _merge_gate_spec "$gate" || return 4
 
   # The per-head record lives in the run-dir: without it a head could be reviewed
@@ -1583,6 +1647,39 @@ pr_run_merge_gate() {
   fi
   PR_GATE_START_SHA="$sha"
 
+  # A verdict that depends on the base is recorded against it too: a head found
+  # clean against one base is not clean against a base that has gained a sibling.
+  if [ "${GATE_KEY_BASE:-0}" = 1 ]; then
+    GATE_BASE_SHA=$( cd "$worktree" && git rev-parse --verify -q "$PR_ROUTE_REMOTE/$base_ref" 2>/dev/null || true )
+    if [ -z "$GATE_BASE_SHA" ]; then
+      log "merge gate '$gate': base '$PR_ROUTE_REMOTE/$base_ref' does not resolve for PR #$pr_num — not merging"
+      state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=gate_base_unresolved"
+      return 4
+    fi
+  fi
+
+  # The trigger runs BEFORE the record is read: it is cheap, and the base it
+  # looks at may have moved since the record was written.
+  if [ -n "${GATE_TRIGGER:-}" ]; then
+    local ctx="$run_dir/merge-gate-$gate.context" trc=0
+    rm -f "$ctx"
+    "$GATE_TRIGGER" "$pr_num" "$rid" "$run_dir" "$worktree" "$base_ref" "$ctx" || trc=$?
+    case "$trc" in
+      0) [ -s "$ctx" ] && GATE_CONTEXT_FILE="$ctx" ;;
+      1)
+        log "merge gate '$gate': nothing to review for PR #$pr_num head $sha — passing without an agent"
+        state_event "$run_dir" "merge_gate_not_triggered" "gate=$gate" "pr=$pr_num" "sha=$sha" "base_sha=$GATE_BASE_SHA"
+        PR_GATE_HEAD_SHA="$sha"
+        return 0
+        ;;
+      *)
+        log "merge gate '$gate': trigger could not decide for PR #$pr_num (rc=$trc) — not merging, retrying next poll"
+        state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=gate_trigger_failed"
+        return 4
+        ;;
+    esac
+  fi
+
   # The threshold comes from the BASE branch's config: the PR under review must
   # not be able to lower the gate that reviews it.
   local cfg hold_min
@@ -1600,7 +1697,7 @@ pr_run_merge_gate() {
   esac
   local jsonl="$run_dir/state.jsonl" prior result holding findings attempts fixes_here=0
   while :; do
-    prior=$(merge_gate_last_result "$jsonl" "$gate" "$sha")
+    prior=$(merge_gate_last_result "$jsonl" "$gate" "$sha" "$GATE_BASE_SHA")
     result="${prior%% *}"
     if [ "$result" = findings ]; then
       # The recorded holding count was computed against the threshold in force at
@@ -1676,6 +1773,11 @@ _merge_gate_findings_file() {
   printf '%s/merge-gate-%s-%s.findings' "$1" "$2" "$3"
 }
 
+# _merge_gate_context — the context the gate's trigger wrote, or nothing.
+_merge_gate_context() {
+  [ -n "${GATE_CONTEXT_FILE:-}" ] && cat "$GATE_CONTEXT_FILE" 2>/dev/null || true
+}
+
 # _pr_gate_review <gate> <pr> <run-dir> <worktree> <branch> <base-ref> <sha> <hold-min>
 # One review call in a fresh context. Sets GATE_RESULT (clean | findings |
 # launch_failed), GATE_FINDINGS, GATE_HOLDING and GATE_WHY, and records the
@@ -1724,7 +1826,8 @@ _pr_gate_review() {
     local prompt_file="$run_dir/$GATE_REVIEW_STEP.prompt"
     render_prompt "$SCRIPT_DIR/prompts/$GATE_REVIEW_STEP.md" "$prompt_file" \
       PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
-      HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE" SCANNER_RESULTS="$scanner_results"
+      HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE" SCANNER_RESULTS="$scanner_results" \
+      GATE_CONTEXT="$(_merge_gate_context)"
     # A previous review's output must never be parsed as this one's, so the
     # call starts without it; repo principles are not loaded (see _pr_call_agent).
     rm -f "$run_dir/$GATE_REVIEW_STEP.out" "$run_dir/$GATE_REVIEW_STEP.exit"
@@ -1779,8 +1882,11 @@ _pr_gate_review() {
     fi
   fi
   [ "$GATE_RESULT" = "launch_failed" ] && log "merge gate '$gate': review of PR #$pr_num did not complete — $GATE_WHY"
+  local -a base_kv=()
+  [ -n "${GATE_BASE_SHA:-}" ] && base_kv=("base_sha=$GATE_BASE_SHA")
   state_event "$run_dir" "merge_gate_reviewed" "gate=$gate" "pr=$pr_num" "sha=$sha" \
-    "result=$GATE_RESULT" "holding=${GATE_HOLDING:-0}" "hold_min=$hold_min"
+    "result=$GATE_RESULT" "holding=${GATE_HOLDING:-0}" "hold_min=$hold_min" \
+    ${base_kv[@]+"${base_kv[@]}"}
 }
 
 # _pr_gate_fix <gate> <pr> <run-dir> <worktree> <branch> <base-ref> <sha> <findings> <attempt>
@@ -1801,7 +1907,8 @@ _pr_gate_fix() {
   render_prompt "$SCRIPT_DIR/prompts/$GATE_FIX_STEP.md" "$prompt_file" \
     PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
     HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE" \
-    FINDINGS="$(printf '%s\n' "$findings" | sed 's/|/ | /g')"
+    FINDINGS="$(printf '%s\n' "$findings" | sed 's/|/ | /g')" \
+    GATE_CONTEXT="$(_merge_gate_context)"
   local arc=0
   _pr_call_agent "$run_dir" "$worktree" "$GATE_FIX_STEP" "$prompt_file" \
     "$GATE_FIX_TIMEOUT" || arc=$?
@@ -1874,6 +1981,7 @@ _pr_gate_hold_to_human() {
   else
     list="Löydöslistaa ei ole: katselmus ei valmistunut, tai headin löydöstiedosto puuttuu run-diristä."
   fi
+  [ -n "${GATE_CONTEXT_SUMMARY:-}" ] && list="$list"$'\n\n'"Portin konteksti: $GATE_CONTEXT_SUMMARY"
 
   local body
   body=$(printf '%s\n\n%s\n\n%s\n%s\n' \
@@ -1883,6 +1991,105 @@ _pr_gate_hold_to_human() {
     "(Merge-portti \`$gate\` on päällä \`$GATE_SWITCH=1\`. Korjaa ja pushaa, ja poista sitten \`needs-human\`-label: valvoja katselmoi uuden headin. Samaa headia ei katselmoida uudelleen, joten ilman uutta committia PR pidätetään taas. Hyväksytyt löydökset mergetään käsin.)")
   printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file - || \
     log "failed to post $gate gate hold comment on PR #$pr_num"
+}
+
+# ----- The semantic gate's trigger (issue #341) ----------------------------
+# GATE_TRIGGER of the `semantic` gate (contract: pr_run_merge_gate). Deterministic
+# and agent-free: review only when a sibling runner PR merged into the base since
+# this run started touches a directory this PR touches.
+#
+# The window starts at the run's start, not at the merge-base: a PR the watcher
+# rebased (P5) has the base's tip as its merge-base, so `merge-base..base` would be
+# empty exactly when siblings landed under it. The base's commits are dated by
+# their merge (GitHub rewrites the committer on rebase and squash merges), so
+# the commits dated at or after <started_at> are that window (semantic_window,
+# which filters rather than stopping at the first older commit). A run-dir without
+# started_at falls back to merge-base..base.
+#
+# Cost (CLAUDE.md §5.2/§5.4): at most ONE gh call, a REST listing, and only when
+# the base has gained commits in the window; everything else is local git.
+_pr_semantic_trigger() {
+  local pr_num="$1" rid="$2" run_dir="$3" worktree="$4" base_ref="$5" ctx="$6"
+  local base="$PR_ROUTE_REMOTE/$base_ref"
+
+  local mine_files mine_dirs
+  mine_files=$( cd "$worktree" && git diff --name-only "$base...HEAD" 2>/dev/null ) || return 2
+  mine_dirs=$(printf '%s\n' "$mine_files" | semantic_dirs_of)
+  [ -n "$mine_dirs" ] || return 1
+
+  local started range mb
+  started=$(run_field "$rid" '.started_at')
+  if [ -n "$started" ]; then
+    range=$( cd "$worktree" && TZ=UTC git log --first-parent -n "$SEMANTIC_WINDOW_MAX" \
+               --date=format-local:%Y-%m-%dT%H:%M:%SZ --format='%H %cd' "$base" 2>/dev/null \
+             | semantic_window "$started" ) || {
+      log "semantic gate: could not read a complete window of '$base' since $started for PR #$pr_num — not a pass"
+      return 2
+    }
+  else
+    mb=$( cd "$worktree" && git merge-base HEAD "$base" 2>/dev/null ) || return 2
+    range=$( cd "$worktree" && git rev-list --first-parent --reverse "$mb..$base" 2>/dev/null ) || return 2
+  fi
+  if [ -z "$range" ]; then
+    log "semantic gate: base '$base' has no commits since the run started — no sibling to compare with"
+    return 1
+  fi
+  # The span of the oldest sibling starts at the commit before the window; a
+  # window that starts at the root starts at the empty tree.
+  local boundary
+  boundary=$( cd "$worktree" && git rev-parse --verify -q "${range%%$'\n'*}^1" 2>/dev/null ) \
+    || boundary=$( cd "$worktree" && git hash-object -t tree /dev/null )
+
+  local owner_repo="$PR_OWNER_REPO" json siblings
+  [ -n "$owner_repo" ] || owner_repo='{owner}/{repo}'
+  if ! json=$(gh_route api "repos/$owner_repo/pulls?state=closed&base=$base_ref&sort=updated&direction=desc&per_page=100"); then
+    log "semantic gate: listing closed PRs failed for PR #$pr_num"
+    return 2
+  fi
+  if ! siblings=$(semantic_merged_siblings "$json" "$pr_num"); then
+    log "semantic gate: closed-PR listing for PR #$pr_num is not a JSON array — not a pass"
+    return 2
+  fi
+
+  local spans num ref from to dirs overlap hits="" tmp
+  spans=$(semantic_sibling_spans "$boundary"$'\n'"$range" "$siblings")
+  tmp=$(mktemp -t pr-watch-semantic.XXXXXX)
+  while IFS=$'\t' read -r num ref from to; do
+    [ -n "$to" ] || continue
+    dirs=$( cd "$worktree" && git diff --name-only "$from" "$to" 2>/dev/null | semantic_dirs_of ) || { rm -f "$tmp"; return 2; }
+    overlap=$(semantic_dirs_overlap "$mine_dirs" "$dirs")
+    if [ -z "$overlap" ]; then
+      log "semantic gate: sibling PR #$num ($ref) merged in the window but shares no directory with PR #$pr_num"
+      continue
+    fi
+    hits="${hits:+$hits, }#$num (\`$ref\`)"
+    {
+      printf '### Sisar-PR #%s (`%s`)\n\n' "$num" "$ref"
+      printf 'Mergetty baseen commitissa `%s`. Yhteiset hakemistot: %s. Koko diff: `git diff %s %s`.\n\n' \
+        "$to" "$(printf '%s\n' "$overlap" | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')" "$from" "$to"
+      printf '```diff\n'
+      ( cd "$worktree" && git diff "$from" "$to" 2>/dev/null )
+      printf '```\n\n'
+    } >> "$tmp"
+  done <<<"$spans"
+
+  if [ -z "$hits" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  local size
+  size=$(wc -c < "$tmp" | tr -d ' ')
+  if [ "$size" -gt "$PR_WATCH_SEMANTIC_CONTEXT_MAX" ]; then
+    { head -c "$PR_WATCH_SEMANTIC_CONTEXT_MAX" "$tmp"
+      printf '\n```\n\n(Sisarten diffit on katkaistu %s tavuun %s:sta. Lue loput otsikoiden `git diff` -komennoilla.)\n' \
+        "$PR_WATCH_SEMANTIC_CONTEXT_MAX" "$size"; } > "$ctx"
+  else
+    cp "$tmp" "$ctx"
+  fi
+  rm -f "$tmp"
+  GATE_CONTEXT_SUMMARY="välissä mergetyt sisar-PR:t samoissa hakemistoissa: $hits"
+  log "semantic gate: PR #$pr_num shares directories with $hits — reviewing"
+  return 0
 }
 
 # ----- P0: dependency gate (issue #279) -----------------------------------

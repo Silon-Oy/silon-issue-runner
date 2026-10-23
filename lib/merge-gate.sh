@@ -6,7 +6,8 @@
 # the watcher's own agents may have made. The mechanism is gate-agnostic: the
 # result format, the head-SHA bookkeeping, the attempt cap and the severity
 # threshold are the same for every gate; a gate contributes only its prompts, its
-# switch and its config key. Security is the first gate; the caller in
+# switch and its config key. Security is the first gate, semantic
+# (lib/semantic-gate.sh) the second; the caller in
 # pr-watch.sh (pr_run_merge_gate) drives the review/fix loop and the hold.
 #
 # Result format every gate prompt must produce (scoped to the END of the output,
@@ -153,14 +154,17 @@ merge_gate_hold_min() {
   fi
 }
 
-# merge_gate_last_result <state-jsonl> <gate> <sha> — "<result> <holding>" of the
-# most recent merge_gate_reviewed event for this gate and head, or nothing.
+# merge_gate_last_result <state-jsonl> <gate> <sha> [<base-sha>] — "<result>
+# <holding>" of the most recent merge_gate_reviewed event for this gate and head,
+# or nothing. With <base-sha>, only a review recorded against that base counts
+# (a gate whose verdict depends on the base, issue #341).
 merge_gate_last_result() {
-  local jsonl="$1" gate="$2" sha="$3"
+  local jsonl="$1" gate="$2" sha="$3" base="${4:-}"
   [ -f "$jsonl" ] || return 0
   tail -n "$PR_WATCH_GATE_TAIL_LINES" "$jsonl" 2>/dev/null \
-    | jq -Rrn --arg g "$gate" --arg s "$sha" '
-        [inputs | fromjson? | select(.event == "merge_gate_reviewed" and .data.gate == $g and .data.sha == $s)]
+    | jq -Rrn --arg g "$gate" --arg s "$sha" --arg b "$base" '
+        [inputs | fromjson? | select(.event == "merge_gate_reviewed" and .data.gate == $g and .data.sha == $s)
+                            | select($b == "" or .data.base_sha == $b)]
         | last | if . == null then empty else "\(.data.result) \(.data.holding // "0")" end' \
         2>/dev/null || true
 }

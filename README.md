@@ -582,6 +582,7 @@ lähde on koodin `${VAR:-oletus}`.
 | `PR_WATCH_ENABLE_CI_REPAIR` | `0` (poller nostaa `1`:ksi) | AI-avusteinen punaisen CI:n korjaus (ks. osio 7.5) |
 | `PR_WATCH_MAX_CI_REPAIRS` | `1` | CI-korjauksen yrityskatto per PR |
 | `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (ks. osio 7.12) |
+| `PR_WATCH_ENABLE_SEMANTIC_CHECK` | `0` (poller nostaa `1`:ksi) | Rinnakkaisajojen kaksoistoteutusten tarkistus (ks. osio 7.13) |
 
 ### Asennin
 
@@ -1126,6 +1127,16 @@ agentit muuttavat sitä vielä ajon jälkeen. Siksi `pr-watch.sh` ajaa ennen jok
   `principles_file`ä; PR:n `CLAUDE.md` on jäännösriski, jonka prompti käsittelee datana.
 - Asennetut skannerit (osio 2) ajetaan diffille ennen katselmusta, ja niiden löydökset
   lisätään päätökseen. Salaisuus on aina `high`, epäonnistunut skanneri `low`-rivi.
+
+### 7.13 Semanttisen konfliktin tarkistus
+
+Kaksi rinnakkaista ajoa voi mergeytyä ilman tekstuaalista konfliktia ja silti jättää kaksi
+samaa tekevää toteutusta. Toinen merge-portti (`PR_WATCH_ENABLE_SEMANTIC_CHECK`) käyttää samaa
+mekanismia kuin 7.12. Agentti ajetaan vain, jos ajon alun jälkeen baseen mergetty
+runner-PR (`auto-run/`) muuttaa samaa hakemistoa kuin tämä PR. Muuten portti läpäisee ilman
+agenttia. **Mergetty toteutus voittaa:** korjaus poistaa tämän PR:n kaksoiskappaleen, tai PR
+pidätetään kommentilla, joka nimeää sisar-PR:n. Tulos sidotaan headiin ja baseen.
+Yksityiskohdat: [`docs/env-reference.md`](docs/env-reference.md#pr-vahti).
 
 ---
 
