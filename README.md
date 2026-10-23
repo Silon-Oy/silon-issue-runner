@@ -1135,7 +1135,10 @@ samaa tekevää toteutusta. Toinen merge-portti (`PR_WATCH_ENABLE_SEMANTIC_CHECK
 mekanismia kuin 7.12. Agentti ajetaan vain, jos ajon alun jälkeen baseen mergetty
 runner-PR (`auto-run/`) muuttaa samaa hakemistoa kuin tämä PR. Muuten portti läpäisee ilman
 agenttia. **Mergetty toteutus voittaa:** korjaus poistaa tämän PR:n kaksoiskappaleen, tai PR
-pidätetään kommentilla, joka nimeää sisar-PR:n. Tulos sidotaan headiin ja baseen.
+pidätetään kommentilla, joka nimeää sisar-PR:n. Tulos sidotaan headiin ja baseen, myös
+korjauksen jälkeen: base tarkistetaan uudelleen ennen mergeä. Toistuva pysyvä listausvirhe
+pidättää PR:n ihmiselle. Ikkuna kulkee basen first-parent-ketjua, joten paikallisen
+`git pull` -mergen jälkeen portti voi ohittaa sisaren.
 Yksityiskohdat: [`docs/env-reference.md`](docs/env-reference.md#pr-vahti).
 
 ---
