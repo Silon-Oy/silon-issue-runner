@@ -162,11 +162,11 @@ joka portissa, ei sattumaa.
 
 ### Claimin jälkeinen esto labeloidaan — paitsi odotustila
 
-Terminaalinen esto claimin jälkeen lisää issuelle situation-kommentin lisäksi `needs-human`-labelin
-(`_add_needs_human_label`). Poikkeus on sarjoitus (exit 14): se on S2b:n tavoin itsestään
-jatkuva odotustila, joten se ei labeloidu — mutta jos varaus jää voimaan, se labeloituu (exit 15). **Pelkkä kommentti ei riitä: se ei ole
-suodatettava**, joten jumiin jäänyt ajo näytti GitHubissa samalta kuin normaali kesken oleva —
-yksi hiljainen esto pysäytti kuuden issuen riippuvuusketjun yön yli. `cleanup-run.sh` poistaa
+Terminaalinen esto claimin jälkeen lisää issuelle situation-kommentin lisäksi
+`needs-human`-labelin (`_add_needs_human_label`). Poikkeus on sarjoitus (exit 14): se on S2b:n
+tavoin itsestään jatkuva odotustila, joten se ei labeloidu — mutta jos varaus jää voimaan, se
+labeloituu (exit 15). **Pelkkä kommentti ei riitä: se ei ole suodatettava**, joten jumiin
+jäänyt ajo näytti GitHubissa samalta kuin normaali kesken oleva — yksi hiljainen esto pysäytti kuuden issuen riippuvuusketjun yön yli. `cleanup-run.sh` poistaa
 labelin, joten elinkaari on suljettu.
 
 ### Varaus on label, ei assignaatio (#99) — reititys on (#238)

@@ -195,8 +195,8 @@ for repo in "${REPOS[@]}"; do
         fi
         ;;
       14)
-        # Serialized behind an earlier sibling (issue #338), successfully: a planned wait that
-        # ends by itself when the sibling closes — not a failure.
+        # Serialized behind an earlier sibling (issue #338), successfully: a
+        # planned wait that ends by itself when the sibling closes — not a failure.
         log "run #$started: issue #$issue serialized behind a sibling run — continuing"
         consecutive_blocked=0
         ;;
