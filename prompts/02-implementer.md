@@ -82,9 +82,9 @@ source "$HOME/.claude/scripts/run-issues/lib/hook-runner.sh"
 sync_commit "feat: ..."
 ```
 
-`sync_commit` ei stageaa mitään — aja `git add` ensin. Paljas `git commit` ohittaa lipun:
-jos hook on olemassa, se voi ajaa taustalla, ja sen korjauscommitit eivät ehdi PR:ään ennen
-sen avaamista.
+`sync_commit` ei stageaa mitään — aja `git add` ensin. Paljas `git commit` nojaa siihen, että
+lippu periytyy ympäristöstä; `sync_commit` asettaa sen itse. Ilman lippua hook voi ajaa
+taustalla, eivätkä sen korjauscommitit ehdi PR:ään ennen sen avaamista.
 
 ## Päämäärä
 
