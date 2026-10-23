@@ -760,8 +760,7 @@ liikkeelle, tarkista `auto-claimed`-label ensin.
 
 Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as blocked by"**
 -toiminnolla — siinä kaikki. Ei labelia lisättäväksi eikä skriptiä ajettavaksi: poiminta lukee
-`blocked_by`-graafin suoraan GitHubin riippuvuusrajapinnasta ja ohittaa estetyt issuet. (Ennen
-#133:a saman teki hakukvalifikaattori `-is:blocked`; se poistui, kun poiminta siirtyi REST:iin.)
+`blocked_by`-graafin suoraan GitHubin riippuvuusrajapinnasta ja ohittaa estetyt issuet.
 
 - Yksi avoin estäjä riittää pitämään issuen poiminnan ulkopuolella.
 - Kun viimeinen estäjä sulkeutuu, issue vapautuu poimintaan **seuraavalla tikillä** ilman
@@ -774,15 +773,11 @@ Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as block
   poistamalla. Vastaavasti: jos issue ei lähde ajoon eikä yksikään estolabeli ole päällä,
   tarkista riippuvuudet issuen omasta näkymästä.
 
-Runner voi myös lisätä kaaren itse: kun aiemmin aloitettu sisarajo tekee saman muutoksen,
-ajo sarjoitetaan sen perään ilman `needs-human`-labelia (exit 14, [`docs/troubleshooting.md`](docs/troubleshooting.md)).
+Runner voi myös lisätä kaaren itse sarjoittaessaan ajon aiemman sisarajon perään (exit 14).
 
 **Työjärjestys ketjun rakentamiseen:** luo issuet → merkitse riippuvuudet GitHubin omalla
 "blocked by" -toiminnolla → lisää jokaiselle `auto-run`. Automaatio etenee ketjussa yksi
 lenkki kerrallaan itsestään.
-
-Estotieto tulee GitHubin hakuindeksistä, joten se päivittyy pienellä viiveellä juuri suljetun
-estäjän jälkeen. Käytännössä viive mahtuu pollerin 5 minuutin tikkiväliin.
 
 **Epicit — usean issuen ketju.** Kun kokonaisuus koostuu monesta issuesta, ne voi koota
 **epic-issueen** (`epic`-label) ja ajaa koko ketjun yhdellä `auto-run`-signaalilla, joka
