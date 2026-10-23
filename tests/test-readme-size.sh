@@ -51,7 +51,13 @@ FAIL=0
 # rule. The machinery (permission API, cache, App mode) went to
 # docs/usage-reference.md first; README carries one paragraph, one troubleshooting
 # row and a one-sentence correction in section 8, ~1.3 KB.
-MAX_BYTES=85300
+#
+# Raised to 87100 by issue #334, merged on top of #343. #334's criteria require
+# a new security-model section (7.12, the merge-time security gate) plus one
+# section-5 table row, ~1.8 KB. The reference material went to the mirrors
+# first: exit code 10 -> docs/troubleshooting.md, the six variables and the
+# "repo wins" rationale -> docs/env-reference.md.
+MAX_BYTES=87100
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

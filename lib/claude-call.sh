@@ -154,6 +154,8 @@ _claude_step_phase() {
     03-evolution*)           printf 'EVOLUTION' ;;
     04-conflict-resolution*) printf 'CONFLICT' ;;
     05-ci-repair*)           printf 'CI_REPAIR' ;;
+    06-security-review*)     printf 'SECURITY_REVIEW' ;;
+    07-security-fix*)        printf 'SECURITY_FIX' ;;
   esac
 }
 
