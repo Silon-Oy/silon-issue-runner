@@ -57,7 +57,12 @@ FAIL=0
 # section-5 table row, ~1.8 KB. The reference material went to the mirrors
 # first: exit code 10 -> docs/troubleshooting.md, the six variables and the
 # "repo wins" rationale -> docs/env-reference.md.
-MAX_BYTES=87100
+#
+# Raised to 87900 by issue #341, whose criteria require README to document the
+# semantic-conflict merge gate. The trigger rules, the six variables and the
+# precedence detail went to docs/env-reference.md first; README carries one
+# section-5 row and a seven-line section 7.13, ~0.8 KB.
+MAX_BYTES=87900
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

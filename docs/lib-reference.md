@@ -42,6 +42,7 @@ lukuihin.
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
 | `rate-limit.sh` | Rate-limitin **tekstuaalinen** tunnistus ja jaettu perääntyminen (§5.1) |
 | `run-terminate.sh` | Elävän ajon turvallinen lopetus **kutsuttavana funktiona**. Irrotettu pollerista, joka `exit 0`si source-hetkellä; `stop-run.sh` ja `run-epic.sh --stop` käyttävät samaa polkua monistamatta turvalogiikkaa |
+| `semantic-gate.sh` | Semanttisen merge-portin laukaisimen puhtaat osat (#341): hakemistojoukot ja niiden leikkaus, mergettyjen `auto-run/`-sisarten suodatus REST-listauksesta (ei-taulukko on virhe, ei "ei sisaria") ja basen first-parent-committien jako sisarille. Git- ja gh-kutsut ovat `pr-watch.sh`:n `_pr_semantic_trigger`issa |
 | `sibling-runs.sh` | Saman repon sisarajot cycle reviewlle (#337): avoimet runnerin PR:t **yhdellä** REST-listauksella per repo ja tämän koneen elävät run-dirit, muuttuneet tiedostot paikallisista refeistä. Neuvoa-antava: lukuvirhe renderöityy promptiin virheenä, ei tyhjänä listana eikä estä ajoa. `list_sibling_runs` on irrotettu S6:sta sarjoitusta varten |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-github.sh` | `status.sh --github`-rikastus. Ei omaa CI-rollupia eikä merge-päätöstä — kutsuu `pr-watch-lib.sh`:n omia |
