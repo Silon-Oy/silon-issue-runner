@@ -353,8 +353,10 @@ saa sisäänrakennetun oletuksen.
 
 **Ajastus pollerista** (`lib/audit-schedule.sh`). Poller ajaa auditoinnin irrallisessa
 tmux-istunnossa `run-issues-audit-<laji>-<repo-slug>`. Istunto lasketaan samaan
-`global_max_concurrent`-kattoon kuin orkestraattoriajot. Täysi katto lykkää auditoinnin
-seuraavaan tikkiin, eikä lykkäystä kirjata. Ajastus koskee vain watchlistin repoja, se on
+`global_max_concurrent`-kattoon kuin orkestraattoriajot, ja `status.sh` (`audits[]`,
+`totals.audits`) sekä ohjaamo listaavat käynnissä olevat istunnot erikseen, koska ne eivät
+ole ajoja. Täysi katto lykkää auditoinnin seuraavaan tikkiin, ja lykkäys näkyy lokissa
+(`deferring <laji> audit`). Ajastus koskee vain watchlistin repoja, se on
 host-portin takana, eikä se käynnisty Clauden käyttörajan aikana. Käynnistyshetki kirjataan
 yksiriviseen tiedostoon `$RUN_ISSUES_LOG_DIR/.audit-last-<laji>-<repo-slug>`. Sen poistaminen
 pakottaa auditoinnin seuraavalla tikillä. Kirjaus tehdään käynnistyksessä, joten aina kaatuva
@@ -362,6 +364,16 @@ auditointi ei käynnisty joka tikillä. Istunto kirjaa lopputuloksensa viereen
 (`….result`: käynnistysaika ja exit-koodi). Käynnistys ilman onnistunutta lopputulosta
 (exit muu kuin 0 tai 5, tai istunto katkesi ennen kirjausta) yritetään uudelleen
 `RUN_ISSUES_AUDIT_RETRY_HOURS`-ajan (oletus 24 h) kuluttua eikä vasta koko välin päästä.
+**Pysäytys:** `tmux kill-session -t run-issues-audit-<laji>-<repo-slug>`. `stop-run.sh` ei
+koske auditointiin, koska sillä ei ole run-diriä. Katkaistu istunto ei kirjaa onnistunutta
+lopputulosta, joten se yritetään uudelleen `RUN_ISSUES_AUDIT_RETRY_HOURS`in kuluttua;
+pysyvä pois kytkentä on väli `0`. **Välitön uusinta:** poista `.audit-last-<laji>-<repo-slug>`.
+**Lokiin kerran:** jos väli on asetettu mutta repon `.claude/run-issues.json` on kelvoton tai
+sen `audit_interval_days` ei ole `0` tai positiivinen kokonaisluku (esim. `1.5`), poller
+kirjaa yhden rivin (`… audit not scheduled`). Sama vaimennus koskee rivejä "audit script not
+executable" ja "cannot record … audit start": rivi toistuu vasta, kun viesti muuttuu tai ehto
+on välillä poistunut (`.audit-last-….notice-<tag>`). Istunto saa pollerin
+`RUN_ISSUES_POLLER_ENV_FILE`-polun, joten auditointi lukee saman `poller.env`in kuin poller.
 **Tunnettu rajoite:** ajastus ei koordinoi koneiden välillä. Jos kaksi konetta valvoo samaa
 repoa ja repo asettaa välin, molemmat auditoivat sen ja voivat luoda samat löydösissuet.
 Valvo repoa auditoinnin osalta yhdellä koneella. Repon väli luetaan remoten oletushaaran viimeksi haetusta tilasta
