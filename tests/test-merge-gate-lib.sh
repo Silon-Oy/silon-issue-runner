@@ -91,6 +91,13 @@ check "result is per gate" "clean 0" "$(merge_gate_last_result "$J" other bbb)"
 check "attempts per gate" 1 "$(merge_gate_attempts "$J" security)"
 check "attempts on a missing file" 0 "$(merge_gate_attempts "$WORK/none.jsonl" security)"
 
+# One torn line (a write cut short) must not zero the count or hide a result:
+# a zeroed count would let the fix loop run past its cap.
+T="$WORK/torn.jsonl"
+{ cat "$J"; echo '{"event":"merge_gate_fix_attempted","data":{"gate":"secu'; } > "$T"
+check "attempts survive a torn line" 1 "$(merge_gate_attempts "$T" security)"
+check "result survives a torn line" "findings 2" "$(merge_gate_last_result "$T" security aaa)"
+
 # Only the tail is read (CLAUDE.md §5.3): a record outside the window is unseen,
 # which fails safe (the head is reviewed again).
 for _ in $(seq 1 30); do echo '{"event":"pr_watch_skipped","data":{}}' >> "$J"; done

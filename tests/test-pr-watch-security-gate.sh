@@ -327,6 +327,35 @@ merged && bad J "merged a high finding"
 [ "$FAIL" = "$FAIL_BEFORE" ] && ok J "head config ignored"
 [ -n "${KEEP:-}" ] || rm -rf "$WORK"
 
+# ===========================================================================
+echo "=== K: worktree gone -> hold, not a silent skip on every tick ==="
+FAIL_BEFORE=$FAIL
+setup K
+( cd "$REPO" && git worktree remove --force "$WT" )
+run_watch; show K
+[ "$RC" = 10 ] || bad K "rc $RC, want 10"
+merged && bad K "merged without a review"
+[ "$(calls REVIEW)" = 0 ] || bad K "reviewed without a worktree"
+grep -q 'labels\[\]=needs-human' "$WORK/labels.log" || bad K "needs-human not added"
+grep -q 'ei toteutunut' "$WORK/comments.log" || bad K "no hold comment"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok K "missing worktree held for a human"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== L: worktree ahead of the PR head -> hold, never review the local commit ==="
+FAIL_BEFORE=$FAIL
+setup L
+( cd "$WT" && echo local > g.txt && git add g.txt && git -c user.email=t@t.t -c user.name=t commit -qm local-only )
+run_watch; show L
+[ "$RC" = 10 ] || bad L "rc $RC, want 10"
+merged && bad L "merged although the worktree is not the PR head"
+[ "$(calls REVIEW)" = 0 ] || bad L "reviewed a head GitHub would not merge"
+grep -q 'labels\[\]=needs-human' "$WORK/labels.log" || bad L "needs-human not added"
+grep -q 'ei ole PR:n head' "$WORK/comments.log" || bad L "hold comment does not name the head mismatch"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok L "worktree ahead of the PR head held for a human"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "pr-watch-security-gate: all passed" || echo "pr-watch-security-gate: FAILURES"
 [ "$FAIL" -eq 0 ]

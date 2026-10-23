@@ -159,18 +159,19 @@ merge_gate_last_result() {
   local jsonl="$1" gate="$2" sha="$3"
   [ -f "$jsonl" ] || return 0
   tail -n "$PR_WATCH_GATE_TAIL_LINES" "$jsonl" 2>/dev/null \
-    | jq -rn --arg g "$gate" --arg s "$sha" '
-        [inputs | select(.event == "merge_gate_reviewed" and .data.gate == $g and .data.sha == $s)]
+    | jq -Rrn --arg g "$gate" --arg s "$sha" '
+        [inputs | fromjson? | select(.event == "merge_gate_reviewed" and .data.gate == $g and .data.sha == $s)]
         | last | if . == null then empty else "\(.data.result) \(.data.holding // "0")" end' \
         2>/dev/null || true
 }
 
 # merge_gate_attempts <state-jsonl> <gate> — fix attempts recorded for this gate.
+# Lines are parsed one by one (fromjson?): one torn line must not zero the count.
 merge_gate_attempts() {
   local jsonl="$1" gate="$2" n
   [ -f "$jsonl" ] || { printf '0'; return 0; }
   n=$(tail -n "$PR_WATCH_GATE_TAIL_LINES" "$jsonl" 2>/dev/null \
-    | jq -rn --arg g "$gate" '[inputs | select(.event == "merge_gate_fix_attempted" and .data.gate == $g)] | length' \
+    | jq -Rrn --arg g "$gate" '[inputs | fromjson? | select(.event == "merge_gate_fix_attempted" and .data.gate == $g)] | length' \
         2>/dev/null) || n=0
   printf '%s' "${n:-0}"
 }

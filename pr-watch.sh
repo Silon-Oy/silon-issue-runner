@@ -1086,13 +1086,16 @@ pr_wait_ci_green() {
 # agent in the feature worktree and then force-push it. These two helpers are
 # that common mechanism, extracted so neither path copies it.
 
-# _pr_call_agent <out-dir> <worktree> <step-id> <prompt-file> <timeout-secs>
+# _pr_call_agent <out-dir> <worktree> <step-id> <prompt-file> <timeout-secs> [repo-principles]
+# repo-principles (default 1) = 0 skips the worktree's principles_file override:
+# a merge-gate reviewer must not take instructions from the PR it reviews.
 # Runs the claude CLI with the worktree as CWD (the agent edits files + drives
 # git there) under a dedicated wall-clock budget so a wedged call can't hang the
 # watcher. Returns the agent's rc — but callers must NOT trust it: the worktree
 # / CI state is always verified independently afterwards.
 _pr_call_agent() {
   local out_dir="$1" worktree="$2" step_id="$3" prompt_file="$4" timeout_secs="$5"
+  local repo_principles="${6:-1}"
   local crc=0
   (
     cd "$worktree" || exit 99
@@ -1103,7 +1106,7 @@ _pr_call_agent() {
     # REPO_ROOT of its own. The worktree IS a checkout of the target repo, so it
     # carries the same .claude/run-issues.json. Kept inside the subshell so the
     # variable cannot leak across PRs from different repos in one scan.
-    load_repo_principles_file "$worktree"
+    [ "$repo_principles" = "1" ] && load_repo_principles_file "$worktree"
     RUN_ISSUES_CLAUDE_TIMEOUT="$timeout_secs" \
       call_claude "$out_dir" "$step_id" "$prompt_file"
   ) || crc=$?
@@ -1440,13 +1443,19 @@ pr_run_merge_gate() {
   branch=$(run_field "$rid" '.branch')
   base_ref=$(jq -r '.baseRefName // "main"' <<<"$pr_json")
   if [ -z "$worktree" ] || [ ! -d "$worktree" ] || [ -z "$branch" ]; then
+    # Durable, not transient: nothing on a later tick brings the worktree back,
+    # so returning 4 here would park the PR forever without telling anyone.
     log "merge gate '$gate': no usable worktree/branch for PR #$pr_num (worktree='$worktree') — not merging"
     state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=no_worktree"
-    return 4
+    _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "" \
+      "ajon worktreetä tai haaraa ei löydy tältä koneelta, joten katselmusta ei voitu ajaa" "" launch_failed
+    return 10
   fi
 
   # Review exactly what GitHub would merge: the remote head. A worktree behind it
-  # is fast-forwarded; one that diverges is not ours to reconcile.
+  # is fast-forwarded; one that diverges is not ours to reconcile. The HEAD check
+  # after the merge matters: --ff-only succeeds as a no-op on a worktree AHEAD of
+  # the remote, which would leave unreviewed local commits under the review.
   if ! _pr_fetch "$worktree" "$base_ref" "$branch"; then
     log "merge gate '$gate': git fetch failed for PR #$pr_num — retrying next poll"
     state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
@@ -1458,12 +1467,17 @@ pr_run_merge_gate() {
   if [ -z "$sha" ] || [ "$sha" != "$remote_sha" ]; then
     if [ -n "$sha" ] && [ -n "$remote_sha" ] \
        && ! ( cd "$worktree" && git status --porcelain 2>/dev/null | grep -q . ) \
-       && ( cd "$worktree" && git merge --ff-only -q "$remote_sha" >/dev/null 2>&1 ); then
+       && ( cd "$worktree" && git merge --ff-only -q "$remote_sha" >/dev/null 2>&1 ) \
+       && [ "$( cd "$worktree" && git rev-parse HEAD 2>/dev/null )" = "$remote_sha" ]; then
       sha="$remote_sha"
     else
+      # Durable too: a diverged or dirty worktree (a human rebase / force-push,
+      # or a fix agent's leftovers) does not reconcile itself on a later tick.
       log "merge gate '$gate': worktree head '${sha:-?}' is not the PR head '${remote_sha:-?}' for PR #$pr_num — not reviewing a head GitHub would not merge"
       state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=gate_head_mismatch"
-      return 4
+      _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "${remote_sha:-?}" \
+        "worktreen head (\`${sha:-?}\`) ei ole PR:n head eikä sitä voitu siirtää siihen (haara on erkaantunut tai worktree on likainen)" "" launch_failed
+      return 10
     fi
   fi
   PR_GATE_START_SHA="$sha"
@@ -1474,7 +1488,16 @@ pr_run_merge_gate() {
   cfg=$( cd "$worktree" && git show "$PR_ROUTE_REMOTE/$base_ref:.claude/run-issues.json" 2>/dev/null || true )
   hold_min=$(merge_gate_hold_min "$cfg" "$gate" "$GATE_HOLD_MACHINE")
 
-  local jsonl="$run_dir/state.jsonl" prior result holding findings attempts
+  # The cap must hold even if the event log cannot be read: a non-numeric cap
+  # reads as 0 (hold at the first holding finding), and fixes made in this
+  # invocation are counted in-process as well as from the log.
+  case "$GATE_MAX_FIXES" in
+    ''|*[!0-9]*)
+      log "merge gate '$gate': invalid fix cap '$GATE_MAX_FIXES' — using 0"
+      GATE_MAX_FIXES=0
+      ;;
+  esac
+  local jsonl="$run_dir/state.jsonl" prior result holding findings attempts fixes_here=0
   while :; do
     prior=$(merge_gate_last_result "$jsonl" "$gate" "$sha")
     result="${prior%% *}"
@@ -1519,6 +1542,8 @@ pr_run_merge_gate() {
 
     # Holding findings: fix within the cap, or hold.
     attempts=$(merge_gate_attempts "$jsonl" "$gate")
+    case "$attempts" in ''|*[!0-9]*) attempts=0 ;; esac
+    [ "$fixes_here" -gt "$attempts" ] && attempts="$fixes_here"
     if [ "$attempts" -ge "$GATE_MAX_FIXES" ]; then
       _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "$sha" \
         "korjausyritysten katto ($attempts/$GATE_MAX_FIXES) on täynnä" "$findings"
@@ -1529,6 +1554,7 @@ pr_run_merge_gate() {
       _pr_gate_hold_to_human "$gate" "$pr_num" "$run_dir" "$worktree" "$sha" "$GATE_WHY" "$findings" "$GATE_KIND"
       return 10
     fi
+    fixes_here=$((fixes_here + 1))
     sha="$GATE_NEW_SHA"   # the new head is reviewed on the next pass
   done
 }
@@ -1561,9 +1587,12 @@ _pr_gate_review() {
     render_prompt "$SCRIPT_DIR/prompts/$GATE_REVIEW_STEP.md" "$prompt_file" \
       PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
       HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE"
+    # A previous review's output must never be parsed as this one's, so the
+    # call starts without it; repo principles are not loaded (see _pr_call_agent).
+    rm -f "$run_dir/$GATE_REVIEW_STEP.out" "$run_dir/$GATE_REVIEW_STEP.exit"
     local arc=0
     _pr_call_agent "$run_dir" "$worktree" "$GATE_REVIEW_STEP" "$prompt_file" \
-      "$GATE_REVIEW_TIMEOUT" || arc=$?
+      "$GATE_REVIEW_TIMEOUT" 0 || arc=$?
     log "merge gate '$gate': review call for PR #$pr_num returned rc=$arc"
 
     local out="$run_dir/$GATE_REVIEW_STEP.out"
@@ -1574,6 +1603,8 @@ _pr_gate_review() {
       GATE_WHY="katselmointiagentti muutti worktreetä, vaikka sen piti vain lukea (head \`${head_after:-?}\`), joten katselmusta ei hyväksytty"
     else
       GATE_RESULT=$(merge_gate_parse "$out" "$run_dir/$GATE_REVIEW_STEP.exit")
+      # A failed call is never a verdict, whatever the files say.
+      [ "$arc" -ne 0 ] && GATE_RESULT="launch_failed"
       case "$GATE_RESULT" in
         launch_failed)
           if [ "$arc" -ne 0 ]; then
