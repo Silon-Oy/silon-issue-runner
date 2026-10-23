@@ -43,8 +43,9 @@ runnerin PR:t (`auto-run/`-haarat).
 
 Jos jokin sisarajo toteuttaa osan tästä muutoksesta tai muuttaa samoja tiedostoja, nimeä
 päällekkäisyys φ-osiossa ja kirjaa Implementerille, **mitä ei toteuteta itse, koska sisarajo
-tekee sen**. Päällekkäisyys ei yksin kaada luokitusta. Jos sisarajoja ei voitu lukea, älä
-oleta, ettei niitä ole.
+tekee sen**. Päällekkäisyys ei yksin kaada luokitusta. Jos sisarajo kuitenkin toteuttaa
+**olennaisesti saman muutoksen**, luokitus ei pidä: valitse `ESCALATE`, jolloin täysi review
+voi sarjoittaa ajon. Jos sisarajoja ei voitu lukea, älä oleta, ettei niitä ole.
 
 Älä tee täyttä analyysiä. Kirjoita lyhyesti:
 

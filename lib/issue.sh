@@ -475,19 +475,70 @@ verify_claim() {
   [ "$current_set" = "$expected_set" ]
 }
 
-# unclaim_issue <repo-root> <N> [<owner/repo>]
+# _login_in_set <login> <csv> — pure. Returns 0 when <login> is a member of the
+# comma-separated login list <csv>, non-zero otherwise (an empty login is never a
+# member).
+_login_in_set() {
+  local login="$1" csv="${2:-}"
+  [ -n "$login" ] || return 1
+  printf '%s' "$csv" | tr ',' '\n' | grep -qxF -- "$login"
+}
+
+# claim_self_preassigned <before-assignees-csv> <snapshot-rc>
+# Prints whether @me was ALREADY an assignee before claim_issue ran (issue #357):
+#   1        — @me was in the pre-claim snapshot (a human assigned the runner's
+#              account, e.g. to route the issue via the watchlist `assignees`, #238)
+#   0        — @me was not assigned; claim_issue's assignment is the run's own
+#   unknown  — the snapshot read failed (<snapshot-rc> != 0) or `me` could not be
+#              resolved, so the pre-claim state cannot be known
+# The `me` lookup uses the personal identity for the same reason verify_claim does.
+claim_self_preassigned() {
+  local before_csv="${1:-}" rc="${2:-0}" me
+  if [ "$rc" != "0" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if ! me=$(gh api user --jq .login 2>/dev/null) || [ -z "$me" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if _login_in_set "$me" "$before_csv"; then printf '1'; else printf '0'; fi
+}
+
+# unclaim_keeps_assignee <self-preassigned> — pure. Returns 0 when the @me
+# assignee must be KEPT on unclaim: `1` (a human pre-assigned it) or `unknown`
+# (the pre-claim state is lost — a stray assignee is harmless because pickup
+# filters on the auto-claimed label, while removing a routing assignee drops the
+# issue out of pickup for good). Empty (a run.json predating the field) or `0`
+# keeps the old behaviour: the run's own assignment is removed.
+unclaim_keeps_assignee() {
+  case "${1:-}" in
+    1|unknown) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# unclaim_issue <repo-root> <N> [<owner/repo>] [<self-preassigned>]
 # Removes the @me assignee AND the auto-claimed reservation label (issue #99).
 # Idempotent (best-effort). The label removal is bound here for the same reason
 # the add is bound to claim_issue: it tracks the assignment structurally.
+#
+# The assignee is removed only when claim_issue added it in this run (issue #357):
+# <self-preassigned> is the run.json `self_preassigned` value from
+# claim_self_preassigned, and unclaim_keeps_assignee decides. The label is always
+# removed — it is the reservation; a pre-existing assignee is not.
 unclaim_issue() {
   local repo="$1"
   local n="$2"
   local owner_repo="${3:-}"
-  (
-    cd "$repo"
-    # shellcheck disable=SC2046
-    gh issue edit "$n" $(_repo_args "$owner_repo") --remove-assignee "@me" >/dev/null 2>&1 || true
-  )
+  local preassigned="${4:-}"
+  if ! unclaim_keeps_assignee "$preassigned"; then
+    (
+      cd "$repo"
+      # shellcheck disable=SC2046
+      gh issue edit "$n" $(_repo_args "$owner_repo") --remove-assignee "@me" >/dev/null 2>&1 || true
+    )
+  fi
   _reserve_label_remove "$repo" "$n" "$owner_repo"
 }
 
@@ -570,6 +621,62 @@ list_blocked_by() {
   ); then
     return 2
   fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
+# add_blocked_by <repo-root> <N> <blocker-N> [<owner/repo>] [<remote>]
+# The writing pair of list_blocked_by (issue #338): adds the dependency edge
+# "issue N is blocked by issue <blocker-N>". The REST body takes the blocker's
+# database id, not its number, so the issue is read first. Returns 0 only when a
+# re-read of N's blocked_by graph lists <blocker-N>, and 2 otherwise — whatever
+# the POST itself returned. The re-read makes an already-existing edge (422) a
+# success and a write whose response was lost in transit a verified one; the
+# caller never has to guess from a status code. Writes through _issue_gh so the
+# edge is attributed like the run's comments (App identity on origin).
+# rc 3 (nothing written) when <blocker-N> is closed: such an edge is no wait. An
+# unverified POST is taken back with a DELETE before rc 2, because the caller
+# carries on as if there were no edge. (An identical edge a human drew mid-run
+# would go with it — S2b already refuses a run with an open blocker, so that
+# needs a human drawing the same edge between S2b and S7.)
+add_blocked_by() {
+  local repo="$1" n="$2" blocker="$3" owner_repo="${4:-}" remote="${5:-}"
+  local id="" state="" meta path edges posted=0
+  meta=$(cd "$repo" && _issue_gh --remote "$remote" -- api \
+    "$(_rest_issue_path "$owner_repo" "$blocker")" --jq '"\(.id) \(.state)"' 2>/dev/null) || meta=""
+  read -r id state <<<"$meta"
+  # A closed blocker is no wait: rc 3, nothing written.
+  [ "$state" = "closed" ] && return 3
+  path="$(_rest_issue_path "$owner_repo" "$n")/dependencies/blocked_by"
+  case "$id" in
+    ''|*[!0-9]*) ;;
+    *)
+      ( cd "$repo" && _issue_gh --remote "$remote" -- api -X POST "$path" \
+          -F "issue_id=$id" >/dev/null 2>&1 ) || true
+      posted=1
+      ;;
+  esac
+  if edges=$(list_blocked_by "$repo" "$n" "$owner_repo") \
+     && printf '%s\n' "$edges" | cut -f1 | grep -qx "$blocker"; then
+    return 0
+  fi
+  # Not verified. The POST may still have landed (the re-read can fail on its
+  # own), and the caller carries on as if no edge existed — so take it back.
+  if [ "$posted" = 1 ]; then
+    ( cd "$repo" && _issue_gh --remote "$remote" -- api -X DELETE "$path/$id" \
+        >/dev/null 2>&1 ) || true
+  fi
+  return 2
+}
+
+# issue_label_names <repo-root> <N> [<owner/repo>] [<remote>]
+# Prints issue N's current label names, one per line, read live from REST (not
+# the cached issue.json). rc 2 (printing nothing) when the read fails, so a
+# caller can tell "label absent" from "could not tell".
+issue_label_names() {
+  local repo="$1" n="$2" owner_repo="${3:-}" remote="${4:-}" out
+  out=$(cd "$repo" && _issue_gh --remote "$remote" -- api \
+    "$(_rest_issue_path "$owner_repo" "$n")" --jq '.labels[].name' 2>/dev/null) || return 2
   [ -n "$out" ] && printf '%s\n' "$out"
   return 0
 }

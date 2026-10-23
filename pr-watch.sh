@@ -180,6 +180,9 @@ machine_env_capture
 # shellcheck source=lib/semantic-gate.sh
 # The semantic gate's trigger (issue #341): sibling listing filter, spans, dirs.
 . "$SCRIPT_DIR/lib/semantic-gate.sh"
+# shellcheck source=lib/security-scan.sh
+# Optional deterministic scanners (issue #336) a gate can feed its reviewer.
+. "$SCRIPT_DIR/lib/security-scan.sh"
 
 # rate_limit_* (issue #126): the watcher spends the SAME GitHub quota as the
 # pollers, so it must be able to trip the shared backoff. Functions only.
@@ -1216,19 +1219,8 @@ _pr_force_push() {
 # Also the merge gate's launch check (issue #334); [<what>] names the caller in
 # the log line.
 pr_ci_repair_preflight() {
-  local what="${1:-CI-repair}" reason=""
-  if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
-    # shellcheck disable=SC2086
-    if ! preflight_probe_claude $RUN_ISSUES_CLAUDE_CMD; then
-      reason="claude CLI probe failed (\`$RUN_ISSUES_CLAUDE_CMD --version\` returned non-zero — the \`claude\` command is not usable; fix: $(preflight_install_hint claude))"
-    fi
-  else
-    local first="${RUN_ISSUES_CLAUDE_CMD%% *}"
-    if ! preflight_have "$first"; then
-      reason="claude driver '$first' not found on PATH (RUN_ISSUES_CLAUDE_CMD override)"
-    fi
-  fi
-  [ -z "$reason" ] && return 0
+  local what="${1:-CI-repair}" reason
+  reason=$(preflight_claude_cmd_unusable) || return 0
   log "$what unavailable: $reason"
   return 1
 }
@@ -1516,8 +1508,10 @@ _pr_ci_handover_to_human() {
 _merge_gate_spec() {
   GATE_TRIGGER=""
   GATE_KEY_BASE=0
+  GATE_SCANNERS=0
   case "$1" in
     security)
+      GATE_SCANNERS=1   # lib/security-scan.sh, diff mode, before the review
       GATE_TITLE="Tietoturvakatselmus"
       GATE_ENABLED="$PR_WATCH_ENABLE_SECURITY_GATE"
       GATE_SWITCH="PR_WATCH_ENABLE_SECURITY_GATE"
@@ -1533,8 +1527,8 @@ _merge_gate_spec() {
       GATE_TITLE="Semanttisen konfliktin tarkistus"
       GATE_ENABLED="$PR_WATCH_ENABLE_SEMANTIC_CHECK"
       GATE_SWITCH="PR_WATCH_ENABLE_SEMANTIC_CHECK"
-      GATE_REVIEW_STEP="08-semantic-review"
-      GATE_FIX_STEP="09-semantic-fix"
+      GATE_REVIEW_STEP="10-semantic-review"
+      GATE_FIX_STEP="11-semantic-fix"
       GATE_MAX_FIXES="$PR_WATCH_MAX_SEMANTIC_FIXES"
       GATE_REVIEW_TIMEOUT="$PR_WATCH_SEMANTIC_REVIEW_TIMEOUT"
       GATE_FIX_TIMEOUT="$PR_WATCH_SEMANTIC_FIX_TIMEOUT"
@@ -1674,7 +1668,17 @@ pr_run_merge_gate() {
   while :; do
     prior=$(merge_gate_last_result "$jsonl" "$gate" "$sha" "$GATE_BASE_SHA")
     result="${prior%% *}"
-    holding="${prior##* }"
+    if [ "$result" = findings ]; then
+      # The recorded holding count was computed against the threshold in force at
+      # review time; the decision uses the current one, re-applied to the stored
+      # findings. Without them the head is reviewed again (fail-closed) rather
+      # than trusting a count a lowered threshold would no longer give.
+      findings=$(cat "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")" 2>/dev/null || true)
+      if [ -z "$findings" ]; then
+        log "merge gate '$gate': findings of already reviewed head $sha are missing — reviewing it again"
+        result=""
+      fi
+    fi
     case "$result" in
       clean)
         log "merge gate '$gate': head $sha already reviewed clean — passing"
@@ -1682,13 +1686,13 @@ pr_run_merge_gate() {
         return 0
         ;;
       findings)
-        findings=$(cat "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")" 2>/dev/null || true)
+        holding=$(merge_gate_holding "$hold_min" "$findings" | grep -c . || true)
         if [ "${holding:-0}" -eq 0 ]; then
           log "merge gate '$gate': head $sha already reviewed, no finding at or above '$hold_min' — passing"
           PR_GATE_HEAD_SHA="$sha"
           return 0
         fi
-        log "merge gate '$gate': head $sha already reviewed with $holding holding finding(s) — not reviewing it again"
+        log "merge gate '$gate': head $sha already reviewed with $holding finding(s) at or above '$hold_min' — not reviewing it again"
         ;;
       *)
         # No record, or a review that never happened (launch_failed): review.
@@ -1778,10 +1782,20 @@ _pr_gate_review() {
   esac
   if [ "$ready" -eq 1 ]; then
     log "merge gate '$gate': reviewing PR #$pr_num head $sha with $reviewer (hold threshold '$hold_min')"
+    # Deterministic scanners run first, by the watcher itself, and write only
+    # into the run-dir: the read-only check after the review covers them too.
+    local scan_dir="$run_dir/scan-$gate-$sha" scanner_results="Tälle portille ei ole deterministisiä skannereita."
+    if [ "$GATE_SCANNERS" = 1 ]; then
+      rm -rf "$scan_dir"
+      security_scan diff "$worktree" "$scan_dir" "$PR_ROUTE_REMOTE/$base_ref" >&2 \
+        || { log "merge gate '$gate': security scan did not start for PR #$pr_num — recorded as a failed scan"; rm -rf "$scan_dir"; }
+      [ -f "$scan_dir/scan.summary" ] && log "merge gate '$gate': scan: $(tr '\n' ';' < "$scan_dir/scan.summary")"
+      scanner_results=$(security_scan_prompt_text "$scan_dir")
+    fi
     local prompt_file="$run_dir/$GATE_REVIEW_STEP.prompt"
     render_prompt "$SCRIPT_DIR/prompts/$GATE_REVIEW_STEP.md" "$prompt_file" \
       PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
-      HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE" \
+      HEAD_SHA="$sha" REMOTE="$PR_ROUTE_REMOTE" SCANNER_RESULTS="$scanner_results" \
       GATE_CONTEXT="$(_merge_gate_context)"
     # A previous review's output must never be parsed as this one's, so the
     # call starts without it; repo principles are not loaded (see _pr_call_agent).
@@ -1816,10 +1830,24 @@ _pr_gate_review() {
           ;;
         findings)
           GATE_FINDINGS=$(merge_gate_findings "$out")
-          GATE_HOLDING=$(merge_gate_holding "$hold_min" "$GATE_FINDINGS" | grep -c . || true)
-          printf '%s\n' "$GATE_FINDINGS" > "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")"
           ;;
       esac
+      # Scanner rows join the verdict AFTER parsing (a CLEAN marker next to
+      # finding lines would parse as launch_failed) and deterministically: a
+      # secret the scanner found holds whatever the reviewer said, and a failed
+      # scanner turns a clean review into a reported one, never a silent pass.
+      if [ "$GATE_RESULT" != "launch_failed" ] && [ "$GATE_SCANNERS" = 1 ]; then
+        local scan_rows
+        scan_rows=$(security_scan_gate_findings "$scan_dir")
+        if [ -n "$scan_rows" ]; then
+          GATE_FINDINGS=$(printf '%s\n%s\n' "$GATE_FINDINGS" "$scan_rows" | awk 'NF && !seen[$0]++')
+          GATE_RESULT="findings"
+        fi
+      fi
+      if [ "$GATE_RESULT" = "findings" ]; then
+        GATE_HOLDING=$(merge_gate_holding "$hold_min" "$GATE_FINDINGS" | grep -c . || true)
+        printf '%s\n' "$GATE_FINDINGS" > "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")"
+      fi
     fi
   fi
   [ "$GATE_RESULT" = "launch_failed" ] && log "merge gate '$gate': review of PR #$pr_num did not complete — $GATE_WHY"

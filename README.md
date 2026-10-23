@@ -79,6 +79,9 @@ tarkistetaan komennolla `gh auth token` eikä `gh auth status`:lla
 ei virhettä — mutta silloin claude-kutsut ajetaan **ilman aikakattoa** ja voivat jäädä
 roikkumaan. Poller nojaa erikseen omaan liveness-rajaansa (`RUN_ISSUES_STALE_AFTER`).
 
+`gitleaks` ja `osv-scanner`: paketti ei asenna niitä, mutta asennettuina merge-portti
+käyttää niitä (osio 7.12).
+
 ### Pollerikäyttö (edellisten lisäksi)
 
 | Vaatimus | Huomio |
@@ -568,6 +571,7 @@ lähde on koodin `${VAR:-oletus}`.
 | `RUN_ISSUES_RATE_LIMIT_BACKOFF` | `1` | `0` poistaa GitHubin kutsurajan perääntymisen käytöstä (#126). Oletuksena pollerit odottavat kasvavan ajan (5→60 min) rajaan törmättyään, koska torjuttu pyyntö pidentää estoa |
 | `RUN_ISSUES_CLEAN_SCAN_LIMIT` | `200` | Purkulabelin (`auto-clean` ja `auto-reset`) repo-laajuisen listauksen rivikatto (#124); ylittyessä kattamattomat issuet luetaan yksitellen ja lokiin tulee WARNING |
 | `RUN_ISSUES_STALE_AFTER` | `3600` | Kuinka vanha ajo tulkitaan jumiutuneeksi ja tapetaan (6.6 f) |
+| `RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS` | *(ei ajastusta)* | `security-audit.sh`-ajojen väli päivinä per repo. Repon `.security.audit_interval_days` voittaa (`0` = pois). Lasketaan `global_max_concurrent`-kattoon |
 
 ### PR-vahti
 
@@ -761,8 +765,7 @@ liikkeelle, tarkista `auto-claimed`-label ensin.
 
 Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as blocked by"**
 -toiminnolla — siinä kaikki. Ei labelia lisättäväksi eikä skriptiä ajettavaksi: poiminta lukee
-`blocked_by`-graafin suoraan GitHubin riippuvuusrajapinnasta ja ohittaa estetyt issuet. (Ennen
-#133:a saman teki hakukvalifikaattori `-is:blocked`; se poistui, kun poiminta siirtyi REST:iin.)
+`blocked_by`-graafin suoraan GitHubin riippuvuusrajapinnasta ja ohittaa estetyt issuet.
 
 - Yksi avoin estäjä riittää pitämään issuen poiminnan ulkopuolella.
 - Kun viimeinen estäjä sulkeutuu, issue vapautuu poimintaan **seuraavalla tikillä** ilman
@@ -775,12 +778,11 @@ Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as block
   poistamalla. Vastaavasti: jos issue ei lähde ajoon eikä yksikään estolabeli ole päällä,
   tarkista riippuvuudet issuen omasta näkymästä.
 
+Runner voi myös lisätä kaaren itse sarjoittaessaan ajon aiemman sisarajon perään (exit 14).
+
 **Työjärjestys ketjun rakentamiseen:** luo issuet → merkitse riippuvuudet GitHubin omalla
 "blocked by" -toiminnolla → lisää jokaiselle `auto-run`. Automaatio etenee ketjussa yksi
 lenkki kerrallaan itsestään.
-
-Estotieto tulee GitHubin hakuindeksistä, joten se päivittyy pienellä viiveellä juuri suljetun
-estäjän jälkeen. Käytännössä viive mahtuu pollerin 5 minuutin tikkiväliin.
 
 **Epicit — usean issuen ketju.** Kun kokonaisuus koostuu monesta issuesta, ne voi koota
 **epic-issueen** (`epic`-label) ja ajaa koko ketjun yhdellä `auto-run`-signaalilla, joka
@@ -1123,6 +1125,8 @@ agentit muuttavat sitä vielä ajon jälkeen. Siksi `pr-watch.sh` ajaa ennen jok
   arvo **voittaa koneen asetuksen**. Arvo luetaan base-haarasta, joten PR ei voi laskea omaa
   rajaansa ([perustelu](docs/env-reference.md#pr-vahti)). Katselmoija ei lue PR:n
   `principles_file`ä; PR:n `CLAUDE.md` on jäännösriski, jonka prompti käsittelee datana.
+- Asennetut skannerit (osio 2) ajetaan diffille ennen katselmusta, ja niiden löydökset
+  lisätään päätökseen. Salaisuus on aina `high`, epäonnistunut skanneri `low`-rivi.
 
 ### 7.13 Semanttisen konfliktin tarkistus
 
@@ -1216,8 +1220,8 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 
 | Oire | Todennäköinen syy | Korjaus |
 |---|---|---|
-| Issue ei lähde ajoon, vaikka `auto-run` on | Assignee (myös oma) estää poiminnan | Poista assignaatio tai siivoa vanha ajo: `cleanup-run.sh --issue <N> --yes` |
-| — sama, mutta assigneeta ei ole | Jokin estolabeli päällä: `waiting`, `wip`, `auto-clean` | Poista label |
+| Issue ei lähde ajoon, vaikka `auto-run` on | Vanhan ajon varaus (`auto-claimed`) estää poiminnan | Siivoa vanha ajo: `cleanup-run.sh --issue <N> --yes` |
+| — sama, mutta varausta ei ole | Jokin estolabeli päällä: `waiting`, `wip`, `auto-clean` | Poista label |
 | — sama, eikä estolabeleita ole | Issue on estetty natiivilla "blocked by" -riippuvuudella — esto ei näy labeleissa (6.5) | Sulje edeltäjä tai poista riippuvuus issuen näkymästä |
 | — sama, eikä riippuvuuksia ole | Repo ei ole watchlistissä, tai poimintalabelien JA-ehto ei täyty (6.2) | Tarkista watchlist ja repon `labels`-lista |
 | Yksittäinen issue ei lähde ajoon, vaikka labelit ovat oikein | Repolla on watchlistin `assignees`-rajaus, ja issue on assignattu listan ulkopuoliselle tunnukselle (6.2) | Assignaa listatulle tunnukselle, poista assignee kokonaan tai laajenna `assignees`-listaa |
@@ -1227,8 +1231,9 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | Vastasin tarkennuskysymykseen, mutta mitään ei tapahtunut | Vastaus ennen markeria, tai useampi kommentti (vain uusin luetaan) | Kirjoita vastaus uudelleen **yhtenä** kommenttina (6.6 c) |
 | — sama, ja vastaus oli oikein | Vastaajalla ei ole kirjoitusoikeutta repoon, tai oikeutta ei voitu lukea (§7.11) | Vastaa kirjoitusoikeudellisella tilillä; etsi lokista `comment-trust: WARNING` |
 | PR on auki, CI vihreä, mutta ei mergeydy | `auto-merge`-label puuttuu **PR:ltä**, tai PR on draft | Lisää label PR:lle; draft merkitään valmiiksi käsin |
-| Ajo epäonnistui, korjasin syyn, issue ei palaa | Assignaatio ja `needs-human` jäivät | `/issue-runner:cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
+| Ajo epäonnistui, korjasin syyn, issue ei palaa | Varaus (`auto-claimed`) jäi | `/issue-runner:cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
 | Siivous ei löydä ajoa | Ajo tapahtui toisella koneella | Aja siivous siellä; PR-vahti tulostaa lokiin valmiin komennon |
+| `epic-attention`, lapsissa ei `needs-human`ia | `epic-review.sh`-löydös | Lue katselmuskommentti, korjaa, poista label |
 
 ### Ajon tilat (`run.json`)
 
@@ -1252,17 +1257,16 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 `implementer_BLOCKED`, `clarification_loop_exhausted`, `git_push_failed`,
 `pr_create_failed`, `stalled_in_<vaihe>`. Näistä kaikki jättävät issuelle
 `needs-human`-labelin; kolme S4-syytä on avattu korjauskomentoineen kohdassa (e) yllä.
-Poikkeus on `blocked_by_dependency` (exit 9), joka on odotustila eikä labeloi mitään —
-ajo jatkuu itsestään kun estäjä sulkeutuu.
+Poikkeukset ovat `blocked_by_dependency` (exit 9) ja `serialized_behind_sibling` (exit 14),
+jotka ovat odotustiloja eivätkä labeloi mitään — ajo jatkuu itsestään kun estäjä sulkeutuu.
 
 ### Exit-koodit
 
 Useita skriptejä, **kukin oma erillinen exit-koodiavaruutensa**. Sama numero ei tarkoita samaa
 asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 
-Täydet taulukot kaikille neljälletoista skriptille ovat omassa hakuteoksessaan:
-[`docs/troubleshooting.md`](docs/troubleshooting.md). Se on skriptikohtainen diagnostiikka,
-jota luetaan hakusanalla — skriptin nimellä tai koodilla — eikä alusta loppuun.
+Täydet taulukot kaikille skripteille ovat omassa hakuteoksessaan:
+[`docs/troubleshooting.md`](docs/troubleshooting.md), haettavissa skriptin nimellä.
 
 ### Mistä lokit löytyvät
 

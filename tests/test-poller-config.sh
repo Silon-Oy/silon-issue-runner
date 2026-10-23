@@ -25,6 +25,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 ROOT="$(cd "$HERE/.." && pwd)"
 LIB="$ROOT/lib/poller-config.sh"
 
@@ -315,9 +317,11 @@ done
 # env vars are not flagged as unread. poller.sh sources lib/github-app-auth.sh
 # (#127) so the poller's own pickup reads can route through the App, so the
 # RUN_ISSUES_GITHUB_APP_* identity vars the example documents are read there.
+# poller.sh likewise sources lib/audit-schedule.sh (#340), which names each audit
+# kind's interval variable.
 EXAMPLE_READERS=("${POLLERS[@]}" "$LIB" "$ROOT/status-render.sh" \
   "$ROOT/action-server.sh" "$ROOT/lib/action-service.py" "$ROOT/self-update.sh" \
-  "$ROOT/lib/github-app-auth.sh")
+  "$ROOT/lib/github-app-auth.sh" "$ROOT/security-audit.sh" "$ROOT/coherence-audit.sh" "$ROOT/lib/audit-schedule.sh")
 EXAMPLE="$ROOT/examples/run-issues-poller.env.example"
 if [ ! -f "$EXAMPLE" ]; then
   bad "case9 examples/run-issues-poller.env.example is missing"

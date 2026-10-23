@@ -194,6 +194,19 @@ for repo in "${REPOS[@]}"; do
           break
         fi
         ;;
+      14)
+        # Serialized behind an earlier sibling (issue #338), successfully: a
+        # planned wait that ends by itself when the sibling closes — not a failure.
+        log "run #$started: issue #$issue serialized behind a sibling run — continuing"
+        consecutive_blocked=0
+        ;;
+      15)
+        # Serialized, but the reservation label survived the unclaim (issue
+        # #355): the wait no longer ends by itself, so a human must act.
+        log "run #$started: issue #$issue serialized but still reserved — needs a human"
+        summary+=("$repo #$issue: needs-human rc=15")
+        consecutive_blocked=0
+        ;;
       1|8)
         # Usage error or a missing dependency. Retrying cannot fix either, and
         # exit 8 means the preflight gate refused before touching anything.

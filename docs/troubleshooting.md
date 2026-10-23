@@ -34,6 +34,8 @@ asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 | 11 | Odottaa tarkennusta — vastaa issuelle, poller jatkaa `--continue`-ajolla |
 | 12 | **Issue kantaa `epic`-labelia** — S2c-portti kieltäytyi lukon ja claimin välissä ennen assignaatiota (issue #81). Epic kokoaa ajettavat alaissueet mutta ei ole itse ajettava; ajo viimeisteltiin `blocked`-tilaan (`is_epic_not_runnable`, tai `epic_check_failed` jos labelit lukukelvottomat) ja lukko vapautettiin. Portti lukee labelin suoraan (hakuindeksin sijaan) ja on fail-closed. Issue **ei** saa `needs-human`-labelia (claimia edeltävä portti kuten S2b). Nimetyn ajon voi pakottaa `--force`-lipulla |
 | 13 | **Claude-kutsu osui tilauksen käyttörajaan** (S6, S8 tai S9, issue #294). Ajo viimeisteltiin tilaan `usage_limited` (syy `usage_limit`), nollautumisaika kirjattiin `run.json`iin (`usage_limit_reset_at`) ja koneen yhteiseen tiedostoon `$RUN_ISSUES_LOG_DIR/.claude-usage-limit`. Issue **ei** saa `needs-human`-labelia eikä kommenttia. Poller ei aloita tällä koneella Claude-työtä ennen nollautumista, minkä jälkeen se jatkaa ajoa `--restart`illa keskeytyneestä vaiheesta kuluttamatta aikakatkaisubudjettia. Ohitus: `RUN_ISSUES_USAGE_LIMIT_DETECTION=0` |
+| 14 | **Ajo sarjoitettiin vanhemman sisarajon perään** (S7, vain auto-tila, issue #338). Cycle review palautti `SERIALIZE #N`, ja `#N` oli S6:ssa listattu saman repon sisarajo, joka aloitettiin ennen tätä ajoa. Runner lisäsi issuelle riippuvuuden "blocked by #N", postasi perustelukommentin, vapautti varauksen ja purki paikalliset artefaktit (`cleanup-run.sh`); ajo viimeisteltiin tilaan `blocked/serialized_behind_sibling`. Issue **ei** saa `needs-human`-labelia: se on odotustila kuten exit 9, ja S2b päästää issuen ajoon, kun `#N` sulkeutuu. Jos `auto-claimed`-labelin poistoa ei voitu varmistaa, ajo päättyy koodiin 15. Hylätty `SERIALIZE` (ei listattu sisarajo, ei vanhempi, jäsentymätön) tai epäonnistunut kaaren kirjoitus ei koskaan päädy tähän eikä koodiin 15: ajo jatkuu `PROCEED`ina ja `state.jsonl` kirjaa `serialize_rejected`- tai `serialize_edge_failed`-tapahtuman |
+| 15 | **Ajo sarjoitettiin, mutta varaus jäi voimaan** (S7, vain auto-tila, issue #355). Kuten exit 14, mutta `auto-claimed`-labelin poistoa ei voitu varmistaa, joten odotus ei enää pääty itsestään. Ajo viimeisteltiin tilaan `blocked/serialize_unclaim_failed`, artefaktit jäävät, ja issue saa `needs-human`-labelin ja vastattavan kommentin. Vastaus kommenttiin siivoaa ajon (`scan_blocked_answered`), minkä jälkeen issue odottaa `#N`:n sulkeutumista. `drain-queue.sh` raportoi tämän ihmistä vaativana |
 
 ### Asennin (`install.sh`)
 
@@ -161,6 +163,22 @@ ensimmäisen ajokelpoisen alaissueen heti. `--stop` **keskeyttää** epicin: se 
 lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla ajolabelit
 **ensin epiciltä, sitten avoimilta lapsilta** (järjestys estää pollerin re-propagoinnin).
 
+### Epicin katselmus (`epic-review.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Kriteerit täyttyvät (kirjattu, tai `--dry-run`), tai katselmus on jo kirjattu epicille (marker olemassa — agenttia ei kutsuttu, mitään ei kirjoitettu) |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero / `--repo` ei ole git-repo / `--remote` ei resolvoidu) |
+| 2 | Epic-issueta ei löytynyt, se ei ole avoin tai siltä puuttuu `epic`-label — mitään ei kirjoitettu |
+| 3 | Epic ilman alaissueita — ei katselmoitavaa, mitään ei kirjoitettu |
+| 4 | Lukuvirhe — lapsijoukkoa tai katselmusaineistoa ei saatu luettua (fail-closed: osittaista aineistoa ei katselmoida) |
+| 5 | Ei tuomiota — katselmusagentti ei käynnistynyt, aikakatkesi tai ei tuottanut jäsennettävää tulosta. Mitään ei kirjoitettu, joten uusi ajo yrittää uudelleen |
+| 6 | Löydöksiä — kommentti ja `epic-attention` kirjattu, tai kirjattaisiin (`--dry-run`) |
+| 7 | Tuomio saatiin, mutta GitHub-kirjoitus epäonnistui (label ja/tai kommentti). Jos kommentti ehti perille, marker vaientaa uudelleenajot — lisää puuttuva label käsin |
+
+`epic-review.sh` on ihmisen käynnistämä: poller ei kutsu sitä. Se **ei sulje epiciä**, ei koske
+lapsiin eikä mergeä. Rakenne ja kertaluontoisuus: [`epic-orchestration.md`](epic-orchestration.md) §4.4.
+
 ### Julkaisu julkiseen peiliin (`publish-release.sh`)
 
 | Koodi | Merkitys |
@@ -225,6 +243,27 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | 1 | Käyttö- tai syötevirhe |
 | 2 | Tuntematon `schema_version` — ei lähetystä |
 | 3 | Lähetys epäonnistui; runko on silti stdoutissa |
+
+### Tietoturva-auditointi (`security-audit.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` valmis |
+| 1 | Käyttövirhe |
+| 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä". Työhakemisto jätetään tarkasteltavaksi (polku stderrissä) |
+| 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
+| 5 | Auditointi valmis, mutta vähintään yksi skanneri epäonnistui: sen luokka jäi tarkistamatta deterministisesti. Epäonnistumisesta ei luoda issueta |
+
+### Koherenssiauditointi (`coherence-audit.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole tai uusia runnerin PR:iä ei ole mergetty), tai `--dry-run` valmis. Kursori siirtyy vain tällä koodilla, eikä `--dry-run`illa |
+| 1 | Käyttövirhe |
+| 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, kursori ei siirry, eikä tämä ole "ei löydöksiä" |
+| 4 | GitHub-luku tai -kirjoitus epäonnistui: PR-joukko, muutospinta, issue-indeksi tai issuen kirjoitus. Kursori ei siirry, joten seuraava ajo katselmoi samat PR:t; dedup estää duplikaatit |
 
 ### Evolutionin havaintojen kooste (`evolution-digest.sh`)
 

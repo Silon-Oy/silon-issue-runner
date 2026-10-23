@@ -30,6 +30,20 @@
 #   P) codex fails (rc=3)    -> hold; the real rc=3 is logged
 #   Q) codex unparseable     -> hold
 #   R) unknown reviewer      -> hold, nobody called
+#   S) scanner secret        -> agent CLEAN, gitleaks shim finds a secret: the
+#                               high row is merged into the verdict and holds
+#   T) scanner failed        -> agent CLEAN, osv-scanner shim crashes: not a
+#                               silent clean — a low row, reported in a comment
+#   U) no scanners           -> the prompt says so, behaviour as in A
+#   V..X) an already reviewed head is judged against the CURRENT threshold,
+#      re-applied to its stored findings (issue #356):
+#   V) threshold lowered     -> passed at `high` with a medium finding; at
+#                               `medium` it holds, with no review or fix call
+#   W) threshold raised      -> held at `medium`; at `high` it merges, unreviewed
+#   X) findings file missing -> fail-closed: the head is reviewed again
+#
+# Scanners are hidden by default (RUN_ISSUES_*_BIN at a missing path), so a real
+# gitleaks / osv-scanner on the machine never runs here (issue #336).
 #
 # Runs use a FOREIGN host so P9 local cleanup is skipped and the run-dir survives
 # for assertions.
@@ -39,6 +53,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 PRWATCH="$HERE/../pr-watch.sh"
 STATE_LIB="$HERE/../lib/state.sh"
 
@@ -162,6 +178,7 @@ run_watch() {
     PR_WATCH_ENABLE_SECURITY_GATE=1 PR_WATCH_ENABLE_SEMANTIC_CHECK=0 \
     PR_WATCH_SECURITY_REVIEW_TIMEOUT=30 PR_WATCH_SECURITY_FIX_TIMEOUT=30 \
     PR_WATCH_CI_MAX_POLLS=1 PR_WATCH_CI_POLL_SECS=1 \
+    RUN_ISSUES_GITLEAKS_BIN="$WORK/no-gitleaks" RUN_ISSUES_OSV_SCANNER_BIN="$WORK/no-osv" \
     "$@" "$PRWATCH" "$REPO" 55 2>&1 )
   RC=$?
 }
@@ -301,6 +318,54 @@ merged || bad F "not merged"
 [ -n "${KEEP:-}" ] || rm -rf "$WORK"
 
 # ===========================================================================
+# seed_findings_review <holding> <hold-min> [<findings-line>] — record that the
+# worktree head was already reviewed with findings, as _pr_gate_review would;
+# without <findings-line> the findings file is not written.
+seed_findings_review() {
+  SHA=$(git -C "$WT" rev-parse HEAD)
+  state_event "$RD" merge_gate_reviewed gate=security pr=55 "sha=$SHA" result=findings "holding=$1" "hold_min=$2"
+  [ -n "${3:-}" ] && printf '%s\n' "$3" > "$RD/merge-gate-security-$SHA.findings"
+  return 0
+}
+FINDING_MEDIUM_NORM='medium|low|f.txt:1|verbose error message'
+
+echo "=== V: threshold lowered -> reviewed head now holds, no agent call ==="
+FAIL_BEFORE=$FAIL
+setup V
+seed_findings_review 0 high "$FINDING_MEDIUM_NORM"
+run_watch PR_WATCH_SECURITY_HOLD_MIN_SEVERITY=medium PR_WATCH_MAX_SECURITY_FIXES=0; show V
+[ "$RC" = 10 ] || bad V "rc $RC, want 10 (medium finding at threshold 'medium')"
+merged && bad V "merged a head the lowered threshold holds"
+[ "$(calls REVIEW)" = 0 ] || bad V "head reviewed again"
+[ "$(calls FIX)" = 0 ] || bad V "fix attempted with a zero cap"
+grep -q 'verbose error message' "$WORK/comments.log" || bad V "hold comment does not list the finding"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok V "lowered threshold re-applied to stored findings"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+echo "=== W: threshold raised -> held head merges, no review ==="
+FAIL_BEFORE=$FAIL
+setup W
+seed_findings_review 1 medium "$FINDING_MEDIUM_NORM"
+run_watch PR_WATCH_SECURITY_HOLD_MIN_SEVERITY=high; show W
+[ "$RC" = 0 ] || bad W "rc $RC, want 0"
+merged || bad W "not merged"
+[ "$(calls REVIEW)" = 0 ] || bad W "head reviewed again"
+[ "$(calls FIX)" = 0 ] || bad W "unexpected fix call"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok W "raised threshold re-applied to stored findings"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+echo "=== X: findings file missing -> reviewed again (fail-closed) ==="
+FAIL_BEFORE=$FAIL
+setup X
+seed_findings_review 0 high
+run_watch; show X
+[ "$(calls REVIEW)" = 1 ] || bad X "review calls $(calls REVIEW), want 1"
+[ "$RC" = 0 ] || bad X "rc $RC, want 0 (re-review is clean)"
+[ "$(events merge_gate_reviewed)" = 2 ] || bad X "re-review not recorded"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok X "missing findings never trusted as a stored count"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
 echo "=== G: gate off -> unchanged behaviour ==="
 FAIL_BEFORE=$FAIL
 setup G
@@ -398,6 +463,8 @@ grep -q "\"event\":\"merge_gate_reviewed\".*\"sha\":\"$SHA\".*\"result\":\"clean
 [ "$FAIL" = "$FAIL_BEFORE" ] && ok M "codex review merged a clean head"
 [ -n "${KEEP:-}" ] || rm -rf "$WORK"
 
+# ====================================================================[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
 # ===========================================================================
 echo "=== N: codex finding -> claude fixes -> codex re-reviews -> merge ==="
 FAIL_BEFORE=$FAIL
@@ -468,6 +535,62 @@ merged && bad R "merged without a review"
 [ -s "$WORK/calls.log" ] && bad R "an agent was called: $(tr '\n' ' ' < "$WORK/calls.log")"
 grep -q 'tuntematon' "$WORK/comments.log" || bad R "comment does not name the unknown reviewer"
 [ "$FAIL" = "$FAIL_BEFORE" ] && ok R "unknown reviewer held"
+=======
+echo "=== S: agent CLEAN, gitleaks finds a secret -> hold ==="
+FAIL_BEFORE=$FAIL
+setup S
+cat > "$BIN/gitleaks" <<'SH'
+#!/usr/bin/env bash
+report="" code=1
+while [ $# -gt 0 ]; do
+  case "$1" in --report-path) report="$2"; shift ;; --exit-code) code="$2"; shift ;; esac
+  shift
+done
+echo '[{"Description":"AWS Access Key","StartLine":1,"File":"f.txt","Commit":"abc","RuleID":"aws-access-token","Secret":"AKIAREALSECRET"}]' > "$report"
+exit "$code"
+SH
+chmod +x "$BIN/gitleaks"
+run_watch RUN_ISSUES_GITLEAKS_BIN="$BIN/gitleaks" PR_WATCH_MAX_SECURITY_FIXES=0; show S
+SHA=$(git -C "$WT" rev-parse HEAD)
+[ "$RC" = 10 ] || bad S "rc $RC, want 10 (a scanner secret holds whatever the agent said)"
+merged && bad S "merged a head with a scanner-found secret"
+grep -q 'aws-access-token' "$WORK/comments.log" || bad S "hold comment does not list the scanner finding"
+grep -q 'AKIAREALSECRET' "$WORK/comments.log" "$RD/$(echo 06-security-review.prompt)" "$RD/merge-gate-security-$SHA.findings" && bad S "secret value leaked"
+grep -q "\"sha\":\"$SHA\".*\"result\":\"findings\".*\"holding\":\"1\"" "$RD/state.jsonl" || bad S "merged findings not recorded against the head"
+grep -q 'gitleaks: aws-access-token' "$RD/06-security-review.prompt" || bad S "scanner result not in the reviewer's prompt"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok S "scanner secret held despite a clean review"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== T: agent CLEAN, osv-scanner fails -> reported, not a silent clean ==="
+FAIL_BEFORE=$FAIL
+setup T
+printf '#!/usr/bin/env bash\necho "network unreachable" >&2\nexit 127\n' > "$BIN/osv-scanner"
+chmod +x "$BIN/osv-scanner"
+# The scanner only runs when the diff changes a lockfile.
+( cd "$WT" && echo '{}' > package-lock.json && git add package-lock.json \
+  && git -c user.email=t@t.t -c user.name=t commit -qm deps && git push -q origin feature/x )
+run_watch RUN_ISSUES_OSV_SCANNER_BIN="$BIN/osv-scanner"; show T
+[ "$RC" = 0 ] || bad T "rc $RC, want 0 (a failed scanner alone is low, below the threshold)"
+merged || bad T "not merged"
+grep -q 'osv-scanner epäonnistui' "$WORK/comments.log" || bad T "scanner failure not shown in a comment"
+grep -q '"result":"findings"' "$RD/state.jsonl" || bad T "a failed scanner recorded as clean"
+grep -q 'osv-scanner: EPÄONNISTUI' "$RD/06-security-review.prompt" || bad T "failure not in the reviewer's prompt"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok T "failed scanner reported, never silently clean"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== U: no scanners -> prompt says so, clean merges ==="
+FAIL_BEFORE=$FAIL
+setup U
+run_watch; show U
+[ "$RC" = 0 ] || bad U "rc $RC, want 0"
+merged || bad U "not merged"
+grep -q 'gitleaks: ei asennettu' "$RD/06-security-review.prompt" || bad U "prompt does not say gitleaks is missing"
+grep -q '{{SCANNER_RESULTS}}' "$RD/06-security-review.prompt" && bad U "placeholder not rendered"
+grep -q '"result":"clean"' "$RD/state.jsonl" || bad U "missing scanners changed a clean result"
+[ -s "$WORK/comments.log" ] && bad U "unexpected comment"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok U "missing scanners are a recorded no-op"
 [ -n "${KEEP:-}" ] || rm -rf "$WORK"
 
 # ===========================================================================

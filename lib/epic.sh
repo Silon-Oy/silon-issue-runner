@@ -291,10 +291,14 @@ _epic_labels_have() {
   jq -e --arg l "$label" 'any(.labels[]?; (.name // "") == $l)' "$file" >/dev/null 2>&1
 }
 
-# _epic_child_pr_refs <repo-root> <child-N> [<owner/repo>] — best-effort: print
-# the PR references (`#<n>`) that closed the child, space-separated, or nothing.
-# Uses GraphQL closedByPullRequestsReferences; any failure (endpoint, auth,
-# absent data) degrades silently to no PR — the summary still lists the child.
+# _epic_child_pr_refs <repo-root> <child-N> [<owner/repo>] — print the PR
+# references (`#<n>`) that closed the child, space-separated, or nothing.
+# Uses GraphQL closedByPullRequestsReferences (first 5 PRs per child).
+# Returns 0 on a good read — including "no PRs" (empty output) — and 1 when the
+# read failed (repo resolution, endpoint, auth), so "no PR" and "unreadable"
+# stay distinguishable. Best-effort is the CALLER's choice: the completion
+# summary swallows the failure (`|| prs=""`), the epic review (lib/epic-review.sh,
+# issue #272) is fail-closed on it.
 _epic_child_pr_refs() {
   local repo="$1" child="$2" owner_repo="${3:-}"
   local o r
@@ -302,13 +306,13 @@ _epic_child_pr_refs() {
     o="${owner_repo%%/*}"; r="${owner_repo##*/}"
   else
     local nwo
-    nwo=$(cd "$repo" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
-    [ -n "$nwo" ] || return 0
+    nwo=$(cd "$repo" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || return 1
+    [ -n "$nwo" ] || return 1
     o="${nwo%%/*}"; r="${nwo##*/}"
   fi
   local q='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){closedByPullRequestsReferences(first:5,includeClosedPrs:true){nodes{number}}}}}'
   ( cd "$repo" && gh api graphql -f query="$q" -F o="$o" -F r="$r" -F n="$child" \
-      --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[]?.number | "#\(.)"] | join(" ")' 2>/dev/null ) || true
+      --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[]?.number | "#\(.)"] | join(" ")' 2>/dev/null ) || return 1
 }
 
 # epic_process_one <repo-root> <epic-N> <labels-csv> [<owner/repo>] [<remote>]
@@ -440,14 +444,34 @@ _epic_escalate_child() {
     echo
     echo "Selvitä alaissueen ${child_ref} tilanne — kun se etenee, epic jatkaa itsestään."
   } > "$body_file"
-  ( cd "$repo" && labels_ensure "$owner_repo" epic-attention D4C5F9 \
-      "Epicin alaissue vaatii ihmistä" ) 2>&1 \
-      | while IFS= read -r _l; do _epic_log "$_l"; done || true
-  ( cd "$repo" && labels_add "$owner_repo" "$epic" epic-attention ) 2>&1 \
-      | while IFS= read -r _l; do _epic_log "$_l"; done || true
-  comment_issue "$repo" "$epic" "$(cat "$body_file")" "$owner_repo" "$remote" >/dev/null 2>&1 || true
+  _epic_post_attention "$repo" "$epic" "$owner_repo" "$remote" "$body_file" 1 || true
   rm -f "$body_file"
   _epic_log "epic #$epic: escalated stalled child $child_ref to epic (once)"
+}
+
+# _epic_post_attention <repo> <epic> <owner/repo> <remote> <body-file> <with-label>
+# The shared "record on the epic" write: when <with-label> is 1, ensure and add
+# the filterable epic-attention label FIRST, then post <body-file> (which carries
+# the caller's once-marker on its first line) as a comment. Label before comment
+# on purpose: the comment's marker is what makes the write once-only, so it goes
+# last. Both writes are always attempted; rc 1 if the label add or the comment
+# failed (the poller's escalation ignores it — best-effort — while
+# epic-review.sh reports it). <with-label> 0 = comment only (a clean review).
+_epic_post_attention() {
+  local repo="$1" epic="$2" owner_repo="$3" remote="$4" body_file="$5" with_label="${6:-1}"
+  local rc=0
+  if [ "$with_label" = "1" ]; then
+    ( cd "$repo" && labels_ensure "$owner_repo" epic-attention D4C5F9 \
+        "Epicin alaissue vaatii ihmistä" ) 2>&1 \
+        | while IFS= read -r _l; do _epic_log "$_l"; done || true
+    local lrc=0
+    ( cd "$repo" && labels_add "$owner_repo" "$epic" epic-attention ) > "$body_file.lerr" 2>&1 || lrc=$?
+    while IFS= read -r _l; do _epic_log "$_l"; done < "$body_file.lerr"
+    rm -f "$body_file.lerr"
+    [ "$lrc" -eq 0 ] || rc=1
+  fi
+  comment_issue "$repo" "$epic" "$(cat "$body_file")" "$owner_repo" "$remote" >/dev/null 2>&1 || rc=1
+  return "$rc"
 }
 
 # _epic_announce_complete <repo> <epic> <epic-title> <children-tsv> <owner/repo> <remote> <marker>
@@ -475,7 +499,7 @@ _epic_announce_complete() {
       # repo, not the epic's.
       [ -n "$child_repo" ] || child_repo="$owner_repo"
       child_ref="$(_epic_child_ref "$child_repo" "$owner_repo" "$num")"
-      prs=$(_epic_child_pr_refs "$repo" "$num" "$child_repo")
+      prs=$(_epic_child_pr_refs "$repo" "$num" "$child_repo") || prs=""
       if [ -n "$prs" ]; then
         echo "- ${child_ref} ${title} — PR: ${prs}"
       else

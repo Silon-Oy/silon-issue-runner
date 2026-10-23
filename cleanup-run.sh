@@ -141,6 +141,16 @@ if [ -f "$LABELS_LIB" ]; then
   . "$LABELS_LIB"
 fi
 
+# issue.sh owns the unclaim rule (issue #357): unclaim_keeps_assignee decides from
+# the run.json `self_preassigned` field whether the @me assignee was the run's own
+# (remove) or a human's routing assignment (keep). Sourced so this teardown and
+# orchestrate.sh's unclaim_issue cannot disagree about the rule.
+ISSUE_LIB="$SCRIPT_DIR/lib/issue.sh"
+if [ -f "$ISSUE_LIB" ]; then
+  # shellcheck source=lib/issue.sh
+  . "$ISSUE_LIB"
+fi
+
 # ---------- helpers ----------
 
 # archive_run <run-id> <run-dir> — copy essential artefacts to
@@ -263,7 +273,7 @@ cleanup_run() {
   # run's teardown, whether it completed with zero failed operations (→ RUNS_OK).
   local pre_gh_fail="$GH_FAIL_COUNT" pre_local_fail="$LOCAL_FAIL_COUNT"
 
-  local status issue_num branch worktree_path db_clone provision_env remote owner_repo run_slug
+  local status issue_num branch worktree_path db_clone provision_env remote owner_repo run_slug self_preassigned
   status=$(run_field "$rid" '.status')
   issue_num=$(run_field "$rid" '.issue_number')
   branch=$(run_field "$rid" '.branch')
@@ -277,6 +287,9 @@ cleanup_run() {
   # Repo namespacing (issue #67): the slug this run recorded. Empty = a run
   # created before #67, whose lock carries the legacy repo-agnostic name.
   run_slug=$(run_field "$rid" '.repo_slug')
+  # Whether @me was assigned before the claim (issue #357). Empty = a run created
+  # before the field existed → the assignee is removed as before.
+  self_preassigned=$(run_field "$rid" '.self_preassigned')
 
   if [ "$status" = "completed" ] && [ "$FORCE" != "1" ]; then
     printf 'SKIP %s — status=completed (PR likely open; pass --force to clean anyway)\n' "$rid"
@@ -302,7 +315,15 @@ cleanup_run() {
     (
       cd "$REPO_ROOT"
       f=0
-      do_or_dry remote "unassign" gh issue edit "$issue_num" $repo_args --remove-assignee "@me" || f=$((f + 1))
+      # Keep a pre-existing @me assignee (issue #357): a human may have assigned the
+      # runner's account to route the issue (#238), and removing it would drop the
+      # issue out of pickup for good. Only the run's own assignment is undone.
+      if declare -F unclaim_keeps_assignee >/dev/null 2>&1 \
+         && unclaim_keeps_assignee "$self_preassigned"; then
+        printf '  [remote] unassign: skipped — @me was assigned before the claim (self_preassigned=%s)\n' "$self_preassigned"
+      else
+        do_or_dry remote "unassign" gh issue edit "$issue_num" $repo_args --remove-assignee "@me" || f=$((f + 1))
+      fi
       # Drop the auto-claimed reservation label so the issue re-enters pickup
       # (issue #99). This is the reservation that keeps a running or un-cleaned run
       # out of pickup (-label:auto-claimed), the role assignment used to play, so

@@ -156,8 +156,9 @@ _claude_step_phase() {
     05-ci-repair*)           printf 'CI_REPAIR' ;;
     06-security-review*)     printf 'SECURITY_REVIEW' ;;
     07-security-fix*)        printf 'SECURITY_FIX' ;;
-    08-semantic-review*)     printf 'SEMANTIC_REVIEW' ;;
-    09-semantic-fix*)        printf 'SEMANTIC_FIX' ;;
+    09-epic-review*)         printf 'EPIC_REVIEW' ;;
+    10-semantic-review*)     printf 'SEMANTIC_REVIEW' ;;
+    11-semantic-fix*)        printf 'SEMANTIC_FIX' ;;
   esac
 }
 
@@ -824,7 +825,10 @@ call_claude() {
         CLAUDE_CODE_OAUTH_TOKEN="$token"
         export CLAUDE_CODE_OAUTH_TOKEN
       fi
-      exec "${cmd[@]}" ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} ${session_args[@]+"${session_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")"
+      # stdin from /dev/null: the prompt travels in -p, so the agent needs no
+      # input, and an inherited open pipe (a caller run from a tool whose stdin
+      # never reaches EOF) would hang any agent that reads it (issue #358).
+      exec "${cmd[@]}" ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} ${session_args[@]+"${session_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" < /dev/null
     ) > "$out_file" 2>&1 || rc=$?
 
     printf '%s\n' "$rc" > "$exit_file"

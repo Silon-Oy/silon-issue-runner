@@ -58,11 +58,19 @@ FAIL=0
 # first: exit code 10 -> docs/troubleshooting.md, the six variables and the
 # "repo wins" rationale -> docs/env-reference.md.
 #
-# Raised to 87900 by issue #341, whose criteria require README to document the
-# semantic-conflict merge gate. The trigger rules, the six variables and the
-# precedence detail went to docs/env-reference.md first; README carries one
-# section-5 row and a seven-line section 7.13, ~0.8 KB.
-MAX_BYTES=87900
+# Raised to 87400 by issue #336 (optional security scanners), whose plan
+# requires README section 2 to name the optional scanners outside the required
+# table, plus one section-7.12 bullet on how the gate uses them, ~300 B. The
+# variables and the module went to docs/env-reference.md and
+# docs/lib-reference.md first.
+MAX_BYTES=87400
+#
+# Raised to 88300 by issue #341, merged on top of #336. #341's criteria
+# require README to document the semantic-conflict merge gate. The trigger
+# rules, the six variables and the precedence detail went to
+# docs/env-reference.md first; README carries one section-5 row and a
+# seven-line section 7.13, ~0.8 KB.
+MAX_BYTES=88300
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

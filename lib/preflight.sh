@@ -130,6 +130,32 @@ preflight_probe_codex() {
   _preflight_probe_version "$@"
 }
 
+# preflight_claude_cmd_unusable — the launch check before an unattended claude
+# call outside the orchestrator (PR watcher's repair and gate agents, the audit
+# of security-audit.sh). rc 0 and the reason on stdout when RUN_ISSUES_CLAUDE_CMD
+# CANNOT be used; rc 1 and nothing when it can. The DEFAULT invocation is probed
+# with `--version` (a name on PATH does not prove it starts); an override is the
+# user's own driver whose --version we must neither guess nor fire, so only its
+# first token is checked. Needs lib/claude-call.sh's RUN_ISSUES_CLAUDE_CMD and
+# RUN_ISSUES_CLAUDE_CMD_DEFAULT, read at call time.
+preflight_claude_cmd_unusable() {
+  if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
+    # shellcheck disable=SC2086
+    if ! preflight_probe_claude $RUN_ISSUES_CLAUDE_CMD; then
+      printf 'claude CLI probe failed (`%s --version` returned non-zero — the `claude` command is not usable; fix: %s)' \
+        "$RUN_ISSUES_CLAUDE_CMD" "$(preflight_install_hint claude)"
+      return 0
+    fi
+  else
+    local first="${RUN_ISSUES_CLAUDE_CMD%% *}"
+    if ! preflight_have "$first"; then
+      printf "claude driver '%s' not found on PATH (RUN_ISSUES_CLAUDE_CMD override)" "$first"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 # _preflight_probe_version <cmd-token...> — the shared probe body: stdin closed,
 # bounded by the timeout binary when one exists.
 _preflight_probe_version() {

@@ -28,6 +28,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 PRWATCH="$HERE/../pr-watch.sh"
 STATE_LIB="$HERE/../lib/state.sh"
 
@@ -236,7 +238,7 @@ run_watch; show C
 merged || bad C "not merged"
 [ "$(seq_calls)" = "SREVIEW " ] || bad C "calls '$(seq_calls)', want one semantic review"
 [ "$(listings)" = 1 ] || bad C "REST listings $(listings), want exactly 1"
-P="$RD/08-semantic-review.prompt"
+P="$RD/10-semantic-review.prompt"
 grep -q 'Sisar-PR #77' "$P" || bad C "prompt does not name sibling #77"
 grep -q '+retry_with_backoff() { :; }  # sibling 77' "$P" || bad C "prompt does not carry the sibling's diff"
 grep -q 'Sisar-PR #76' "$P" && bad C "prompt names the non-overlapping sibling #76"
@@ -269,8 +271,8 @@ merged || bad D "not merged"
 [ "$(seq_calls)" = "SREVIEW SFIX SREVIEW " ] || bad D "calls '$(seq_calls)'"
 [ -s "$WORK/ci.log" ] || bad D "CI not revalidated after the fix"
 [ "$(events merge_gate_fix_pushed)" = 1 ] || bad D "no merge_gate_fix_pushed"
-grep -q 'lib/a.sh:2' "$RD/09-semantic-fix.prompt" || bad D "fix prompt does not carry the finding"
-grep -q 'Sisar-PR #77' "$RD/09-semantic-fix.prompt" || bad D "fix prompt does not carry the sibling"
+grep -q 'lib/a.sh:2' "$RD/11-semantic-fix.prompt" || bad D "fix prompt does not carry the finding"
+grep -q 'Sisar-PR #77' "$RD/11-semantic-fix.prompt" || bad D "fix prompt does not carry the sibling"
 grep -q -- "--match-head-commit $SHA1" "$WORK/merge.log" || bad D "merge not bound to the fixed head"
 [ "$FAIL" = "$FB" ] && ok D "conflict fixed, revalidated, re-reviewed, merged"
 done_case
@@ -336,7 +338,7 @@ sibling 78 lib/c.sh
 : > "$WORK/merge.log"
 run_watch; show H3
 [ "$(calls SREVIEW)" = 2 ] || bad H3 "same head against a new base not reviewed again ($(calls SREVIEW))"
-grep -q 'Sisar-PR #78' "$RD/08-semantic-review.prompt" || bad H3 "new sibling not in the prompt"
+grep -q 'Sisar-PR #78' "$RD/10-semantic-review.prompt" || bad H3 "new sibling not in the prompt"
 merged || bad H3 "not merged"
 [ "$FAIL" = "$FB" ] && ok H "record keyed by head and base"
 done_case

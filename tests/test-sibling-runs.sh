@@ -18,12 +18,17 @@
 #       run is listed once, as the local run.
 #   (g) both cycle-review prompts carry the {{SIBLING_RUNS}} placeholder, and
 #       orchestrate.sh renders it into both.
+#   (h) the optional rows file (issue #338): written with the rendered rows on a
+#       good read, empty when there are no siblings, absent on a read failure.
 #
 # Run: bash tests/test-sibling-runs.sh
 
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
+export RUN_ISSUES_CLAIM_VERIFY_DELAY=0
 ROOT="$HERE/.."
 
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
@@ -122,13 +127,13 @@ exec "$REAL_GIT" "\$@"
 SH
 chmod +x "$BIN/git"
 
-# section <mode> — runs sibling_runs_section as the run "self" (issue 30).
+# section <mode> [<rows-file>] — runs sibling_runs_section as the run "self" (issue 30).
 section() {
   printf '%s' "$1" > "$GH_MODE"
   : > "$GH_LOG"
   ( PATH="$BIN:$PATH"
     . "$ROOT/lib/sibling-runs.sh"
-    sibling_runs_section "$REPO" "acme/app" origin "$RUNS/self" 30 ) 2>"$WORK/stderr"
+    sibling_runs_section "$REPO" "acme/app" origin "$RUNS/self" 30 ${2:+"$2"} ) 2>"$WORK/stderr"
 }
 list() {
   printf '%s' "$1" > "$GH_MODE"
@@ -210,6 +215,20 @@ if grep -q '{{SIBLING_RUNS}}' "$ROOT/prompts/01-cycle-review.md" \
   ok g "both review prompts carry the section and orchestrate.sh renders it into both"
 else
   bad g "placeholder or render argument missing"
+fi
+
+# (h)
+ROWS_F="$WORK/rows-full.jsonl"; ROWS_N="$WORK/rows-none.jsonl"; ROWS_X="$WORK/rows-fail.jsonl"
+section full "$ROWS_F" >/dev/null
+mv "$RUNS/r20" "$WORK/r20.off"
+section none "$ROWS_N" >/dev/null
+mv "$WORK/r20.off" "$RUNS/r20"
+section fail "$ROWS_X" >/dev/null
+if [ -f "$ROWS_F" ] && [ "$(jq -s -c '[.[] | .issue] | sort' "$ROWS_F")" = "$(printf '%s\n' "$ROWS" | jq -s -c '[.[] | .issue] | sort')" ] \
+   && [ -f "$ROWS_N" ] && [ ! -s "$ROWS_N" ] && [ ! -e "$ROWS_X" ]; then
+  ok h "rows file: the rendered rows on a good read, empty for none, absent on failure"
+else
+  bad h "full='$(cat "$ROWS_F" 2>/dev/null)' none_exists=$([ -f "$ROWS_N" ] && echo y) fail_exists=$([ -e "$ROWS_X" ] && echo y)"
 fi
 
 exit "$FAIL"

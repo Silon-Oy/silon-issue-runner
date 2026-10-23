@@ -33,6 +33,9 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
+export RUN_ISSUES_CLAIM_VERIFY_DELAY=0
 ORCH="$HERE/../orchestrate.sh"
 WORKTREE_LIB="$HERE/../lib/worktree.sh"
 PRWATCH="$HERE/../pr-watch.sh"

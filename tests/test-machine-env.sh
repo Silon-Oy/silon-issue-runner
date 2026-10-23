@@ -37,6 +37,9 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
+export RUN_ISSUES_CLAIM_VERIFY_DELAY=0
 ROOT="$HERE/.."
 LIB="$ROOT/lib/machine-env.sh"
 
@@ -55,7 +58,7 @@ check() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1 — got '$2', want '
 # exports these into the agents it launches, so a run of this suite from inside
 # an orchestrated step inherits them and turns cases 3, 8 and 10 red for a reason
 # that has nothing to do with the code under test.
-unset RUN_ISSUES_CLAUDE_CMD RUN_ISSUES_CLAUDE_MODEL RUN_ISSUES_CLAUDE_TIMEOUT RUN_ISSUES_ENV_FILE
+unset RUN_ISSUES_CLAUDE_CMD RUN_ISSUES_CLAUDE_MODEL RUN_ISSUES_CLAUDE_TIMEOUT
 
 # ---------------------------------------------------------------------------
 # Unit cases: source the lib in a subshell per case so leaked globals cannot
