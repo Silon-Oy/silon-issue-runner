@@ -773,6 +773,14 @@ Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as block
   poistamalla. Vastaavasti: jos issue ei lähde ajoon eikä yksikään estolabeli ole päällä,
   tarkista riippuvuudet issuen omasta näkymästä.
 
+**Runner voi lisätä kaaren itse (sarjoitus, issue #338).** Kun cycle review toteaa, että saman
+repon toinen, aiemmin aloitettu ajo toteuttaa olennaisesti saman muutoksen, se palauttaa
+`SERIALIZE #N`. Runner lisää silloin issuelle riippuvuuden "blocked by #N", kommentoi
+perustelun, vapauttaa varauksen ja lopettaa ajon (exit 14) **ilman `needs-human`-labelia**:
+issue lähtee ajoon itsestään, kun `#N` sulkeutuu. Kaari lisätään vain aiemmin aloitettuun
+sisarajoon, joten sarjoitus ei voi muodostaa riippuvuussykliä. Jos kaaren kirjoitus
+epäonnistuu, ajo jatkuu tavallisena. Runner ei koskaan pura olemassa olevia kaaria.
+
 **Työjärjestys ketjun rakentamiseen:** luo issuet → merkitse riippuvuudet GitHubin omalla
 "blocked by" -toiminnolla → lisää jokaiselle `auto-run`. Automaatio etenee ketjussa yksi
 lenkki kerrallaan itsestään.
@@ -1202,8 +1210,8 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 `implementer_BLOCKED`, `clarification_loop_exhausted`, `git_push_failed`,
 `pr_create_failed`, `stalled_in_<vaihe>`. Näistä kaikki jättävät issuelle
 `needs-human`-labelin; kolme S4-syytä on avattu korjauskomentoineen kohdassa (e) yllä.
-Poikkeus on `blocked_by_dependency` (exit 9), joka on odotustila eikä labeloi mitään —
-ajo jatkuu itsestään kun estäjä sulkeutuu.
+Poikkeukset ovat `blocked_by_dependency` (exit 9) ja `serialized_behind_sibling` (exit 14),
+jotka ovat odotustiloja eivätkä labeloi mitään — ajo jatkuu itsestään kun estäjä sulkeutuu.
 
 ### Exit-koodit
 
