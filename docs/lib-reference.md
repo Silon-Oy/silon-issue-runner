@@ -19,7 +19,8 @@ lukuihin.
 | `claude-profiles.sh` | Claude-tilausprofiilien järjestetty lista (#295): jäsennys, tunnistetiedoston tarkistus, profiilikohtainen täysi-tila `deadline-file.sh`:n päällä, ensimmäisen vapaan valinta ja aikaisin nollautuminen. Vaihtosilmukka asuu `claude-call.sh`:n `call_claude`ssa |
 | `deadline-file.sh` | Koneen laajuisten perääntymisporttien yhteinen yksirivinen `<deadline> <tag>`-tilatiedosto: fail-soft luku, atominen kirjoitus. Jaettu `rate-limit.sh`:n ja `usage-limit.sh`:n kesken |
 | `env-bootstrap.sh` | Pakettimanagerin ja kohderepon `.nvmrc`-Node-version tunnistus S7b:n fail-fast-asennusporttiin |
-| `epic.sh` | Epic-tason automaatio: ajolabelien propagointi, `needs-human`-eskalaatio, valmiuskommentti. Best-effort (aina rc 0) |
+| `epic.sh` | Epic-tason automaatio: ajolabelien propagointi, `needs-human`-eskalaatio, valmiuskommentti. Best-effort (aina rc 0); `_epic_child_pr_refs` erottaa lukuvirheen (rc 1) "ei PR:iä" -tuloksesta, ja kutsuja päättää sietääkö sen |
+| `epic-review.sh` | Epicin katselmusaineiston kokoaja (`epic_review_collect`): kriteerit, lapsijoukko, PR-viitteet ja yhdistetty muutospinta yhtenä markdown-lohkona. **Fail-closed** — mikä tahansa lukuvirhe ⇒ rc 1 ja tyhjä tuloste. Vain luku, ei agenttia eikä kirjoituksia |
 | `git-remote.sh` | Multi-remote-apurit: yksi klooni voi pollata useaa GitHub-orgia. Myös jaettu aikarajallisen `git fetch`in primitiivi (`runner_git_fetch_bounded`), jota `worktree.sh:refresh_origin` ja `version.sh:runner_fetch_throttled` käyttävät |
 | `github-app-auth.sh` | Opt-in GitHub App -identiteetti. Kattaa kirjoitukset **ja** raskaimmat luvut |
 | `fix-rate.sh` | Koosteen jälkikorjausmittari (#314): watchlist-repojen jaksolla yhdistetyt `auto-run/`-PR:t sekä niistä peruutetut ja jälkikorjatut. Kolme REST-listausta per repo, sivutus vain jakson verran (§5.4); luokittelu on puhdas jq-funktio (`fix_rate_classify`). Fail-soft |
