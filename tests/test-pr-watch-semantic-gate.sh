@@ -20,6 +20,15 @@
 #                                  reviewed again; an unchanged base does not
 #   I) both gates               -> a semantic fix moves the head, so the security
 #                                  gate reviews the new head too
+#   J) listing pages (#370)     -> a full page still inside the window reads the
+#                                  next one (exactly 2 listings); a listing that
+#                                  still reaches the window at the page cap is
+#                                  not a pass (exactly SEMANTIC_LIST_MAX_PAGES)
+#   K) permanent listing error  -> 404 repeated: rc 4 twice, then needs-human +
+#                                  a comment naming it on the third tick
+#   L) base moves during the fix's CI wait, semantic gate alone -> the base is
+#                                  checked again before the merge and the new
+#                                  sibling is reviewed
 #
 # Runs use a FOREIGN host so P9 local cleanup is skipped and the run-dir survives.
 #
@@ -94,8 +103,15 @@ case "\$1" in
   api)
     if printf '%s' "\$*" | grep -q 'pulls?state=closed'; then
       printf '%s\n' "\$*" >> "$WORK/api.log"
-      [ -f "$WORK/pulls-fail" ] && { echo "HTTP 502" >&2; exit 1; }
-      cat "$WORK/pulls.json"; exit 0
+      if [ -f "$WORK/pulls-fail" ]; then
+        if [ -s "$WORK/pulls-fail" ]; then cat "$WORK/pulls-fail" >&2; else echo "HTTP 502" >&2; fi
+        exit 1
+      fi
+      p=\$(printf '%s' "\$*" | sed -nE 's/.*[?&]page=([0-9]+).*/\\1/p')
+      if [ -f "$WORK/pulls-page-\$p.json" ]; then cat "$WORK/pulls-page-\$p.json"
+      elif [ "\${p:-1}" = 1 ]; then cat "$WORK/pulls.json"
+      else echo '[]'; fi
+      exit 0
     fi
     printf '%s\n' "\$*" >> "$WORK/labels.log"; exit 0 ;;
   auth) exit 0 ;;
@@ -108,6 +124,7 @@ case "\$1 \$2" in
         headRefName:"auto-run/x-5",baseRefName:"main"}'
     else
       echo ci-poll >> "$WORK/ci.log"
+      [ -f "$WORK/on-ci.sh" ] && { bash "$WORK/on-ci.sh" >/dev/null 2>&1; rm -f "$WORK/on-ci.sh"; }
       echo '{"headRefOid":"'"\$(git -C "$WT" rev-parse HEAD)"'","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
     fi
     ;;
@@ -149,22 +166,36 @@ SH
 # (one rebase-style commit, dated inside the run's window) and list it in the
 # closed-PR listing the gh shim serves.
 sibling() {
-  local num="$1" file="$2" ref="${3:-auto-run/sibling-$1}" sha
-  (
-    cd "$REPO"
-    git checkout -q main
-    git pull -q origin main
-    mkdir -p "$(dirname "$file")"
-    printf 'retry_with_backoff() { :; }  # sibling %s\n' "$num" >> "$file"
-    git add -A
-    GIT_COMMITTER_DATE="$SIB_DATE" GIT_AUTHOR_DATE="$SIB_DATE" git commit -qm "feat: sibling $num"
-    git push -q origin main
-  )
-  sha=$(git -C "$REPO" rev-parse HEAD)
-  local tmp; tmp=$(mktemp)
-  jq --argjson n "$num" --arg r "$ref" --arg s "$sha" \
-    '. + [{number:$n, merged_at:"2026-07-01T00:00:00Z", merge_commit_sha:$s, head:{ref:$r}}]' \
-    "$WORK/pulls.json" > "$tmp" && mv "$tmp" "$WORK/pulls.json"
+  bash <(sibling_script "$@")
+}
+
+# sibling_script <pr-number> <file> [<head-ref>] — sibling's work as a standalone
+# script, so the gh shim can also run it mid-tick (case L).
+sibling_script() {
+  local num="$1" file="$2" ref="${3:-auto-run/sibling-$1}"
+  cat <<SH
+set -e
+cd "$REPO"
+git checkout -q main
+git pull -q origin main
+mkdir -p "\$(dirname "$file")"
+printf 'retry_with_backoff() { :; }  # sibling %s\\n' "$num" >> "$file"
+git add "$file"  # not -A: the run-dir lives in this checkout
+GIT_COMMITTER_DATE="$SIB_DATE" GIT_AUTHOR_DATE="$SIB_DATE" git commit -qm "feat: sibling $num"
+git push -q origin main
+sha=\$(git rev-parse HEAD)
+tmp=\$(mktemp)
+jq --argjson n "$num" --arg r "$ref" --arg s "\$sha" \\
+  '. + [{number:\$n, merged_at:"2026-07-01T00:00:00Z", updated_at:"2026-07-01T00:00:00Z", merge_commit_sha:\$s, head:{ref:\$r}}]' \\
+  "$WORK/pulls.json" > "\$tmp" && mv "\$tmp" "$WORK/pulls.json"
+SH
+}
+
+# full_page <file> — a full listing page (SEMANTIC_LIST_PER_PAGE rows) of closed,
+# unmerged non-runner PRs, every one updated inside the run's window.
+full_page() {
+  jq -nc '[range(1000; 1100) | {number: ., merged_at: null, merge_commit_sha: null,
+           updated_at: "2026-07-02T00:00:00Z", head: {ref: "feature/x-\(.)"}}]' > "$1"
 }
 
 run_watch() {
@@ -362,6 +393,94 @@ merged || bad I "not merged"
 [ "$(seq_calls)" = "REVIEW SREVIEW SFIX SREVIEW REVIEW " ] || bad I "calls '$(seq_calls)'"
 grep -q -- "--match-head-commit $SHA1" "$WORK/merge.log" || bad I "merge not bound to the final head"
 [ "$FAIL" = "$FB" ] && ok I "both gates reviewed the final head"
+done_case
+
+# ===========================================================================
+echo "=== J: listing pages ==="
+FB=$FAIL
+setup J
+sibling 77 lib/b.sh
+mv "$WORK/pulls.json" "$WORK/pulls-page-2.json"
+full_page "$WORK/pulls-page-1.json"
+run_watch; show J1
+[ "$RC" = 0 ] || bad J1 "rc $RC, want 0"
+[ "$(listings)" = 2 ] || bad J1 "listings $(listings), want exactly 2"
+grep -q 'page=1' "$WORK/api.log" && grep -q 'page=2' "$WORK/api.log" || bad J1 "pages not requested: $(cat "$WORK/api.log")"
+[ "$(seq_calls)" = "SREVIEW " ] || bad J1 "sibling on page 2 not reviewed: '$(seq_calls)'"
+grep -q 'Sisar-PR #77' "$RD/10-semantic-review.prompt" 2>/dev/null || bad J1 "prompt does not name the page-2 sibling"
+merged || bad J1 "not merged"
+done_case
+setup J
+sibling 77 lib/b.sh
+full_page "$WORK/pulls-page-1.json"; full_page "$WORK/pulls-page-2.json"; full_page "$WORK/pulls-page-3.json"
+cp "$WORK/pulls.json" "$WORK/pulls-page-4.json"
+run_watch; show J2
+[ "$RC" = 4 ] || bad J2 "rc $RC, want 4"
+merged && bad J2 "merged although the listing was cut short"
+[ "$(listings)" = 3 ] || bad J2 "listings $(listings), want exactly SEMANTIC_LIST_MAX_PAGES (3)"
+[ -s "$WORK/calls.log" ] && bad J2 "agent called: $(seq_calls)"
+grep -q '"kind":"transient"' "$RD/state.jsonl" || bad J2 "cut-short listing not recorded as an undecided trigger"
+[ "$FAIL" = "$FB" ] && ok J "pages read while inside the window, bounded by the cap"
+done_case
+
+# ===========================================================================
+echo "=== K: permanent listing error -> hold after it repeats ==="
+FB=$FAIL
+setup K
+sibling 77 lib/b.sh
+echo 'gh: Not Found (HTTP 404)' > "$WORK/pulls-fail"
+for i in 1 2; do
+  run_watch; show "K$i"
+  [ "$RC" = 4 ] || bad "K$i" "rc $RC, want 4"
+  grep -q 'labels\[\]=needs-human' "$WORK/labels.log" && bad "K$i" "held before the failure repeated"
+done
+run_watch; show K3
+[ "$RC" = 10 ] || bad K3 "rc $RC, want 10"
+merged && bad K3 "merged without knowing the siblings"
+grep -q 'labels\[\]=needs-human' "$WORK/labels.log" || bad K3 "needs-human not added"
+grep -q 'HTTP 404' "$WORK/comments.log" || bad K3 "comment does not name the error"
+grep -q 'toistui 3 kertaa' "$WORK/comments.log" || bad K3 "comment does not say it repeated"
+[ "$(events merge_gate_held)" = 1 ] || bad K3 "no merge_gate_held event"
+[ -s "$WORK/calls.log" ] && bad K3 "agent called"
+[ "$FAIL" = "$FB" ] && ok K "a repeated 404 is held for a human, not parked"
+done_case
+
+echo "=== K': transient listing error -> never held ==="
+FB=$FAIL
+setup K2
+sibling 77 lib/b.sh
+touch "$WORK/pulls-fail"
+for i in 1 2 3 4; do
+  run_watch; show "K'$i"
+  [ "$RC" = 4 ] || bad "K'$i" "rc $RC, want 4"
+done
+grep -q 'labels\[\]=needs-human' "$WORK/labels.log" && bad "K'" "transient failure held"
+[ "$(grep -c '"kind":"transient"' "$RD/state.jsonl")" = 4 ] || bad "K'" "transient failures not recorded as such"
+[ "$FAIL" = "$FB" ] && ok "K'" "a transient listing error keeps retrying"
+done_case
+
+# ===========================================================================
+echo "=== L: sibling merged during the fix's CI wait -> base rechecked ==="
+FB=$FAIL
+setup L
+sibling 77 lib/b.sh
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$FINDING_DUP" > "$WORK/sreview-1.txt"
+printf 'MERGE_GATE_RESULT: CLEAN\n' > "$WORK/sreview-2.txt"
+printf 'FINDING: high | high | lib/a.sh:2 | #78: use_retry duplicates the sibling 78 helper\nMERGE_GATE_RESULT: FINDINGS\n' > "$WORK/sreview-3.txt"
+cat > "$WORK/sfix.sh" <<'SH'
+printf 'v0\nuse_retry() { retry_with_backoff; }\n' > lib/a.sh
+git add lib/a.sh
+git -c user.email=s@t.t -c user.name=s commit -qm "refactor: use the merged retry_with_backoff"
+SH
+sibling_script 78 lib/c.sh > "$WORK/on-ci.sh"
+run_watch; show L
+[ -f "$WORK/on-ci.sh" ] && bad L "the CI wait never ran the sibling merge"
+[ "$RC" = 10 ] || bad L "rc $RC, want 10"
+merged && bad L "merged without reviewing the sibling merged during the CI wait"
+[ "$(seq_calls)" = "SREVIEW SFIX SREVIEW SREVIEW " ] || bad L "calls '$(seq_calls)'"
+grep -q 'Sisar-PR #78' "$RD/10-semantic-review.prompt" || bad L "the re-review did not see sibling #78"
+grep -q '#78' "$WORK/comments.log" || bad L "hold comment does not name sibling #78"
+[ "$FAIL" = "$FB" ] && ok L "the base is checked again after the fix, before the merge"
 done_case
 
 echo "----------------------------------------"
