@@ -1190,19 +1190,8 @@ _pr_force_push() {
 # Also the merge gate's launch check (issue #334); [<what>] names the caller in
 # the log line.
 pr_ci_repair_preflight() {
-  local what="${1:-CI-repair}" reason=""
-  if [ "$RUN_ISSUES_CLAUDE_CMD" = "$RUN_ISSUES_CLAUDE_CMD_DEFAULT" ]; then
-    # shellcheck disable=SC2086
-    if ! preflight_probe_claude $RUN_ISSUES_CLAUDE_CMD; then
-      reason="claude CLI probe failed (\`$RUN_ISSUES_CLAUDE_CMD --version\` returned non-zero — the \`claude\` command is not usable; fix: $(preflight_install_hint claude))"
-    fi
-  else
-    local first="${RUN_ISSUES_CLAUDE_CMD%% *}"
-    if ! preflight_have "$first"; then
-      reason="claude driver '$first' not found on PATH (RUN_ISSUES_CLAUDE_CMD override)"
-    fi
-  fi
-  [ -z "$reason" ] && return 0
+  local what="${1:-CI-repair}" reason
+  reason=$(preflight_claude_cmd_unusable) || return 0
   log "$what unavailable: $reason"
   return 1
 }
