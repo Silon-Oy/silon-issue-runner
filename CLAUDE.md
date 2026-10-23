@@ -160,13 +160,13 @@ joka portissa, ei sattumaa.
   ettei ajo käynnisty toimivalla koneella. Sama periaate koskee muidenkin porttien
   ohitusmuuttujia (`docs/env-reference.md`).
 
-### Claimin jälkeinen esto labeloidaan aina
+### Claimin jälkeinen esto labeloidaan — paitsi odotustila
 
-Terminaalinen esto claimin jälkeen lisää issuelle situation-kommentin lisäksi **aina**
-`needs-human`-labelin (`_add_needs_human_label`) — paitsi sarjoitus (exit 14), joka on S2b:n
-tavoin itsestään jatkuva odotustila. **Pelkkä kommentti ei riitä: se ei ole
-suodatettava**, joten jumiin jäänyt ajo näytti GitHubissa samalta kuin normaali kesken oleva —
-yksi hiljainen esto pysäytti kuuden issuen riippuvuusketjun yön yli. `cleanup-run.sh` poistaa
+Terminaalinen esto claimin jälkeen lisää issuelle situation-kommentin lisäksi
+`needs-human`-labelin (`_add_needs_human_label`). Poikkeus on sarjoitus (exit 14): se on S2b:n
+tavoin itsestään jatkuva odotustila, joten se ei labeloidu — mutta jos varaus jää voimaan, se
+labeloituu (exit 15). **Pelkkä kommentti ei riitä: se ei ole suodatettava**, joten jumiin
+jäänyt ajo näytti GitHubissa samalta kuin normaali kesken oleva — yksi hiljainen esto pysäytti kuuden issuen riippuvuusketjun yön yli. `cleanup-run.sh` poistaa
 labelin, joten elinkaari on suljettu.
 
 ### Varaus on label, ei assignaatio (#99) — reititys on (#238)
@@ -176,7 +176,8 @@ labelin, joten elinkaari on suljettu.
 "runnerin varaus" eivät olleet erotettavissa. Varaus on nyt **vain automaation kirjoittama**
 `auto-claimed`-label, ja poiminta suodattaa sillä (`no:assignee` poistui) — käsin assignattu
 issue lähtee ajoon. `verify_claim`in sääntö: **assignee-joukko claimin jälkeen == joukko ennen
-∪ {@me}**. Etukäteen tehty assignaatio ei kaada ajoa, kilpaileva toinen tili huomataan yhä.
+∪ {@me}**. Etukäteen tehty assignaatio ei kaada ajoa, kilpaileva toinen tili huomataan yhä,
+eikä perääntyminen poista sitä (`run.json`:n `self_preassigned`, #357).
 
 Assignee palasi poimintaan **reitityksenä** (#238): per-repo `assignees` ANDataan labeleihin —
 **opt-in, ja tyhjä lista ei suodata mitään**; vastakkainen luenta pysäyttäisi repon hiljaa ja

@@ -42,6 +42,11 @@
 #   --cache-ttl <s>    with --github: cache freshness window (default 300, env
 #                      RUN_ISSUES_STATUS_CACHE_TTL).
 #
+# Running audits (issue #360): the top-level audits[] list — {kind, repo_slug,
+# session, age_seconds} per live run-issues-audit-* tmux session — and
+# totals.audits. Additive (schema_version stays 1), local, always present: []
+# without tmux. An audit has no run-dir, so it is not a run and never in runs[].
+#
 # Exit codes:
 #   0  read OK
 #   1  usage error (unknown flag / bad value)
@@ -106,6 +111,10 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 # limit. Read-only — status.sh never writes the gate file (§5.1's rule).
 # shellcheck source=lib/usage-limit.sh
 . "$RUN_ISSUES_HOME/lib/usage-limit.sh"
+# audit_session_parse (issue #360): running audit sessions are listed through
+# the SAME name rule the poller spawns them under, never a second derivation.
+# shellcheck source=lib/audit-schedule.sh
+. "$RUN_ISSUES_HOME/lib/audit-schedule.sh"
 # --github enrichment: pr_decide / pr_ci_state (pr-watch-lib.sh), gha_with_token
 # (github-app-auth.sh), the shared epic child-set resolver (issue.sh's
 # list_epic_children — issue #91: the view resolves epic children through the SAME
@@ -460,6 +469,39 @@ RUNNER_JSON="$(jq -nc \
     pin_age_seconds: (if $pinepoch == "" then null
                       else (($now - ($pinepoch | tonumber)) as $a | if $a < 0 then 0 else $a end) end)
   } + $rl + $ul' 2>/dev/null || printf '{"version":"?","behind_origin":null,"pinned_version":null,"update_state":"unknown","pin_age_seconds":null,"rate_limited_until":null,"rate_limit_backoff_seconds":null,"usage_limited_until":null,"usage_limit_wait_seconds":null}')"
+
+# ---- running audit sessions (issue #360) -------------------------------------
+# A scheduled audit (#340) has no run-dir but takes a slot under the poller's
+# run-issues-* cap, so without this list the page showed fewer runs than the
+# cap was spending. ONE `tmux ls` for the whole document — O(running sessions),
+# no run-dir and no gh read (CLAUDE.md §5.4). No tmux / no server => [].
+# --repo narrows the list to that repo's slugs like the rest of the scan.
+AUDITS_TSV="$TMPD/audits.tsv"
+: > "$AUDITS_TSV"
+REPO_SLUGS=" $(cut -f4 "$OWNERS_TSV" 2>/dev/null | tr '\n' ' ')"
+# An idle repo (no run-dir) is where audits typically run, and OWNERS_TSV only
+# knows repos with runs — so the filtered repo's own remotes supply its slugs.
+if [ -n "$REPO_FILTER" ] && [ -d "$REPO_FILTER" ]; then
+  for a_rem in $(git -C "$REPO_FILTER" remote 2>/dev/null); do
+    REPO_SLUGS="$REPO_SLUGS$(repo_slug "$REPO_FILTER" "$a_rem" 2>/dev/null) "
+  done
+fi
+while read -r a_name a_created; do
+  parsed="$(audit_session_parse "$a_name")" || continue
+  a_kind="${parsed%% *}"
+  a_slug="${parsed#* }"
+  if [ -n "$REPO_FILTER" ]; then
+    case "$REPO_SLUGS" in *" $a_slug "*) ;; *) continue ;; esac
+  fi
+  case "$a_created" in ''|*[!0-9]*) a_created="" ;; esac
+  printf '%s\t%s\t%s\t%s\n' "$a_kind" "$a_slug" "$a_name" "$a_created" >> "$AUDITS_TSV"
+done < <(tmux ls -F '#{session_name} #{session_created}' 2>/dev/null || true)
+AUDITS_JSON="$(jq -R -s -c --argjson now "$NOW_EPOCH" '
+  split("\n") | map(select(length > 0) | split("\t")
+    | {kind: .[0], repo_slug: .[1], session: .[2],
+       age_seconds: (if .[3] == "" then null
+                     else (($now - (.[3] | tonumber)) as $a | if $a < 0 then 0 else $a end) end)})
+  | sort_by(.repo_slug, .kind)' "$AUDITS_TSV" 2>/dev/null || echo '[]')"
 
 # ---- optional GitHub enrichment (--github) ----------------------------------
 # Fill each run's `github` sub-object from `gh pr list` ONCE per owner/repo,
@@ -988,11 +1030,13 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
         ([\$runs_final[] | select(.class == \"attention\") | .age_seconds | select(. != null)]
          | if length == 0 then null else max end),
       archived_runs: \$archived,
+      audits: (\$audits | length),
       degraded: (\$read_errors | length > 0)
     },
     runs: \$runs_final,
     recent_usage: \$recent_usage,
     epics: \$epics,
+    audits: \$audits,
     read_errors: \$read_errors
   }
 "
@@ -1004,6 +1048,7 @@ DOC="$(jq -n \
   --slurpfile state "$TMPD/state.json" \
   --slurpfile ghmap "$TMPD/ghmap.json" \
   --argjson epics "$EPICS_JSON" \
+  --argjson audits "$AUDITS_JSON" \
   --argjson runner "$RUNNER_JSON" \
   --argjson now "$NOW_EPOCH" \
   --argjson stale "$STALE_AFTER" \
@@ -1088,6 +1133,15 @@ else
     '"\(.totals.by_class.running) \(.totals.by_class.stalled) \(.totals.by_class.pr_in_flight)"')"
   printf '%sKÄYNNISSÄ%s %s · %sJUMISSA%s %s · %sPR MATKALLA%s %s\n\n' \
     "$C_GRN" "$C_RESET" "$n_run" "$C_YEL" "$C_RESET" "$n_stall" "$C_GRN" "$C_RESET" "$n_pr"
+
+  # Running audits (#360): they take a slot under the cap without being runs.
+  n_aud="$(printf '%s' "$DOC" | jq -r '.totals.audits')"
+  if [ "$n_aud" != "0" ]; then
+    printf '%sAUDITOINNIT KÄYNNISSÄ (%s)%s\n' "$C_BOLD" "$n_aud" "$C_RESET"
+    printf '%s' "$DOC" | jq -r '.audits[]
+      | "  \(.repo_slug)  \(.kind)  \(if .age_seconds == null then "?" else "\((.age_seconds/60)|floor) min" end)"'
+    printf '  %spysäytys: tmux kill-session -t run-issues-audit-<laji>-<repo-slug>%s\n\n' "$C_DIM" "$C_RESET"
+  fi
 
   # Cleanup queue collapsed to a per-repo counter.
   n_clean="$(printf '%s' "$DOC" | jq -r '.totals.by_class.cleanup')"

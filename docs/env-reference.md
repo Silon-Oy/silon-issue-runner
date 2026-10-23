@@ -33,7 +33,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_ENV_BOOTSTRAP_TIMEOUT` | `1200` | S7b:n aikakatto |
 | `RUN_ISSUES_FETCH_TIMEOUT` | `120` | S4:n `refresh_origin`-haun (`git fetch`) aikakatto sekunteina (#298). Estää roikkuvaa yhteyttä jumittamasta ajoa S4:ään pollerin tuntisen liveness-rajan asti. Voimassa vain kun GNU `timeout`/`gtimeout` löytyy (`preflight_timeout_bin`); ilman sitä haku on rajaton, kuten `runner_fetch_throttled` ja `claude-call.sh` dokumentoivat. Aikakatkaistu haku palautuu koodilla 1 kuten muukin fetch-virhe, ja `origin-fetch.log` erottaa aikakatkaisun auth-/verkkovirheestä |
 | `RUN_ISSUES_NVM_SH` | *(asettamatta)* = `$NVM_DIR/nvm.sh` → `/opt/homebrew/opt/nvm/nvm.sh` | Polku nvm:n `nvm.sh`-integraatioon, jonka `ensure_node_runtime` (npx-ajuri) ja `select_node_runtime` (kohderepon `.nvmrc`-Noden aktivointi, #287) sourceavat. Asetettuna se on **ainoa** ehdokas — osumaton override ei valu oletusehdokkaisiin (sama sääntö kuin `RUN_ISSUES_WATCHLIST`illa). Ensisijaisesti **testien injektiopiste**: pitää testit hermeettisinä koneen oikeaa nvm-asennusta vasten. Käytettävissä myös operaattorin ohituksena, jos nvm on ei-standardissa sijainnissa |
-| `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Koneistokohtainen env-tiedosto |
+| `RUN_ISSUES_ENV_FILE` | `$HOME/.config/run-issues/env` | Koneistokohtainen env-tiedosto. Tyhjä arvo ⇒ oletus, joten testit osoittavat sen olemattomaan polkuun omassa puussaan eivätkä tyhjään arvoon (#358, vartija `tests/test-env-hermeticity.sh`) |
 | `RUN_ISSUES_LOCK_ROOT` | macOS: `$HOME/Library/Application Support/run-issues/locks`; muut: `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/locks` | Lukkohakemistojen juuri. Oletus haarautuu `uname -s`:llä (`lib/paths.sh`: `default_lock_root`); haara on `Darwin` ⇒ macOS, **kaikki muu** ⇒ XDG, jotta myös `MINGW64_NT-*` osuu oikein |
 | `RUN_ISSUES_LOCK_STALE_SECS` | `86400` | Lukon vanhenemisraja |
 | `RUN_ISSUES_SITUATION_ARTIFACT_MAX` | `60000` | Tilanneartefaktin kokokatto (tavua) |
@@ -47,6 +47,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_CLAUDE_PROFILES` | *(tyhjä)* = koneen oma claude-kirjautuminen | Järjestetty, välilyönnein tai rivinvaihdoin eroteltu lista `nimi=polku`-tilausprofiileja (#295, `lib/claude-profiles.sh`). Polku osoittaa `claude setup-token` -tunnisteen sisältävään tiedostoon (mode 600); tunniste annetaan vain claude-prosessille `CLAUDE_CODE_OAUTH_TOKEN`ina. Käyttöraja merkitsee profiilin täydeksi nollautumiseen asti (koneen jaettu tila `$RUN_ISSUES_LOG_DIR/.claude-usage-limit.profile-<nimi>`), ja sama askel ajetaan heti seuraavalla vapaalla profiililla; koneen käyttörajaportti laukeaa vasta kun kaikki ovat täynnä, aikaisimpaan nollautumiseen. Rikkinäinen tunnistetiedosto ⇒ profiili ohitetaan lokirivillä, **ei** pudoteta oletuskirjautumiseen (fail-closed). Luetaan `call_claude`ssa (myös PR-vahdin agenteissa), joten paikka on `env`, ei `poller.env` |
 | `RUN_ISSUES_USAGE_LIMIT_DETECTION` | `1` | `0` = poista Clauden käyttörajan tunnistus **ja** sen portti käytöstä (#294). Hätävara samalla perusteella kuin `RUN_ISSUES_RATE_LIMIT_BACKOFF`: uusi portti ei saa olla syy siihen, ettei toimiva kone aja. Luetaan `call_claude`ssa (myös PR-vahdin agenteissa), `poller.sh`:ssa ja `status.sh`:ssa (`lib/usage-limit.sh`) |
 | `RUN_ISSUES_USAGE_LIMIT_BACKOFF` | `3600` | Sekunnit, jotka kone odottaa käyttörajaan osumisen jälkeen, kun viestistä ei saada jäsennettyä nollautumisaikaa (#294). Ei-numeerinen tai `0` ⇒ oletus. Jäsennetty aika voittaa aina, ja siihen lisätään 60 s marginaali |
+| `RUN_ISSUES_CLAIM_VERIFY_DELAY` | `5` | **Testien injektiopiste**, ei käyttäjäkonfiguraatio. Sekunnit, jotka S3 odottaa `claim_issue`n ja `verify_claim`in välissä, jotta kilpaileva claim ehtii näkyä (#358). Testit asettavat sen nollaksi |
 | `RUN_ISSUES_SKIP_REPO_WRITE_CHECK` | `0` | `1` = ohita S0:n repo-kirjoitusoikeuden tarkistus (#256). S0 tarkistaa sillä identiteetillä, jolla ajo oikeasti kirjoittaa, että sillä on kirjoitusoikeus: henkilökohtainen tunnus `gh api repos/<owner/repo> --jq .permissions.push`illa (vähintään Write), GitHub App -tilassa Appin asennus `GET /repos/<owner/repo>/installation`illa (asennus-ID on konfiguroitu ja `issues`, `contents` sekä `pull_requests` ovat `write`). App-tilassa `permissions.push`ia ei käytetä, koska asennustunnuksella luettuna jokainen `permissions`-lippu on `false`. Read-only-tunnus kaatuisi muuten vasta varauslabelin tai pushin kohdalla. Fatal ja **fail-closed**: verkkovirhe tai epäselvä vastaus estää ajon; vain saavuttamaton App-identiteetti (avain tai JWT rikki) on varoitus. Sama hätävaraperuste kuin `RUN_ISSUES_SKIP_PREFLIGHT`illa. Vain uuden ajon poluilla; resume/restart/continue eivät tarkista (claim on jo ohitettu). Repo ilman jäsentyvää GitHub-remotea jää tarkistamatta — se kaatuu joka tapauksessa S1:n issue-haussa ennen claimia |
 
 ### Poller
@@ -353,8 +354,10 @@ saa sisäänrakennetun oletuksen.
 
 **Ajastus pollerista** (`lib/audit-schedule.sh`). Poller ajaa auditoinnin irrallisessa
 tmux-istunnossa `run-issues-audit-<laji>-<repo-slug>`. Istunto lasketaan samaan
-`global_max_concurrent`-kattoon kuin orkestraattoriajot. Täysi katto lykkää auditoinnin
-seuraavaan tikkiin, eikä lykkäystä kirjata. Ajastus koskee vain watchlistin repoja, se on
+`global_max_concurrent`-kattoon kuin orkestraattoriajot, ja `status.sh` (`audits[]`,
+`totals.audits`) sekä ohjaamo listaavat käynnissä olevat istunnot erikseen, koska ne eivät
+ole ajoja. Täysi katto lykkää auditoinnin seuraavaan tikkiin, ja lykkäys näkyy lokissa
+(`deferring <laji> audit`). Ajastus koskee vain watchlistin repoja, se on
 host-portin takana, eikä se käynnisty Clauden käyttörajan aikana. Käynnistyshetki kirjataan
 yksiriviseen tiedostoon `$RUN_ISSUES_LOG_DIR/.audit-last-<laji>-<repo-slug>`. Sen poistaminen
 pakottaa auditoinnin seuraavalla tikillä. Kirjaus tehdään käynnistyksessä, joten aina kaatuva
@@ -362,11 +365,38 @@ auditointi ei käynnisty joka tikillä. Istunto kirjaa lopputuloksensa viereen
 (`….result`: käynnistysaika ja exit-koodi). Käynnistys ilman onnistunutta lopputulosta
 (exit muu kuin 0 tai 5, tai istunto katkesi ennen kirjausta) yritetään uudelleen
 `RUN_ISSUES_AUDIT_RETRY_HOURS`-ajan (oletus 24 h) kuluttua eikä vasta koko välin päästä.
+**Pysäytys:** `tmux kill-session -t run-issues-audit-<laji>-<repo-slug>`. `stop-run.sh` ei
+koske auditointiin, koska sillä ei ole run-diriä. Katkaistu istunto ei kirjaa onnistunutta
+lopputulosta, joten se yritetään uudelleen `RUN_ISSUES_AUDIT_RETRY_HOURS`in kuluttua;
+pysyvä pois kytkentä on väli `0`. **Välitön uusinta:** poista `.audit-last-<laji>-<repo-slug>`.
+**Lokiin kerran:** jos väli on asetettu mutta repon `.claude/run-issues.json` on kelvoton tai
+sen `audit_interval_days` ei ole `0` tai positiivinen kokonaisluku (esim. `1.5`), poller
+kirjaa yhden rivin (`… audit not scheduled`). Sama vaimennus koskee rivejä "audit script not
+executable" ja "cannot record … audit start": rivi toistuu vasta, kun viesti muuttuu tai ehto
+on välillä poistunut (`.audit-last-….notice-<tag>`). Istunto saa pollerin
+`RUN_ISSUES_POLLER_ENV_FILE`-polun, joten auditointi lukee saman `poller.env`in kuin poller.
 **Tunnettu rajoite:** ajastus ei koordinoi koneiden välillä. Jos kaksi konetta valvoo samaa
 repoa ja repo asettaa välin, molemmat auditoivat sen ja voivat luoda samat löydösissuet.
 Valvo repoa auditoinnin osalta yhdellä koneella. Repon väli luetaan remoten oletushaaran viimeksi haetusta tilasta
 (`<remote>/HEAD`) ilman verkkokutsua. Skannerit ja agentti käyttävät yllä kuvattuja
 `RUN_ISSUES_GITLEAKS_BIN`-, `RUN_ISSUES_OSV_SCANNER_BIN`- ja `RUN_ISSUES_CLAUDE_*`-asetuksia.
+
+### Koherenssiauditointi (`coherence-audit.sh`, #342)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus samalla mekanismilla kuin tietoturva-auditoinnissa (`lib/audit-schedule.sh`, oma tilatiedosto `.audit-last-coherence-<repo-slug>`). **Kohderepon `.claude/run-issues.json` `.coherence.audit_interval_days` voittaa tämän** (`0` = pois). Sama arvo on ensimmäisen ajon ikkuna, kun kursoria ei vielä ole; käsiajossa ilman kumpaakaan ikkuna on 7 päivää. Skripti lukee arvon ympäristöstä, muuten `poller.env`:stä |
+| `RUN_ISSUES_COHERENCE_AUDIT_TIMEOUT` | `3600` | Auditointiagentin kutsun aikakatto sekunteina |
+| `RUN_ISSUES_COHERENCE_AUDIT_FETCH_TIMEOUT` | `300` | Remoten `git fetch`in aikakatto ennen auditointia |
+| `RUN_ISSUES_COHERENCE_AUDIT_MAX` | `60000` | Promptiin menevän muutospinnan kokokatto tavuina. Katkaisu näkyy aineistossa itsessään; ei-numeerinen arvo ⇒ oletus |
+
+Katselmoitava joukko on runnerin PR:t (head-haara `auto-run/`), jotka on mergetty remoten
+oletushaaraan kursorin jälkeen, epicistä riippumatta. **Kursori on auditoinnin oma**
+(`$RUN_ISSUES_LOG_DIR/.audit-coherence-cursor-<repo-slug>`: uusimman katselmoidun PR:n
+`merged_at`), ja se siirtyy vain exit 0:lla. Ajastuksen tilatiedosto ei kelpaa siihen, koska se
+kirjaa auditoinnin *aloitusajan*: epäonnistunut auditointi pudottaisi muuten PR:nsä
+katselmoinnista hiljaa. Kursorin poistaminen palauttaa ikkunan välin mittaiseksi. Löydösissuet
+saavat `coherence`-labelin eikä koskaan poimintalabeleita: refaktorointi on ihmisen valinta.
 
 ### Julkaisu julkiseen peiliin (`publish-release.sh`, #155)
 

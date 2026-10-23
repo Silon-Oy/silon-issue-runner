@@ -52,6 +52,8 @@
 #                           (escape hatch; default 1 — issue #294)
 #   RUN_ISSUES_USAGE_LIMIT_BACKOFF  seconds to wait when the usage-limit message
 #                           carries no parseable reset time (default 3600)
+#   RUN_ISSUES_CLAIM_VERIFY_DELAY  seconds S3 waits between the claim and
+#                           verify_claim (default 5; test injection point)
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
@@ -105,12 +107,14 @@
 #       and tore the local artefacts down (cleanup-run.sh). The run is finalized
 #       blocked/serialized_behind_sibling with NO needs-human label: S2b lets the
 #       issue run again once #N closes. If the auto-claimed label could not be
-#       verified gone, the run is instead finalized
-#       blocked/serialize_unclaim_failed, keeps its artefacts and is handed to a
-#       human (needs-human + answerable comment). A rejected SERIALIZE (not an
-#       older listed sibling, unparseable) or a failed edge write never exits 14:
-#       it is logged as serialize_rejected / serialize_edge_failed and the run
-#       continues as PROCEED.
+#       verified gone, the run exits 15 instead. A rejected SERIALIZE (not an
+#       older listed sibling, unparseable) or a failed edge write never exits
+#       14 or 15: it is logged as serialize_rejected / serialize_edge_failed and
+#       the run continues as PROCEED.
+#  15   serialized, but the auto-claimed label could not be verified gone (S7,
+#       issue #355) — the run is finalized blocked/serialize_unclaim_failed,
+#       keeps its artefacts and is handed to a human (needs-human + answerable
+#       comment); a reply tears the run down via scan_blocked_answered.
 #
 # --restart <run-dir> resumes a timed_out run with a ramped, capped timeout
 # (base*(1+retry_count), cap RUN_ISSUES_CLAUDE_TIMEOUT_MAX). It skips pick/claim
@@ -704,6 +708,8 @@ RUN_DIR=""
 BRANCH=""
 WORKTREE_PATH=""
 BASE_BRANCH=""
+# run.json self_preassigned (issue #357): empty = legacy run, unclaim removes @me.
+SELF_PREASSIGNED=""
 CR_DECISION=""
 CR_SERIALIZE_TARGET=""
 DB_CLONE_VALUE=""
@@ -1064,14 +1070,21 @@ phase_a() {
   # it checks the post-claim set equals this snapshot ∪ {@me} rather than "@me is
   # the sole assignee". A racing runner on another account still shows up as an
   # extra login and loses the race.
-  local before_assignees
-  before_assignees=$(issue_assignees "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" || true)
+  local before_assignees before_rc=0
+  before_assignees=$(issue_assignees "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME") || before_rc=$?
+  # Record whether @me was already assigned BEFORE the claim (issue #357), so every
+  # unclaim path — here, serialize, resume_cancel, cleanup-run.sh — removes only an
+  # assignment this run made and never a human's routing assignment (#238).
+  SELF_PREASSIGNED=$(claim_self_preassigned "$before_assignees" "$before_rc")
+  state_set "$RUN_DIR" "self_preassigned" "$SELF_PREASSIGNED"
   claim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
   state_event "$RUN_DIR" "claim_attempted"
-  sleep 5
+  # Give a competing claim time to become visible before verify_claim reads the
+  # assignees. Tests set the delay to 0 (issue #358); production keeps 5 s.
+  sleep "${RUN_ISSUES_CLAIM_VERIFY_DELAY:-5}"
   if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$before_assignees" "$REMOTE_NAME"; then
     log "claim race lost after verification — unclaiming and exiting"
-    unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
+    unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$SELF_PREASSIGNED"
     state_finalize "$RUN_DIR" "lost_race" "claim_lost"
     exit 3
   fi
@@ -1397,7 +1410,7 @@ _serialize_reject() {
 
 # serialize_gate — S7, auto mode, CR_DECISION=SERIALIZE (issue #338). Turns an
 # overlap with a sibling run into a dependency: "this issue is blocked by #N",
-# after which S2b runs it once #N closes. Either exits 14 or returns with
+# after which S2b runs it once #N closes. Either exits 14 (or 15) or returns with
 # CR_DECISION=PROCEED.
 #
 # Acyclic by construction: the edge is written only when the sibling's start key
@@ -1471,7 +1484,7 @@ serialize_gate() {
 
   # (d) Release the claim and verify the reservation label is gone: a blocked
   # issue that stays auto-claimed would never re-enter pickup.
-  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
+  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$SELF_PREASSIGNED"
   [ "$IS_CONTINUE" = "1" ] && _remove_waiting_label
   local labels
   if ! labels=$(issue_label_names "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME") \
@@ -1485,7 +1498,7 @@ serialize_gate() {
     _hand_to_human \
       "Ajo sarjoitettiin sisarajon #$target perään, mutta varauslabelin \`$AUTO_CLAIMED_LABEL\` poistoa ei voitu varmistaa, joten issue ei palaa poimintaan itsestään. Kommentoi tähän issueen — ajo siivotaan ja issue odottaa #$target:n sulkeutumista. (Pelkkä labelin poisto jättäisi ajon jäänteet, joihin seuraava ajo kaatuisi.)" \
       "" blocked
-    exit 14
+    exit 15
   fi
 
   # (e) Finalize, then (f) tear the local artefacts down so the next run of
@@ -1508,7 +1521,7 @@ review_gate() {
   log "S7_ReviewGate decision=$CR_DECISION mode=$RUN_ISSUES_REVIEW_GATE"
   case "$RUN_ISSUES_REVIEW_GATE" in
     auto)
-      # SERIALIZE (issue #338): exits 14, or falls through as PROCEED.
+      # SERIALIZE (issue #338): exits 14/15, or falls through as PROCEED.
       [ "$CR_DECISION" = "SERIALIZE" ] && serialize_gate
       if [ "$CR_DECISION" = "PROCEED" ]; then
         state_event "$RUN_DIR" "review_gate_auto_proceed"
@@ -1579,6 +1592,7 @@ resume_load_state() {
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  SELF_PREASSIGNED=$(jq -r '.self_preassigned // ""' "$rj")
   # Multi-remote: empty -> "origin" (legacy run.json predating the field).
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
@@ -1638,6 +1652,7 @@ restart_load_state() {
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  SELF_PREASSIGNED=$(jq -r '.self_preassigned // ""' "$rj")
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
   # Repo namespacing (issue #67): read the slug back verbatim and do NOT
@@ -1808,6 +1823,7 @@ continue_load_state() {
   WORKTREE_PATH=$(jq -r '.worktree_path // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  SELF_PREASSIGNED=$(jq -r '.self_preassigned // ""' "$rj")
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
   # Repo namespacing (issue #67): read the slug back verbatim and do NOT
@@ -2308,7 +2324,7 @@ resume_cancel() {
     "/run-issues peruutettu review-gate-vaiheessa. Worktree ja branch jätettiin paikoilleen: \`$WORKTREE_PATH\` ja \`$BRANCH\`. Voit jatkaa manuaalisesti tai poistaa nuo." \
     "$OWNER_REPO" "$REMOTE_NAME" \
     || true
-  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" || true
+  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$SELF_PREASSIGNED" || true
   exit 0
 }
 

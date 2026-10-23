@@ -13,6 +13,8 @@
 #      exit 0.
 #   C) gh missing → refuse BEFORE any side effect with exit 3, so a partial
 #      teardown never starts.
+#   D) run.json self_preassigned (issue #357): `1` / `unknown` keep the @me
+#      assignee a human set before the claim; `0` / absent remove the run's own.
 #
 # Run: bash tests/test-cleanup-run-report.sh
 
@@ -104,6 +106,37 @@ if printf '%s\n' "$OUT_B" | grep -qx 'Done.'; then
 else
   echo "FAIL: 'Done.' missing on full success:"; printf '%s\n' "$OUT_B"; FAIL=1
 fi
+
+# ---- Case D: pre-existing @me assignee survives the teardown (issue #357) ----
+BIN_D="$WORK/binD"; mkdir -p "$BIN_D"
+GH_LOG_D="$WORK/gh-d.log"
+cat > "$BIN_D/gh" <<SH
+#!/usr/bin/env bash
+echo "\$*" >> "$GH_LOG_D"
+exit 0
+SH
+chmod +x "$BIN_D/gh"
+
+n=50
+for v in 1 unknown 0 absent; do
+  n=$((n + 1))
+  REPO_D="$WORK/repoD$n"
+  RID_D=$(make_run "$n" "$REPO_D")
+  if [ "$v" != absent ]; then
+    ( . "$STATE_LIB"; state_set "$REPO_D/.claude/run-issues/$RID_D" self_preassigned "$v" ) >/dev/null 2>&1
+  fi
+  : > "$GH_LOG_D"
+  OUT_D=$(PATH="$BIN_D:$PATH" RUN_ISSUES_LOCK_ROOT="$WORK/locksD" \
+    bash "$CLEANUP" --repo "$REPO_D" --issue "$n" --yes 2>&1)
+  RC_D=$?
+  removed=0; grep -q -- '--remove-assignee' "$GH_LOG_D" && removed=1
+  case "$v" in 1|unknown) want=0 ;; *) want=1 ;; esac
+  if [ "$RC_D" -eq 0 ] && [ "$removed" = "$want" ] && grep -qF 'labels/auto-claimed' "$GH_LOG_D"; then
+    echo "PASS: self_preassigned=$v → unassign $([ "$want" = 1 ] && echo removes || echo keeps) @me, label removed"
+  else
+    echo "FAIL: self_preassigned=$v: rc=$RC_D removed=$removed want=$want"; printf '%s\n' "$OUT_D"; FAIL=1
+  fi
+done
 
 # ---- Case C: gh missing → refuse before any side effect, exit 3 ----
 # Build a curated PATH that has the tools the script touches before the gate but

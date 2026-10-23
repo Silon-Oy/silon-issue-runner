@@ -14,6 +14,26 @@
 # (kind, repo × remote), read in O(1). Nothing here reads run-dirs, state.jsonl,
 # logs or GitHub.
 #
+# Kinds: security (security-audit.sh, #339) and coherence (coherence-audit.sh,
+# #342).
+#
+# CALLING CONTRACT — every kind's script MUST accept exactly this form, because
+# the spawn has no per-kind branch (#360, for #342 and any later kind):
+#
+#   <script> <repo-path> --remote <r> --watchlist <wl>
+#
+# and MUST read the rest of its configuration from the environment it inherits
+# (RUN_ISSUES_LOG_DIR, RUN_ISSUES_POLLER_ENV_FILE, RUN_ISSUES_AUTO=1). Its exit
+# code is the outcome audit_run records: 0 = done, 5 = done but one scanner
+# failed (the review itself ran) — _audit_succeeded treats both as an audit
+# that happened; anything else is retried after RUN_ISSUES_AUDIT_RETRY_HOURS.
+# A kind whose script needs another argument changes this contract and the
+# spawn in poller.sh together, never one of them.
+#
+# Visibility (#360): the session is named audit_session_name, under
+# audit_session_prefix, so status.sh lists running audits from one `tmux ls`
+# through audit_session_parse instead of deriving the name a second time.
+#
 # The time is recorded when the audit STARTS, not when it ends: an audit that
 # fails every time (no remote HEAD, agent cannot launch) then costs a bounded
 # number of attempts instead of one agent call per tick. Its OUTCOME is recorded
@@ -29,7 +49,7 @@ _AUDIT_SCHEDULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # audit_kinds — the audit kinds the poller schedules, space-separated.
 audit_kinds() {
-  printf 'security'
+  printf 'security coherence'
 }
 
 # audit_kind_script <kind> — the package-root script that runs <kind>. An
@@ -37,7 +57,8 @@ audit_kinds() {
 # launch a guessed path. rc 1 (and no output) for an unknown kind.
 audit_kind_script() {
   case "${1:-}" in
-    security) printf 'security-audit.sh' ;;
+    security)  printf 'security-audit.sh' ;;
+    coherence) printf 'coherence-audit.sh' ;;
     *) return 1 ;;
   esac
 }
@@ -48,7 +69,8 @@ audit_kind_script() {
 # example variable that no reader names. rc 1 for an unknown kind.
 audit_kind_env_var() {
   case "${1:-}" in
-    security) printf 'RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS' ;;
+    security)  printf 'RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS' ;;
+    coherence) printf 'RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS' ;;
     *) return 1 ;;
   esac
 }
@@ -90,6 +112,96 @@ audit_interval_days() {
   else
     _audit_positive_days "$repo_val"
   fi
+}
+
+# audit_interval_problem <repo-config-json> <kind> <machine-value> — one line
+# saying why the repo's config leaves <kind> unscheduled, or nothing. The poller
+# logs it (#360): audit_interval_days reads both an unparseable config and a bad
+# value as "not scheduled", which is the safe side but was silent.
+#
+# A bad `.<kind>.audit_interval_days` (`1.5`, `"x"`, `-1`) is always reported —
+# the repo asked for a schedule. Unparseable JSON is reported only when the
+# machine schedules <kind> (<machine-value> set): otherwise a broken file says
+# nothing about audits. Absent, null, `0` (deliberately off) and a positive
+# whole number print nothing.
+audit_interval_problem() {
+  local cfg="${1:-}" kind="${2:-}" machine="${3:-}" val
+  audit_kind_script "$kind" >/dev/null || return 0
+  [ -n "$cfg" ] || return 0
+  if ! val=$(jq -r --arg k "$kind" '
+      (if type == "object" then (.[$k] // {}) else error("not an object") end) as $s
+      | if ($s | type) == "object" and ($s | has("audit_interval_days")) and $s.audit_interval_days != null
+        then ($s.audit_interval_days | tostring) else "@absent" end
+    ' <<<"$cfg" 2>/dev/null); then
+    [ -n "$machine" ] || return 0
+    printf '.claude/run-issues.json on the default branch is not a valid JSON object — %s audit not scheduled' "$kind"
+    return 0
+  fi
+  [ "$val" = "@absent" ] && return 0
+  [ -n "$(_audit_positive_days "$val")" ] && return 0
+  case "$val" in ''|*[!0-9]*) ;; *) [ "${#val}" -le 6 ] && [ "$((10#$val))" -eq 0 ] && return 0 ;; esac
+  printf 'invalid .%s.audit_interval_days %s in .claude/run-issues.json (want 0 or a positive whole number of days) — %s audit not scheduled' \
+    "$kind" "$(printf '%s' "$val" | tr -d '\n' | cut -c1-40)" "$kind"
+}
+
+# audit_notice <state-file> <log> <tag> <message> — append <message> to <log>
+# once, not on every tick (CLAUDE.md §5.7). The last logged message per <tag> is
+# kept in <state-file>.notice-<tag>; the line is written again only when the
+# message changes or audit_notice_clear removed it, so a condition that goes
+# away and comes back is reported again.
+#
+# When the notice file itself cannot be written (the "cannot record" case: the
+# state directory refuses writes), the log's last 500 lines stand in for it —
+# a tick writes far fewer, so the line still appears once per such window rather
+# than once per tick. tail only (§5.3).
+audit_notice() {
+  local state="${1:-}" log="${2:-}" tag="${3:-}" msg="${4:-}" nf prev tmp
+  [ -n "$state" ] && [ -n "$tag" ] && [ -n "$msg" ] || return 0
+  nf="${state}.notice-${tag}"
+  prev=$(head -n 1 "$nf" 2>/dev/null || true)
+  [ "$prev" = "$msg" ] && return 0
+  if tmp=$(mktemp "${nf}.XXXXXX" 2>/dev/null) \
+     && printf '%s\n' "$msg" > "$tmp" 2>/dev/null && mv -f "$tmp" "$nf" 2>/dev/null; then
+    :
+  else
+    [ -n "${tmp:-}" ] && rm -f "$tmp" 2>/dev/null
+    tail -n 500 "$log" 2>/dev/null | grep -qF -- "$msg" && return 0
+  fi
+  printf '%s poller: %s\n' "$(date -u +%FT%TZ)" "$msg" >> "$log"
+}
+
+# audit_notice_clear <state-file> <tag> — the condition behind <tag> is gone.
+audit_notice_clear() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  rm -f "${1}.notice-${2}" 2>/dev/null
+  return 0
+}
+
+# audit_session_prefix — every audit session's name starts with this. It begins
+# with `run-issues-`, so the poller's cap count includes audits.
+audit_session_prefix() {
+  printf 'run-issues-audit-'
+}
+
+# audit_session_name <kind> <repo-slug> — the tmux session of one audit.
+audit_session_name() {
+  printf '%s%s-%s' "$(audit_session_prefix)" "${1:-}" "${2:-}"
+}
+
+# audit_session_parse <session-name> — prints "<kind> <repo-slug>" for an audit
+# session, rc 1 otherwise. The kind is matched against audit_kinds (a kind has
+# no dash, a slug may), so an unknown kind is not read as an audit.
+audit_session_parse() {
+  local name="${1:-}" pre rest k
+  pre=$(audit_session_prefix)
+  case "$name" in "$pre"*) ;; *) return 1 ;; esac
+  rest="${name#"$pre"}"
+  for k in $(audit_kinds); do
+    case "$rest" in
+      "$k"-?*) printf '%s %s' "$k" "${rest#"$k"-}"; return 0 ;;
+    esac
+  done
+  return 1
 }
 
 # audit_state_file <log-dir> <kind> <repo-slug> — where the last start time of

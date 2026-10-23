@@ -823,7 +823,10 @@ call_claude() {
         CLAUDE_CODE_OAUTH_TOKEN="$token"
         export CLAUDE_CODE_OAUTH_TOKEN
       fi
-      exec "${cmd[@]}" ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} ${session_args[@]+"${session_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")"
+      # stdin from /dev/null: the prompt travels in -p, so the agent needs no
+      # input, and an inherited open pipe (a caller run from a tool whose stdin
+      # never reaches EOF) would hang any agent that reads it (issue #358).
+      exec "${cmd[@]}" ${principles_args[@]+"${principles_args[@]}"} ${plugin_context_args[@]+"${plugin_context_args[@]}"} ${session_args[@]+"${session_args[@]}"} --dangerously-skip-permissions -p "$(cat "$prompt_file")" < /dev/null
     ) > "$out_file" 2>&1 || rc=$?
 
     printf '%s\n' "$rc" > "$exit_file"

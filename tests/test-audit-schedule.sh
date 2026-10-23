@@ -30,10 +30,12 @@ WORK=$(mktemp -d -t audit-schedule.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- kind table -----------------------------------------------------------------
-check "security is a scheduled kind" "$(audit_kinds)" "security"
+check "security and coherence are the scheduled kinds" "$(audit_kinds)" "security coherence"
 check "security runs security-audit.sh" "$(audit_kind_script security)" "security-audit.sh"
 check "the script exists in the package root" "$([ -x "$ROOT/$(audit_kind_script security)" ] && echo y)" "y"
 check "security interval variable" "$(audit_kind_env_var security)" "RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS"
+check "coherence runs coherence-audit.sh" "$(audit_kind_script coherence)" "coherence-audit.sh"
+check "coherence interval variable" "$(audit_kind_env_var coherence)" "RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS"
 check "unknown kind has no script" "$(audit_kind_script nosuch)" ""
 check "unknown kind fails" "$(rc_of audit_kind_script nosuch)" "1"
 check "unknown kind has no variable" "$(rc_of audit_kind_env_var nosuch)" "1"
@@ -61,6 +63,9 @@ check "absurdly large is off" "$(audit_interval_days '' security 99999999)" ""
 check "invalid JSON is off, even with a machine value" "$(audit_interval_days '{not json' security 7)" ""
 check "non-object config is off" "$(audit_interval_days '[1,2]' security 7)" ""
 check "another kind's key does not apply" "$(audit_interval_days '{"coherence":{"audit_interval_days":1}}' security '')" ""
+check "coherence reads its own key" "$(audit_interval_days '{"coherence":{"audit_interval_days":3}}' coherence 7)" "3"
+check "security's key does not apply to coherence" "$(audit_interval_days '{"security":{"audit_interval_days":1}}' coherence '')" ""
+check "coherence 0 switches the machine's schedule off" "$(audit_interval_days '{"coherence":{"audit_interval_days":0}}' coherence 7)" ""
 check "unknown kind is never scheduled" "$(audit_interval_days '{"nosuch":{"audit_interval_days":1}}' nosuch 1)" ""
 
 # ---- state file -------------------------------------------------------------------
@@ -105,6 +110,63 @@ check "audit_run records success" "$(cat "$H.result")" "$NOW 0"
 
 check "record into a missing directory fails" "$(rc_of audit_record "$WORK/no/such/dir/f" "$NOW" security)" "1"
 check "no temp files are left behind" "$(find "$WORK" -name '.audit-last-security-x.*' ! -name '*.result' | wc -l | tr -d ' ')" "0"
+
+# ---- interval diagnostics (#360) -------------------------------------------------
+check "no config: no problem" "$(audit_interval_problem '' security 7)" ""
+check "absent key: no problem" "$(audit_interval_problem '{}' security 7)" ""
+check "null: no problem" "$(audit_interval_problem '{"security":{"audit_interval_days":null}}' security 7)" ""
+check "0 is deliberate: no problem" "$(audit_interval_problem '{"security":{"audit_interval_days":0}}' security 7)" ""
+check "positive: no problem" "$(audit_interval_problem '{"security":{"audit_interval_days":30}}' security '')" ""
+case "$(audit_interval_problem '{"security":{"audit_interval_days":1.5}}' security '')" in
+  *"invalid .security.audit_interval_days 1.5"*) echo "PASS: 1.5 is reported even without a machine value" ;;
+  *) echo "FAIL: 1.5 not reported"; FAIL=1 ;;
+esac
+case "$(audit_interval_problem '{"coherence":{"audit_interval_days":"x"}}' coherence 7)" in
+  *"invalid .coherence.audit_interval_days x"*) echo "PASS: a string value is reported under its kind" ;;
+  *) echo "FAIL: string value not reported"; FAIL=1 ;;
+esac
+case "$(audit_interval_problem '{"security":' security 7)" in
+  *"not a valid JSON object"*) echo "PASS: unparseable config is reported when the machine schedules the kind" ;;
+  *) echo "FAIL: unparseable config not reported"; FAIL=1 ;;
+esac
+check "unparseable config without a machine value: silent" "$(audit_interval_problem '{"security":' security '')" ""
+check "a problem is one line" "$(audit_interval_problem '{"security":{"audit_interval_days":"a\nb"}}' security 7 | wc -l | tr -d ' ')" "0"
+
+# ---- once-only notices (#360) ----------------------------------------------------
+NL="$WORK/notice.log"; NS="$WORK/.audit-last-security-n"
+: > "$NL"
+audit_notice "$NS" "$NL" script "msg one"
+audit_notice "$NS" "$NL" script "msg one"
+check "a repeated notice is logged once" "$(grep -c 'msg one' "$NL")" "1"
+audit_notice "$NS" "$NL" record "msg one"
+check "another tag is its own notice" "$(grep -c 'msg one' "$NL")" "2"
+audit_notice "$NS" "$NL" script "msg two"
+check "a changed message is logged" "$(grep -c 'msg two' "$NL")" "1"
+audit_notice_clear "$NS" script
+audit_notice "$NS" "$NL" script "msg two"
+check "a cleared notice is logged again" "$(grep -c 'msg two' "$NL")" "2"
+check "notice lines carry the poller prefix" "$(grep -c ' poller: msg ' "$NL")" "4"
+# Unwritable notice file: the log tail stands in for it.
+NL2="$WORK/notice2.log"; : > "$NL2"
+audit_notice "$WORK/no/such/dir/s" "$NL2" record "cannot write"
+audit_notice "$WORK/no/such/dir/s" "$NL2" record "cannot write"
+check "unwritable notice file: the log tail suppresses the repeat" "$(grep -c 'cannot write' "$NL2")" "1"
+
+# ---- session names (#360) --------------------------------------------------------
+check "session name" "$(audit_session_name security example-org-repo-a)" "run-issues-audit-security-example-org-repo-a"
+_pre=$(audit_session_prefix)
+check "the prefix counts against the run-issues- cap" "${_pre%%audit-}" "run-issues-"
+check "parse: kind and a dashed slug" "$(audit_session_parse run-issues-audit-coherence-example-org-repo-a)" "coherence example-org-repo-a"
+check "parse round-trips every kind" \
+  "$(for k in $(audit_kinds); do audit_session_parse "$(audit_session_name "$k" o-r)"; echo; done | tr '\n' '|')" \
+  "security o-r|coherence o-r|"
+check "parse: an unknown kind is not an audit" "$(rc_of audit_session_parse run-issues-audit-nosuch-o-r)" "1"
+check "parse: a run session is not an audit" "$(rc_of audit_session_parse run-issues-o-r-issue-5)" "1"
+check "parse: no slug is not an audit" "$(rc_of audit_session_parse run-issues-audit-security-)" "1"
+
+# ---- calling contract (#360, for #342) -------------------------------------------
+grep -qF -- '<script> <repo-path> --remote <r> --watchlist <wl>' "$ROOT/lib/audit-schedule.sh" \
+  && echo "PASS: the calling contract is written down" || { echo "FAIL: calling contract missing"; FAIL=1; }
 
 # ---- cost guard (CLAUDE.md §5.3, §5.4) ------------------------------------------
 if grep -nE 'state\.jsonl|runs\.log|gh ' "$ROOT/lib/audit-schedule.sh" | grep -v '^[0-9]*:#' >/dev/null; then

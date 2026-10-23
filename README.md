@@ -1209,8 +1209,8 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 
 | Oire | Todennäköinen syy | Korjaus |
 |---|---|---|
-| Issue ei lähde ajoon, vaikka `auto-run` on | Assignee (myös oma) estää poiminnan | Poista assignaatio tai siivoa vanha ajo: `cleanup-run.sh --issue <N> --yes` |
-| — sama, mutta assigneeta ei ole | Jokin estolabeli päällä: `waiting`, `wip`, `auto-clean` | Poista label |
+| Issue ei lähde ajoon, vaikka `auto-run` on | Vanhan ajon varaus (`auto-claimed`) estää poiminnan | Siivoa vanha ajo: `cleanup-run.sh --issue <N> --yes` |
+| — sama, mutta varausta ei ole | Jokin estolabeli päällä: `waiting`, `wip`, `auto-clean` | Poista label |
 | — sama, eikä estolabeleita ole | Issue on estetty natiivilla "blocked by" -riippuvuudella — esto ei näy labeleissa (6.5) | Sulje edeltäjä tai poista riippuvuus issuen näkymästä |
 | — sama, eikä riippuvuuksia ole | Repo ei ole watchlistissä, tai poimintalabelien JA-ehto ei täyty (6.2) | Tarkista watchlist ja repon `labels`-lista |
 | Yksittäinen issue ei lähde ajoon, vaikka labelit ovat oikein | Repolla on watchlistin `assignees`-rajaus, ja issue on assignattu listan ulkopuoliselle tunnukselle (6.2) | Assignaa listatulle tunnukselle, poista assignee kokonaan tai laajenna `assignees`-listaa |
@@ -1220,8 +1220,9 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | Vastasin tarkennuskysymykseen, mutta mitään ei tapahtunut | Vastaus ennen markeria, tai useampi kommentti (vain uusin luetaan) | Kirjoita vastaus uudelleen **yhtenä** kommenttina (6.6 c) |
 | — sama, ja vastaus oli oikein | Vastaajalla ei ole kirjoitusoikeutta repoon, tai oikeutta ei voitu lukea (§7.11) | Vastaa kirjoitusoikeudellisella tilillä; etsi lokista `comment-trust: WARNING` |
 | PR on auki, CI vihreä, mutta ei mergeydy | `auto-merge`-label puuttuu **PR:ltä**, tai PR on draft | Lisää label PR:lle; draft merkitään valmiiksi käsin |
-| Ajo epäonnistui, korjasin syyn, issue ei palaa | Assignaatio ja `needs-human` jäivät | `/issue-runner:cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
+| Ajo epäonnistui, korjasin syyn, issue ei palaa | Varaus (`auto-claimed`) jäi | `/issue-runner:cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
 | Siivous ei löydä ajoa | Ajo tapahtui toisella koneella | Aja siivous siellä; PR-vahti tulostaa lokiin valmiin komennon |
+| `epic-attention`, lapsissa ei `needs-human`ia | `epic-review.sh`-löydös | Lue katselmuskommentti, korjaa, poista label |
 
 ### Ajon tilat (`run.json`)
 
@@ -1253,9 +1254,8 @@ jotka ovat odotustiloja eivätkä labeloi mitään — ajo jatkuu itsestään ku
 Useita skriptejä, **kukin oma erillinen exit-koodiavaruutensa**. Sama numero ei tarkoita samaa
 asiaa eri skripteissä — tarkista aina, kumpi prosessi exittasi.
 
-Täydet taulukot kaikille neljälletoista skriptille ovat omassa hakuteoksessaan:
-[`docs/troubleshooting.md`](docs/troubleshooting.md). Se on skriptikohtainen diagnostiikka,
-jota luetaan hakusanalla — skriptin nimellä tai koodilla — eikä alusta loppuun.
+Täydet taulukot kaikille skripteille ovat omassa hakuteoksessaan:
+[`docs/troubleshooting.md`](docs/troubleshooting.md), haettavissa skriptin nimellä.
 
 ### Mistä lokit löytyvät
 

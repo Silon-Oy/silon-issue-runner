@@ -444,14 +444,34 @@ _epic_escalate_child() {
     echo
     echo "Selvitä alaissueen ${child_ref} tilanne — kun se etenee, epic jatkaa itsestään."
   } > "$body_file"
-  ( cd "$repo" && labels_ensure "$owner_repo" epic-attention D4C5F9 \
-      "Epicin alaissue vaatii ihmistä" ) 2>&1 \
-      | while IFS= read -r _l; do _epic_log "$_l"; done || true
-  ( cd "$repo" && labels_add "$owner_repo" "$epic" epic-attention ) 2>&1 \
-      | while IFS= read -r _l; do _epic_log "$_l"; done || true
-  comment_issue "$repo" "$epic" "$(cat "$body_file")" "$owner_repo" "$remote" >/dev/null 2>&1 || true
+  _epic_post_attention "$repo" "$epic" "$owner_repo" "$remote" "$body_file" 1 || true
   rm -f "$body_file"
   _epic_log "epic #$epic: escalated stalled child $child_ref to epic (once)"
+}
+
+# _epic_post_attention <repo> <epic> <owner/repo> <remote> <body-file> <with-label>
+# The shared "record on the epic" write: when <with-label> is 1, ensure and add
+# the filterable epic-attention label FIRST, then post <body-file> (which carries
+# the caller's once-marker on its first line) as a comment. Label before comment
+# on purpose: the comment's marker is what makes the write once-only, so it goes
+# last. Both writes are always attempted; rc 1 if the label add or the comment
+# failed (the poller's escalation ignores it — best-effort — while
+# epic-review.sh reports it). <with-label> 0 = comment only (a clean review).
+_epic_post_attention() {
+  local repo="$1" epic="$2" owner_repo="$3" remote="$4" body_file="$5" with_label="${6:-1}"
+  local rc=0
+  if [ "$with_label" = "1" ]; then
+    ( cd "$repo" && labels_ensure "$owner_repo" epic-attention D4C5F9 \
+        "Epicin alaissue vaatii ihmistä" ) 2>&1 \
+        | while IFS= read -r _l; do _epic_log "$_l"; done || true
+    local lrc=0
+    ( cd "$repo" && labels_add "$owner_repo" "$epic" epic-attention ) > "$body_file.lerr" 2>&1 || lrc=$?
+    while IFS= read -r _l; do _epic_log "$_l"; done < "$body_file.lerr"
+    rm -f "$body_file.lerr"
+    [ "$lrc" -eq 0 ] || rc=1
+  fi
+  comment_issue "$repo" "$epic" "$(cat "$body_file")" "$owner_repo" "$remote" >/dev/null 2>&1 || rc=1
+  return "$rc"
 }
 
 # _epic_announce_complete <repo> <epic> <epic-title> <children-tsv> <owner/repo> <remote> <marker>

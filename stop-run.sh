@@ -31,6 +31,12 @@
 #   5. A stop is NOT a cleanup. Worktree, branch and run-dir are left intact —
 #      teardown stays with cleanup-run.sh / the auto-clean label.
 #
+# Not for scheduled audits (issue #360): an audit session has no run-dir, lock
+# or issue, so none of run_terminate applies. Stop one with
+#   tmux kill-session -t run-issues-audit-<kind>-<repo-slug>
+# (status.sh lists the running ones). It records no successful outcome, so the
+# poller retries it after RUN_ISSUES_AUDIT_RETRY_HOURS; interval 0 turns it off.
+#
 # Exit codes:
 #   0  stopped (or --dry-run plan printed)
 #   1  usage error (bad flag / missing or conflicting target)

@@ -23,14 +23,19 @@
 #   (d) unparseable SERIALIZE lines → reason=unparseable, PROCEED.
 #   (e) a number that is not a listed sibling → reason=not_a_sibling.
 #   (f) the sibling list could not be read → reason=siblings_unknown.
-#   (g) the reservation label survives the unclaim → exit 14 as
+#   (g) the reservation label survives the unclaim → exit 15 as
 #       serialize_unclaim_failed, needs-human, artefacts kept.
+#   (k) @me was assigned BEFORE the claim (a human routed the issue, #238) →
+#       the unclaim keeps that assignee and only drops the label (issue #357).
 #
 # Run: bash tests/test-serialize.sh
 
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
+export RUN_ISSUES_CLAIM_VERIFY_DELAY=0
 ORCH="$HERE/../orchestrate.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
@@ -71,6 +76,10 @@ POST_MODE="$WORK/post-mode"     # ok | fail
 LIST_MODE="$WORK/list-mode"     # ok | fail (the open-PR listing)
 LABEL_MODE="$WORK/label-mode"   # clear | stuck (labels read after unclaim)
 EDGE="$WORK/edge"               # exists once a POST succeeded
+# Assignee state (issue #357): testbot is an assignee once --add-assignee ran, or
+# from the start when PREASSIGNED exists (a human assigned the runner's account).
+ASSIGNED="$WORK/assigned"
+PREASSIGNED="$WORK/preassigned"
 
 cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
@@ -95,7 +104,9 @@ case "\$*" in
   *"/issues/43 --jq .labels"*)
     [ "\$(cat "$LABEL_MODE")" = stuck ] && echo "auto-claimed"; exit 0 ;;
   *"issue view"*"--json labels"*) echo "0" ;;                    # S2c: not an epic
-  *"issue view"*"--json assignees"*) echo "testbot" ;;           # verify_claim
+  *"issue view"*"--json assignees"*)                              # S3 snapshot + verify_claim
+    { [ -f "$ASSIGNED" ] || [ -f "$PREASSIGNED" ]; } && echo "testbot"; exit 0 ;;
+  *"issue edit"*"--add-assignee"*) touch "$ASSIGNED" ;;
   *"issue view"*) echo '{"title":"Same thing twice","body":"b","labels":[],"author":{"login":"x"},"comments":[]}' ;;
   *"api user"*) echo "testbot" ;;
   *"issue comment"*"--body-file -"*) cat >/dev/null 2>&1 || true ;;
@@ -131,7 +142,7 @@ reset() {
   git -C "$REPO" for-each-ref --format='%(refname:short)' 'refs/heads/auto-run/*' \
     | while read -r b; do git -C "$REPO" branch -D "$b" >/dev/null 2>&1; done
   rm -rf "$REPO/.claude/run-issues" "$REPO/.claude/run-issues-archive" "$WORK/locks" "$EDGE" "$CALLS" \
-    "$WORK/target-state" "$WORK/verify-mode" "$WORK/deletes.log"
+    "$WORK/target-state" "$WORK/verify-mode" "$WORK/deletes.log" "$ASSIGNED" "$PREASSIGNED"
   : > "$GH_LOG"
 }
 
@@ -170,6 +181,7 @@ if [ "$RC" = 14 ] && [ -n "$RD" ] \
    && grep -q 'issue comment' "$GH_LOG" \
    && has_field situation_posted kind serialized \
    && grep -q -- '--remove-assignee' "$GH_LOG" \
+   && [ "$(jq -r '.self_preassigned' "$RD/run.json")" = 0 ] \
    && grep -qF 'labels/auto-claimed' "$GH_LOG" \
    && ! grep -qF 'labels[]=needs-human' "$GH_LOG" \
    && [ "$(cat "$CALLS")" = 1 ] \
@@ -235,11 +247,11 @@ fi
 
 # (g)
 run_case "SERIALIZE #12" "$OLD" ok ok stuck
-if [ "$RC" = 14 ] \
+if [ "$RC" = 15 ] \
    && [ "$(jq -r '.blocked_reason' "$RD/run.json")" = serialize_unclaim_failed ] \
    && grep -qF 'labels[]=needs-human' "$GH_LOG" \
    && [ -d "$REPO/.claude/run-issues/$(basename "$RD")" ]; then
-  ok g "reservation label survives: needs-human, artefacts kept, exit 14"
+  ok g "reservation label survives: needs-human, artefacts kept, exit 15"
 else
   bad g "rc=$RC rd=$RD out=$(echo "$OUT" | tail -5)"
 fi
@@ -277,6 +289,26 @@ if [ "$RC" != 14 ] && has_event serialize_edge_failed \
   ok j "unverified edge taken back, run proceeds"
 else
   bad j "rc=$RC edge=$([ -f "$EDGE" ] && echo left) out=$(echo "$OUT" | tail -5)"
+fi
+
+# (k) @me pre-assigned by a human (issue #357): the snapshot sees testbot before
+# the claim, so the unclaim must leave that routing assignee in place — removing
+# it would drop the issue out of assignee-routed pickup for good. The reservation
+# label still goes, so the wait ends by itself as in (a).
+reset; touch "$PREASSIGNED"
+printf '%s' "SERIALIZE #12" > "$DECISION"; printf '%s' "$OLD" > "$SIB_TIME"
+printf ok > "$POST_MODE"; printf ok > "$LIST_MODE"; printf clear > "$LABEL_MODE"
+OUT=$( cd "$REPO" && PATH="$BIN:$PATH" RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto \
+  RUN_ISSUES_CLAUDE_CMD="$BIN/claude" RUN_ISSUES_LOCK_ROOT="$WORK/locks" \
+  RUN_ISSUES_ENV_FILE="$WORK/no-such-env" "$ORCH" "$REPO" 43 2>&1 ); RC=$?
+RD=$(ls -d "$REPO"/.claude/run-issues/*-issue-43 "$REPO"/.claude/run-issues-archive/*-issue-43 2>/dev/null | tail -1)
+if [ "$RC" = 14 ] && [ -n "$RD" ] \
+   && [ "$(jq -r '.self_preassigned' "$RD/run.json")" = 1 ] \
+   && ! grep -q -- '--remove-assignee' "$GH_LOG" \
+   && grep -qF 'labels/auto-claimed' "$GH_LOG"; then
+  ok k "pre-assigned @me: assignee kept, reservation label removed, exit 14"
+else
+  bad k "rc=$RC rd=$RD out=$(echo "$OUT" | tail -5) gh=$(grep -- 'assignee' "$GH_LOG")"
 fi
 
 echo "----------------------------------------"

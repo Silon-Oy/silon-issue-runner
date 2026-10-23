@@ -598,6 +598,35 @@ if [ -f "$HTML8" ]; then
   present "action-token meta empty without config" 'run-issues-action-token" content=""' "$HTML8"
 fi
 
+# ---- Case 9: running audits strip (#360) -------------------------------------
+# audits[] with a repo_slug that is an XSS payload. The page is data-free, so the
+# value never lands in it; the JS reads only the named audit fields.
+AUDIT_SLUG_LEAK="AUDIT-SLUG-<script>alert(9)</script>-SECRET"
+cat > "$FX/audits.json" <<JSON
+{"schema_version":1,"generated_at":"2026-10-23T12:00:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "enrichment":{"mode":"local","fetched_at":null,"cache_age_seconds":null},
+ "totals":{"runs":0,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":0},"audits":1,"degraded":false},
+ "read_errors":[],"runs":[],"epics":[],
+ "audits":[{"kind":"security","repo_slug":"$AUDIT_SLUG_LEAK","session":"run-issues-audit-security-x","age_seconds":120}]}
+JSON
+OUTAU="$FX/wwwau"
+RUN_ISSUES_STATUS_OUT_DIR="$OUTAU" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/audits.json"; rcau=$?
+HTMLAU="$OUTAU/index.html"
+check "audits doc renders (exit 0)" "$rcau" "0"
+if [ -f "$HTMLAU" ]; then
+  absent "audit slug value not embedded" "$AUDIT_SLUG_LEAK" "$HTMLAU"
+  absent "audit slug XSS not embedded" "<script>alert(9)" "$HTMLAU"
+  present "JS reads data.audits" "data.audits" "$HTMLAU"
+  present "JS reads totals.audits" "totals.audits" "$HTMLAU"
+  present "JS renders the audits strip" "renderAudits(data)" "$HTMLAU"
+  present "audits strip has its mount point" 'id="audits"' "$HTMLAU"
+  presenti "audits strip says it shares the cap" "rinnakkaisuuskatosta" "$HTMLAU"
+  present "audits strip names the stop command" "tmux kill-session -t run-issues-audit-" "$HTMLAU"
+  absent "the session name field is not read" "a.session" "$HTMLAU"
+fi
+
 echo "----------------------------------------"
 echo "status-render: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

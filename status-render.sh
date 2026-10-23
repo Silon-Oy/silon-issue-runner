@@ -49,6 +49,8 @@
 #      epics[] lane (#79) reads only its named fields too — repo_slug, epic_number,
 #      epic_title, epic_url, sub_issues[].{number,state,repo,repo_slug}, source —
 #      the same way (sub_issues[].repo/repo_slug added for cross-repo, issue #92).
+#      The audits[] strip (#360) reads only kind, repo_slug, age_seconds and
+#      totals.audits — never the session name or any other field.
 #
 # EPIC ROLLUP (#79). status.sh --github also emits a top-level epics[] list (open
 # epic-labelled issues + their sub-issues). The JS renders one lane per epic
@@ -305,6 +307,8 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .runner-label{font-weight:600}
 .runner-ver{color:var(--muted);font-size:.82rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .runner-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
+.audits{padding:.45rem .8rem;border:1px solid var(--border);border-radius:6px;margin:.5rem 0 .8rem;font-size:.88rem}
+.audit-row{display:flex;gap:.6rem;flex-wrap:wrap;color:var(--muted)}
 .chips{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.5rem;margin:.4rem 0 .8rem}
 .chip{border:1px solid var(--border);background:var(--card);color:var(--fg);
   padding:.35rem .7rem;border-radius:999px;font-size:.85rem;cursor:pointer;
@@ -410,6 +414,7 @@ a:hover{text-decoration:underline}
   <p class="meta" id="meta"></p>
   <div id="banners"></div>
   <div id="runner"></div>
+  <div id="audits"></div>
   <ul class="chips" id="chips"></ul>
   <div class="controls">
     <label>Järjestys:
@@ -829,6 +834,32 @@ a:hover{text-decoration:underline}
     box.appendChild(wrap);
   }
 
+  // renderAudits — running scheduled audits (#360). An audit has no run-dir, so
+  // it is not a row, but it takes a slot under the poller's cap; without this
+  // strip the page showed fewer runs than the cap was spending. Shown only when
+  // audits[] is non-empty. Named fields only (kind, repo_slug, age_seconds),
+  // every string via el() => textContent.
+  function renderAudits(data){
+    var box = document.getElementById("audits");
+    clear(box);
+    var list = Array.isArray(data.audits) ? data.audits : [];
+    if (list.length === 0) return;
+    var n = (data.totals && data.totals.audits != null) ? data.totals.audits : list.length;
+    var wrap = el("div", "audits");
+    wrap.appendChild(el("div", "runner-label",
+      "Auditointeja käynnissä " + n + " — vievät paikan samasta rinnakkaisuuskatosta kuin ajot"));
+    list.forEach(function(a){
+      var row = el("div", "audit-row");
+      row.appendChild(el("span", null, typeof a.repo_slug === "string" ? a.repo_slug : "?"));
+      row.appendChild(el("span", null, typeof a.kind === "string" ? a.kind : "?"));
+      row.appendChild(el("span", null, "käynnissä " + dur(a.age_seconds)));
+      wrap.appendChild(row);
+    });
+    wrap.appendChild(el("div", "runner-next",
+      "Pysäytys hallintakoneella: tmux kill-session -t run-issues-audit-<laji>-<repo-slug>"));
+    box.appendChild(wrap);
+  }
+
   function renderChips(data){
     var box = document.getElementById("chips");
     clear(box);
@@ -1119,6 +1150,7 @@ a:hover{text-decoration:underline}
     renderMeta(data);
     renderBanners(data);
     renderRunner(data);
+    renderAudits(data);
     renderChips(data);
     document.getElementById("sort").value = sortMode;
 

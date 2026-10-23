@@ -20,7 +20,10 @@
 #
 # The audit never changes code. It runs in a temporary detached worktree of
 # <remote>/<default-branch> (removed on exit); the operator's working tree is
-# never touched. The agent's read-only promise is checked afterwards.
+# never touched. The agent's read-only promise is checked afterwards. That
+# skeleton is shared with the coherence audit (lib/repo-audit.sh); this file
+# holds what is the security audit's own: the scanners, the threat-model prompt,
+# the auto-run policy and the issue text.
 #
 # Not a result, and nothing is written (CLAUDE.md §9): the agent could not
 # start, the result is empty or unparseable, or the worktree changed (exit 3).
@@ -80,8 +83,9 @@ AUDIT_KIND="security"
 SECURITY_AUDIT_LABEL="security"
 AUDIT_STEP="08-security-audit"
 
+REPO_AUDIT_NAME="security-audit"
+
 die_usage() { printf 'security-audit.sh: %s\n' "$1" >&2; exit 1; }
-say() { printf 'security-audit: %s\n' "$*" >&2; }
 
 REPO=""
 REMOTE="origin"
@@ -101,91 +105,34 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$REPO" ] || die_usage "usage: security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>]"
 
-for tool in git jq gh; do
-  command -v "$tool" >/dev/null 2>&1 || { say "$tool is required but not installed"; exit 2; }
-done
-
-if ! TOPLEVEL=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) || [ -z "$TOPLEVEL" ]; then
-  say "'$REPO' is not a git repository"
-  exit 2
-fi
-# The path as the operator spelled it (logical, symlinks kept) when it is the
-# repo root: the watchlist lookup compares paths as strings, and git's own
-# answer is the physical path.
-if [ "$(cd "$REPO" && pwd -P)" = "$(cd "$TOPLEVEL" && pwd -P)" ]; then
-  REPO=$(cd "$REPO" && pwd)
-else
-  REPO="$TOPLEVEL"
-fi
-
-# Libraries. claude-call.sh and preflight.sh carry `set -e`; this script does
-# not (every failure below is an explicit exit code), so it is switched off
-# again after sourcing.
+# Libraries. claude-call.sh (via repo-audit.sh) carries `set -e`; this script
+# does not (every failure below is an explicit exit code), so it is switched
+# off again after sourcing.
 source_machine_env
-# shellcheck source=lib/git-remote.sh
-. "$SCRIPT_DIR/lib/git-remote.sh"
+# shellcheck source=lib/repo-audit.sh
+. "$SCRIPT_DIR/lib/repo-audit.sh"
 # shellcheck source=lib/poller-config.sh
 . "$SCRIPT_DIR/lib/poller-config.sh"
-# shellcheck source=lib/labels.sh
-. "$SCRIPT_DIR/lib/labels.sh"
-# shellcheck source=lib/merge-gate.sh
-. "$SCRIPT_DIR/lib/merge-gate.sh"
 # shellcheck source=lib/security-scan.sh
 . "$SCRIPT_DIR/lib/security-scan.sh"
-# shellcheck source=lib/finding-issues.sh
-. "$SCRIPT_DIR/lib/finding-issues.sh"
-# shellcheck source=lib/claude-call.sh
-. "$SCRIPT_DIR/lib/claude-call.sh"
 set +e
 
-# _poller_env_value <file> <var> — one variable out of poller.env, read in a
-# subshell so nothing else in the file reaches this process (the same pattern
-# as install.sh's poller_env_values).
-_poller_env_value() {
-  ( exec 3>&1 >/dev/null 2>&1; set +eu; unset "$2"; [ -f "$1" ] && . "$1"; printf '%s' "${!2:-}" >&3 )
-}
+say() { repo_audit_say "$@"; }
+
+repo_audit_require_tools || exit $?
+repo_audit_set_repo "$REPO" || exit $?
+
 # The machine's auto-run threshold: the environment (caller or the machine env
-# file) first, then poller.env — the file the poller of #340 will run this
-# under, so a hand run and a scheduled run of one machine agree.
-POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-$HOME/.config/run-issues/poller.env}"
-AUTO_RUN_MACHINE="${RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY:-$(_poller_env_value "$POLLER_ENV_FILE" RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY)}"
+# file) first, then poller.env — the file the poller of #340 runs this under,
+# so a hand run and a scheduled run of one machine agree.
+AUTO_RUN_MACHINE="${RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY:-$(repo_audit_poller_env_value RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY)}"
 AUDIT_TIMEOUT="${RUN_ISSUES_SECURITY_AUDIT_TIMEOUT:-3600}"
 FETCH_TIMEOUT="${RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT:-300}"
 
-if ! OWNER_REPO=$(resolve_remote_to_owner_repo "$REPO" "$REMOTE"); then
-  say "remote '$REMOTE' does not exist in $REPO or is not a github.com remote"
-  exit 2
-fi
-
-if ! runner_git_fetch_bounded "$(preflight_timeout_bin)" "$FETCH_TIMEOUT" "$REPO" "$REMOTE" --quiet; then
-  say "git fetch $REMOTE failed in $REPO"
-  exit 2
-fi
-if ! BASE_REF=$(git -C "$REPO" symbolic-ref --short "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || [ -z "$BASE_REF" ]; then
-  say "'$REMOTE/HEAD' does not resolve — run 'git remote set-head $REMOTE -a' in $REPO, then retry"
-  exit 2
-fi
-BASE_BRANCH="${BASE_REF#"$REMOTE"/}"
-HEAD_SHA=$(git -C "$REPO" rev-parse "$BASE_REF" 2>/dev/null)
+repo_audit_resolve "$FETCH_TIMEOUT" || exit $?
 
 # ---- work area: a temporary detached worktree of the default branch ----------
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/security-audit.XXXXXX") || { say "cannot create a temp dir"; exit 2; }
-WT="$WORK/wt"
-KEEP_WORK=0
-cleanup() {
-  git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1 || true
-  git -C "$REPO" worktree prune >/dev/null 2>&1 || true
-  if [ "$KEEP_WORK" = 1 ]; then
-    say "artifacts kept for inspection: $WORK"
-  else
-    rm -rf "$WORK"
-  fi
-}
-trap cleanup EXIT
-if ! git -C "$REPO" worktree add --detach -q "$WT" "$HEAD_SHA" >/dev/null 2>&1; then
-  say "cannot create a worktree of $BASE_REF"
-  exit 2
-fi
+repo_audit_worktree || exit $?
 
 # ---- policy: repo (default branch) > machine > default ----------------------
 CFG=$(git -C "$REPO" show "$HEAD_SHA:.claude/run-issues.json" 2>/dev/null || true)
@@ -198,22 +145,10 @@ PICK_LABELS=$(poller_watchlist_pick_labels "$WATCHLIST" "$REPO") \
 say "auditing $OWNER_REPO at $BASE_REF ($HEAD_SHA); auto-run threshold '$AUTO_RUN_MIN', pickup labels '$PICK_LABELS'"
 
 # ---- launch check before anything costs ---------------------------------------
-if reason=$(preflight_claude_cmd_unusable); then
-  say "audit agent unavailable: $reason — nothing written"
-  exit 3
-fi
+repo_audit_preflight || exit $?
 
 # ---- known findings (also the dedup index) ------------------------------------
-INDEX="$WORK/index.tsv"
-if ! finding_issues_index "$OWNER_REPO" "$SECURITY_AUDIT_LABEL" "$INDEX"; then
-  say "listing the '$SECURITY_AUDIT_LABEL' issues of $OWNER_REPO failed — nothing written"
-  exit 4
-fi
-if [ -s "$INDEX" ]; then
-  KNOWN=$(awk -F'\t' '{ printf "#%s (%s) %s\n", $3, $4, $5 }' "$INDEX")
-else
-  KNOWN="Ei tunnettuja löydöksiä."
-fi
+repo_audit_index "$SECURITY_AUDIT_LABEL" || exit $?
 
 # ---- scanners -----------------------------------------------------------------
 SCAN_DIR="$WORK/scan"
@@ -227,28 +162,8 @@ PROMPT="$WORK/$AUDIT_STEP.prompt"
 render_prompt "$SCRIPT_DIR/prompts/$AUDIT_STEP.md" "$PROMPT" \
   REPO="$OWNER_REPO" HEAD_SHA="$HEAD_SHA" REMOTE="$REMOTE" BASE_REF="$BASE_BRANCH" \
   SCANNER_RESULTS="$SCANNER_RESULTS" KNOWN_FINDINGS="$KNOWN"
-arc=0
-( cd "$WT" && RUN_ISSUES_CLAUDE_TIMEOUT="$AUDIT_TIMEOUT" call_claude "$WORK" "$AUDIT_STEP" "$PROMPT" ) >&2 || arc=$?
-say "audit agent returned rc=$arc"
-
+repo_audit_agent "$AUDIT_STEP" "$PROMPT" "$AUDIT_TIMEOUT" || exit $?
 OUT="$WORK/$AUDIT_STEP.out"
-head_after=$(git -C "$WT" rev-parse HEAD 2>/dev/null)
-if [ "$head_after" != "$HEAD_SHA" ] || [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
-  KEEP_WORK=1
-  say "the audit agent changed the worktree (head ${head_after:-?}) although it may only read — audit rejected, nothing written"
-  exit 3
-fi
-RESULT=$(merge_gate_parse "$OUT" "$WORK/$AUDIT_STEP.exit")
-[ "$arc" -ne 0 ] && RESULT="launch_failed"
-if [ "$RESULT" = "launch_failed" ]; then
-  KEEP_WORK=1
-  if [ "$arc" -ne 0 ]; then
-    say "the audit agent failed (rc=$arc; 127 = did not start, 124 = timeout) — nothing written"
-  else
-    say "the audit result was empty or unparseable (no consistent MERGE_GATE_RESULT line) — nothing written"
-  fi
-  exit 3
-fi
 
 # Scanner rows join AFTER parsing, as in the merge gate. Failed scanners are
 # not findings here: they are reported and set exit 5.
@@ -287,6 +202,16 @@ _audit_source_key() {
   fi
   key=$(printf '%s' "$desc" | sed -nE 's/^\[([A-Za-z0-9_-]+)\].*/\1/p')
   printf 'agent\t%s' "${key:-$desc}"
+}
+
+# _audit_labels <severity> — the security label, plus the pickup labels when
+# the severity reaches the auto-run threshold.
+_audit_labels() {
+  if finding_issues_auto_runs "$AUTO_RUN_MIN" "$1"; then
+    printf '%s,%s' "$SECURITY_AUDIT_LABEL" "$PICK_LABELS"
+  else
+    printf '%s' "$SECURITY_AUDIT_LABEL"
+  fi
 }
 
 _audit_title() {
@@ -340,53 +265,17 @@ EOF
 }
 
 # ---- apply --------------------------------------------------------------------
-N_FINDINGS=0
-N_WRITE_FAILED=0
-SEEN=" "
 REOPEN_COMMENT="Löydös toistui koko repon tietoturva-auditoinnissa (\`security-audit.sh\`, commit \`$HEAD_SHA\`), joten issue avattiin uudelleen."
-while IFS= read -r row; do
-  [ -n "$row" ] || continue
-  origin="${row%%|*}"; rest="${row#*|}"
-  IFS='|' read -r sev conf loc desc <<<"$rest"
-  desc="${rest#*|*|*|}"
-  sk=$(_audit_source_key "$origin" "$desc")
-  source="${sk%%$'\t'*}"; key="${sk#*$'\t'}"
-  fp=$(finding_fingerprint "$source" "$loc" "$key")
-  N_FINDINGS=$((N_FINDINGS + 1))
-
-  if [[ "$SEEN" == *" $fp "* ]]; then
-    printf 'duplicate\t%s\t%s\t%s\n' "$sev" "$loc" "$desc"
-    continue
-  fi
-  SEEN="$SEEN$fp "
-
-  labels="$SECURITY_AUDIT_LABEL"
-  finding_issues_auto_runs "$AUTO_RUN_MIN" "$sev" && labels="$labels,$PICK_LABELS"
-
-  if [ "$DRY_RUN" = 1 ]; then
-    plan=$(finding_issue_plan "$INDEX" "$AUDIT_KIND" "$fp")
-    case "$plan" in create|reopen*) plan="$plan [$labels]" ;; esac
-    printf '%s\t%s\t%s\t%s\n' "$plan" "$sev" "$loc" "$desc"
-    continue
-  fi
-
-  title=$(_audit_title "$sev" "$loc" "$desc")
-  body=$(_audit_body "$sev" "$conf" "$loc" "$desc" "$source" "$fp")
-  if res=$(finding_issue_apply "$OWNER_REPO" "$INDEX" "$AUDIT_KIND" "$fp" "$title" "$body" "$labels" "$REOPEN_COMMENT"); then
-    printf '%s\t%s\t%s\t%s\n' "$res" "$sev" "$loc" "$desc"
-  else
-    N_WRITE_FAILED=$((N_WRITE_FAILED + 1))
-    printf 'FAILED\t%s\t%s\t%s\n' "$sev" "$loc" "$desc"
-  fi
-done <<EOF
+repo_audit_apply "$AUDIT_KIND" "$DRY_RUN" "$REOPEN_COMMENT" \
+  _audit_source_key _audit_labels _audit_title _audit_body <<EOF
 $FINDINGS
 EOF
 
-printf 'security-audit: %s finding(s)%s%s%s\n' "$N_FINDINGS" \
+printf 'security-audit: %s finding(s)%s%s%s\n' "$REPO_AUDIT_FINDINGS" \
   "$([ "$DRY_RUN" = 1 ] && echo ' (dry run: nothing written)')" \
   "$([ -n "$SCAN_FAILED" ] && echo "; scanner(s) failed: $SCAN_FAILED")" \
-  "$([ "$N_WRITE_FAILED" -gt 0 ] && echo "; $N_WRITE_FAILED GitHub write(s) failed")"
+  "$([ "$REPO_AUDIT_WRITE_FAILED" -gt 0 ] && echo "; $REPO_AUDIT_WRITE_FAILED GitHub write(s) failed")"
 
-[ "$N_WRITE_FAILED" -gt 0 ] && exit 4
+[ "$REPO_AUDIT_WRITE_FAILED" -gt 0 ] && exit 4
 [ -n "$SCAN_FAILED" ] && exit 5
 exit 0

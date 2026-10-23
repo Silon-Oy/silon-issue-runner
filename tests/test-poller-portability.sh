@@ -38,6 +38,9 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
+export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
+export RUN_ISSUES_CLAIM_VERIFY_DELAY=0
 ROOT="$(cd "$HERE/.." && pwd)"
 # The host name comes from the SAME primitive the code under test uses.
 # `hostname -s` is not portable — Windows' hostname has no -s — and issue #213

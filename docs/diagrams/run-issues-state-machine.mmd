@@ -89,9 +89,12 @@ stateDiagram-v2
     %% written first and verified; then comment, unclaim, local teardown. No
     %% needs-human: S2b resumes the issue once #N closes. A rejected SERIALIZE or
     %% a failed edge write continues as PROCEED (serialize_rejected /
-    %% serialize_edge_failed).
+    %% serialize_edge_failed). If the auto-claimed label survives the unclaim
+    %% (issue #355) the wait no longer ends by itself: artefacts kept,
+    %% needs-human + answerable comment, rc=15.
     S7_ReviewGate --> S7b_EnvBootstrap: auto + SERIALIZE rejected or edge write failed → PROCEED
     S7_ReviewGate --> [*]: auto + SERIALIZE #N accepted → blocked/serialized_behind_sibling (rc=14, no label)
+    S7_ReviewGate --> [*]: auto + SERIALIZE #N accepted, unclaim unverified → blocked/serialize_unclaim_failed + needs-human (rc=15)
     S7_ReviewGate --> [*]: auto + BLOCKER → blocked/cycle_review_BLOCKER + needs-human (rc=4)
     S7_ReviewGate --> S_AwaitingClarification: auto + NEEDS_CLARIFICATION (rc=11)
     S7_ReviewGate --> S_AwaitingReview: interactive (rc=10)

@@ -27,8 +27,16 @@ Kielletty:
 - haavoittuvan koodin piilottaminen, siirtäminen tai uudelleennimeäminen niin, että
   katselmoija ei enää huomaa sitä,
 - kommentit tai annotaatiot, jotka ohjeistavat katselmoijaa ohittamaan kohdan,
+- vaimennusannotaation lisääminen (`# nosec`, `// eslint-disable…`, `@SuppressWarnings`,
+  `# noqa`, `// NOSONAR`, `# gitleaks:allow`, `// nolint` tai vastaava),
+- tietoturvatyökalujen konfiguraation muokkaaminen löydöksen ohittamiseksi (esim.
+  `.gitleaks.toml`, `osv-scanner.toml`, linttereiden ja SAST-työkalujen säännöt,
+  allowlistit ja ignore-tiedostot),
 - toiminnallisuuden poistaminen, ellei se ole PR:n oma, selvästi tarpeeton lisäys,
-- testien poistaminen tai löysääminen, jotta korjaus näyttäisi toimivan.
+- testin poistaminen tai kommentoiminen,
+- assertion löysääminen (`toBeVisible` → `toBeAttached`, tarkka arvo → `toBeTruthy`),
+- `skip` / `only` / `xfail` / `continue-on-error` lisääminen,
+- CI-workflown muokkaaminen niin, ettei vaihe enää aja.
 
 Salaisuuden poistaminen koodista ei poista sitä historiasta. Poista se koodista silti ja
 mainitse vastauksessasi, että salaisuus on vaihdettava.

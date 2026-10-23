@@ -1602,7 +1602,17 @@ pr_run_merge_gate() {
   while :; do
     prior=$(merge_gate_last_result "$jsonl" "$gate" "$sha")
     result="${prior%% *}"
-    holding="${prior##* }"
+    if [ "$result" = findings ]; then
+      # The recorded holding count was computed against the threshold in force at
+      # review time; the decision uses the current one, re-applied to the stored
+      # findings. Without them the head is reviewed again (fail-closed) rather
+      # than trusting a count a lowered threshold would no longer give.
+      findings=$(cat "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")" 2>/dev/null || true)
+      if [ -z "$findings" ]; then
+        log "merge gate '$gate': findings of already reviewed head $sha are missing — reviewing it again"
+        result=""
+      fi
+    fi
     case "$result" in
       clean)
         log "merge gate '$gate': head $sha already reviewed clean — passing"
@@ -1610,13 +1620,13 @@ pr_run_merge_gate() {
         return 0
         ;;
       findings)
-        findings=$(cat "$(_merge_gate_findings_file "$run_dir" "$gate" "$sha")" 2>/dev/null || true)
+        holding=$(merge_gate_holding "$hold_min" "$findings" | grep -c . || true)
         if [ "${holding:-0}" -eq 0 ]; then
           log "merge gate '$gate': head $sha already reviewed, no finding at or above '$hold_min' — passing"
           PR_GATE_HEAD_SHA="$sha"
           return 0
         fi
-        log "merge gate '$gate': head $sha already reviewed with $holding holding finding(s) — not reviewing it again"
+        log "merge gate '$gate': head $sha already reviewed with $holding finding(s) at or above '$hold_min' — not reviewing it again"
         ;;
       *)
         # No record, or a review that never happened (launch_failed): review.

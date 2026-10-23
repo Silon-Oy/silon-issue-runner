@@ -195,9 +195,16 @@ for repo in "${REPOS[@]}"; do
         fi
         ;;
       14)
-        # Serialized behind an earlier sibling (issue #338): a planned wait that
-        # ends by itself when the sibling closes — not a failure.
+        # Serialized behind an earlier sibling (issue #338), successfully: a
+        # planned wait that ends by itself when the sibling closes — not a failure.
         log "run #$started: issue #$issue serialized behind a sibling run — continuing"
+        consecutive_blocked=0
+        ;;
+      15)
+        # Serialized, but the reservation label survived the unclaim (issue
+        # #355): the wait no longer ends by itself, so a human must act.
+        log "run #$started: issue #$issue serialized but still reserved — needs a human"
+        summary+=("$repo #$issue: needs-human rc=15")
         consecutive_blocked=0
         ;;
       1|8)
