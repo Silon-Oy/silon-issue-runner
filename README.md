@@ -773,13 +773,8 @@ Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as block
   poistamalla. Vastaavasti: jos issue ei lähde ajoon eikä yksikään estolabeli ole päällä,
   tarkista riippuvuudet issuen omasta näkymästä.
 
-**Runner voi lisätä kaaren itse (sarjoitus, issue #338).** Kun cycle review toteaa, että saman
-repon toinen, aiemmin aloitettu ajo toteuttaa olennaisesti saman muutoksen, se palauttaa
-`SERIALIZE #N`. Runner lisää silloin issuelle riippuvuuden "blocked by #N", kommentoi
-perustelun, vapauttaa varauksen ja lopettaa ajon (exit 14) **ilman `needs-human`-labelia**:
-issue lähtee ajoon itsestään, kun `#N` sulkeutuu. Kaari lisätään vain aiemmin aloitettuun
-sisarajoon, joten sarjoitus ei voi muodostaa riippuvuussykliä. Jos kaaren kirjoitus
-epäonnistuu, ajo jatkuu tavallisena. Runner ei koskaan pura olemassa olevia kaaria.
+Runner voi myös lisätä kaaren itse: kun aiemmin aloitettu sisarajo tekee saman muutoksen,
+ajo sarjoitetaan sen perään ilman `needs-human`-labelia (exit 14, [`docs/troubleshooting.md`](docs/troubleshooting.md)).
 
 **Työjärjestys ketjun rakentamiseen:** luo issuet → merkitse riippuvuudet GitHubin omalla
 "blocked by" -toiminnolla → lisää jokaiselle `auto-run`. Automaatio etenee ketjussa yksi
