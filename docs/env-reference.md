@@ -335,6 +335,18 @@ raja riippuisi siitä, kumpi kone sattuu mergeämään. Järjestys on siksi repo
 headista**, joten katselmoitava PR ei voi laskea omaa rajaansa. Rajamuutos tulee voimaan vasta,
 kun se on mergetty. Kelvoton JSON tai tuntematon arvo tulkitaan tiukimmaksi (`low`).
 
+### Tietoturva-auditointi (`security-audit.sh`, #339)
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY` | `high` | Lievin vakavuus, jonka löydösissue saa poimintalabelit (`critical`, `high`, `medium`, `low` tai `none`). Rajan alittavat luodaan ilman niitä. Luetaan ympäristöstä (kutsuja tai `env`-tiedosto), muuten `poller.env`:stä — vain tämä yksi muuttuja, alikuoressa. **Kohderepon `.claude/run-issues.json` `.security.audit_auto_run_min_severity` voittaa tämän** samalla perusteella kuin pidätysrajassa; repon arvo luetaan remoten oletushaarasta. Tuntematon arvo tai kelvoton JSON ⇒ `none`: issuet luodaan, mutta mikään ei käynnisty itsestään (turvallinen suunta on päinvastainen kuin merge-portissa) |
+| `RUN_ISSUES_SECURITY_AUDIT_TIMEOUT` | `3600` | Auditointiagentin kutsun aikakatto sekunteina |
+| `RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT` | `300` | Remoten `git fetch`in aikakatto ennen auditointia |
+
+Poimintalabelit tulevat watchlististä (`poller_pick_labels`); repo, jota watchlist ei listaa,
+saa sisäänrakennetun oletuksen. Skannerit ja agentti käyttävät yllä kuvattuja
+`RUN_ISSUES_GITLEAKS_BIN`-, `RUN_ISSUES_OSV_SCANNER_BIN`- ja `RUN_ISSUES_CLAUDE_*`-asetuksia.
+
 ### Julkaisu julkiseen peiliin (`publish-release.sh`, #155)
 
 Kaikki kolme ovat **testien injektiopisteitä**, eivät käyttäjäkonfiguraatiota: tuotannossa arvot ovat skriptin omia vakioita, koska asiakasnimiä sisältävä konfiguraatiotiedosto olisi itsessään vuotopinta.

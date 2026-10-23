@@ -52,7 +52,8 @@
 # Env:
 #   RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY  mildest severity whose issue
 #        gets the pickup labels: critical|high|medium|low|none (default high).
-#        The repo's `.security.audit_auto_run_min_severity` in
+#        Read from the environment, else from poller.env (RUN_ISSUES_POLLER_ENV_FILE,
+#        default $HOME/.config/run-issues/poller.env). The repo's `.security.audit_auto_run_min_severity` in
 #        .claude/run-issues.json (default branch) wins. Unknown => none.
 #   RUN_ISSUES_SECURITY_AUDIT_TIMEOUT   agent call time cap in seconds (default 3600)
 #   RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT  git fetch time cap (default 300)
@@ -137,7 +138,17 @@ source_machine_env
 . "$SCRIPT_DIR/lib/claude-call.sh"
 set +e
 
-AUTO_RUN_MACHINE="${RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY:-}"
+# _poller_env_value <file> <var> — one variable out of poller.env, read in a
+# subshell so nothing else in the file reaches this process (the same pattern
+# as install.sh's poller_env_values).
+_poller_env_value() {
+  ( exec 3>&1 >/dev/null 2>&1; set +eu; unset "$2"; [ -f "$1" ] && . "$1"; printf '%s' "${!2:-}" >&3 )
+}
+# The machine's auto-run threshold: the environment (caller or the machine env
+# file) first, then poller.env — the file the poller of #340 will run this
+# under, so a hand run and a scheduled run of one machine agree.
+POLLER_ENV_FILE="${RUN_ISSUES_POLLER_ENV_FILE:-$HOME/.config/run-issues/poller.env}"
+AUTO_RUN_MACHINE="${RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY:-$(_poller_env_value "$POLLER_ENV_FILE" RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY)}"
 AUDIT_TIMEOUT="${RUN_ISSUES_SECURITY_AUDIT_TIMEOUT:-3600}"
 FETCH_TIMEOUT="${RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT:-300}"
 

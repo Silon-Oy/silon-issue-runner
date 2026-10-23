@@ -1,6 +1,6 @@
 ---
 name: claude-issue-runner
-description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run, heavy-run or priority-high label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
+description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run, heavy-run, priority-high or security label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
 version: 2.4.0
 ---
@@ -63,6 +63,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
 | `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä | sinä | Suodatettava merkintä epic-issuella |
 | `epic-complete` | automaatio, kun kaikki alaissueet ovat kiinni | sinä | Merkintä epicillä; **runner ei sulje epiciä** |
+| `security` | automaatio, kun tietoturva-auditointi (`security-audit.sh`) luo löydösissuen | sinä tai ajo, joka korjaa löydöksen | Merkitsee auditoinnin löydöksen. Ei poimintaehto: vakavimmat löydökset saavat lisäksi poimintalabelit. Sulje väärä löydös tilaan *not planned*, niin auditointi ei avaa sitä uudelleen |
 
 Luo `auto-run`, `wip`, `auto-clean` ja `auto-reset` repoon itse: GitHub ei salli tuntemattoman labelin
 liittämistä, ja automaatio luo vain omat labelinsa. Kolme kallista sekaannusta:
@@ -268,6 +269,8 @@ skriptejä):
   `--stop` keskeyttää.
 - `/issue-runner:pr-watch` — aja PR-vahti yhdelle PR:lle tai skannaa tämän koneen valmiit ajot.
 - `/issue-runner:cleanup-run` — siivoa keskenjääneen ajon jäänteet.
+- `/issue-runner:security-audit` — koko repon tietoturva-auditointi: löydöksistä
+  `security`-labeloituja issueita, vakavimmista poimittavia. `--dry-run` ei kirjoita mitään.
 
 Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suoraan:
 
@@ -278,6 +281,8 @@ Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suo
 - `stop-run.sh` — pysäytä yksi elävä ajo (ei siivoa jäänteitä).
 - `cleanup-run.sh` — pura yhden ajon worktree, haara, run-dir, varaus ja lukko.
 - `auto-clean.sh` — sama siivous labelin laukaisemana, ja issuen sulkeminen.
+- `security-audit.sh` — koko repon tietoturva-auditointi (skannerit ja agentin
+  uhkamalli); ei muuta koodia.
 - `auto-reset.sh` — sama purku labelin laukaisemana **ilman** issuen sulkemista: issue palaa
   poimintaan ja ajo alkaa alusta puhtaasta basesta. Turvaportit ovat kirjaimellisesti samat
   rivit kuin siivouksessa (`lib/teardown.sh`); ero on vain lopputulos.

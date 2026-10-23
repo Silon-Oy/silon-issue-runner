@@ -36,7 +36,7 @@
 # Sourced; defines functions only and does no top-level work. Needs
 # lib/labels.sh and lib/merge-gate.sh (sourced here if not yet loaded).
 
-if ! declare -F labels_add >/dev/null 2>&1; then
+if ! declare -F _labels_repo_path >/dev/null 2>&1; then
   # shellcheck source=labels.sh
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/labels.sh"
 fi

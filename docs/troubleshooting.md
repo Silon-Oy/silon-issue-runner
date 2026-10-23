@@ -227,6 +227,17 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | 2 | Tuntematon `schema_version` — ei lähetystä |
 | 3 | Lähetys epäonnistui; runko on silti stdoutissa |
 
+### Tietoturva-auditointi (`security-audit.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` valmis |
+| 1 | Käyttövirhe |
+| 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä". Työhakemisto jätetään tarkasteltavaksi (polku stderrissä) |
+| 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
+| 5 | Auditointi valmis, mutta vähintään yksi skanneri epäonnistui: sen luokka jäi tarkistamatta deterministisesti. Epäonnistumisesta ei luoda issueta |
+
 ### Evolutionin havaintojen kooste (`evolution-digest.sh`)
 
 | Koodi | Merkitys |

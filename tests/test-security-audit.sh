@@ -15,7 +15,8 @@
 #   F) same finding twice in one audit -> one issue
 #   G) policy             -> default: medium gets no pickup label; repo `low`
 #                            beats machine `critical`; machine `medium` applies
-#                            without a repo value; repo `none` stops even a high;
+#                            without a repo value (also from poller.env); repo
+#                            `none` stops even a high;
 #                            watchlist labels are the pickup labels
 #   H) launch failure     -> CLI missing (preflight) and rc 127: exit 3, no write
 #   I) unparseable result -> exit 3, no write
@@ -259,6 +260,15 @@ policy_case 2 '{"security":{"audit_auto_run_min_severity":"low"}}' critical "$F_
 policy_case 3 "" medium "$F_MED" 1
 policy_case 4 '{"security":{"audit_auto_run_min_severity":"none"}}' "" "$F_HIGH" 0
 policy_case 5 '{"security":{"audit_auto_run_min_severity":"bogus"}}' "" "$F_HIGH" 0
+
+setup G7   # the machine value from poller.env
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_MED" > "$WORK/review.txt"
+mkdir -p "$HOME/.config/run-issues"
+echo 'RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY=medium' > "$HOME/.config/run-issues/poller.env"
+run_audit
+if grep -qx auto-run "$WORK/created/100.labels" 2>/dev/null; then ok G7 "poller.env threshold applies"
+else show G7; bad G7 "poller.env threshold 'medium' not applied"; fi
+done_case
 
 setup G6
 printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"

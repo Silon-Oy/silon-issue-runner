@@ -381,6 +381,7 @@ Claude Codessa, kohderepon juuressa:
 | `/issue-runner:problem` | `<ongelma omin sanoin>` | Triagee kuvatun ongelman repon koodista ja lokeista, kysyy puuttuvat toistoaskeleet ja tarkistaa duplikaatit avoimista issueista. Päätyy yhteen kolmesta: korjausohje ilman issueta, issue `/issue-runner:new-issue`n kautta, tai kokonaisuus `/issue-runner:new-epic`in kautta. Ei korjaa eikä aja mitään. Ohje: [`commands/issue-runner/problem.md`](../commands/issue-runner/problem.md) |
 | `/issue-runner:pr-watch` | `[#PR \| scan]` | PR-vahti yhdelle PR:lle tai kaikille tämän koneen valmiille ajoille. Ohje: [`commands/issue-runner/pr-watch.md`](../commands/issue-runner/pr-watch.md) |
 | `/issue-runner:cleanup-run` | `[<run-id> \| --list \| --issue <N> \| --all]` | Siivoaa keskenjääneen ajon worktreen, haaran, run-dirin, lukon ja assignaation. Ohje: [`commands/issue-runner/cleanup-run.md`](../commands/issue-runner/cleanup-run.md) |
+| `/issue-runner:security-audit` | `[--dry-run] [--remote <nimi>]` | Koko repon tietoturva-auditointi `security-audit.sh`:lla: löydöksistä `security`-labeloituja issueita ilman duplikaatteja, auto-run-rajan ylittävät saavat poimintalabelit. Ei muuta koodia. Ohje: [`commands/issue-runner/security-audit.md`](../commands/issue-runner/security-audit.md) |
 | `/issue-runner:refresh` | — | Tuo repon ajan tasalle ja varmistaa että dev-server pyörii. Ohje: [`commands/issue-runner/refresh.md`](../commands/issue-runner/refresh.md) |
 
 Slash-komennot ovat ohjeita Claude Codelle, eivät skriptejä: agentti lukee ohjeen, ajaa
@@ -400,6 +401,7 @@ käytettävissä.
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
 | `evolution-digest.sh` | `evolution-digest.sh [--since <vrk>] [--claude]` | Evolutionin toistuvat havainnot jakson ajoista ja kohde-ehdotus kullekin. Puhtaasti lukeva, ajetaan käsin |
+| `security-audit.sh` | `security-audit.sh <repo> [--remote <nimi>] [--dry-run]` | Koko repon tietoturva-auditointi oletushaarasta väliaikaisessa worktreessä: skannerit ja agentin uhkamalli, löydös → yksi issue sormenjäljellä (`lib/finding-issues.sh`). Avointa ei monisteta, korjattu avataan vain toistuessa, *not planned* -tilaan suljettua ei koskaan. Ei ajastusta |
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run` |
 | `cleanup-run.sh` | `cleanup-run.sh --issue <N> --yes` | Ajojäänteiden purku. `--list`, `--all`, `--force`, `--dry-run`, `--remote` |
 | `auto-clean.sh` | *(pollerin kutsuma)* | Label-vetoinen siivous + issuen sulkeminen. Käsin: `--repo <polku> --issue <N>` |
