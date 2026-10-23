@@ -317,6 +317,7 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 | `PR_WATCH_CI_LOG_MAX` | `60000` | Agentin promptiin syötettävän CI-lokiotteen kokokatto (tavua) |
 | `PR_WATCH_CI_MAX_POLLS` | `40` | CI-odotuksen kierrosten määrä |
 | `PR_WATCH_CI_POLL_SECS` | `15` | CI-odotuksen kierrosväli (40 × 15 s = 10 min) |
+| `PR_WATCH_CI_EMPTY_GRACE_SECS` | `120` | Pushin jälkeen tyhjä tarkistuslista pushatulla SHA:lla on `PENDING`, kunnes se on pysynyt tyhjänä tämän ajan; sen jälkeen `GREEN` (repo ilman CI:tä, #354). **Ei koskaan `GREEN`, jos PR:llä oli tarkistuksia ennen pushia**: repossa on silloin CI, ja tyhjä lista tarkoittaa vain, ettei GitHub ole vielä rekisteröinyt niitä — odotus aikakatkeaa ihmiselle. Aika lasketaan kierroksista (kierros × `PR_WATCH_CI_POLL_SECS`). Pidä pienempänä kuin (`PR_WATCH_CI_MAX_POLLS` − 1) × `PR_WATCH_CI_POLL_SECS`, muuten CI:tön repo aikakatkeaa hyväksynnän sijaan |
 | `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (#334): agentti katselmoi PR:n lopullisen diffin ennen jokaista mergeä, ja löydökset korjataan tai PR pidätetään (exit 10). README §7.12 |
 | `PR_WATCH_MAX_SECURITY_FIXES` | `1` | Tietoturvalöydösten korjausyritysten katto per PR (`merge_gate_fix_attempted`, luetaan `state.jsonl`in hännästä) |
 | `PR_WATCH_SECURITY_REVIEW_TIMEOUT` | `1800` | Tietoturvakatselmuksen kutsun aikakatto (claude tai codex) |

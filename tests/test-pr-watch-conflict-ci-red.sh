@@ -73,7 +73,7 @@ case "\$1 \$2" in
  "labels":[{"name":"auto-merge"}],"statusCheckRollup":[],"headRefName":"feature/x","baseRefName":"main"}
 JSON
     else
-      echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"FAILURE"}]}'
+      echo '{"headRefOid":"'"\$(git -C "$WT" rev-parse HEAD)"'","statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"FAILURE"}]}'
     fi
     ;;
   "pr comment") cat > /dev/null; touch "$COMMENT_FLAG" ;;
