@@ -479,6 +479,13 @@ RUNNER_JSON="$(jq -nc \
 AUDITS_TSV="$TMPD/audits.tsv"
 : > "$AUDITS_TSV"
 REPO_SLUGS=" $(cut -f4 "$OWNERS_TSV" 2>/dev/null | tr '\n' ' ')"
+# An idle repo (no run-dir) is where audits typically run, and OWNERS_TSV only
+# knows repos with runs — so the filtered repo's own remotes supply its slugs.
+if [ -n "$REPO_FILTER" ] && [ -d "$REPO_FILTER" ]; then
+  for a_rem in $(git -C "$REPO_FILTER" remote 2>/dev/null); do
+    REPO_SLUGS="$REPO_SLUGS$(repo_slug "$REPO_FILTER" "$a_rem" 2>/dev/null) "
+  done
+fi
 while read -r a_name a_created; do
   parsed="$(audit_session_parse "$a_name")" || continue
   a_kind="${parsed%% *}"
