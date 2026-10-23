@@ -44,7 +44,14 @@ FAIL=0
 # both variables -> docs/env-reference.md, the full behaviour ->
 # docs/usage-reference.md case d2); README carries only the three table rows a
 # human scanning "Ajon tilat" and section 5 needs, ~430 B.
-MAX_BYTES=83400
+#
+# Raised to 85700 by issue #334. README already measured 83854 B on main before
+# it (over the previous budget, so the test was red there). #334's criteria
+# require a new security-model section (7.11, the merge-time security gate) plus
+# one section-5 table row, ~1.8 KB. The reference material went to the mirrors
+# first: exit code 10 -> docs/troubleshooting.md, the six variables and the
+# "repo wins" rationale -> docs/env-reference.md.
+MAX_BYTES=85700
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

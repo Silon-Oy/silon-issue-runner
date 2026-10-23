@@ -37,6 +37,7 @@ lukuihin.
 | `machine-env.sh` | Koneen env-tiedoston sourceaus **kutsujan etuoikeudella** (§5.5). Jaettu `orchestrate.sh`:n ja `pr-watch.sh`:n kesken, jotta sääntö on yhdessä paikassa |
 | `paths.sh` | Lukkojuuren ja lokihakemiston **alustakohtaiset oletukset** (`uname -s`: Darwin ⇒ macOS-polut, kaikki muu ⇒ XDG state). Haara on tarkoituksella ei-valkolista, jotta `MINGW64_NT-*` osuu XDG-haaraan |
 | `poller-config.sh` | Host-portti, watchlistin resolvointi ja repon poimintaehdot (labelit, valinnainen `assignees`). Erillinen, koska poller itse exittaa source-hetkellä vieraalla koneella eikä olisi testattavissa. Kirjoittaa levylle ei koskaan; ainoa ulkoinen komento on watchlistin `jq`-luku |
+| `merge-gate.sh` | Yleisen merge-portin puhtaat osat (#334): tulosmuodon jäsennys (käynnistysvirhe ei ole koskaan puhdas), vakavuusraja (repo voittaa koneen) sekä headin aiempi tulos ja yritysmäärä `state.jsonl`in hännästä. Silmukka ja pidätys ovat `pr-watch.sh`:n `pr_run_merge_gate`ssa |
 | `pr-watch-lib.sh` | PR:n luokittelu ja merge-päätös irrotettuna testattavaksi |
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
 | `rate-limit.sh` | Rate-limitin **tekstuaalinen** tunnistus ja jaettu perääntyminen (§5.1) |

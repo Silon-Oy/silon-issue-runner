@@ -577,6 +577,7 @@ lähde on koodin `${VAR:-oletus}`.
 | `PR_WATCH_ENABLE_CONFLICT_RESOLUTION` | `0` (poller nostaa `1`:ksi) | AI-avusteinen konfliktinratkaisu (ks. osio 7.4) |
 | `PR_WATCH_ENABLE_CI_REPAIR` | `0` (poller nostaa `1`:ksi) | AI-avusteinen punaisen CI:n korjaus (ks. osio 7.5) |
 | `PR_WATCH_MAX_CI_REPAIRS` | `1` | CI-korjauksen yrityskatto per PR |
+| `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (ks. osio 7.11) |
 
 ### Asennin
 
@@ -1087,6 +1088,29 @@ koneellesi tunnin sisällä. Jos et halua sitä, älä bootstrappaa self-update-
 submodulena, jolloin pull ohitetaan ja päivitys on eksplisiittinen pinnin nosto.
 
 ---
+
+### 7.11 Merge-hetken tietoturvaportti
+
+Auto-merge-PR:n koodia ei katselmoi ihminen, ja rebasen, konfliktinratkaisun ja CI-korjauksen
+agentit muuttavat sitä vielä ajon jälkeen. Siksi `pr-watch.sh` ajaa ennen jokaista mergeä
+**tietoturvakatselmuksen PR:n lopullisesta diffistä** erillisessä agenttikutsussa
+([`prompts/06-security-review.md`](prompts/06-security-review.md)). Kytkin
+`PR_WATCH_ENABLE_SECURITY_GATE` on skriptissä `0`, ja poller nostaa sen päälle.
+
+- Pidätysrajan ylittävät löydökset (oletus `critical` ja `high`) korjaa agentti
+  feature-worktreessä ([`prompts/07-security-fix.md`](prompts/07-security-fix.md)). Sen
+  jälkeen CI revalidoidaan ja **uusi head katselmoidaan** ennen mergeä. Rajan alittavat
+  löydökset raportoidaan PR-kommentissa, eivätkä ne estä mergeä.
+- Epäonnistunut korjaus, täyttynyt yrityskatto (`PR_WATCH_MAX_SECURITY_FIXES`, oletus `1`) tai
+  katselmus, joka ei käynnisty tai ei tuota jäsennettävää tulosta ⇒ `needs-human`, kommentti
+  löydöksineen ja exit 10. **Käynnistysvirhe ei ole koskaan puhdas tulos.**
+- Tulos kirjataan head-SHA:han sidottuna, joten samaa headia ei katselmoida kahdesti. Merge
+  sidotaan katselmoituun headiin (`--match-head-commit`). Pidätys toimii kuten CI-korjauksen
+  luovutus: kun poistat labelin, uusi head katselmoidaan. Sama head pidätetään uudelleen, joten
+  hyväksytyt löydökset mergetään käsin.
+- Kohderepo asettaa rajan `.claude/run-issues.json`issa (`security.hold_min_severity`), ja
+  arvo **voittaa koneen asetuksen**. Arvo luetaan base-haarasta, joten PR ei voi laskea omaa
+  rajaansa ([perustelu](docs/env-reference.md#pr-vahti)).
 
 ## 8. Perehdytys — miksi se käyttäytyy noin
 

@@ -45,9 +45,11 @@ RUNNER="${RUNNER_DIR:-$HOME/.claude/scripts/run-issues}"
 DRAIN="$RUNNER/drain-queue.sh"
 
 # Let an agent resolve a rebase conflict or repair red CI instead of stalling
-# the chain — the same defaults the pr-watch poller applies.
+# the chain, and review the final diff before each merge — the same defaults
+# the pr-watch poller applies.
 export PR_WATCH_ENABLE_CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
 export PR_WATCH_ENABLE_CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
+export PR_WATCH_ENABLE_SECURITY_GATE="${PR_WATCH_ENABLE_SECURITY_GATE:-1}"
 
 # Post-drain retry budget while CI is still running: attempts × interval.
 PR_WATCH_POST_ATTEMPTS="${PR_WATCH_POST_ATTEMPTS:-8}"
