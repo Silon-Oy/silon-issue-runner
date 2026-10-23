@@ -176,7 +176,8 @@ labelin, joten elinkaari on suljettu.
 "runnerin varaus" eivät olleet erotettavissa. Varaus on nyt **vain automaation kirjoittama**
 `auto-claimed`-label, ja poiminta suodattaa sillä (`no:assignee` poistui) — käsin assignattu
 issue lähtee ajoon. `verify_claim`in sääntö: **assignee-joukko claimin jälkeen == joukko ennen
-∪ {@me}**. Etukäteen tehty assignaatio ei kaada ajoa, kilpaileva toinen tili huomataan yhä.
+∪ {@me}**. Etukäteen tehty assignaatio ei kaada ajoa, kilpaileva toinen tili huomataan yhä,
+eikä perääntyminen poista sitä (`run.json`:n `self_preassigned`, #357).
 
 Assignee palasi poimintaan **reitityksenä** (#238): per-repo `assignees` ANDataan labeleihin —
 **opt-in, ja tyhjä lista ei suodata mitään**; vastakkainen luenta pysäyttäisi repon hiljaa ja

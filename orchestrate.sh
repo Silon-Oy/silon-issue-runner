@@ -706,6 +706,8 @@ RUN_DIR=""
 BRANCH=""
 WORKTREE_PATH=""
 BASE_BRANCH=""
+# run.json self_preassigned (issue #357): empty = legacy run, unclaim removes @me.
+SELF_PREASSIGNED=""
 CR_DECISION=""
 CR_SERIALIZE_TARGET=""
 DB_CLONE_VALUE=""
@@ -1066,14 +1068,19 @@ phase_a() {
   # it checks the post-claim set equals this snapshot ∪ {@me} rather than "@me is
   # the sole assignee". A racing runner on another account still shows up as an
   # extra login and loses the race.
-  local before_assignees
-  before_assignees=$(issue_assignees "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" || true)
+  local before_assignees before_rc=0
+  before_assignees=$(issue_assignees "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME") || before_rc=$?
+  # Record whether @me was already assigned BEFORE the claim (issue #357), so every
+  # unclaim path — here, serialize, resume_cancel, cleanup-run.sh — removes only an
+  # assignment this run made and never a human's routing assignment (#238).
+  SELF_PREASSIGNED=$(claim_self_preassigned "$before_assignees" "$before_rc")
+  state_set "$RUN_DIR" "self_preassigned" "$SELF_PREASSIGNED"
   claim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
   state_event "$RUN_DIR" "claim_attempted"
   sleep 5
   if ! verify_claim "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$before_assignees" "$REMOTE_NAME"; then
     log "claim race lost after verification — unclaiming and exiting"
-    unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
+    unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$SELF_PREASSIGNED"
     state_finalize "$RUN_DIR" "lost_race" "claim_lost"
     exit 3
   fi
@@ -1473,7 +1480,7 @@ serialize_gate() {
 
   # (d) Release the claim and verify the reservation label is gone: a blocked
   # issue that stays auto-claimed would never re-enter pickup.
-  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO"
+  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$SELF_PREASSIGNED"
   [ "$IS_CONTINUE" = "1" ] && _remove_waiting_label
   local labels
   if ! labels=$(issue_label_names "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME") \
@@ -1581,6 +1588,7 @@ resume_load_state() {
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  SELF_PREASSIGNED=$(jq -r '.self_preassigned // ""' "$rj")
   # Multi-remote: empty -> "origin" (legacy run.json predating the field).
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
@@ -1640,6 +1648,7 @@ restart_load_state() {
   CR_DECISION=$(jq -r '.cycle_review_decision // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  SELF_PREASSIGNED=$(jq -r '.self_preassigned // ""' "$rj")
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
   # Repo namespacing (issue #67): read the slug back verbatim and do NOT
@@ -1810,6 +1819,7 @@ continue_load_state() {
   WORKTREE_PATH=$(jq -r '.worktree_path // ""' "$rj")
   DB_CLONE_VALUE=$(jq -r '.db_clone // ""' "$rj")
   BASE_BRANCH=$(jq -r '.base_branch // ""' "$rj")
+  SELF_PREASSIGNED=$(jq -r '.self_preassigned // ""' "$rj")
   REMOTE_NAME=$(jq -r '.remote // "origin"' "$rj")
   OWNER_REPO=$(jq -r '.owner_repo // ""' "$rj")
   # Repo namespacing (issue #67): read the slug back verbatim and do NOT
@@ -2310,7 +2320,7 @@ resume_cancel() {
     "/run-issues peruutettu review-gate-vaiheessa. Worktree ja branch jätettiin paikoilleen: \`$WORKTREE_PATH\` ja \`$BRANCH\`. Voit jatkaa manuaalisesti tai poistaa nuo." \
     "$OWNER_REPO" "$REMOTE_NAME" \
     || true
-  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" || true
+  unclaim_issue "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$SELF_PREASSIGNED" || true
   exit 0
 }
 

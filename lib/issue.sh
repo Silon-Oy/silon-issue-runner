@@ -475,19 +475,70 @@ verify_claim() {
   [ "$current_set" = "$expected_set" ]
 }
 
-# unclaim_issue <repo-root> <N> [<owner/repo>]
+# _login_in_set <login> <csv> — pure. Returns 0 when <login> is a member of the
+# comma-separated login list <csv>, non-zero otherwise (an empty login is never a
+# member).
+_login_in_set() {
+  local login="$1" csv="${2:-}"
+  [ -n "$login" ] || return 1
+  printf '%s' "$csv" | tr ',' '\n' | grep -qxF -- "$login"
+}
+
+# claim_self_preassigned <before-assignees-csv> <snapshot-rc>
+# Prints whether @me was ALREADY an assignee before claim_issue ran (issue #357):
+#   1        — @me was in the pre-claim snapshot (a human assigned the runner's
+#              account, e.g. to route the issue via the watchlist `assignees`, #238)
+#   0        — @me was not assigned; claim_issue's assignment is the run's own
+#   unknown  — the snapshot read failed (<snapshot-rc> != 0) or `me` could not be
+#              resolved, so the pre-claim state cannot be known
+# The `me` lookup uses the personal identity for the same reason verify_claim does.
+claim_self_preassigned() {
+  local before_csv="${1:-}" rc="${2:-0}" me
+  if [ "$rc" != "0" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if ! me=$(gh api user --jq .login 2>/dev/null) || [ -z "$me" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if _login_in_set "$me" "$before_csv"; then printf '1'; else printf '0'; fi
+}
+
+# unclaim_keeps_assignee <self-preassigned> — pure. Returns 0 when the @me
+# assignee must be KEPT on unclaim: `1` (a human pre-assigned it) or `unknown`
+# (the pre-claim state is lost — a stray assignee is harmless because pickup
+# filters on the auto-claimed label, while removing a routing assignee drops the
+# issue out of pickup for good). Empty (a run.json predating the field) or `0`
+# keeps the old behaviour: the run's own assignment is removed.
+unclaim_keeps_assignee() {
+  case "${1:-}" in
+    1|unknown) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# unclaim_issue <repo-root> <N> [<owner/repo>] [<self-preassigned>]
 # Removes the @me assignee AND the auto-claimed reservation label (issue #99).
 # Idempotent (best-effort). The label removal is bound here for the same reason
 # the add is bound to claim_issue: it tracks the assignment structurally.
+#
+# The assignee is removed only when claim_issue added it in this run (issue #357):
+# <self-preassigned> is the run.json `self_preassigned` value from
+# claim_self_preassigned, and unclaim_keeps_assignee decides. The label is always
+# removed — it is the reservation; a pre-existing assignee is not.
 unclaim_issue() {
   local repo="$1"
   local n="$2"
   local owner_repo="${3:-}"
-  (
-    cd "$repo"
-    # shellcheck disable=SC2046
-    gh issue edit "$n" $(_repo_args "$owner_repo") --remove-assignee "@me" >/dev/null 2>&1 || true
-  )
+  local preassigned="${4:-}"
+  if ! unclaim_keeps_assignee "$preassigned"; then
+    (
+      cd "$repo"
+      # shellcheck disable=SC2046
+      gh issue edit "$n" $(_repo_args "$owner_repo") --remove-assignee "@me" >/dev/null 2>&1 || true
+    )
+  fi
   _reserve_label_remove "$repo" "$n" "$owner_repo"
 }
 

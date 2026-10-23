@@ -147,9 +147,67 @@ else
 fi
 reset_path
 
+# ── Tests 9–13: unclaim keeps a pre-existing @me assignee (issue #357) ──
+# install_edit_stub [<api-user-exit>] — a gh that logs every call and answers
+# `api user` with "maintainer" (or fails with <api-user-exit>). Without labels.sh
+# sourced, _reserve_label_remove is a no-op, so the log holds only gh's own calls.
+GH_CALLS="$TMP/gh-calls.log"
+install_edit_stub() {
+  local user_rc="${1:-0}"
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/gh" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$GH_CALLS"
+case "\$1 \$2" in
+  "api user") [ "$user_rc" = 0 ] || exit "$user_rc"; echo "maintainer" ;;
+esac
+exit 0
+EOF
+  chmod +x "$TMP/bin/gh"
+  export PATH="$TMP/bin:$PATH"
+  : > "$GH_CALLS"
+}
+
+install_edit_stub
+for v in 1 unknown; do
+  : > "$GH_CALLS"
+  unclaim_issue "$TMP" 9 "" "$v"
+  if grep -q -- '--remove-assignee' "$GH_CALLS"; then
+    fail "self_preassigned=$v → unclaim_issue must keep the @me assignee"
+  else
+    pass "self_preassigned=$v → unclaim_issue keeps the @me assignee"
+  fi
+done
+for v in 0 ""; do
+  : > "$GH_CALLS"
+  unclaim_issue "$TMP" 10 "" "$v"
+  if grep -q -- '--remove-assignee @me' "$GH_CALLS"; then
+    pass "self_preassigned='$v' → unclaim_issue removes the run's own @me assignee"
+  else
+    fail "self_preassigned='$v' → unclaim_issue should remove @me"
+  fi
+done
+
+# claim_self_preassigned: 1 when @me is in the snapshot, 0 when not, unknown when
+# the snapshot read or the `me` lookup failed.
+check_pre() {
+  local want="$1" got="$2" what="$3"
+  if [ "$got" = "$want" ]; then pass "claim_self_preassigned: $what → $want"
+  else fail "claim_self_preassigned: $what → want $want, got '$got'"; fi
+}
+check_pre 1 "$(claim_self_preassigned "coworker,maintainer" 0)" "me in snapshot"
+check_pre 0 "$(claim_self_preassigned "coworker" 0)" "me not in snapshot"
+check_pre 0 "$(claim_self_preassigned "" 0)" "empty snapshot"
+check_pre 0 "$(claim_self_preassigned "maintainer2" 0)" "login prefix is not membership"
+check_pre unknown "$(claim_self_preassigned "maintainer" 1)" "snapshot read failed"
+reset_path
+install_edit_stub 1
+check_pre unknown "$(claim_self_preassigned "maintainer" 0)" "me lookup failed"
+reset_path
+
 # ── Summary ──────────────────────────────────────────────────────────
 if [[ "$FAILED" -gt 0 ]]; then
   echo "$FAILED test(s) failed." >&2
   exit 1
 fi
-echo "All verify_claim tests passed."
+echo "All verify_claim / unclaim tests passed."
