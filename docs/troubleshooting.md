@@ -162,6 +162,22 @@ ensimmäisen ajokelpoisen alaissueen heti. `--stop` **keskeyttää** epicin: se 
 lapsiajot delegoimalla `stop-run.sh`:lle ja vapauttaa jonossa olevat poistamalla ajolabelit
 **ensin epiciltä, sitten avoimilta lapsilta** (järjestys estää pollerin re-propagoinnin).
 
+### Epicin katselmus (`epic-review.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Kriteerit täyttyvät (kirjattu, tai `--dry-run`), tai katselmus on jo kirjattu epicille (marker olemassa — agenttia ei kutsuttu, mitään ei kirjoitettu) |
+| 1 | Käyttövirhe (tuntematon lippu / puuttuva tai epäkelpo epic-numero / `--repo` ei ole git-repo / `--remote` ei resolvoidu) |
+| 2 | Epic-issueta ei löytynyt, se ei ole avoin tai siltä puuttuu `epic`-label — mitään ei kirjoitettu |
+| 3 | Epic ilman alaissueita — ei katselmoitavaa, mitään ei kirjoitettu |
+| 4 | Lukuvirhe — lapsijoukkoa tai katselmusaineistoa ei saatu luettua (fail-closed: osittaista aineistoa ei katselmoida) |
+| 5 | Ei tuomiota — katselmusagentti ei käynnistynyt, aikakatkesi tai ei tuottanut jäsennettävää tulosta. Mitään ei kirjoitettu, joten uusi ajo yrittää uudelleen |
+| 6 | Löydöksiä — kommentti ja `epic-attention` kirjattu, tai kirjattaisiin (`--dry-run`) |
+| 7 | Tuomio saatiin, mutta GitHub-kirjoitus epäonnistui (label ja/tai kommentti). Jos kommentti ehti perille, marker vaientaa uudelleenajot — lisää puuttuva label käsin |
+
+`epic-review.sh` on ihmisen käynnistämä: poller ei kutsu sitä. Se **ei sulje epiciä**, ei koske
+lapsiin eikä mergeä. Rakenne ja kertaluontoisuus: [`epic-orchestration.md`](epic-orchestration.md) §4.4.
+
 ### Julkaisu julkiseen peiliin (`publish-release.sh`)
 
 | Koodi | Merkitys |

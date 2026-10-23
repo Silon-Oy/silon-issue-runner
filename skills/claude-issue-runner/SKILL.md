@@ -1,6 +1,6 @@
 ---
 name: claude-issue-runner
-description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run, heavy-run, priority-high or security label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
+description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run, heavy-run, priority-high or security label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:epic-review, /issue-runner:pr-watch or /issue-runner:cleanup-run commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
 version: 2.4.0
 ---
@@ -61,7 +61,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `priority-high` | sinä | sinä | Järjestys, ei ehto: poimitaan ennen saman repon muita ehdokkaita, ryhmän sisällä vanhin ensin. Estetty prioriteetti-issue ohitetaan kuten muutkin estetyt. Luo label repoon itse |
 | `auto-claimed` | automaatio, kun ajo varaa issuen (S3) | automaatio, kun ajo perääntyy tai siivotaan | **Varaus**: estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Älä lisää tai poista käsin** |
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
-| `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä | sinä | Suodatettava merkintä epic-issuella |
+| `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä tai epicin katselmus löytää puutteen | sinä | Suodatettava merkintä epic-issuella |
 | `epic-complete` | automaatio, kun kaikki alaissueet ovat kiinni | sinä | Merkintä epicillä; **runner ei sulje epiciä** |
 | `security` | automaatio, kun tietoturva-auditointi (`security-audit.sh`) luo löydösissuen | sinä tai ajo, joka korjaa löydöksen | Merkitsee auditoinnin löydöksen. Ei poimintaehto: vakavimmat löydökset saavat lisäksi poimintalabelit. Sulje väärä löydös tilaan *not planned*, niin auditointi ei avaa sitä uudelleen |
 
@@ -202,8 +202,9 @@ poista kaari issuen näkymästä — issue lähtee ajoon seuraavalla tikillä.
   koska propagointi palauttaisi poistetun labelin.
 - Jätä yksittäinen alaissue ajon ulkopuolelle `wip`illä, älä `auto-run`ia poistamalla —
   propagointi palauttaisi sen.
-- `epic-attention` epicillä tarkoittaa, että jokin lapsi tarvitsee ihmistä; riippumattomat
-  haarat jatkavat silti itsestään.
+- `epic-attention` epicillä tarkoittaa, että jokin lapsi tarvitsee ihmistä (riippumattomat
+  haarat jatkavat silti itsestään) **tai** että epicin katselmus (`/issue-runner:epic-review`)
+  löysi kriteerin, jota lapset eivät yhdessä täytä. Kommentti kertoo kumpi.
 - `epic-complete` tarkoittaa, että kaikki alaissueet ovat kiinni. **Runner ei sulje epiciä** —
   sulkupäätös on sinun, koska epicin rungossa voi olla hyväksyntäkriteereitä.
 
@@ -267,6 +268,8 @@ skriptejä):
   Tarkistaa duplikaatit; ei korjaa eikä aja mitään.
 - `/issue-runner:run-epic` — validoi epicin rakenne ja propagoi ajolabelit sen alaissueille;
   `--stop` keskeyttää.
+- `/issue-runner:epic-review` — katselmoi epicin hyväksyntäkriteereitään vasten ja kirjaa
+  tuloksen epicille kerran; löydöksistä `epic-attention`. Ei sulje epiciä. `--dry-run` ei kirjoita.
 - `/issue-runner:pr-watch` — aja PR-vahti yhdelle PR:lle tai skannaa tämän koneen valmiit ajot.
 - `/issue-runner:cleanup-run` — siivoa keskenjääneen ajon jäänteet.
 - `/issue-runner:security-audit` — koko repon tietoturva-auditointi: löydöksistä
@@ -276,6 +279,7 @@ Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suo
 
 - `orchestrate.sh` — orkestraattori: yksi issue → yksi ajo → yksi PR.
 - `run-epic.sh` — epicin käynnistys ja keskeytys.
+- `epic-review.sh` — epicin katselmus hyväksyntäkriteereitä vasten.
 - `pr-watch.sh` — PR-vahti: CI-odotus, konfliktin ratkaisu, auto-merge.
 - `status.sh` — puhtaasti lukeva kokonaistila kaikista ajoista.
 - `stop-run.sh` — pysäytä yksi elävä ajo (ei siivoa jäänteitä).

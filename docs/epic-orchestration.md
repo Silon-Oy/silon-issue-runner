@@ -470,6 +470,30 @@ Kaksi osaa, molemmat olemassa olevalla koneistolla:
 
 ---
 
+### 4.4 Valmistumisen katselmus (`epic-review.sh`, #274)
+
+`epic-complete` kertoo vain, että jokainen lapsi on kiinni — ei sitä, täyttävätkö lasten
+muutokset **yhdessä** epicin hyväksyntäkriteerit. `epic-review.sh <N>` (komento
+`/issue-runner:epic-review`) vastaa siihen: se kokoaa aineiston (`epic_review_collect`, #272),
+ajaa katselmusagentin (`epic_review_run`, #273) ja kirjaa tuloksen epicille.
+
+- **Ihmisen käynnistämä opt-in-pinta.** Poller ei kutsu sitä: `epic_process_one` ja
+  `scan_epics` ovat ennallaan, eikä `epic-complete` käynnistä katselmusta.
+- **Suunnittele–sovella.** Epic olemassa, avoin, `epic`-label, lapsia ≥ 1, aineisto luettavissa
+  ja agentilta tuomio — vasta sitten ensimmäinen kirjoitus. Yksikin kieltäytyminen ⇒ nolla
+  muutosta. `--dry-run` ajaa agentin (raportti tarvitsee tuomion) muttei kirjoita mitään.
+- **Kirjaus olemassa olevalla sanastolla**, samalla primitiivillä kuin §4.2:n eskalaatio
+  (`_epic_post_attention`): löydökset ⇒ kommentti kriteereittäin + `epic-attention`; kriteerit
+  täyttyvät ⇒ kommentti **ilman** labelia. Label kirjoitetaan ennen kommenttia, koska kommentin
+  marker tekee kirjauksesta kertaluontoisen.
+- **Kertaluontoisuus luetaan GitHubista.** Marker `<!-- run-issues:epic-review -->` on yksi per
+  epic tuloksesta riippumatta; kun se on jo epicin kommenteissa, agenttia ei kutsuta eikä mitään
+  kirjoiteta. Uusi katselmus vaatii kommentin poistamisen.
+- **Käynnistysvirhe ei ole tuomio** (CLAUDE.md §9): ei kommenttia, ei labelia — seuraava ajo
+  yrittää uudelleen.
+- Ei sulje epiciä, ei koske lapsiin, ei mergeä eikä tee git-kirjoituksia. Exit-koodit:
+  [`docs/troubleshooting.md`](troubleshooting.md).
+
 ## 5. `/issue-runner:run-epic`-komennon UX
 
 ### 5.1 Syöte
