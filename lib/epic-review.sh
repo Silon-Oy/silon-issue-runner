@@ -42,7 +42,8 @@
 #
 # Scope: read-only. No GitHub writes, not called from the poller.
 # Shared primitives only (CLAUDE.md §7): the child set comes from
-# list_epic_children, PR references from _epic_child_pr_refs.
+# list_epic_children, PR references from _epic_child_pr_refs, the change surface
+# from review_pr_surface (lib/pr-surface.sh, shared with the coherence audit).
 #
 # Only functions are defined here — no work at source time. It pulls in its own
 # deps (via epic.sh) so a lone caller (test / terminal) needs this file alone.
@@ -54,6 +55,8 @@ _EPIC_REVIEW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # _epic_parse_child_line / _epic_child_ref / _epic_child_pr_refs.
 # shellcheck source=epic.sh
 . "$_EPIC_REVIEW_DIR/epic.sh"
+# shellcheck source=pr-surface.sh
+. "$_EPIC_REVIEW_DIR/pr-surface.sh"
 # call_claude / render_prompt (the single agent seam) and _merge_gate_result_lines
 # (the shared tail reader: trailing blanks and bare fences dropped).
 # shellcheck source=claude-call.sh
@@ -96,14 +99,6 @@ _epic_review_criteria() {
     }'
 }
 
-# _epic_review_pr_files <owner/repo> <pr-N> — print the files changed by a PR,
-# one per line. rc 1 on any read failure (fail-closed). REST, not search
-# (CLAUDE.md §5.2).
-_epic_review_pr_files() {
-  local owner_repo="$1" pr="$2"
-  gh api --paginate "repos/$owner_repo/pulls/$pr/files" --jq '.[].filename' 2>/dev/null || return 1
-}
-
 # _epic_review_bytes <text> — byte length of the text.
 _epic_review_bytes() {
   printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '
@@ -133,8 +128,8 @@ epic_review_collect() {
   local children
   children=$(list_epic_children "$repo" "$epic" "$owner_repo" --body "$body") || return 1
 
-  # 3. Per child: PR references, then each PR's files. Nothing is printed yet.
-  local child_lines="" surface="" line num state ctitle child_repo child_ref prs pr files f
+  # 3. Per child: PR references. Nothing is printed yet.
+  local child_lines="" pr_set="" line num state ctitle child_repo child_ref prs pr
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     _epic_parse_child_line "$line"
@@ -145,27 +140,16 @@ epic_review_collect() {
     prs=$(_epic_child_pr_refs "$repo" "$num" "$child_repo") || return 1
     child_lines+="- ${child_ref} (${state:-?}) — ${ctitle} — PR: ${prs:-ei PR-viitteitä}"$'\n'
     for pr in $prs; do
-      pr="${pr#\#}"
-      files=$(_epic_review_pr_files "$child_repo" "$pr") || return 1
-      while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        surface+="${f}"$'\t'"${child_ref}"$'\n'
-      done <<FILES
-$files
-FILES
+      pr_set+="${child_repo}"$'\t'"${pr#\#}"$'\t'"${child_ref}"$'\n'
     done
   done <<CHILDREN
 $children
 CHILDREN
 
-  # 4. Combine the surface: one line per file, naming every child that touched it.
-  local file_lines=""
-  if [ -n "$surface" ]; then
-    file_lines=$(printf '%s' "$surface" | LC_ALL=C sort -u | awk -F'\t' '
-      $1 != prev { if (NR > 1) print out ")"; out = "- `" $1 "` (" $2; prev = $1; next }
-      { out = out ", " $2 }
-      END { if (NR > 0) print out ")" }')
-  fi
+  # 4. The combined surface: one line per file, naming every child that touched
+  # it (shared with the coherence audit; fail-closed on any unreadable PR).
+  local file_lines
+  file_lines=$(printf '%s' "$pr_set" | review_pr_surface) || return 1
 
   # 5. Assemble.
   local criteria head
