@@ -89,6 +89,17 @@ check "last result for the head" "findings 2" "$(merge_gate_last_result "$J" sec
 check "no result for another gate's head" "" "$(merge_gate_last_result "$J" security bbb)"
 check "result is per gate" "clean 0" "$(merge_gate_last_result "$J" other bbb)"
 check "attempts per gate" 1 "$(merge_gate_attempts "$J" security)"
+
+# Base-keyed records (issue #341): with a base, only a review against it counts.
+B="$WORK/base.jsonl"
+{
+  echo '{"event":"merge_gate_reviewed","data":{"gate":"semantic","sha":"aaa","result":"clean","holding":"0","base_sha":"m1"}}'
+  echo '{"event":"merge_gate_reviewed","data":{"gate":"semantic","sha":"aaa","result":"findings","holding":"1","base_sha":"m2"}}'
+} > "$B"
+check "base-keyed result for its base" "clean 0" "$(merge_gate_last_result "$B" semantic aaa m1)"
+check "base-keyed result: other base not read" "" "$(merge_gate_last_result "$B" semantic aaa m3)"
+check "no base given: latest for the head" "findings 1" "$(merge_gate_last_result "$B" semantic aaa)"
+check "record without base_sha does not match a base" "" "$(merge_gate_last_result "$J" security aaa m1)"
 check "attempts on a missing file" 0 "$(merge_gate_attempts "$WORK/none.jsonl" security)"
 
 # One torn line (a write cut short) must not zero the count or hide a result:
