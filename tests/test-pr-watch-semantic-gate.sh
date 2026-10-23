@@ -108,7 +108,7 @@ case "\$1 \$2" in
         headRefName:"auto-run/x-5",baseRefName:"main"}'
     else
       echo ci-poll >> "$WORK/ci.log"
-      echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+      echo '{"headRefOid":"'"\$(git -C "$WT" rev-parse HEAD)"'","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
     fi
     ;;
   "pr merge")   printf '%s\n' "\$*" >> "$WORK/merge.log"; echo "merged (mock)" ;;
