@@ -316,9 +316,11 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 | `PR_WATCH_CI_POLL_SECS` | `15` | CI-odotuksen kierrosväli (40 × 15 s = 10 min) |
 | `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (#334): agentti katselmoi PR:n lopullisen diffin ennen jokaista mergeä, ja löydökset korjataan tai PR pidätetään (exit 10). README §7.12 |
 | `PR_WATCH_MAX_SECURITY_FIXES` | `1` | Tietoturvalöydösten korjausyritysten katto per PR (`merge_gate_fix_attempted`, luetaan `state.jsonl`in hännästä) |
-| `PR_WATCH_SECURITY_REVIEW_TIMEOUT` | `1800` | Tietoturvakatselmuksen claude-kutsun aikakatto |
+| `PR_WATCH_SECURITY_REVIEW_TIMEOUT` | `1800` | Tietoturvakatselmuksen kutsun aikakatto (claude tai codex) |
 | `PR_WATCH_SECURITY_FIX_TIMEOUT` | `1800` | Tietoturvakorjauksen claude-kutsun aikakatto |
 | `PR_WATCH_SECURITY_HOLD_MIN_SEVERITY` | `high` | Lievin vakavuus, joka pidättää mergen (`critical`, `high`, `medium`, `low`). Rajan alittavat löydökset raportoidaan PR-kommentissa ilman pidätystä. **Kohderepon `.claude/run-issues.json` `.security.hold_min_severity` voittaa tämän**, ks. alla. Tuntematon arvo ⇒ tiukin (`low`), fail-closed |
+| `PR_WATCH_SECURITY_REVIEWER` | `claude` | Tietoturvakatselmuksen katselmoija: `claude` tai `codex` (#335). Toinen malliperhe näkee eri asioita kuin koodin kirjoittaja. Korjaukset tekee aina Claude-agentti. Codex on valinnainen, eikä paketti asenna sitä. Jos `codex` on valittu mutta CLI puuttuu, kaatuu tai tuottaa jäsentymättömän tuloksen, tai arvo on tuntematon, katselmus ei toteutunut ⇒ PR pidätetään (exit 10). **Portti ei koskaan vaihda hiljaa Claudeen eikä päästä läpi.** Preflight tarkistaa Codexin vain, kun se on valittu |
+| `PR_WATCH_CODEX_CMD` | `codex` | Codex-CLI:n kutsu (tokenit); ajuri lisää `exec --sandbox read-only --skip-git-repo-check --color never --output-last-message <step>.out -`. Oletus tarkistetaan `--version`-koettimella, ylikirjoitetusta vain ensimmäisen tokenin löytyminen. Testien injektiopiste tai oma ajuri |
 | `PR_WATCH_GATE_TAIL_LINES` | `1000` | Montako riviä `state.jsonl`in hännästä merge-portti lukee (headin aiempi tulos, yritysmäärä). Hännän ulkopuolelle jäänyt kirjaus johtaa uuteen katselmukseen, ei ohitettuun |
 
 **Pidätysrajassa repo voittaa koneen — tietoinen poikkeus §8:n "kutsuja voittaa" -säännöstä.**

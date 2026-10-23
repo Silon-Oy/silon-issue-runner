@@ -70,6 +70,18 @@
 #                                        .claude/run-issues.json
 #                                        `.security.hold_min_severity`, read from
 #                                        the BASE branch, WINS over this value.
+#   PR_WATCH_SECURITY_REVIEWER           default claude — who REVIEWS for the
+#                                        security gate: claude | codex (issue
+#                                        #335). Another model family sees what the
+#                                        author's does not. Fixes are always made by
+#                                        the claude agent. Codex selected but
+#                                        missing / failing / unparseable, or an
+#                                        unknown value => the review did not
+#                                        happen => held; never a silent fall back
+#                                        to claude, never a pass.
+#   PR_WATCH_CODEX_CMD                   default "codex" — the Codex CLI invocation
+#                                        (tokens; `exec …` is appended). Override =
+#                                        own driver or a test stub.
 #   PR_WATCH_GATE_TAIL_LINES             default 1000 — state.jsonl tail window
 #                                        the gate reads (lib/merge-gate.sh).
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
@@ -188,6 +200,9 @@ PR_WATCH_MAX_SECURITY_FIXES="${PR_WATCH_MAX_SECURITY_FIXES:-1}"
 PR_WATCH_SECURITY_REVIEW_TIMEOUT="${PR_WATCH_SECURITY_REVIEW_TIMEOUT:-1800}"
 PR_WATCH_SECURITY_FIX_TIMEOUT="${PR_WATCH_SECURITY_FIX_TIMEOUT:-1800}"
 PR_WATCH_SECURITY_HOLD_MIN_SEVERITY="${PR_WATCH_SECURITY_HOLD_MIN_SEVERITY:-}"
+PR_WATCH_SECURITY_REVIEWER="${PR_WATCH_SECURITY_REVIEWER:-claude}"
+PR_WATCH_CODEX_CMD_DEFAULT="codex"
+PR_WATCH_CODEX_CMD="${PR_WATCH_CODEX_CMD:-$PR_WATCH_CODEX_CMD_DEFAULT}"
 PR_WATCH_MERGE_LABEL="${PR_WATCH_MERGE_LABEL:-auto-merge}"
 PR_WATCH_LABELS_CSV="${PR_WATCH_LABELS_CSV:-}"
 
@@ -1189,6 +1204,64 @@ pr_ci_repair_preflight() {
   return 1
 }
 
+# pr_codex_preflight [<what>] — is the Codex CLI usable for a merge-gate review?
+# (issue #335). Same policy as pr_ci_repair_preflight: the default invocation is
+# probed with `--version` (a name on PATH does not prove it starts), an override
+# is the user's own driver and only its first token is checked. Called only when
+# Codex is the selected reviewer. Logs the reason once on failure. Returns 0
+# usable, 1 not.
+pr_codex_preflight() {
+  local what="${1:-merge gate}" reason=""
+  if [ "$PR_WATCH_CODEX_CMD" = "$PR_WATCH_CODEX_CMD_DEFAULT" ]; then
+    # shellcheck disable=SC2086
+    if ! preflight_probe_codex $PR_WATCH_CODEX_CMD; then
+      reason="codex CLI probe failed (\`$PR_WATCH_CODEX_CMD --version\` returned non-zero — fix: $(preflight_install_hint codex))"
+    fi
+  else
+    local first="${PR_WATCH_CODEX_CMD%% *}"
+    if ! preflight_have "$first"; then
+      reason="codex driver '$first' not found on PATH (PR_WATCH_CODEX_CMD override)"
+    fi
+  fi
+  [ -z "$reason" ] && return 0
+  log "$what unavailable: $reason"
+  return 1
+}
+
+# _pr_call_codex <out-dir> <worktree> <step-id> <prompt-file> <timeout-secs>
+# The Codex driver for a READ-ONLY merge-gate review (issue #335). Honours the
+# same file contract as call_claude, so merge_gate_parse reads both alike:
+#   <step-id>.out   — Codex's final message (--output-last-message); missing or
+#                     empty when Codex did not answer => launch_failed
+#   <step-id>.exit  — the process's REAL exit code, written on every path,
+#                     including 127 (not found) and 124 (timeout)
+#   <step-id>.codex.log — the raw stdout/stderr transcript
+# Flags (codex exec): `--sandbox read-only` makes the reviewer unable to write
+# even if it tried (the HEAD / clean-tree check after the call stays the real
+# gate), `--skip-git-repo-check` because a linked worktree is not always
+# recognised as trusted, `--color never` keeps the log readable, and `-` reads
+# the prompt from stdin. Returns the rc — callers must not trust it alone.
+_pr_call_codex() {
+  local out_dir="$1" worktree="$2" step_id="$3" prompt_file="$4" timeout_secs="$5"
+  local out_file="$out_dir/$step_id.out" exit_file="$out_dir/$step_id.exit"
+  local log_file="$out_dir/$step_id.codex.log"
+  local tb rc=0
+  tb=$(preflight_timeout_bin)
+  local -a cmd
+  # shellcheck disable=SC2206
+  cmd=($PR_WATCH_CODEX_CMD)
+  [ -n "$tb" ] && cmd=("$tb" --kill-after=60 "$timeout_secs" "${cmd[@]}")
+  # rc is captured with `|| rc=$?`, never `if ! cmd; then rc=$?` — inside that
+  # branch $? is the negation's status, which is always 0.
+  ( cd "$worktree" || exit 99
+    "${cmd[@]}" exec --sandbox read-only --skip-git-repo-check --color never \
+      --output-last-message "$out_file" - < "$prompt_file"
+  ) > "$log_file" 2>&1 || rc=$?
+  printf '%s\n' "$rc" > "$exit_file"
+  log "codex call $step_id returned rc=$rc (transcript: $log_file)"
+  return "$rc"
+}
+
 # ----- P5b: Repair red CI --------------------------------------------------
 # CI repair is OFF by default (PR_WATCH_ENABLE_CI_REPAIR=0), in which case
 # pr_decide never returns FIX_CI and this is unreachable. When ON and a labelled
@@ -1396,7 +1469,9 @@ _pr_ci_handover_to_human() {
 # MECHANISM below is gate-agnostic: head sync, the per-SHA record, the review /
 # fix / revalidate loop, the attempt cap and the hold. A gate contributes only its
 # CONTENT through _merge_gate_spec — prompts, switch, cap, timeouts, threshold —
-# and the result format of lib/merge-gate.sh. Adding a gate = two prompts, one
+# and the result format of lib/merge-gate.sh. The reviewer (GATE_REVIEWER:
+# claude | codex) only swaps the review call's driver; fixes are always claude's.
+# Adding a gate = two prompts, one
 # spec case, one name in MERGE_GATES.
 
 # _merge_gate_spec <gate> — set the gate's content into GATE_* globals; rc 1 for
@@ -1413,6 +1488,7 @@ _merge_gate_spec() {
       GATE_REVIEW_TIMEOUT="$PR_WATCH_SECURITY_REVIEW_TIMEOUT"
       GATE_FIX_TIMEOUT="$PR_WATCH_SECURITY_FIX_TIMEOUT"
       GATE_HOLD_MACHINE="$PR_WATCH_SECURITY_HOLD_MIN_SEVERITY"
+      GATE_REVIEWER="$PR_WATCH_SECURITY_REVIEWER"
       ;;
     *) return 1 ;;
   esac
@@ -1578,11 +1654,28 @@ _pr_gate_review() {
 
   # Preflight BEFORE the call, so a CLI that cannot start is reported as exactly
   # that (CLAUDE.md §9) — and, unlike FIX_CI, it holds: there is no "wait" for a
-  # merge that would otherwise go through unreviewed.
-  if ! pr_ci_repair_preflight "merge gate '$gate'"; then
-    GATE_WHY="katselmointiagenttia ei voitu käynnistää (claude-CLI ei ole käytettävissä pr-watchin ympäristössä)"
-  else
-    log "merge gate '$gate': reviewing PR #$pr_num head $sha (hold threshold '$hold_min')"
+  # merge that would otherwise go through unreviewed. Each reviewer is checked
+  # only when selected, and an unknown one is not a review: no fall back to
+  # claude, which would silently undo the user's choice.
+  local reviewer="${GATE_REVIEWER:-claude}" ready=0
+  case "$reviewer" in
+    claude)
+      if pr_ci_repair_preflight "merge gate '$gate'"; then ready=1; else
+        GATE_WHY="katselmointiagenttia ei voitu käynnistää (claude-CLI ei ole käytettävissä pr-watchin ympäristössä)"
+      fi
+      ;;
+    codex)
+      if pr_codex_preflight "merge gate '$gate' (codex reviewer)"; then ready=1; else
+        GATE_WHY="Codex-katselmoijaa ei voitu käynnistää (codex-CLI ei ole käytettävissä pr-watchin ympäristössä; katselmoija on valittu asetuksella PR_WATCH_SECURITY_REVIEWER=codex)"
+      fi
+      ;;
+    *)
+      log "merge gate '$gate': unknown reviewer '$reviewer' (want claude or codex) — not reviewing"
+      GATE_WHY="katselmoija \`$reviewer\` on tuntematon (sallitut: \`claude\`, \`codex\`), joten katselmusta ei ajettu"
+      ;;
+  esac
+  if [ "$ready" -eq 1 ]; then
+    log "merge gate '$gate': reviewing PR #$pr_num head $sha with $reviewer (hold threshold '$hold_min')"
     local prompt_file="$run_dir/$GATE_REVIEW_STEP.prompt"
     render_prompt "$SCRIPT_DIR/prompts/$GATE_REVIEW_STEP.md" "$prompt_file" \
       PR_NUMBER="$pr_num" BRANCH="$branch" BASE_REF="$base_ref" \
@@ -1591,9 +1684,14 @@ _pr_gate_review() {
     # call starts without it; repo principles are not loaded (see _pr_call_agent).
     rm -f "$run_dir/$GATE_REVIEW_STEP.out" "$run_dir/$GATE_REVIEW_STEP.exit"
     local arc=0
-    _pr_call_agent "$run_dir" "$worktree" "$GATE_REVIEW_STEP" "$prompt_file" \
-      "$GATE_REVIEW_TIMEOUT" 0 || arc=$?
-    log "merge gate '$gate': review call for PR #$pr_num returned rc=$arc"
+    if [ "$reviewer" = codex ]; then
+      _pr_call_codex "$run_dir" "$worktree" "$GATE_REVIEW_STEP" "$prompt_file" \
+        "$GATE_REVIEW_TIMEOUT" || arc=$?
+    else
+      _pr_call_agent "$run_dir" "$worktree" "$GATE_REVIEW_STEP" "$prompt_file" \
+        "$GATE_REVIEW_TIMEOUT" 0 || arc=$?
+    fi
+    log "merge gate '$gate': $reviewer review call for PR #$pr_num returned rc=$arc"
 
     local out="$run_dir/$GATE_REVIEW_STEP.out"
     local head_after

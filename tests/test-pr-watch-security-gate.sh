@@ -22,6 +22,14 @@
 #                               a medium finding holds
 #   J) PR cannot lower it    -> a config on the PR head saying `critical` is
 #                               ignored: a high finding holds
+#   M..R) Codex reviewer (issue #335), stubbed through PR_WATCH_CODEX_CMD — no
+#      real Codex is ever called:
+#   M) codex clean           -> merge; codex reviewed, claude never did
+#   N) codex fixes via claude-> a codex finding is fixed by the CLAUDE agent
+#   O) codex missing         -> hold, no claude fall back, no merge
+#   P) codex fails (rc=3)    -> hold; the real rc=3 is logged
+#   Q) codex unparseable     -> hold
+#   R) unknown reviewer      -> hold, nobody called
 #
 # Runs use a FOREIGN host so P9 local cleanup is skipped and the run-dir survives
 # for assertions.
@@ -124,6 +132,25 @@ exit 0
 SH
   chmod +x "$BIN/claude-mock"
   printf 'MERGE_GATE_RESULT: CLEAN\n' > "$WORK/review.txt"
+
+  # The stub Codex: logs CODEX (+ its argv), reads the prompt from stdin and
+  # writes codex-review.txt to the --output-last-message file, like codex exec.
+  cat > "$BIN/codex-mock" <<SH
+#!/usr/bin/env bash
+echo CODEX >> "$WORK/calls.log"
+printf '%s\n' "\$*" > "$WORK/codex-argv"
+cat > /dev/null
+o=""
+while [ \$# -gt 0 ]; do
+  [ "\$1" = "--output-last-message" ] && o="\$2"
+  shift
+done
+[ -n "\$o" ] && [ -f "$WORK/codex-review.txt" ] && cp "$WORK/codex-review.txt" "\$o"
+[ -f "$WORK/codex-rc" ] && exit "\$(cat "$WORK/codex-rc")"
+exit 0
+SH
+  chmod +x "$BIN/codex-mock"
+  printf 'MERGE_GATE_RESULT: CLEAN\n' > "$WORK/codex-review.txt"
 }
 
 # run_watch [ENV=VAL...] — run pr-watch on PR 55 with the gate ON; sets RC, OUT.
@@ -353,6 +380,94 @@ merged && bad L "merged although the worktree is not the PR head"
 grep -q 'labels\[\]=needs-human' "$WORK/labels.log" || bad L "needs-human not added"
 grep -q 'ei ole PR:n head' "$WORK/comments.log" || bad L "hold comment does not name the head mismatch"
 [ "$FAIL" = "$FAIL_BEFORE" ] && ok L "worktree ahead of the PR head held for a human"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== M: codex reviewer, clean -> merge, claude never reviews ==="
+FAIL_BEFORE=$FAIL
+setup M
+SHA=$(git -C "$WT" rev-parse HEAD)
+run_watch PR_WATCH_SECURITY_REVIEWER=codex PR_WATCH_CODEX_CMD="$BIN/codex-mock"; show M
+[ "$RC" = 0 ] || bad M "rc $RC, want 0"
+merged || bad M "not merged"
+[ "$(calls CODEX)" = 1 ] || bad M "codex calls $(calls CODEX), want 1"
+[ "$(calls REVIEW)" = 0 ] || bad M "claude reviewed although codex was selected"
+grep -q -- '--sandbox read-only' "$WORK/codex-argv" 2>/dev/null || bad M "codex not run read-only: $(cat "$WORK/codex-argv" 2>/dev/null)"
+grep -q "\"event\":\"merge_gate_reviewed\".*\"sha\":\"$SHA\".*\"result\":\"clean\"" "$RD/state.jsonl" || bad M "clean result not recorded"
+[ "$(tr -d '[:space:]' < "$RD/06-security-review.exit")" = 0 ] || bad M ".exit not written"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok M "codex review merged a clean head"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== N: codex finding -> claude fixes -> codex re-reviews -> merge ==="
+FAIL_BEFORE=$FAIL
+setup N
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$FINDING_HIGH" > "$WORK/codex-review.txt"
+cat > "$WORK/fix.sh" <<SH
+echo "feature (escaped)" > f.txt
+git add f.txt
+git -c user.email=s@t.t -c user.name=s commit -qm "fix: escape shell argument"
+printf 'MERGE_GATE_RESULT: CLEAN\n' > "$WORK/codex-review.txt"
+SH
+run_watch PR_WATCH_SECURITY_REVIEWER=codex PR_WATCH_CODEX_CMD="$BIN/codex-mock"; show N
+[ "$RC" = 0 ] || bad N "rc $RC, want 0"
+merged || bad N "not merged"
+[ "$(tr '\n' ' ' < "$WORK/calls.log")" = "CODEX FIX CODEX " ] || bad N "calls '$(tr '\n' ' ' < "$WORK/calls.log")', want codex, claude fix, codex"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok N "codex finding fixed by the claude agent"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== O: codex selected but not installed -> hold, no claude fall back ==="
+FAIL_BEFORE=$FAIL
+setup O
+run_watch PR_WATCH_SECURITY_REVIEWER=codex PR_WATCH_CODEX_CMD="$WORK/no-such-codex"; show O
+[ "$RC" = 10 ] || bad O "rc $RC, want 10"
+merged && bad O "merged without a review"
+[ -s "$WORK/calls.log" ] && bad O "an agent was called: $(tr '\n' ' ' < "$WORK/calls.log")"
+grep -q 'Codex-katselmoijaa ei voitu käynnistää' "$WORK/comments.log" || bad O "comment does not name the missing Codex"
+grep -q 'labels\[\]=needs-human' "$WORK/labels.log" || bad O "needs-human not added"
+grep -q '"result":"launch_failed"' "$RD/state.jsonl" || bad O "launch_failed not recorded"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok O "missing codex held, claude not used instead"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== P: codex fails (rc=3) -> hold, the real rc is logged ==="
+FAIL_BEFORE=$FAIL
+setup P
+echo 3 > "$WORK/codex-rc"
+run_watch PR_WATCH_SECURITY_REVIEWER=codex PR_WATCH_CODEX_CMD="$BIN/codex-mock"; show P
+[ "$RC" = 10 ] || bad P "rc $RC, want 10"
+merged && bad P "merged on a failed review"
+echo "$OUT" | grep -q 'codex review call for PR #55 returned rc=3' || bad P "real rc=3 not logged"
+[ "$(tr -d '[:space:]' < "$RD/06-security-review.exit")" = 3 ] || bad P ".exit does not hold rc=3"
+grep -q 'rc=3' "$WORK/comments.log" || bad P "comment does not carry rc=3"
+[ "$(calls REVIEW)" = 0 ] || bad P "claude reviewed after codex failed"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok P "failed codex held with its real rc"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== Q: codex unparseable result -> hold ==="
+FAIL_BEFORE=$FAIL
+setup Q
+printf 'Looks good to me.\n' > "$WORK/codex-review.txt"
+run_watch PR_WATCH_SECURITY_REVIEWER=codex PR_WATCH_CODEX_CMD="$BIN/codex-mock"; show Q
+[ "$RC" = 10 ] || bad Q "rc $RC, want 10"
+merged && bad Q "merged on an unparseable review"
+grep -q 'jäsentymätön' "$WORK/comments.log" || bad Q "comment does not name the parse failure"
+[ "$(calls REVIEW)" = 0 ] || bad Q "claude reviewed after codex"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok Q "unparseable codex result held"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+echo "=== R: unknown reviewer -> hold, nobody called ==="
+FAIL_BEFORE=$FAIL
+setup R
+run_watch PR_WATCH_SECURITY_REVIEWER=gpt PR_WATCH_CODEX_CMD="$BIN/codex-mock"; show R
+[ "$RC" = 10 ] || bad R "rc $RC, want 10"
+merged && bad R "merged without a review"
+[ -s "$WORK/calls.log" ] && bad R "an agent was called: $(tr '\n' ' ' < "$WORK/calls.log")"
+grep -q 'tuntematon' "$WORK/comments.log" || bad R "comment does not name the unknown reviewer"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok R "unknown reviewer held"
 [ -n "${KEEP:-}" ] || rm -rf "$WORK"
 
 # ===========================================================================
