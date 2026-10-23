@@ -1086,6 +1086,18 @@ katselmointiin. Kehittäjäkoneella tämä tarkoittaa: jokainen `main`iin merget
 koneellesi tunnin sisällä. Jos et halua sitä, älä bootstrappaa self-update-agenttia — tai aja klooni
 submodulena, jolloin pull ohitetaan ja päivitys on eksplisiittinen pinnin nosto.
 
+### 7.11 Agentin kehotteeseen pääsevät vain kirjoitusoikeudellisten kommentit
+
+Agentti toimii ilman lupakyselyjä (§7.1), joten jokainen kehotteeseen päätyvä issue-kommentti on
+ohje agentille. Siksi kehotteeseen, tarkennus- ja blocked-vastaukseksi (6.6 c) ja kuvien lähteeksi
+kelpaavat **vain kommentit, joiden kirjoittajalla on kirjoitusoikeus repoon** (`admin`, `maintain`,
+`write`). Pois jätetyistä kehote kertoo vain lukumäärän, ei tekstiä eikä kirjoittajia. Oikeudettoman
+vastaus ei käynnistä ajoa eikä kuluta tarkennuskierrosta, eikä sen kirjoittama markeri siirrä
+vastausrajaa. **Lukukelvoton oikeus luetaan oikeudettomaksi** (fail-closed, WARNING-lokirivi).
+Issuen runkoa ei suodateta: `auto-run`-labelin lisääjällä on jo kirjoitusoikeus, joten hän on
+ottanut rungon vastuulleen. Oikeuden luku, välimuisti ja App-tila:
+[`docs/usage-reference.md`](docs/usage-reference.md#kommenttien-luottamussuodatus).
+
 ---
 
 ## 8. Perehdytys — miksi se käyttäytyy noin
@@ -1095,9 +1107,10 @@ Viisi asiaa, jotka selittävät ensimmäisen viikon yllätykset.
 ### Tarkennuskysymykseen vastataan **yhdellä** kommentilla
 
 Vastauksesta poimitaan vain uusin markerin jälkeinen ei-bottikommentti, ja se katkaistaan 8000
-merkkiin. Sääntö on **rakenteellinen, ei tyylisuositus**: bot ja ihminen käyttävät samaa
-GitHub-tiliä, joten kommentin kirjoittaja ei kelpaa erottimeksi — ainoa luotettava raja on
-markerin aikaleima. Koko kulku: kohta 6.6 c).
+merkkiin. Sääntö on **rakenteellinen, ei tyylisuositus**: bot ja ihminen voivat käyttää samaa
+GitHub-tiliä, joten kommentin kirjoittaja ei kelpaa erottimeksi botin ja ihmisen välillä — raja on
+markerin aikaleima. Kirjoittajan oikeus on lisäehto: vastauksen on tultava tililtä, jolla on
+kirjoitusoikeus repoon (§7.11). Koko kulku: kohta 6.6 c).
 
 ### Assignaatio on varaus, ei kirjanpitoa
 
@@ -1176,6 +1189,7 @@ Yleisimmät tilanteet siinä järjestyksessä, jossa niihin törmää.
 | Poller ei tee mitään eikä kerro miksi | Väärä konenimi, puuttuva `tmux`, puuttuva tai viallinen watchlist — kaikki exittaavat hiljaa nollalla | Lue pollerin loki; ks. "Mistä lokit löytyvät" |
 | Ajo alkoi mutta mitään ei tapahdu | Rinnakkaisuuskatto täynnä | Lokissa `at cap (n/m)`; nosta `global_max_concurrent` tai odota |
 | Vastasin tarkennuskysymykseen, mutta mitään ei tapahtunut | Vastaus ennen markeria, tai useampi kommentti (vain uusin luetaan) | Kirjoita vastaus uudelleen **yhtenä** kommenttina (6.6 c) |
+| — sama, ja vastaus oli oikein | Vastaajalla ei ole kirjoitusoikeutta repoon, tai oikeutta ei voitu lukea (§7.11) | Vastaa kirjoitusoikeudellisella tilillä; etsi lokista `comment-trust: WARNING` |
 | PR on auki, CI vihreä, mutta ei mergeydy | `auto-merge`-label puuttuu **PR:ltä**, tai PR on draft | Lisää label PR:lle; draft merkitään valmiiksi käsin |
 | Ajo epäonnistui, korjasin syyn, issue ei palaa | Assignaatio ja `needs-human` jäivät | `/issue-runner:cleanup-run` tai `cleanup-run.sh --issue <N> --yes` |
 | Siivous ei löydä ajoa | Ajo tapahtui toisella koneella | Aja siivous siellä; PR-vahti tulostaa lokiin valmiin komennon |

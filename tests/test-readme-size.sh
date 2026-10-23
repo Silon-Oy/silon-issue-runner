@@ -44,7 +44,14 @@ FAIL=0
 # both variables -> docs/env-reference.md, the full behaviour ->
 # docs/usage-reference.md case d2); README carries only the three table rows a
 # human scanning "Ajon tilat" and section 5 needs, ~430 B.
-MAX_BYTES=83400
+#
+# Raised to 85300 by issue #343. Two parts: main was already at 83854 B (commit
+# 47dbd94 corrected doc claims without a matching cut), and #343's acceptance
+# criteria require the security model (section 7) to state the comment trust
+# rule. The machinery (permission API, cache, App mode) went to
+# docs/usage-reference.md first; README carries one paragraph, one troubleshooting
+# row and a one-sentence correction in section 8, ~1.3 KB.
+MAX_BYTES=85300
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then
