@@ -15,6 +15,11 @@
 #   h  a usage-limited tick starts no audit
 #   k  the coherence kind (#342): its own interval and session, the same
 #      spawn arguments; each kind's interval schedules only that kind
+#   l  machine interval set but the repo config is unparseable, or its value is
+#      `1.5` → one log line over two ticks; `0` → no line (#360)
+#   m  "script not executable" and "cannot record" are logged once over two
+#      ticks, and again after the condition went away and came back (#360)
+#   n  a custom RUN_ISSUES_POLLER_ENV_FILE reaches the audit session (#360)
 #
 # Run: bash tests/test-poller-audit-dispatch.sh
 
@@ -219,6 +224,94 @@ esac
                                                               || bad "k no coherence state file"
 [ ! -e "$WORK/logs-k/.audit-last-security-example-org-repoa" ] && ok "k the coherence interval does not schedule security" \
                                                               || bad "k security scheduled by the coherence interval"
+
+# ---- l: an unusable repo config is logged once ------------------------------------
+echo 0 > "$LS_SEQ"
+poller_log_count() { grep -cF -- "$2" "$1/run-issues-poller.log" 2>/dev/null || true; }
+REPOL="$WORK/repol"
+mk_repo "$REPOL" '{"security":'
+mk_watchlist "$WORK/wll.json" "$REPOL"
+for _ in 1 2; do
+  run_poller "$WORK/hl" "$WORK/logs-l" "$WORK/wll.json" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7
+done
+[ "$(poller_log_count "$WORK/logs-l" "not a valid JSON object — security audit not scheduled")" = 1 ] \
+  && ok "l unparseable config with a machine interval: one line over two ticks" \
+  || bad "l unparseable config: $(poller_log_count "$WORK/logs-l" "not a valid JSON object") lines"
+[ "$(audit_spawns)" = 0 ] && ok "l unparseable config starts no audit" || bad "l unparseable config spawned"
+REPOL2="$WORK/repol2"
+mk_repo "$REPOL2" '{"security":{"audit_interval_days":1.5}}'
+mk_watchlist "$WORK/wll2.json" "$REPOL2"
+for _ in 1 2; do
+  run_poller "$WORK/hl2" "$WORK/logs-l2" "$WORK/wll2.json" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7
+done
+[ "$(poller_log_count "$WORK/logs-l2" "invalid .security.audit_interval_days 1.5")" = 1 ] \
+  && ok "l value 1.5: one line over two ticks" \
+  || bad "l value 1.5: $(poller_log_count "$WORK/logs-l2" "invalid .security.audit_interval_days") lines"
+for _ in 1 2; do
+  run_poller "$WORK/hf0" "$WORK/logs-l0" "$WORK/wlf0.json" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=1
+done
+[ "$(poller_log_count "$WORK/logs-l0" "audit_interval_days")" = 0 ] && ok "l value 0 is deliberate: no line" \
+                                                                 || bad "l value 0 was reported"
+
+# ---- m: not executable / cannot record are suppressed -------------------------------
+# A package root whose security-audit.sh is not executable: every other entry is
+# a link to the real one.
+NOEXEC="$WORK/noexec-home"
+mkdir -p "$NOEXEC"
+for f in "$ROOT"/* "$ROOT"/.[!.]*; do
+  [ -e "$f" ] || continue
+  [ "$(basename "$f")" = security-audit.sh ] && continue
+  ln -s "$f" "$NOEXEC/$(basename "$f")"
+done
+cp "$ROOT/security-audit.sh" "$NOEXEC/security-audit.sh"
+chmod -x "$NOEXEC/security-audit.sh"
+for _ in 1 2; do
+  run_poller "$WORK/hm" "$WORK/logs-m" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7 RUN_ISSUES_HOME="$NOEXEC"
+done
+[ "$(poller_log_count "$WORK/logs-m" "security audit script not executable")" = 1 ] \
+  && ok "m not executable: one line over two ticks" \
+  || bad "m not executable: $(poller_log_count "$WORK/logs-m" "audit script not executable") lines"
+# The script becomes runnable (one spawn, the notice is cleared), then breaks again.
+chmod +x "$NOEXEC/security-audit.sh"
+run_poller "$WORK/hm" "$WORK/logs-m" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7 RUN_ISSUES_HOME="$NOEXEC"
+[ "$(audit_spawns)" = 1 ] && ok "m an executable script is started" || bad "m fixed script: $(audit_spawns) spawns"
+chmod -x "$NOEXEC/security-audit.sh"
+rm -f "$WORK/logs-m/.audit-last-security-example-org-repoa"
+run_poller "$WORK/hm" "$WORK/logs-m" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7 RUN_ISSUES_HOME="$NOEXEC"
+[ "$(poller_log_count "$WORK/logs-m" "security audit script not executable")" = 2 ] \
+  && ok "m a condition that comes back is logged again" \
+  || bad "m recurrence: $(poller_log_count "$WORK/logs-m" "audit script not executable") lines"
+# cannot record: the log dir refuses new files (the log itself stays appendable),
+# so the notice file cannot be written either and the log tail stands in for it.
+run_poller "$WORK/hm2" "$WORK/logs-m2" "$WL"   # creates the log dir and its files
+chmod a-w "$WORK/logs-m2"
+for _ in 1 2; do
+  run_poller "$WORK/hm2" "$WORK/logs-m2" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7
+done
+chmod u+w "$WORK/logs-m2"
+if [ "$(id -u)" = 0 ]; then
+  echo "SKIP: m cannot record (root ignores directory permissions)"
+else
+  [ "$(poller_log_count "$WORK/logs-m2" "cannot record security audit start")" = 1 ] \
+    && ok "m cannot record: one line over two ticks" \
+    || bad "m cannot record: $(poller_log_count "$WORK/logs-m2" "cannot record security audit start") lines"
+fi
+
+# ---- n: the poller's env file reaches the audit session ----------------------------
+printf '# test poller.env\n' > "$WORK/custom-poller.env"
+run_poller "$WORK/hn" "$WORK/logs-n" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7 \
+  RUN_ISSUES_POLLER_ENV_FILE="$WORK/custom-poller.env"
+line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)
+case "$line" in
+  *"RUN_ISSUES_POLLER_ENV_FILE='$WORK/custom-poller.env' "*) ok "n a custom RUN_ISSUES_POLLER_ENV_FILE is passed to the audit" ;;
+  *) bad "n env file not passed: $line" ;;
+esac
+run_poller "$WORK/hn2" "$WORK/logs-n2" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7
+line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)
+case "$line" in
+  *"RUN_ISSUES_POLLER_ENV_FILE='$WORK/hn2/.config/run-issues/poller.env' "*) ok "n the default poller.env path is passed too" ;;
+  *) bad "n default env file not passed: $line" ;;
+esac
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "poller-audit-dispatch: all passed" || echo "poller-audit-dispatch: FAILURES"

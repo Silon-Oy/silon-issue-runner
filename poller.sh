@@ -839,7 +839,7 @@ _dispatch_teardown_pass() {
 # waits for its agent call, and its session name starts with `run-issues-` so
 # it counts against GLOBAL_MAX like every other spawn.
 _dispatch_audit_pass() {
-  local kind="$1" script var days ref cfg="" state session active now
+  local kind="$1" script var days ref cfg="" state session active now problem
   # The slug keys both the state file and the session; without one, every repo
   # would share a single "last audited" time.
   [ -n "$REPO_SLUG" ] || return 0
@@ -848,34 +848,48 @@ _dispatch_audit_pass() {
   if ref=$(git -C "$REPO_PATH" rev-parse --verify -q "refs/remotes/$REMOTE/HEAD" 2>/dev/null); then
     cfg=$(git -C "$REPO_PATH" show "$ref:.claude/run-issues.json" 2>/dev/null || true)
   fi
+  state=$(audit_state_file "$LOG_DIR" "$kind" "$REPO_SLUG")
+  # A config that leaves the audit unscheduled by mistake is logged once (#360,
+  # §5.7) — audit_interval_days alone reads it as "off" in silence.
+  problem=$(audit_interval_problem "$cfg" "$kind" "${!var:-}")
+  if [ -n "$problem" ]; then
+    audit_notice "$state" "$LOG" config "$problem in $REPO_PATH (remote=$REMOTE)"
+    return 0
+  fi
+  audit_notice_clear "$state" config
   days=$(audit_interval_days "$cfg" "$kind" "${!var:-}")
   [ -n "$days" ] || return 0
   now=$(date +%s)
-  state=$(audit_state_file "$LOG_DIR" "$kind" "$REPO_SLUG")
   audit_due "$state" "$days" "$now" || return 0
-  session="run-issues-audit-${kind}-${REPO_SLUG}"
+  session=$(audit_session_name "$kind" "$REPO_SLUG")
   if tmux has-session -t "=$session" 2>/dev/null; then
     echo "$(date -u +%FT%TZ) poller: audit session $session already running" >> "$LOG"
     return 0
   fi
   if [ ! -x "${RUN_ISSUES_HOME}/$script" ]; then
-    echo "$(date -u +%FT%TZ) poller: $kind audit script not executable at ${RUN_ISSUES_HOME}/$script" >> "$LOG"
+    audit_notice "$state" "$LOG" script "$kind audit script not executable at ${RUN_ISSUES_HOME}/$script"
     return 0
   fi
+  audit_notice_clear "$state" script
   active=$(tmux ls 2>/dev/null | grep -c '^run-issues-') || active=0
   if [ "$active" -ge "$GLOBAL_MAX" ]; then
     echo "$(date -u +%FT%TZ) poller: at cap ($active/$GLOBAL_MAX), deferring $kind audit of $REPO_PATH (remote=$REMOTE)" >> "$LOG"
     return 0
   fi
   if ! audit_record "$state" "$now" "$kind"; then
-    echo "$(date -u +%FT%TZ) poller: cannot record $kind audit start in $state — not starting it" >> "$LOG"
+    audit_notice "$state" "$LOG" record "cannot record $kind audit start in $state — not starting it"
     return 0
   fi
+  audit_notice_clear "$state" record
   echo "$(date -u +%FT%TZ) poller: auditing ($kind, every ${days}d) $session for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
   # audit_run records the outcome against this start, so a failed audit is
   # retried after RUN_ISSUES_AUDIT_RETRY_HOURS rather than a whole interval.
+  # RUN_ISSUES_POLLER_ENV_FILE is passed on because a tmux session inherits the
+  # tmux server's environment, not this poller's: an audit script reads its
+  # policy from the same poller.env the poller sourced (#360). Only here, not in
+  # ORCH_ENV — the orchestrator never reads poller.env (CLAUDE.md §8).
   tmux new-session -d -s "$session" \
-    "$ORCH_ENV bash -c '. \"\$0\"; audit_run \"\$@\"' '${RUN_ISSUES_HOME}/lib/audit-schedule.sh' '$state' '$now' '${RUN_ISSUES_HOME}/$script' '$REPO_PATH' --remote '$REMOTE' --watchlist '$WATCHLIST' 2>&1 | tee -a '$RUNS_LOG'"
+    "$ORCH_ENV RUN_ISSUES_POLLER_ENV_FILE='$POLLER_ENV_FILE' bash -c '. \"\$0\"; audit_run \"\$@\"' '${RUN_ISSUES_HOME}/lib/audit-schedule.sh' '$state' '$now' '${RUN_ISSUES_HOME}/$script' '$REPO_PATH' --remote '$REMOTE' --watchlist '$WATCHLIST' 2>&1 | tee -a '$RUNS_LOG'"
   return 0
 }
 
