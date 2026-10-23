@@ -35,6 +35,12 @@
 #   T) scanner failed        -> agent CLEAN, osv-scanner shim crashes: not a
 #                               silent clean — a low row, reported in a comment
 #   U) no scanners           -> the prompt says so, behaviour as in A
+#   V..X) an already reviewed head is judged against the CURRENT threshold,
+#      re-applied to its stored findings (issue #356):
+#   V) threshold lowered     -> passed at `high` with a medium finding; at
+#                               `medium` it holds, with no review or fix call
+#   W) threshold raised      -> held at `medium`; at `high` it merges, unreviewed
+#   X) findings file missing -> fail-closed: the head is reviewed again
 #
 # Scanners are hidden by default (RUN_ISSUES_*_BIN at a missing path), so a real
 # gitleaks / osv-scanner on the machine never runs here (issue #336).
@@ -307,6 +313,54 @@ merged || bad F "not merged"
 [ "$(calls REVIEW)" = 0 ] || bad F "head reviewed twice"
 [ "$(events merge_gate_reviewed)" = 1 ] || bad F "a second review was recorded"
 [ "$FAIL" = "$FAIL_BEFORE" ] && ok F "reviewed head not reviewed again"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
+# seed_findings_review <holding> <hold-min> [<findings-line>] — record that the
+# worktree head was already reviewed with findings, as _pr_gate_review would;
+# without <findings-line> the findings file is not written.
+seed_findings_review() {
+  SHA=$(git -C "$WT" rev-parse HEAD)
+  state_event "$RD" merge_gate_reviewed gate=security pr=55 "sha=$SHA" result=findings "holding=$1" "hold_min=$2"
+  [ -n "${3:-}" ] && printf '%s\n' "$3" > "$RD/merge-gate-security-$SHA.findings"
+  return 0
+}
+FINDING_MEDIUM_NORM='medium|low|f.txt:1|verbose error message'
+
+echo "=== V: threshold lowered -> reviewed head now holds, no agent call ==="
+FAIL_BEFORE=$FAIL
+setup V
+seed_findings_review 0 high "$FINDING_MEDIUM_NORM"
+run_watch PR_WATCH_SECURITY_HOLD_MIN_SEVERITY=medium PR_WATCH_MAX_SECURITY_FIXES=0; show V
+[ "$RC" = 10 ] || bad V "rc $RC, want 10 (medium finding at threshold 'medium')"
+merged && bad V "merged a head the lowered threshold holds"
+[ "$(calls REVIEW)" = 0 ] || bad V "head reviewed again"
+[ "$(calls FIX)" = 0 ] || bad V "fix attempted with a zero cap"
+grep -q 'verbose error message' "$WORK/comments.log" || bad V "hold comment does not list the finding"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok V "lowered threshold re-applied to stored findings"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+echo "=== W: threshold raised -> held head merges, no review ==="
+FAIL_BEFORE=$FAIL
+setup W
+seed_findings_review 1 medium "$FINDING_MEDIUM_NORM"
+run_watch PR_WATCH_SECURITY_HOLD_MIN_SEVERITY=high; show W
+[ "$RC" = 0 ] || bad W "rc $RC, want 0"
+merged || bad W "not merged"
+[ "$(calls REVIEW)" = 0 ] || bad W "head reviewed again"
+[ "$(calls FIX)" = 0 ] || bad W "unexpected fix call"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok W "raised threshold re-applied to stored findings"
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+echo "=== X: findings file missing -> reviewed again (fail-closed) ==="
+FAIL_BEFORE=$FAIL
+setup X
+seed_findings_review 0 high
+run_watch; show X
+[ "$(calls REVIEW)" = 1 ] || bad X "review calls $(calls REVIEW), want 1"
+[ "$RC" = 0 ] || bad X "rc $RC, want 0 (re-review is clean)"
+[ "$(events merge_gate_reviewed)" = 2 ] || bad X "re-review not recorded"
+[ "$FAIL" = "$FAIL_BEFORE" ] && ok X "missing findings never trusted as a stored count"
 [ -n "${KEEP:-}" ] || rm -rf "$WORK"
 
 # ===========================================================================
