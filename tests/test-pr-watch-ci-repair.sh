@@ -99,14 +99,14 @@ esac
 case "\$1 \$2" in
   "pr view")
     # Classification asks for many fields (incl. mergeable); pr_wait_ci_green's
-    # revalidation asks ONLY for statusCheckRollup. Serve red to the first, GREEN
-    # to the second — the agent's fix has landed by revalidation time.
+    # revalidation asks for headRefOid + statusCheckRollup. Serve red to the first,
+    # GREEN on the pushed head to the second — the fix has landed by revalidation.
     if printf '%s' "\$*" | grep -q mergeable; then
       cat <<'JSON'
 $PR_VIEW_RED
 JSON
     else
-      echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+      echo '{"headRefOid":"'"\$(git -C "$WT" rev-parse HEAD)"'","statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"SUCCESS"}]}'
     fi
     ;;
   "run list")  echo '[{"databaseId":9001,"conclusion":"failure"}]' ;;
@@ -249,7 +249,7 @@ case "\$1 \$2" in
 $PR_VIEW_RED
 JSON
     else
-      echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"FAILURE"}]}'
+      echo '{"headRefOid":"'"\$(git -C "$WT" rev-parse HEAD)"'","statusCheckRollup":[{"__typename":"CheckRun","name":"e2e","status":"COMPLETED","conclusion":"FAILURE"}]}'
     fi
     ;;
   "run list")  echo '[{"databaseId":9002,"conclusion":"failure"}]' ;;
