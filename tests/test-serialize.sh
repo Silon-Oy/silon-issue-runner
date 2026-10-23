@@ -61,6 +61,9 @@ git -C "$REPO" remote set-head origin main
 
 BIN="$WORK/bin"
 mkdir -p "$BIN"
+# orchestrate.sh waits 5 s at S3 for the claim to settle on GitHub; against the
+# gh shim there is nothing to settle, and ten runs would spend most of this
+# file's wall time asleep.
 GH_LOG="$WORK/gh-calls.log"
 # Per-case knobs read by the gh mock.
 SIB_TIME="$WORK/sib-time"       # the sibling PR's created_at
@@ -77,14 +80,18 @@ case "\$*" in
     [ "\$(cat "$LIST_MODE")" = ok ] || exit 1
     jq -n -c --arg t "\$(cat "$SIB_TIME")" '[{number: 112, title: "Sibling", created_at: \$t,
       body: "Closes #12", head: {ref: "auto-run/issue-12-sibling"}, base: {ref: "main"}}]' ;;
+  *"-X DELETE"*"issues/43/dependencies/blocked_by/"*)
+    echo "\$*" >> "$WORK/deletes.log"; rm -f "$EDGE"; exit 0 ;;
   *"-X POST"*"issues/43/dependencies/blocked_by"*)
     [ "\$(cat "$POST_MODE")" = ok ] || exit 1
     touch "$EDGE"; echo '{}' ;;
   *"--paginate"*"issues/43/dependencies/blocked_by"*)
+    [ "\$(cat "$WORK/verify-mode" 2>/dev/null)" = fail ] && exit 1
     [ -f "$EDGE" ] && printf '12\topen\n'; exit 0 ;;
   *"--paginate"*"dependencies/blocked_by"*) exit 0 ;;          # sibling's own blockers: none
   *"dependencies/blocked_by"*) echo "0" ;;                       # S2b: no blockers
-  *"/issues/12 --jq .id"*) echo "987654" ;;                      # blocker database id
+  *"/issues/12 --jq"*".id"*)                                      # blocker id + state
+    printf '987654 %s\n' "\$(cat "$WORK/target-state" 2>/dev/null || echo open)" ;;
   *"/issues/43 --jq .labels"*)
     [ "\$(cat "$LABEL_MODE")" = stuck ] && echo "auto-claimed"; exit 0 ;;
   *"issue view"*"--json labels"*) echo "0" ;;                    # S2c: not an epic
@@ -123,7 +130,8 @@ reset() {
   git -C "$REPO" worktree prune
   git -C "$REPO" for-each-ref --format='%(refname:short)' 'refs/heads/auto-run/*' \
     | while read -r b; do git -C "$REPO" branch -D "$b" >/dev/null 2>&1; done
-  rm -rf "$REPO/.claude/run-issues" "$REPO/.claude/run-issues-archive" "$WORK/locks" "$EDGE" "$CALLS"
+  rm -rf "$REPO/.claude/run-issues" "$REPO/.claude/run-issues-archive" "$WORK/locks" "$EDGE" "$CALLS" \
+    "$WORK/target-state" "$WORK/verify-mode" "$WORK/deletes.log"
   : > "$GH_LOG"
 }
 
@@ -234,6 +242,41 @@ if [ "$RC" = 14 ] \
   ok g "reservation label survives: needs-human, artefacts kept, exit 14"
 else
   bad g "rc=$RC rd=$RD out=$(echo "$OUT" | tail -5)"
+fi
+
+# (i) A closed target is no wait: S2b would pick the issue straight back up and
+# the same sibling row would serialize it again on every tick.
+reset; echo closed > "$WORK/target-state"
+printf '%s' "SERIALIZE #12" > "$DECISION"; printf '%s' "$OLD" > "$SIB_TIME"
+printf ok > "$POST_MODE"; printf ok > "$LIST_MODE"; printf clear > "$LABEL_MODE"
+OUT=$( cd "$REPO" && PATH="$BIN:$PATH" RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto \
+  RUN_ISSUES_CLAUDE_CMD="$BIN/claude" RUN_ISSUES_LOCK_ROOT="$WORK/locks" \
+  RUN_ISSUES_ENV_FILE="$WORK/no-such-env" "$ORCH" "$REPO" 43 2>&1 ); RC=$?
+RD=$(ls -d "$REPO"/.claude/run-issues/*-issue-43 "$REPO"/.claude/run-issues-archive/*-issue-43 2>/dev/null | tail -1)
+if [ "$RC" != 14 ] && has_field serialize_rejected reason target_closed \
+   && ! grep -q -- '-X POST' "$GH_LOG" \
+   && [ "$(jq -r '.cycle_review_decision' "$RD/run.json")" = PROCEED ]; then
+  ok i "closed target: rejected as target_closed, no edge, run proceeds"
+else
+  bad i "rc=$RC out=$(echo "$OUT" | tail -5)"
+fi
+
+# (j) The POST lands but the verifying re-read fails: the run carries on as
+# PROCEED, so the edge it cannot vouch for is taken back.
+reset; echo fail > "$WORK/verify-mode"
+printf '%s' "SERIALIZE #12" > "$DECISION"; printf '%s' "$OLD" > "$SIB_TIME"
+printf ok > "$POST_MODE"; printf ok > "$LIST_MODE"; printf clear > "$LABEL_MODE"
+OUT=$( cd "$REPO" && PATH="$BIN:$PATH" RUN_ISSUES_AUTO=1 RUN_ISSUES_REVIEW_GATE=auto \
+  RUN_ISSUES_CLAUDE_CMD="$BIN/claude" RUN_ISSUES_LOCK_ROOT="$WORK/locks" \
+  RUN_ISSUES_ENV_FILE="$WORK/no-such-env" "$ORCH" "$REPO" 43 2>&1 ); RC=$?
+RD=$(ls -d "$REPO"/.claude/run-issues/*-issue-43 "$REPO"/.claude/run-issues-archive/*-issue-43 2>/dev/null | tail -1)
+if [ "$RC" != 14 ] && has_event serialize_edge_failed \
+   && grep -q -- '-X DELETE .*issues/43/dependencies/blocked_by/987654' "$GH_LOG" \
+   && [ ! -f "$EDGE" ] \
+   && ! grep -q -- '--remove-assignee' "$GH_LOG"; then
+  ok j "unverified edge taken back, run proceeds"
+else
+  bad j "rc=$RC edge=$([ -f "$EDGE" ] && echo left) out=$(echo "$OUT" | tail -5)"
 fi
 
 echo "----------------------------------------"

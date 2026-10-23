@@ -1221,6 +1221,11 @@ prepare_sibling_runs() {
   rm -f "$rows_file"
   SIBLING_RUNS=$(sibling_runs_section "$REPO_ROOT" "$OWNER_REPO" "$REMOTE_NAME" \
     "$RUN_DIR" "$ISSUE_NUM" "$rows_file" 2>/dev/null) || true
+  # The review can only judge "started before this run" (SERIALIZE) if it is
+  # told when this run started — the gate compares against the same field.
+  local own_started
+  own_started=$(jq -r '.started_at // ""' "$RUN_DIR/run.json" 2>/dev/null || true)
+  SIBLING_RUNS="Tämän ajon aloitusaika: \`${own_started:-tuntematon}\`."$'\n\n'"$SIBLING_RUNS"
   local count
   count=$(printf '%s\n' "$SIBLING_RUNS" | grep -c '^- \*\*' || true)
   case "$SIBLING_RUNS" in
@@ -1421,8 +1426,17 @@ serialize_gate() {
     fi
   fi
 
-  # (b) The edge, verified. A failure leaves GitHub untouched: carry on.
-  if ! add_blocked_by "$REPO_ROOT" "$ISSUE_NUM" "$target" "$OWNER_REPO" "$REMOTE_NAME"; then
+  # (b) The edge, verified. A closed target is no wait at all: S2b would pick
+  # the issue straight back up and the same sibling row would serialize it
+  # again on every tick. Any other failure leaves GitHub as it was (an edge
+  # that could not be verified is removed again): carry on.
+  local edge_rc=0
+  add_blocked_by "$REPO_ROOT" "$ISSUE_NUM" "$target" "$OWNER_REPO" "$REMOTE_NAME" || edge_rc=$?
+  if [ "$edge_rc" = 3 ]; then
+    _serialize_reject target_closed
+    return 0
+  fi
+  if [ "$edge_rc" != 0 ]; then
     log "serialize gate: could not add the blocked_by edge #$ISSUE_NUM -> #$target — continuing as PROCEED"
     state_event "$RUN_DIR" "serialize_edge_failed" "target=$target"
     CR_DECISION="PROCEED"
@@ -1453,7 +1467,7 @@ serialize_gate() {
     state_finalize "$RUN_DIR" "blocked" "serialize_unclaim_failed"
     state_event "$RUN_DIR" "serialized" "behind=$target" "unclaim=failed"
     _hand_to_human \
-      "Ajo sarjoitettiin sisarajon #$target perään, mutta varauslabelin \`$AUTO_CLAIMED_LABEL\` poistoa ei voitu varmistaa, joten issue ei palaa poimintaan itsestään. Poista label tai kommentoi tähän issueen — ajo siivotaan ja issue odottaa #$target:n sulkeutumista." \
+      "Ajo sarjoitettiin sisarajon #$target perään, mutta varauslabelin \`$AUTO_CLAIMED_LABEL\` poistoa ei voitu varmistaa, joten issue ei palaa poimintaan itsestään. Kommentoi tähän issueen — ajo siivotaan ja issue odottaa #$target:n sulkeutumista. (Pelkkä labelin poisto jättäisi ajon jäänteet, joihin seuraava ajo kaatuisi.)" \
       "" blocked
     exit 14
   fi

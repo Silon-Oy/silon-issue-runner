@@ -583,22 +583,39 @@ list_blocked_by() {
 # success and a write whose response was lost in transit a verified one; the
 # caller never has to guess from a status code. Writes through _issue_gh so the
 # edge is attributed like the run's comments (App identity on origin).
+# rc 3 (nothing written) when <blocker-N> is closed: such an edge is no wait. An
+# unverified POST is taken back with a DELETE before rc 2, because the caller
+# carries on as if there were no edge. (An identical edge a human drew mid-run
+# would go with it — S2b already refuses a run with an open blocker, so that
+# needs a human drawing the same edge between S2b and S7.)
 add_blocked_by() {
   local repo="$1" n="$2" blocker="$3" owner_repo="${4:-}" remote="${5:-}"
-  local id="" path edges
-  id=$(cd "$repo" && _issue_gh --remote "$remote" -- api \
-    "$(_rest_issue_path "$owner_repo" "$blocker")" --jq '.id' 2>/dev/null) || id=""
+  local id="" state="" meta path edges posted=0
+  meta=$(cd "$repo" && _issue_gh --remote "$remote" -- api \
+    "$(_rest_issue_path "$owner_repo" "$blocker")" --jq '"\(.id) \(.state)"' 2>/dev/null) || meta=""
+  read -r id state <<<"$meta"
+  # A closed blocker is no wait: rc 3, nothing written.
+  [ "$state" = "closed" ] && return 3
+  path="$(_rest_issue_path "$owner_repo" "$n")/dependencies/blocked_by"
   case "$id" in
     ''|*[!0-9]*) ;;
     *)
-      path="$(_rest_issue_path "$owner_repo" "$n")/dependencies/blocked_by"
       ( cd "$repo" && _issue_gh --remote "$remote" -- api -X POST "$path" \
           -F "issue_id=$id" >/dev/null 2>&1 ) || true
+      posted=1
       ;;
   esac
-  edges=$(list_blocked_by "$repo" "$n" "$owner_repo") || return 2
-  printf '%s\n' "$edges" | cut -f1 | grep -qx "$blocker" || return 2
-  return 0
+  if edges=$(list_blocked_by "$repo" "$n" "$owner_repo") \
+     && printf '%s\n' "$edges" | cut -f1 | grep -qx "$blocker"; then
+    return 0
+  fi
+  # Not verified. The POST may still have landed (the re-read can fail on its
+  # own), and the caller carries on as if no edge existed — so take it back.
+  if [ "$posted" = 1 ]; then
+    ( cd "$repo" && _issue_gh --remote "$remote" -- api -X DELETE "$path/$id" \
+        >/dev/null 2>&1 ) || true
+  fi
+  return 2
 }
 
 # issue_label_names <repo-root> <N> [<owner/repo>] [<remote>]

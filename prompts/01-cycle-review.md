@@ -54,8 +54,10 @@ mihin tämän ajon muutos silloin rajautuu. Tieto on optimointi, ei päätösper
 päällekkäisyys ei yksin ole BLOCKER. Jos sisarajoja ei voitu lukea, älä oleta, ettei niitä ole.
 
 **Sarjoitus.** Jos sisarajo toteuttaa **olennaisesti saman muutoksen** kuin tämä issue *ja* se
-on aloitettu ennen tätä ajoa (sen `aloitettu`-aika yllä), älä rajaa työtä arvaamalla, vaan
-palauta `CYCLE_REVIEW_DECISION: SERIALIZE #<N>`, jossa `N` on yllä listatun sisarajon issue.
+on aloitettu ennen tätä ajoa (vertaa sen `aloitettu`-aikaa yllä mainittuun tämän ajon
+aloitusaikaan), palauta `CYCLE_REVIEW_DECISION: SERIALIZE #<N>`, jossa `N` on yllä listatun
+sisarajon issue. Kirjaa silti φ-osioon myös rajaus (mitä ei toteuteta itse): jos
+orkestraattori hylkää sarjoituksen, ajo jatkuu `PROCEED`ina juuri sen varassa.
 Runner lisää silloin tälle issuelle riippuvuuden "blocked by #N", vapauttaa sen ja ajaa sen
 uudelleen, kun #N on valmis. Pelkkä tiedostopäällekkäisyys ei riitä: silloin rajaa työ
 φ-osiossa kuten yllä. Orkestraattori hyväksyy sarjoituksen vain yllä listattuun, tätä ajoa

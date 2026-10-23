@@ -194,6 +194,12 @@ for repo in "${REPOS[@]}"; do
           break
         fi
         ;;
+      14)
+        # Serialized behind an earlier sibling (issue #338): a planned wait that
+        # ends by itself when the sibling closes — not a failure.
+        log "run #$started: issue #$issue serialized behind a sibling run — continuing"
+        consecutive_blocked=0
+        ;;
       1|8)
         # Usage error or a missing dependency. Retrying cannot fix either, and
         # exit 8 means the preflight gate refused before touching anything.
