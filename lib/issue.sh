@@ -846,8 +846,10 @@ EOF
 # Routed via _issue_gh so the comment is authored as <app>[bot] when App mode
 # is active AND the remote is origin (per-org App scope: non-origin remotes
 # bypass App mode). The clarification loop's detect_answer compares COMMENT
-# TIMESTAMPS against an awaiting-answer marker, not authors, so the identity
-# switch is safe — see tests/test-answer-detection.sh for the invariant.
+# TIMESTAMPS against an awaiting-answer marker, and the comment trust filter
+# (issue_trusted_json) recognises the App's own comments by its slug, so the
+# identity switch is safe — see tests/test-answer-detection.sh and
+# tests/test-comment-trust.sh for the invariants.
 comment_issue() {
   local repo="$1"
   local n="$2"
@@ -927,6 +929,179 @@ fetch_issue_json() {
   )
 }
 
+# ---------------------------------------------------------------------------
+# Comment trust (issue #343)
+# ---------------------------------------------------------------------------
+# The agent runs without permission prompts, so every comment that reaches a
+# prompt — or counts as a clarification reply — is an instruction channel. On a
+# public repo anyone can comment. These helpers narrow that channel to authors
+# with write access to the repo. The issue BODY is not filtered: adding the
+# auto-run label already requires write access, so the labeller owns the body.
+#
+# Layering mirrors parse_marker/detect_answer vs fetch_issue_json: the network
+# layer (issue_trusted_json) rewrites the issue JSON so .comments holds only
+# trusted comments, and every pure consumer (issue_comments_block, parse_marker,
+# detect_answer, extract_image_urls) reads that filtered file unchanged.
+#
+# Trust rule, fail-closed:
+#   - GET repos/{owner}/{repo}/collaborators/<login>/permission → .permission
+#     in {admin, maintain, write} = trusted; read/triage/none, 404, an error or
+#     empty output = untrusted.
+#   - App mode: the runner's own comments are authored by the App, which the
+#     permission API reports as "none" — and `gh issue view` prints its login as
+#     the bare app slug, WITHOUT the "[bot]" suffix (measured 2026-10-23). So the
+#     App's comments are recognised by an exact login == app_slug match, the slug
+#     read from the App's installation record. GitHub forbids an account login
+#     that equals another owner's App name, so an outsider cannot take it.
+#   - Personal-account mode needs no special case: the runner comments as the
+#     maintainer, who has write access.
+#
+# Cache: one TSV per run (<login>\t<allow|deny>, plus "@app\t<slug>"), so each
+# author costs at most one API call per run — also across poller ticks, which
+# share the run-dir file (CLAUDE.md §5.4: cost is O(new authors), not
+# O(comments)). Only DEFINITIVE answers are cached: an unreadable permission is
+# untrusted for this call but retried on the next, so a transient error cannot
+# silence a maintainer for the rest of the run.
+
+_issue_trust_log() {
+  if declare -F log >/dev/null 2>&1; then
+    log "comment-trust: $*"
+  else
+    printf '[comment-trust %s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2
+  fi
+}
+
+# _issue_trust_cache_get <cache> <key> — print the cached value, or nothing.
+_issue_trust_cache_get() {
+  local cache="$1" key="$2"
+  [ -n "$cache" ] && [ -f "$cache" ] || return 0
+  awk -F '\t' -v k="$key" '$1 == k { v = $2 } END { if (v != "") print v }' "$cache" 2>/dev/null
+}
+
+_issue_trust_cache_put() {
+  local cache="$1" key="$2" val="$3"
+  [ -n "$cache" ] || return 0
+  printf '%s\t%s\n' "$key" "$val" >> "$cache" 2>/dev/null || true
+}
+
+# _issue_app_login <repo-root> <remote> <cache> [<owner/repo>] — print the App's
+# comment login (its slug) when App mode is active for <remote>, else nothing.
+# Same routing rule as _issue_gh: non-origin remotes never use the App identity.
+_issue_app_login() {
+  local repo="$1" remote="$2" cache="$3" owner_repo="${4:-}"
+  case "$remote" in ""|origin) ;; *) return 0 ;; esac
+  declare -F gha_enabled >/dev/null 2>&1 || return 0
+  gha_enabled 2>/dev/null || return 0
+  local slug
+  slug=$(_issue_trust_cache_get "$cache" "@app")
+  if [ -n "$slug" ]; then
+    printf '%s' "$slug"
+    return 0
+  fi
+  if [ -z "$owner_repo" ] && declare -F resolve_remote_to_owner_repo >/dev/null 2>&1; then
+    owner_repo=$(resolve_remote_to_owner_repo "$repo" origin 2>/dev/null || true)
+  fi
+  if [ -n "$owner_repo" ]; then
+    slug=$(gha_repo_installation "$owner_repo" 2>/dev/null | jq -r '.app_slug // empty' 2>/dev/null || true)
+  fi
+  if [ -z "$slug" ]; then
+    _issue_trust_log "WARNING: App mode is on but the App's login could not be resolved for ${owner_repo:-$repo} — the runner's own App comments are treated as untrusted"
+    return 0
+  fi
+  _issue_trust_cache_put "$cache" "@app" "$slug"
+  printf '%s' "$slug"
+}
+
+# issue_author_can_write <login> <repo-root> <remote> <cache> [<owner/repo>]
+# rc 0 = trusted (write access), rc 1 = untrusted or unreadable (fail-closed).
+issue_author_can_write() {
+  local login="$1" repo="$2" remote="${3:-origin}" cache="${4:-}" owner_repo="${5:-}"
+  # A GitHub login is alphanumerics and single hyphens. Anything else (a missing
+  # author, "?") is untrusted and never reaches the URL path.
+  case "$login" in
+    ""|-*|*[!A-Za-z0-9-]*) return 1 ;;
+  esac
+  local cached
+  cached=$(_issue_trust_cache_get "$cache" "$login")
+  case "$cached" in
+    allow) return 0 ;;
+    deny)  return 1 ;;
+  esac
+  local path perm rc=0
+  if [ -n "$owner_repo" ]; then
+    path="repos/$owner_repo/collaborators/$login/permission"
+  else
+    path="repos/{owner}/{repo}/collaborators/$login/permission"
+  fi
+  perm=$(cd "$repo" 2>/dev/null && _issue_gh --remote "$remote" -- api "$path" --jq '.permission' 2>/dev/null) || rc=$?
+  perm=$(printf '%s' "$perm" | tr -d '[:space:]')
+  if [ "$rc" -ne 0 ] || [ -z "$perm" ]; then
+    _issue_trust_log "WARNING: write access of @$login unreadable (rc=$rc) — their comments are left out (fail-closed). If every human comment is dropped, check that the gh identity can read collaborator permissions."
+    return 1
+  fi
+  case "$perm" in
+    admin|maintain|write)
+      _issue_trust_cache_put "$cache" "$login" allow
+      return 0 ;;
+    *)
+      _issue_trust_cache_put "$cache" "$login" deny
+      return 1 ;;
+  esac
+}
+
+# issue_trusted_json <in> <out> <repo-root> <remote> <cache> [<owner/repo>]
+# Writes <in> to <out> with .comments narrowed to trusted authors and
+# .omitted_untrusted_comments set to how many were dropped. <in> may equal
+# <out>; re-filtering an already filtered file is idempotent (the count is
+# carried forward). Title, body, labels and state are untouched. rc 1 when
+# <in> is not readable JSON (then <out> is not written).
+issue_trusted_json() {
+  local in="$1" out="$2" repo="$3" remote="${4:-origin}" cache="${5:-}" owner_repo="${6:-}"
+  jq -e 'type == "object"' "$in" >/dev/null 2>&1 || return 1
+  local app_login logins login trusted=""
+  app_login=$(_issue_app_login "$repo" "$remote" "$cache" "$owner_repo")
+  # Unique authors, each resolved once per call (cache or one API request).
+  logins=$(jq -r '[.comments[]? | .author.login // ""] | unique | .[]' "$in" 2>/dev/null)
+  while IFS= read -r login; do
+    [ -n "$login" ] || continue
+    if [ -n "$app_login" ] && [ "$login" = "$app_login" ]; then
+      trusted="$trusted$login"$'\n'
+    elif issue_author_can_write "$login" "$repo" "$remote" "$cache" "$owner_repo"; then
+      trusted="$trusted$login"$'\n'
+    fi
+  done <<EOF
+$logins
+EOF
+  local tmp
+  tmp=$(mktemp "${out}.XXXXXX") || return 1
+  if ! jq --arg t "$trusted" '
+      ($t | split("\n") | map(select(. != ""))) as $ok
+      | ([.comments[]?] | length) as $before
+      | .comments = [ .comments[]? | select((.author.login // "") as $l | $ok | index($l) != null) ]
+      | .omitted_untrusted_comments = ((.omitted_untrusted_comments // 0) + ($before - (.comments | length)))
+    ' "$in" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$out"
+}
+
+# issue_comments_block <issue-json-file> — the ONE formatter for the comment
+# section of a prompt (formerly four copies of the same jq in orchestrate.sh).
+# Reads a file filtered by issue_trusted_json and appends a single line saying
+# how many comments were left out and why — never their text or authors.
+issue_comments_block() {
+  local f="$1"
+  jq -r '
+    ([.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")) as $c
+    | (.omitted_untrusted_comments // 0) as $n
+    | if $n > 0 then
+        ([$c, "_(\($n) kommenttia jätettiin pois: kirjoittajalla ei ole kirjoitusoikeutta repoon.)_"]
+         | map(select(. != "")) | join("\n\n"))
+      else $c end
+  ' "$f"
+}
+
 # Run-path labels: the issue author's classification of how much ceremony a run
 # gets (skills/claude-issue-runner "Ajopolku"). Neither is a pickup condition.
 # shellcheck disable=SC2034  # read by orchestrate.sh, not by this file
@@ -984,9 +1159,13 @@ parse_marker() {
 # that is NOT itself a run-issues bot comment (body does not contain the
 # "run-issues:" token). Empty output means "no human reply yet".
 #
-# The bot and the human share the same GitHub account, so author is NOT a usable
-# discriminator — the marker timestamp is the only durable boundary. The reply
-# body is capped to keep the downstream cycle-review prompt bounded.
+# The marker timestamp is the boundary; the author's write access is an extra
+# condition enforced upstream: callers pass a file filtered by
+# issue_trusted_json, so an untrusted reply never appears here and a forged
+# marker never moves the boundary (parse_marker reads the same file). The
+# "run-issues:" body check stays because in personal-account mode the runner
+# and the human share one account. The reply body is capped to keep the
+# downstream cycle-review prompt bounded.
 detect_answer() {
   local fixture="$1"
   local marker_ts="$2"

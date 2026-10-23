@@ -520,6 +520,12 @@ scan_answered() {
     local tmp_json
     tmp_json=$(mktemp)
     printf '%s' "$issue_json" > "$tmp_json"
+    # Only write-access authors count (issue #343): an untrusted reply emits no
+    # line, so --continue never starts and no clarification round is spent. The
+    # author cache is the run's own, so a tick costs O(new authors).
+    if ! issue_trusted_json "$tmp_json" "$tmp_json" "$repo" "$effective_remote" "$(dirname "$rj")/comment-authors.tsv" "$owner_repo"; then
+      rm -f "$tmp_json"; continue
+    fi
     marker_ts=$(parse_marker "$tmp_json" | sed -n 's/.*ts=\([^ ]*\).*/\1/p')
     if [ -z "$marker_ts" ]; then rm -f "$tmp_json"; continue; fi
     answer=$(detect_answer "$tmp_json" "$marker_ts")
@@ -592,6 +598,10 @@ scan_blocked_answered() {
     # treated as OPEN so the marker/answer gate still decides.
     issue_state=$(jq -r '.state // "OPEN"' "$tmp_json" 2>/dev/null || echo "OPEN")
     if [ "$issue_state" != "OPEN" ]; then rm -f "$tmp_json"; continue; fi
+    # Trusted comments only — same rule and cache as scan_answered.
+    if ! issue_trusted_json "$tmp_json" "$tmp_json" "$repo" "$effective_remote" "$(dirname "$rj")/comment-authors.tsv" "$owner_repo"; then
+      rm -f "$tmp_json"; continue
+    fi
     marker_ts=$(parse_marker "$tmp_json" | sed -n 's/.*ts=\([^ ]*\).*/\1/p')
     if [ -z "$marker_ts" ]; then rm -f "$tmp_json"; continue; fi
     answer=$(detect_answer "$tmp_json" "$marker_ts")

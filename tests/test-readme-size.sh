@@ -45,13 +45,19 @@ FAIL=0
 # docs/usage-reference.md case d2); README carries only the three table rows a
 # human scanning "Ajon tilat" and section 5 needs, ~430 B.
 #
-# Raised to 85700 by issue #334. README already measured 83854 B on main before
-# it (over the previous budget, so the test was red there). #334's criteria
-# require a new security-model section (7.11, the merge-time security gate) plus
-# one section-5 table row, ~1.8 KB. The reference material went to the mirrors
+# Raised to 85300 by issue #343. Two parts: main was already at 83854 B (commit
+# 47dbd94 corrected doc claims without a matching cut), and #343's acceptance
+# criteria require the security model (section 7) to state the comment trust
+# rule. The machinery (permission API, cache, App mode) went to
+# docs/usage-reference.md first; README carries one paragraph, one troubleshooting
+# row and a one-sentence correction in section 8, ~1.3 KB.
+#
+# Raised to 87100 by issue #334, merged on top of #343. #334's criteria require
+# a new security-model section (7.12, the merge-time security gate) plus one
+# section-5 table row, ~1.8 KB. The reference material went to the mirrors
 # first: exit code 10 -> docs/troubleshooting.md, the six variables and the
 # "repo wins" rationale -> docs/env-reference.md.
-MAX_BYTES=85700
+MAX_BYTES=87100
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

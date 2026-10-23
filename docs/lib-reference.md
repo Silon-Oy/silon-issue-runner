@@ -29,7 +29,7 @@ lukuihin.
 | `host-gate-notice.sh` | Host-portin "muuttuja puuttuu" -rivin toimitus: stderr **ja** skriptin oma loki, kerran. Erillään `poller-config.sh`:sta, jotta sen puhtausväite säilyy — tämä kirjoittaa levylle |
 | `hook-runner.sh` | Synkroninen commit, joka ajaa post-commit-hookit loppuun ennen paluuta |
 | `issue-images.sh` | Issuen kuvien poiminta ja lataus, jotta agentit näkevät ne |
-| `issue.sh` | GitHub-issue-operaatiot. Sisältää paketin **ainoan** poimintakyselyn (`pick_oldest_candidate`), lapsijoukon **ainoan** resolvoinnin (`list_epic_children`) ja ajopolkulabelien **ainoan** lukijan (`issue_run_path`) |
+| `issue.sh` | GitHub-issue-operaatiot. Sisältää paketin **ainoan** poimintakyselyn (`pick_oldest_candidate`), lapsijoukon **ainoan** resolvoinnin (`list_epic_children`) ja ajopolkulabelien **ainoan** lukijan (`issue_run_path`) sekä kommenttien luottamussuodatuksen (`issue_trusted_json`) ja kehotteen kommenttiosion **ainoan** muotoilijan (`issue_comments_block`) |
 | `jq-binary.sh` | `jq --binary` Windowsissa (§5.8). Paketin ainoa exportattava funktio; entry pointit sourcettavat sen |
 | `labels.sh` | Label-hallinta REST-API:n kautta (ei `gh issue edit --add-label`) |
 | `locking.sh` | Issue-kohtainen lukkohakemisto, atominen `mkdir(2)`:lla |
@@ -42,6 +42,7 @@ lukuihin.
 | `preflight.sh` | Jaettu riippuvuustarkistus. Korjauskomennot yhdestä lähteestä (`preflight_install_hint`) |
 | `rate-limit.sh` | Rate-limitin **tekstuaalinen** tunnistus ja jaettu perääntyminen (§5.1) |
 | `run-terminate.sh` | Elävän ajon turvallinen lopetus **kutsuttavana funktiona**. Irrotettu pollerista, joka `exit 0`si source-hetkellä; `stop-run.sh` ja `run-epic.sh --stop` käyttävät samaa polkua monistamatta turvalogiikkaa |
+| `sibling-runs.sh` | Saman repon sisarajot cycle reviewlle (#337): avoimet runnerin PR:t **yhdellä** REST-listauksella per repo ja tämän koneen elävät run-dirit, muuttuneet tiedostot paikallisista refeistä. Neuvoa-antava: lukuvirhe renderöityy promptiin virheenä, ei tyhjänä listana eikä estä ajoa. `list_sibling_runs` on irrotettu S6:sta sarjoitusta varten |
 | `state.sh` | Ajon durable-tila `<run-dir>`-hakemistossa |
 | `status-github.sh` | `status.sh --github`-rikastus. Ei omaa CI-rollupia eikä merge-päätöstä — kutsuu `pr-watch-lib.sh`:n omia |
 | `status-read.sh` | `status.sh`:n puhtaat luku- ja luokittelufunktiot. `_iso_to_epoch` asuu täällä, jotta poller ja näkymä laskevat iän identtisesti |

@@ -314,7 +314,7 @@ konfiguraatiokanava (LaunchAgent-ympäristöttömyys).
 | `PR_WATCH_CI_LOG_MAX` | `60000` | Agentin promptiin syötettävän CI-lokiotteen kokokatto (tavua) |
 | `PR_WATCH_CI_MAX_POLLS` | `40` | CI-odotuksen kierrosten määrä |
 | `PR_WATCH_CI_POLL_SECS` | `15` | CI-odotuksen kierrosväli (40 × 15 s = 10 min) |
-| `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (#334): agentti katselmoi PR:n lopullisen diffin ennen jokaista mergeä, ja löydökset korjataan tai PR pidätetään (exit 10). README §7.11 |
+| `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (#334): agentti katselmoi PR:n lopullisen diffin ennen jokaista mergeä, ja löydökset korjataan tai PR pidätetään (exit 10). README §7.12 |
 | `PR_WATCH_MAX_SECURITY_FIXES` | `1` | Tietoturvalöydösten korjausyritysten katto per PR (`merge_gate_fix_attempted`, luetaan `state.jsonl`in hännästä) |
 | `PR_WATCH_SECURITY_REVIEW_TIMEOUT` | `1800` | Tietoturvakatselmuksen claude-kutsun aikakatto |
 | `PR_WATCH_SECURITY_FIX_TIMEOUT` | `1800` | Tietoturvakorjauksen claude-kutsun aikakatto |

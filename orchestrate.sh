@@ -287,6 +287,8 @@ source "$SCRIPT_DIR/lib/gitignore.sh"
 source "$SCRIPT_DIR/lib/host.sh"
 # shellcheck source=lib/state.sh
 source "$SCRIPT_DIR/lib/state.sh"
+# shellcheck source=lib/sibling-runs.sh
+source "$SCRIPT_DIR/lib/sibling-runs.sh"
 # shellcheck source=lib/claude-call.sh
 source "$SCRIPT_DIR/lib/claude-call.sh"
 # shellcheck source=lib/evolution-findings.sh
@@ -860,6 +862,21 @@ resolve_owner_repo() {
   log "remote: routing gh via --repo $OWNER_REPO (remote=$REMOTE_NAME)"
 }
 
+# trust_filter_issue_json <issue-json> — narrow the run's issue snapshot, in
+# place, to comments whose authors have write access (issue #343). Every prompt,
+# the clarification-reply detection and the image download read this file, so
+# filtering it once here covers all of them. The author cache is per run.
+trust_filter_issue_json() {
+  local f="$1"
+  if ! issue_trusted_json "$f" "$f" "$REPO_ROOT" "$REMOTE_NAME" "$RUN_DIR/comment-authors.tsv" "$OWNER_REPO"; then
+    log "WARNING: issue snapshot $f unreadable — comment trust filter not applied (nothing to leak)"
+    return 0
+  fi
+  local omitted
+  omitted=$(jq -r '.omitted_untrusted_comments // 0' "$f" 2>/dev/null || echo 0)
+  [ "$omitted" = "0" ] || log "comment-trust: $omitted comment(s) left out — author lacks write access"
+}
+
 # resolve_repo_slug — derive REPO_SLUG from REPO_ROOT + REMOTE_NAME (issue #67).
 # Called only on the NEW-run path: resume/restart/continue read the slug from
 # run.json instead, so a run's identity never changes under it (a remote URL
@@ -913,9 +930,10 @@ phase_a() {
   mkdir -p "$RUN_DIR"
   local issue_json="$RUN_DIR/issue.json"
   fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
+  trust_filter_issue_json "$issue_json"
   ISSUE_TITLE=$(jq -r '.title // empty' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
   local slug
   slug=$(slugify_title "$ISSUE_TITLE")
   [ -n "$slug" ] || slug="issue_${ISSUE_NUM}"
@@ -1187,6 +1205,25 @@ EOF
   state_event "$RUN_DIR" "issue_images_prepared" "count=${#arr[@]}" || true
 }
 
+# prepare_sibling_runs — fills SIBLING_RUNS with the cycle-review section of
+# the same repo's sibling runs (lib/sibling-runs.sh, issue #337) and logs the
+# outcome. Never fatal: the section is an optimisation, not a gate.
+SIBLING_RUNS=""
+prepare_sibling_runs() {
+  SIBLING_RUNS=$(sibling_runs_section "$REPO_ROOT" "$OWNER_REPO" "$REMOTE_NAME" \
+    "$RUN_DIR" "$ISSUE_NUM" 2>/dev/null) || true
+  local count
+  count=$(printf '%s\n' "$SIBLING_RUNS" | grep -c '^- \*\*' || true)
+  case "$SIBLING_RUNS" in
+    *"ei voitu lukea"*)
+      log "sibling-runs: could not be read — the review prompt says so"
+      state_event "$RUN_DIR" "sibling_runs_read" "result=error" || true ;;
+    *)
+      log "sibling-runs: $count sibling run(s)"
+      state_event "$RUN_DIR" "sibling_runs_read" "result=ok" "count=$count" || true ;;
+  esac
+}
+
 # The run-path label that routes S6 through the light review (issue #312). Its
 # criteria live in skills/claude-issue-runner/SKILL.md ("Ajopolku"); the label
 # is written by the issue author, never by the runner.
@@ -1210,7 +1247,8 @@ run_light_review() {
     "ISSUE_BODY=$ISSUE_BODY" \
     "ISSUE_COMMENTS=$ISSUE_COMMENTS" \
     "ISSUE_IMAGES=$ISSUE_IMAGES" \
-    "REPO_ROOT=$REPO_ROOT"
+    "REPO_ROOT=$REPO_ROOT" \
+    "SIBLING_RUNS=$SIBLING_RUNS"
 
   local lr_rc=0
   (
@@ -1262,6 +1300,11 @@ run_cycle_review() {
   # Download any embedded issue images so the cycle-review agent can Read them.
   prepare_issue_images
 
+  # The same repo's other live runs and open runner PRs (issue #337), computed
+  # once for both review branches. Advisory: a read failure renders as such in
+  # the prompt and never stops the run.
+  prepare_sibling_runs
+
   # A --continue keeps the run_path its first S6 pass recorded.
   if [ -z "$CLARIFICATION_CONTEXT" ]; then
     if issue_json_has_label "$RUN_DIR/issue.json" "$LIGHT_RUN_LABEL"; then
@@ -1283,6 +1326,7 @@ run_cycle_review() {
     "REPO_ROOT=$REPO_ROOT" \
     "REPO_CLAUDE_MD=$repo_claude_md" \
     "CLARIFICATION_CONTEXT=$CLARIFICATION_CONTEXT" \
+    "SIBLING_RUNS=$SIBLING_RUNS" \
     "RUN_PATH_SECTION=$(run_path_section 01-cycle-review)"
 
   local cr_rc=0
@@ -1404,9 +1448,11 @@ resume_load_state() {
     log "issue.json missing in $RUN_DIR — re-fetching from GitHub"
     fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
   fi
+  # Also re-filters a legacy run's unfiltered snapshot; idempotent otherwise.
+  trust_filter_issue_json "$issue_json"
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
 
   # The original run held the lock and the GitHub assignee; the trap kept
   # them alive on exit 10. Mark our globals so cleanup behaves correctly.
@@ -1540,9 +1586,11 @@ restart_load_state() {
     log "issue.json missing in $RUN_DIR — re-fetching from GitHub"
     fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
   fi
+  # Also re-filters a legacy run's unfiltered snapshot; idempotent otherwise.
+  trust_filter_issue_json "$issue_json"
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
 
   # Refresh the chosen remote so RESTART_CONTEXT (git log <remote>/<base>..HEAD)
   # compares the branch against the real remote tip. Soft: a failed fetch only
@@ -1665,6 +1713,10 @@ continue_load_state() {
   # Fetch the freshest issue payload and locate the human reply via the marker.
   local issue_json="$RUN_DIR/issue.json"
   fetch_issue_json "$REPO_ROOT" "$ISSUE_NUM" "$OWNER_REPO" "$REMOTE_NAME" > "$issue_json"
+  # Marker and reply are read from the trusted comments only: an untrusted reply
+  # neither continues the run nor spends a clarification round, and an untrusted
+  # (forged) marker cannot move the boundary.
+  trust_filter_issue_json "$issue_json"
 
   local marker_line marker_ts answer
   marker_line=$(parse_marker "$issue_json")
@@ -1696,7 +1748,7 @@ continue_load_state() {
   # Restore issue text fields for the cycle-review prompt.
   ISSUE_TITLE=$(jq -r '.title // ""' "$issue_json")
   ISSUE_BODY=$(jq -r '.body // ""' "$issue_json")
-  ISSUE_COMMENTS=$(jq -r '[.comments[]? | "--- @\(.author.login // "?") @ \(.createdAt // "?")\n\(.body)"] | join("\n\n")' "$issue_json")
+  ISSUE_COMMENTS=$(issue_comments_block "$issue_json")
 
   # Refresh the chosen remote so the re-run cycle-review reasons against the
   # real remote tip. Soft: a failed fetch only means cycle-review sees a

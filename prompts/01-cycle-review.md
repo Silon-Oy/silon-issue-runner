@@ -39,6 +39,20 @@ Repo: `{{REPO_ROOT}}`
 {{REPO_CLAUDE_MD}}
 ```
 
+## Saman repon rinnakkaiset ajot
+
+Muut tällä hetkellä käynnissä olevat ajot samassa repossa: tämän koneen elävät ajot ja avoimet
+runnerin PR:t (`auto-run/`-haarat). Ne eivät tiedä tästä ajosta, joten päällekkäisyys on
+nimettävä tässä.
+
+{{SIBLING_RUNS}}
+
+Jos jokin sisarajo toteuttaa osan tämän issuen muutoksesta tai muuttaa samoja tiedostoja,
+nimeä päällekkäisyys φ-osiossa: mikä sisarajo (issuen numero), mikä osa ja mitkä tiedostot.
+Kirjaa Implementerille selvästi, **mitä ei toteuteta itse, koska sisarajo tekee sen**, ja
+mihin tämän ajon muutos silloin rajautuu. Tieto on optimointi, ei päätösperuste: pelkkä
+päällekkäisyys ei yksin ole BLOCKER. Jos sisarajoja ei voitu lukea, älä oleta, ettei niitä ole.
+
 ## Issuen kirjoittaja vastasi aiempaan tarkennuspyyntöön
 
 {{CLARIFICATION_CONTEXT}}
