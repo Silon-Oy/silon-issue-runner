@@ -291,10 +291,14 @@ _epic_labels_have() {
   jq -e --arg l "$label" 'any(.labels[]?; (.name // "") == $l)' "$file" >/dev/null 2>&1
 }
 
-# _epic_child_pr_refs <repo-root> <child-N> [<owner/repo>] — best-effort: print
-# the PR references (`#<n>`) that closed the child, space-separated, or nothing.
-# Uses GraphQL closedByPullRequestsReferences; any failure (endpoint, auth,
-# absent data) degrades silently to no PR — the summary still lists the child.
+# _epic_child_pr_refs <repo-root> <child-N> [<owner/repo>] — print the PR
+# references (`#<n>`) that closed the child, space-separated, or nothing.
+# Uses GraphQL closedByPullRequestsReferences (first 5 PRs per child).
+# Returns 0 on a good read — including "no PRs" (empty output) — and 1 when the
+# read failed (repo resolution, endpoint, auth), so "no PR" and "unreadable"
+# stay distinguishable. Best-effort is the CALLER's choice: the completion
+# summary swallows the failure (`|| prs=""`), the epic review (lib/epic-review.sh,
+# issue #272) is fail-closed on it.
 _epic_child_pr_refs() {
   local repo="$1" child="$2" owner_repo="${3:-}"
   local o r
@@ -302,13 +306,13 @@ _epic_child_pr_refs() {
     o="${owner_repo%%/*}"; r="${owner_repo##*/}"
   else
     local nwo
-    nwo=$(cd "$repo" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "")
-    [ -n "$nwo" ] || return 0
+    nwo=$(cd "$repo" && gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || return 1
+    [ -n "$nwo" ] || return 1
     o="${nwo%%/*}"; r="${nwo##*/}"
   fi
   local q='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){closedByPullRequestsReferences(first:5,includeClosedPrs:true){nodes{number}}}}}'
   ( cd "$repo" && gh api graphql -f query="$q" -F o="$o" -F r="$r" -F n="$child" \
-      --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[]?.number | "#\(.)"] | join(" ")' 2>/dev/null ) || true
+      --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[]?.number | "#\(.)"] | join(" ")' 2>/dev/null ) || return 1
 }
 
 # epic_process_one <repo-root> <epic-N> <labels-csv> [<owner/repo>] [<remote>]
@@ -475,7 +479,7 @@ _epic_announce_complete() {
       # repo, not the epic's.
       [ -n "$child_repo" ] || child_repo="$owner_repo"
       child_ref="$(_epic_child_ref "$child_repo" "$owner_repo" "$num")"
-      prs=$(_epic_child_pr_refs "$repo" "$num" "$child_repo")
+      prs=$(_epic_child_pr_refs "$repo" "$num" "$child_repo") || prs=""
       if [ -n "$prs" ]; then
         echo "- ${child_ref} ${title} — PR: ${prs}"
       else

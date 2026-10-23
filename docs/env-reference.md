@@ -37,6 +37,7 @@ näistä asennus- ja konfigurointiaikaisen osajoukon ihmiselle.
 | `RUN_ISSUES_LOCK_ROOT` | macOS: `$HOME/Library/Application Support/run-issues/locks`; muut: `${XDG_STATE_HOME:-$HOME/.local/state}/run-issues/locks` | Lukkohakemistojen juuri. Oletus haarautuu `uname -s`:llä (`lib/paths.sh`: `default_lock_root`); haara on `Darwin` ⇒ macOS, **kaikki muu** ⇒ XDG, jotta myös `MINGW64_NT-*` osuu oikein |
 | `RUN_ISSUES_LOCK_STALE_SECS` | `86400` | Lukon vanhenemisraja |
 | `RUN_ISSUES_SITUATION_ARTIFACT_MAX` | `60000` | Tilanneartefaktin kokokatto (tavua) |
+| `RUN_ISSUES_EPIC_REVIEW_MAX` | `60000` | Epicin katselmusaineiston (`lib/epic-review.sh`: `epic_review_collect`) kokokatto tavuina. Ylityksessä muutospintaa leikataan ensin; kriteerit ja alaissueet vasta jos ne yksinään ylittävät katon. Katkaisu näkyy aina aineiston viimeisellä rivillä. Luetaan kutsuhetkellä; ei-numeerinen arvo ⇒ oletus |
 | `RUN_ISSUES_MAX_IMAGES` | `10` | Issuesta ladattavien kuvien enimmäismäärä |
 | `RUN_ISSUES_MAX_IMAGE_BYTES` | `10485760` | Yksittäisen kuvan kokokatto |
 | `RUN_ISSUES_IMAGE_TIMEOUT` | `60` | Kuvalatauksen timeout |
