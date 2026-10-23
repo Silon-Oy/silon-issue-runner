@@ -104,7 +104,7 @@ check "exit code clean" "$rc" "0"
 if jq -e . "$OUT" >/dev/null 2>&1; then ok "output is valid JSON"; else bad "output is not valid JSON"; fi
 
 # ---- top-level required keys ----
-for k in schema_version generated_at host stale_after_seconds runner enrichment sources totals runs recent_usage epics read_errors; do
+for k in schema_version generated_at host stale_after_seconds runner enrichment sources totals runs recent_usage epics audits read_errors; do
   if jq -e "has(\"$k\")" "$OUT" >/dev/null 2>&1; then ok "top-level key: $k"; else bad "missing top-level key: $k"; fi
 done
 
@@ -197,6 +197,46 @@ check "enrichment.fetched_at null" "$(jq -r '.enrichment.fetched_at' "$OUT")" "n
 
 # ---- schema_version stays 1 (runner is ADDITIVE, issue #105) ----
 check "schema_version still 1" "$(jq -r '.schema_version' "$OUT")" "1"
+
+# ---- audits[] (issue #360): running run-issues-audit-* sessions, from ONE
+# `tmux ls`. A stub tmux lists an audit with a dashed slug, an unknown kind, an
+# ordinary run session and a foreign session; only the audit is reported. ----
+TBIN="$FX/tbin"; mkdir -p "$TBIN"
+TMUX_CALLS="$FX/tmux-calls"
+AUD_CREATED=$(( $(date -u +%s) - 600 ))
+cat > "$TBIN/tmux" <<SH
+#!/usr/bin/env bash
+echo "\$*" >> "$TMUX_CALLS"
+case "\${1:-}" in
+  ls|list-sessions)
+    printf '%s\n' "run-issues-audit-security-example-org-repo-a $AUD_CREATED" \
+      "run-issues-audit-nosuch-example-org-repo-a 1" "run-issues-repo-a-issue-5 1" "other 1" ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$TBIN/tmux"
+OUT_AU="$FX/out-audits.json"
+: > "$TMUX_CALLS"
+HOME="$FX/home" PATH="$TBIN:$PATH" RUN_ISSUES_WATCHLIST="$WL" bash "$STATUS" --json > "$OUT_AU"
+check "audits lists only the audit session" "$(jq -c '[.audits[] | [.kind, .repo_slug, .session]]' "$OUT_AU")" \
+  '[["security","example-org-repo-a","run-issues-audit-security-example-org-repo-a"]]'
+AU_AGE="$(jq -r '.audits[0].age_seconds' "$OUT_AU")"
+if [ "$AU_AGE" -ge 600 ] 2>/dev/null && [ "$AU_AGE" -lt 900 ]; then ok "audit age_seconds from session_created ($AU_AGE)"; else bad "audit age_seconds=$AU_AGE"; fi
+check "totals.audits counts it" "$(jq -r '.totals.audits' "$OUT_AU")" "1"
+check "an audit is not a run" "$(jq -r '[.runs[] | select(.issue_number == null)] | length' "$OUT_AU")" "0"
+check "one tmux ls per document (O(work), §5.4)" "$(grep -cE '^(ls|list-sessions)' "$TMUX_CALLS")" "1"
+# --repo narrows audits to that repo's slugs; another repo's audit drops out.
+HOME="$FX/home" PATH="$TBIN:$PATH" RUN_ISSUES_WATCHLIST="$WL" bash "$STATUS" --json --repo "$REPO" > "$OUT_AU"
+check "--repo drops another repo's audit" "$(jq -r '.audits | length' "$OUT_AU")" "0"
+# No tmux server: an empty list, not an error.
+cat > "$TBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+HOME="$FX/home" PATH="$TBIN:$PATH" RUN_ISSUES_WATCHLIST="$WL" bash "$STATUS" --json > "$OUT_AU"; rc_au=$?
+check "no tmux server: exit clean" "$rc_au" "0"
+check "no tmux server: audits is []" "$(jq -c '.audits' "$OUT_AU")" "[]"
+check "no tmux server: totals.audits 0" "$(jq -r '.totals.audits' "$OUT_AU")" "0"
 
 # ---- runner degrades cleanly outside a git repo (issue #105, criterion 5).
 # Point RUN_ISSUES_HOME at a non-git dir (with lib/ symlinked so status.sh can
