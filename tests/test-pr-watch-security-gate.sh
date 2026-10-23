@@ -109,7 +109,7 @@ case "\$1 \$2" in
         statusCheckRollup:[{__typename:"CheckRun",name:"ci",status:"COMPLETED",conclusion:"SUCCESS"}],
         headRefName:"feature/x",baseRefName:"main"}'
     else
-      echo '{"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+      echo '{"headRefOid":"'"\$(git -C "$WT" rev-parse HEAD)"'","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
     fi
     ;;
   "pr merge")   printf '%s\n' "\$*" >> "$WORK/merge.log"; echo "merged (mock)" ;;

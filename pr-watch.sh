@@ -46,6 +46,13 @@
 #                                        the AI CI-repair claude call.
 #   PR_WATCH_CI_LOG_MAX                  default 60000 — byte cap on the failed-CI
 #                                        log excerpt fed to the agent's prompt.
+#   PR_WATCH_CI_EMPTY_GRACE_SECS         default 120 — after a push, an EMPTY
+#                                        statusCheckRollup on the pushed SHA is
+#                                        PENDING until it has stayed empty this
+#                                        long, then GREEN (checkless repo, #354).
+#                                        Keep below PR_WATCH_CI_MAX_POLLS ×
+#                                        PR_WATCH_CI_POLL_SECS or a checkless
+#                                        repo times out instead.
 #   PR_WATCH_ENABLE_SECURITY_GATE        default 0 — OFF. When 1, every merge
 #                                        (MERGE, and REBASE / FIX_CI once they are
 #                                        green) first passes the security MERGE
@@ -1015,7 +1022,9 @@ _pr_publish_and_revalidate() {
   [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
     state_event "$run_dir" "pr_rebased" "pr=$pr_num"
 
-  if pr_wait_ci_green "$pr_num"; then
+  local pushed_sha
+  pushed_sha=$( cd "$worktree" && git rev-parse HEAD 2>/dev/null || true )
+  if pr_wait_ci_green "$pr_num" "$pushed_sha"; then
     log "CI green after rebase for PR #$pr_num — proceeding to merge"
     return 0
   fi
@@ -1066,29 +1075,39 @@ _pr_abort_to_human() {
     log "failed to post conflict comment on PR #$pr_num"
 }
 
-# pr_wait_ci_green <pr-number> — poll the PR's statusCheckRollup until CI is
-# GREEN or RED, or we time out on PENDING. Returns 0 only when CI is green.
+# pr_wait_ci_green <pr-number> <expected-sha> — poll the PR's statusCheckRollup
+# after a push until CI on <expected-sha> is GREEN or RED, or we time out on
+# PENDING. Returns 0 only when CI is green FOR THE PUSHED SHA.
 #
-# Reads the SAME source as pr_decide's merge gate — the gh-pr-view
-# statusCheckRollup via pr_ci_state — so the two can never disagree on what
-# "green" means (CLAUDE.md §7; issue #276, symptom A). The old implementation
-# polled `gh pr checks`, whose "no checks reported" (rc=1) on a repo with no
-# checks configured matched neither the rc==0 pass nor the fail|error grep, so it
-# spun the FULL 40×15s window and then returned 1 — leaving an otherwise
-# mergeable PR stuck. pr_ci_state maps an empty rollup to GREEN, so this now
-# returns 0 IMMEDIATELY for a checkless PR without consuming any timeout budget.
-# Bounded so a stuck/queued pipeline doesn't hang the watcher forever.
+# The verdict comes from pr_ci_wait_state, which delegates a non-empty rollup to
+# pr_ci_state — the SAME source as pr_decide's merge gate — so the two can never
+# disagree on what "green" means (CLAUDE.md §7; issue #276, symptom A). On top of
+# that it binds the reading to the push (issue #354): GitHub registers the new
+# head's check runs seconds after the push, so a rollup that is empty or still
+# carries the old headRefOid is PENDING, not GREEN. A checkless repo is still
+# accepted — once its rollup has stayed empty for PR_WATCH_CI_EMPTY_GRACE_SECS —
+# so #276's 10-minute spin does not return. Elapsed time is counted in polls
+# (i * interval), not wall clock, so the wait is deterministic under test.
+# An empty <expected-sha> fails closed: the SHA condition never holds and the
+# wait times out to 1. Bounded so a stuck/queued pipeline doesn't hang forever.
 pr_wait_ci_green() {
-  local pr_num="$1"
+  local pr_num="$1" expected_sha="${2:-}"
   local max_polls="${PR_WATCH_CI_MAX_POLLS:-40}"   # 40 * 15s = 10 min
   local interval="${PR_WATCH_CI_POLL_SECS:-15}"
+  local grace="${PR_WATCH_CI_EMPTY_GRACE_SECS:-120}"
   local i=0 json ci
+  [ -n "$expected_sha" ] || \
+    log "pr_wait_ci_green: no expected SHA for PR #$pr_num — CI cannot be verified (fail-closed)"
   while [ "$i" -lt "$max_polls" ]; do
-    if json=$(gh_route pr view "$pr_num" --json statusCheckRollup 2>/dev/null); then
-      ci=$(pr_ci_state "$json")
+    if json=$(gh_route pr view "$pr_num" --json headRefOid,statusCheckRollup 2>/dev/null); then
+      ci=$(pr_ci_wait_state "$json" "$expected_sha" "$((i * interval))" "$grace")
       case "$ci" in
-        GREEN) return 0 ;;
-        RED)   return 1 ;;
+        GREEN)
+          if [ "$(jq -r '(.statusCheckRollup // []) | length' <<<"$json" 2>/dev/null)" = "0" ]; then
+            log "PR #$pr_num: no CI checks on ${expected_sha:0:12} after ${grace}s grace — treating as a checkless repo"
+          fi
+          return 0 ;;
+        RED) return 1 ;;
       esac
     fi
     # PENDING, or a failed fetch (rate limit / network) — wait and retry. A
@@ -1387,7 +1406,7 @@ pr_fix_ci() {
   fi
   state_event "$run_dir" "pr_ci_repair_pushed" "pr=$pr_num"
 
-  if pr_wait_ci_green "$pr_num"; then
+  if pr_wait_ci_green "$pr_num" "$head_after"; then
     log "CI green after repair for PR #$pr_num — proceeding to merge"
     state_event "$run_dir" "pr_ci_repaired" "pr=$pr_num"
     return 0
@@ -1785,7 +1804,7 @@ _pr_gate_fix() {
     GATE_WHY="korjauksen push epäonnistui"
     return 1
   fi
-  if ! pr_wait_ci_green "$pr_num"; then
+  if ! pr_wait_ci_green "$pr_num" "$head_after"; then
     GATE_WHY="CI ei vihreytynyt korjauksen jälkeen"
     return 1
   fi

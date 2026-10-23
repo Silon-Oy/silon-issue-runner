@@ -56,10 +56,17 @@ cat > "$BIN/gh" <<SH
 #!/usr/bin/env bash
 case "\$1 \$2" in
   "pr view")
-    cat <<'JSON'
+    # Classification (asks for mergeable) => BEHIND. Revalidation (headRefOid +
+    # statusCheckRollup) => green on the pushed head (issue #354: the wait only
+    # accepts checks bound to the SHA it pushed).
+    if printf '%s' "\$*" | grep -q mergeable; then
+      cat <<'JSON'
 {"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"BEHIND",
  "labels":[{"name":"auto-merge"}],"statusCheckRollup":[],"headRefName":"feature/x"}
 JSON
+    else
+      echo '{"headRefOid":"'"\$(git -C "$WT" rev-parse HEAD)"'","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+    fi
     ;;
   "pr checks")
     exit 0   # all checks green
