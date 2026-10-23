@@ -184,6 +184,25 @@ check_hint claude 'install Claude Code natively so `claude` is on PATH (npm-pack
 check_hint jq-binary 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)'
 check_hint gh-auth 'gh auth login'
 check_hint timeout 'brew install coreutils (Git Bash on Windows: scoop install coreutils)'
+check_hint codex 'Codex CLI is optional and never installed by this package: install it yourself so `codex` is on PATH, or set PR_WATCH_SECURITY_REVIEWER=claude'
+
+# ---- Case 4b: preflight_probe_codex (issue #335) ----
+# Codex is optional: the probe must report a missing binary as non-zero and
+# accept one that answers --version, without a real Codex on the machine.
+if preflight_probe_codex run-issues-no-such-codex; then
+  echo "FAIL: case4b probe accepted a missing codex"; FAIL=1
+else
+  echo "PASS: case4b missing codex fails the probe"
+fi
+_codex_stub_dir=$(mktemp -d)
+printf '#!/usr/bin/env bash\n[ "$1" = --version ] && exit 0\nexit 9\n' > "$_codex_stub_dir/codex"
+chmod +x "$_codex_stub_dir/codex"
+if preflight_probe_codex "$_codex_stub_dir/codex"; then
+  echo "PASS: case4b a codex answering --version passes the probe"
+else
+  echo "FAIL: case4b probe rejected a working codex"; FAIL=1
+fi
+rm -rf "$_codex_stub_dir"
 
 out=$(preflight_install_hint run-issues-no-such-key 2>&1)
 rc=$?

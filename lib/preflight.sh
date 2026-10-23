@@ -9,7 +9,8 @@
 # instead of drifting apart in two copies.
 #
 # Every function is free of persistent side effects: no writes, no exits, no
-# globals. Five functions — preflight_probe_claude, preflight_timeout_bin,
+# globals. Six functions — preflight_probe_claude, preflight_probe_codex,
+# preflight_timeout_bin,
 # preflight_jq_binary_ok, preflight_repo_write_report and
 # preflight_app_write_report — EXECUTE the command they are asked about, because
 # for those a name on PATH (or a token that merely exists) does not imply the
@@ -80,8 +81,8 @@ preflight_report_tool() {
 }
 
 # preflight_install_hint <key> — echo the fix command for a dependency.
-#   key = git | gh | jq | jq-binary | npx | claude | gh-auth | timeout | tmux |
-#         python3
+#   key = git | gh | jq | jq-binary | npx | claude | codex | gh-auth | timeout |
+#         tmux | python3
 # Returns 1 without output for an unknown key.
 # Single source of truth for fix commands: install.sh reports them advisorily
 # and the orchestrator's S0 gate prints them fatally, so a wording change must
@@ -94,6 +95,7 @@ preflight_install_hint() {
     jq)      printf 'brew install jq\n' ;;
     npx)     printf 'brew install node (or nvm install --lts)\n' ;;
     claude)  printf 'install Claude Code natively so `claude` is on PATH (npm-package alternative: npm i -g @anthropic-ai/claude-code and set RUN_ISSUES_CLAUDE_CMD to the npx invocation)\n' ;;
+    codex)   printf 'Codex CLI is optional and never installed by this package: install it yourself so `codex` is on PATH, or set PR_WATCH_SECURITY_REVIEWER=claude\n' ;;
     gh-auth) printf 'gh auth login\n' ;;
     jq-binary) printf 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)\n' ;;
     timeout) printf 'brew install coreutils (Git Bash on Windows: scoop install coreutils)\n' ;;
@@ -116,6 +118,21 @@ preflight_install_hint() {
 # closed so a CLI that decides to prompt cannot hang the caller, and the
 # timeout binary (when present) bounds the call.
 preflight_probe_claude() {
+  _preflight_probe_version "$@"
+}
+
+# preflight_probe_codex <cmd-token...> — the same `--version` probe for the
+# optional Codex CLI, the merge gate's alternative reviewer (issue #335). Only
+# called when Codex is the selected reviewer: a machine without Codex must not
+# see it checked, let alone fail on it. Executes the command for the same reason
+# as preflight_probe_claude.
+preflight_probe_codex() {
+  _preflight_probe_version "$@"
+}
+
+# _preflight_probe_version <cmd-token...> — the shared probe body: stdin closed,
+# bounded by the timeout binary when one exists.
+_preflight_probe_version() {
   local tb
   tb=$(preflight_timeout_bin)
   if [ -n "$tb" ]; then
