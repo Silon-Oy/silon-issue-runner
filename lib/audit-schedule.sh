@@ -14,8 +14,9 @@
 # (kind, repo × remote), read in O(1). Nothing here reads run-dirs, state.jsonl,
 # logs or GitHub.
 #
-# Kinds: security (security-audit.sh, #339) and coherence (coherence-audit.sh,
-# #342).
+# Kinds: security (security-audit.sh, #339), coherence (coherence-audit.sh,
+# #342) and dependency-scan (dependency-scan.sh, #382: the security audit's
+# scanners alone, no agent call, so it can run on a denser interval).
 #
 # CALLING CONTRACT — every kind's script MUST accept exactly this form, because
 # the spawn has no per-kind branch (#360, for #342 and any later kind):
@@ -25,8 +26,17 @@
 # and MUST read the rest of its configuration from the environment it inherits
 # (RUN_ISSUES_LOG_DIR, RUN_ISSUES_POLLER_ENV_FILE, RUN_ISSUES_AUTO=1). Its exit
 # code is the outcome audit_run records: 0 = done, 5 = done but one scanner
-# failed (the review itself ran) — _audit_succeeded treats both as an audit
-# that happened; anything else is retried after RUN_ISSUES_AUDIT_RETRY_HOURS.
+# failed (the review itself ran), 6 = done, code unchanged since the last
+# successful audit so only the scanners ran — _audit_succeeded treats all three
+# as an audit that happened; anything else (7 = no scanner installed, so
+# nothing was checked, included) is retried after RUN_ISSUES_AUDIT_RETRY_HOURS.
+#
+# Audited commit (#382): audit_run exports RUN_ISSUES_AUDIT_STATE_FILE=<state>.
+# A script may read audit_sha_file <state> — the base commit of the last
+# successful full audit — and write the commit it audited to
+# `<that file>.pending`. audit_run promotes the pending file only on exit 0 or 5,
+# so a failed start never erases the last successful SHA (the result file only
+# describes the LATEST start, which is why the SHA is not a third field there).
 # A kind whose script needs another argument changes this contract and the
 # spawn in poller.sh together, never one of them.
 #
@@ -49,7 +59,7 @@ _AUDIT_SCHEDULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # audit_kinds — the audit kinds the poller schedules, space-separated.
 audit_kinds() {
-  printf 'security coherence'
+  printf 'security coherence dependency-scan'
 }
 
 # audit_kind_script <kind> — the package-root script that runs <kind>. An
@@ -59,18 +69,21 @@ audit_kind_script() {
   case "${1:-}" in
     security)  printf 'security-audit.sh' ;;
     coherence) printf 'coherence-audit.sh' ;;
+    dependency-scan) printf 'dependency-scan.sh' ;;
     *) return 1 ;;
   esac
 }
 
 # audit_kind_env_var <kind> — the machine-level interval variable of <kind>,
-# named RUN_ISSUES_<KIND>_AUDIT_INTERVAL_DAYS. Spelled out per kind rather than
+# named RUN_ISSUES_<KIND>_AUDIT_INTERVAL_DAYS (dependency-scan, not itself an
+# audit in name: RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS). Spelled out per kind rather than
 # derived, so the name stays greppable: tests/test-poller-config.sh flags an
 # example variable that no reader names. rc 1 for an unknown kind.
 audit_kind_env_var() {
   case "${1:-}" in
     security)  printf 'RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS' ;;
     coherence) printf 'RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS' ;;
+    dependency-scan) printf 'RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS' ;;
     *) return 1 ;;
   esac
 }
@@ -82,6 +95,7 @@ audit_kind_watchlist_key() {
   case "${1:-}" in
     security)  printf 'security_audit_interval_days' ;;
     coherence) printf 'coherence_audit_interval_days' ;;
+    dependency-scan) printf 'dependency_scan_interval_days' ;;
     *) return 1 ;;
   esac
 }
@@ -155,7 +169,8 @@ audit_watchlist_interval_problem() {
 # audit_interval_days <repo-config-json> <kind> <machine-value> — the interval
 # in days, or nothing when <kind> is not scheduled for this repo.
 #
-# The repo's `.<kind>.audit_interval_days` in .claude/run-issues.json wins over
+# The repo's `.<kind>.audit_interval_days` in .claude/run-issues.json (for
+# dependency-scan: `."dependency-scan".audit_interval_days`) wins over
 # the machine value when it is present at all — so a repo can switch off an
 # audit the machine schedules (`0`) as well as schedule one the machine does
 # not. How often an application is audited is a property of the application,
@@ -254,8 +269,10 @@ audit_session_name() {
 }
 
 # audit_session_parse <session-name> — prints "<kind> <repo-slug>" for an audit
-# session, rc 1 otherwise. The kind is matched against audit_kinds (a kind has
-# no dash, a slug may), so an unknown kind is not read as an audit.
+# session, rc 1 otherwise. The kind is matched against audit_kinds, so an
+# unknown kind is not read as an audit. A kind may hold a dash
+# (dependency-scan): no kind is a dash-prefix of another, so the match is
+# unambiguous — keep it that way when adding one.
 audit_session_parse() {
   local name="${1:-}" pre rest k
   pre=$(audit_session_prefix)
@@ -281,29 +298,42 @@ audit_result_file() {
   printf '%s.result' "${1:-}"
 }
 
+# audit_sha_file <state-file> — where the base commit of the last SUCCESSFUL
+# full audit is kept (one line, #382). Read in O(1) by the audit script itself;
+# written only by audit_run's promotion of `<this>.pending`.
+audit_sha_file() {
+  printf '%s.sha' "${1:-}"
+}
+
 # _audit_succeeded <state-file> <start-epoch> — rc 0 when the start at
-# <start-epoch> ended in an audit that happened: exit 0, or 5 (done, one scanner
-# failed — the agent review itself ran). Anything else, a result for another
-# start, or no result at all is not a success.
+# <start-epoch> ended in an audit that happened: exit 0, 5 (done, one scanner
+# failed — the agent review itself ran) or 6 (code unchanged, the scanners ran).
+# Anything else, a result for another start, or no result at all is not a
+# success.
 _audit_succeeded() {
   local r start rc
   r=$(deadline_file_read "$(audit_result_file "${1:-}")")
   start="${r%% *}"
   rc="${r#* }"
   [ "$start" = "${2:-}" ] || return 1
-  case "$(audit_rc_outcome "$rc")" in ok|scanner_failed) return 0 ;; esac
+  case "$(audit_rc_outcome "$rc")" in ok|scanner_failed|unchanged) return 0 ;; esac
   return 1
 }
 
 # audit_rc_outcome <exit-code> — the calling contract's reading of an audit's
 # exit code, in ONE place for the retry decision (_audit_succeeded) and the
 # status view (audit_last_outcome): `ok` (0), `scanner_failed` (5: done, but one
-# scanner failed — the review itself ran) or `failed` (anything else). A kind
-# whose script never exits 5 simply never produces `scanner_failed`.
+# scanner failed — the review itself ran), `unchanged` (6: code unchanged since
+# the last successful audit, only the scanners ran — a success), `no_scanner`
+# (7: only the scanners were to run and none is installed, so nothing was
+# checked — a failure) or `failed` (anything else). A kind whose script never
+# exits 5, 6 or 7 simply never produces those words.
 audit_rc_outcome() {
   case "${1:-}" in
     0) printf 'ok' ;;
     5) printf 'scanner_failed' ;;
+    6) printf 'unchanged' ;;
+    7) printf 'no_scanner' ;;
     *) printf 'failed' ;;
   esac
 }
@@ -367,12 +397,21 @@ audit_due() {
 # audit_run <state-file> <start-epoch> <script> [args...] — run one audit and
 # record its outcome against <start-epoch>. The poller's tmux session runs this,
 # so the outcome is written by the audit's own process and never by the tick.
-# Returns the script's exit code.
+# The script gets RUN_ISSUES_AUDIT_STATE_FILE=<state-file>; a pending audited
+# commit it leaves behind becomes audit_sha_file only on exit 0 or 5 (a full
+# audit that happened) and is dropped otherwise. Returns the script's exit code.
 audit_run() {
-  local f="${1:-}" start="${2:-0}" rc=0
+  local f="${1:-}" start="${2:-0}" rc=0 sha
   shift 2
-  "$@" || rc=$?
+  sha=$(audit_sha_file "$f")
+  rm -f "$sha.pending" 2>/dev/null
+  RUN_ISSUES_AUDIT_STATE_FILE="$f" "$@" || rc=$?
   deadline_file_write "$(audit_result_file "$f")" "$start" "$rc" || true
+  if [ -s "$sha.pending" ] && { [ "$rc" = 0 ] || [ "$rc" = 5 ]; }; then
+    mv -f "$sha.pending" "$sha" 2>/dev/null || rm -f "$sha.pending" 2>/dev/null
+  else
+    rm -f "$sha.pending" 2>/dev/null
+  fi
   return "$rc"
 }
 

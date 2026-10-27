@@ -33,6 +33,8 @@
 #       scan.summary   one human-readable line per scanner (OK / not installed /
 #                      FAILED with rc and a stderr excerpt)
 #       scan.failed    scanner|rc|reason per scanner that failed
+#       scan.ran       one scanner name per line that was installed and ran
+#                      (failed or not) — what security_scan_ran_count counts
 #     rc 0 whenever the function itself worked — a scanner failing is data, not
 #     an error. rc 1 on a usage error (unknown mode, diff without a resolvable
 #     base-ref, unwritable out-dir); then nothing is a result.
@@ -44,6 +46,11 @@
 #
 #   security_scan_prompt_text <out-dir>
 #     The summary and the findings as text for a reviewer's prompt.
+#
+#   security_scan_ran_count <out-dir>
+#     How many scanners were installed and ran (scan.ran); 0 when none was or
+#     the scan never started. A caller that has nothing BUT the scanners
+#     (security-audit.sh's scanners-only modes, #382) must not read 0 as clean.
 #
 # Severity: a gitleaks finding is always `high` (never less — a secret the
 # scanner found is not the reviewer's to downgrade). osv-scanner by CVSS score:
@@ -334,6 +341,7 @@ security_scan() {
   repo=$(cd "$repo" && pwd)
   : > "$out/scan.summary"
   : > "$out/scan.failed"
+  : > "$out/scan.ran"
 
   local mb="" range=""
   if [ "$mode" = "diff" ]; then
@@ -350,6 +358,7 @@ security_scan() {
       printf '%s: ei asennettu — skanneria %s ei ole asennettu, joten sen kattamaa luokkaa ei tarkistettu deterministisesti\n' "$s" "$s" >> "$out/scan.summary"
       continue
     fi
+    printf '%s\n' "$s" >> "$out/scan.ran"
     case "$s" in
       gitleaks)    _security_scan_gitleaks "$mode" "$repo" "$out" "$bin" "$range" "$mb" ;;
       osv-scanner) _security_scan_osv "$mode" "$repo" "$out" "$bin" "$mb" ;;
@@ -371,6 +380,12 @@ security_scan_gate_findings() {
     printf 'low|high|%s|skanneri %s epäonnistui (rc=%s), joten sen kattamaa luokkaa ei tarkistettu: %s\n' \
       "$s" "$s" "$rc" "${reason:-ei virhetulostetta}"
   done < "$out/scan.failed"
+}
+
+security_scan_ran_count() {
+  local n
+  n=$(grep -c . "${1:-}/scan.ran" 2>/dev/null) || n=0
+  printf '%s' "${n:-0}"
 }
 
 security_scan_prompt_text() {

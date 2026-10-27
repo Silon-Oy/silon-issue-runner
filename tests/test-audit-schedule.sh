@@ -31,12 +31,15 @@ WORK=$(mktemp -d -t audit-schedule.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- kind table -----------------------------------------------------------------
-check "security and coherence are the scheduled kinds" "$(audit_kinds)" "security coherence"
+check "security, coherence and dependency-scan are the scheduled kinds" "$(audit_kinds)" "security coherence dependency-scan"
 check "security runs security-audit.sh" "$(audit_kind_script security)" "security-audit.sh"
 check "the script exists in the package root" "$([ -x "$ROOT/$(audit_kind_script security)" ] && echo y)" "y"
 check "security interval variable" "$(audit_kind_env_var security)" "RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS"
 check "coherence runs coherence-audit.sh" "$(audit_kind_script coherence)" "coherence-audit.sh"
 check "coherence interval variable" "$(audit_kind_env_var coherence)" "RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS"
+check "dependency-scan runs dependency-scan.sh" "$(audit_kind_script dependency-scan)" "dependency-scan.sh"
+check "dependency-scan interval variable" "$(audit_kind_env_var dependency-scan)" "RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS"
+check "dependency-scan watchlist key" "$(audit_kind_watchlist_key dependency-scan)" "dependency_scan_interval_days"
 check "unknown kind has no script" "$(audit_kind_script nosuch)" ""
 check "unknown kind fails" "$(rc_of audit_kind_script nosuch)" "1"
 check "unknown kind has no variable" "$(rc_of audit_kind_env_var nosuch)" "1"
@@ -67,6 +70,9 @@ check "another kind's key does not apply" "$(audit_interval_days '{"coherence":{
 check "coherence reads its own key" "$(audit_interval_days '{"coherence":{"audit_interval_days":3}}' coherence 7)" "3"
 check "security's key does not apply to coherence" "$(audit_interval_days '{"security":{"audit_interval_days":1}}' coherence '')" ""
 check "coherence 0 switches the machine's schedule off" "$(audit_interval_days '{"coherence":{"audit_interval_days":0}}' coherence 7)" ""
+check "dependency-scan reads its own (dashed) repo key" "$(audit_interval_days '{"dependency-scan":{"audit_interval_days":2}}' dependency-scan 7)" "2"
+check "dependency-scan: machine value without a repo key" "$(audit_interval_days '{"security":{"audit_interval_days":30}}' dependency-scan 1)" "1"
+check "dependency-scan: repo 0 switches it off" "$(audit_interval_days '{"dependency-scan":{"audit_interval_days":0}}' dependency-scan 1)" ""
 check "unknown kind is never scheduled" "$(audit_interval_days '{"nosuch":{"audit_interval_days":1}}' nosuch 1)" ""
 
 # ---- state file -------------------------------------------------------------------
@@ -108,6 +114,27 @@ check "audit_run returns the script's code" "$(rc_of audit_run "$H" "$NOW" sh -c
 check "audit_run records it against the start" "$(cat "$H.result")" "$NOW 4"
 audit_run "$H" "$NOW" true
 check "audit_run records success" "$(cat "$H.result")" "$NOW 0"
+
+# ---- audited commit (#382) --------------------------------------------------------
+S="$WORK/.audit-last-security-sha"
+check "sha file sits next to the state file" "$(audit_sha_file "$S")" "$S.sha"
+check "audit_run tells the script its state file" \
+  "$(audit_run "$S" "$NOW" sh -c 'printf %s "$RUN_ISSUES_AUDIT_STATE_FILE"')" "$S"
+audit_run "$S" "$NOW" sh -c 'echo aaa > "$RUN_ISSUES_AUDIT_STATE_FILE.sha.pending"'
+check "exit 0 promotes the pending commit" "$(cat "$S.sha" 2>/dev/null)" "aaa"
+check "no pending file is left after promotion" "$([ -e "$S.sha.pending" ] && echo left)" ""
+audit_run "$S" "$NOW" sh -c 'echo bbb > "$RUN_ISSUES_AUDIT_STATE_FILE.sha.pending"; exit 5'
+check "exit 5 promotes it too" "$(cat "$S.sha" 2>/dev/null)" "bbb"
+for c in 3 4 6 7; do
+  audit_run "$S" "$NOW" sh -c "echo ccc > \"\$RUN_ISSUES_AUDIT_STATE_FILE.sha.pending\"; exit $c"
+  check "exit $c keeps the last successful commit" "$(cat "$S.sha" 2>/dev/null)" "bbb"
+  check "exit $c drops the pending file" "$([ -e "$S.sha.pending" ] && echo left)" ""
+done
+echo zzz > "$S.sha.pending"
+audit_run "$S" "$NOW" true
+check "a stale pending file from a dead session is never promoted" "$(cat "$S.sha" 2>/dev/null)" "bbb"
+audit_run "$S" "$NOW" true
+check "a run that records no commit keeps the last one" "$(cat "$S.sha" 2>/dev/null)" "bbb"
 
 check "record into a missing directory fails" "$(rc_of audit_record "$WORK/no/such/dir/f" "$NOW" security)" "1"
 check "no temp files are left behind" "$(find "$WORK" -name '.audit-last-security-x.*' ! -name '*.result' | wc -l | tr -d ' ')" "0"
@@ -160,7 +187,8 @@ check "the prefix counts against the run-issues- cap" "${_pre%%audit-}" "run-iss
 check "parse: kind and a dashed slug" "$(audit_session_parse run-issues-audit-coherence-example-org-repo-a)" "coherence example-org-repo-a"
 check "parse round-trips every kind" \
   "$(for k in $(audit_kinds); do audit_session_parse "$(audit_session_name "$k" o-r)"; echo; done | tr '\n' '|')" \
-  "security o-r|coherence o-r|"
+  "security o-r|coherence o-r|dependency-scan o-r|"
+check "parse: a dashed kind with a dashed slug" "$(audit_session_parse run-issues-audit-dependency-scan-example-org-repo-a)" "dependency-scan example-org-repo-a"
 check "parse: an unknown kind is not an audit" "$(rc_of audit_session_parse run-issues-audit-nosuch-o-r)" "1"
 check "parse: a run session is not an audit" "$(rc_of audit_session_parse run-issues-o-r-issue-5)" "1"
 check "parse: no slug is not an audit" "$(rc_of audit_session_parse run-issues-audit-security-)" "1"
@@ -205,6 +233,8 @@ check "with poller-config.sh an unset kind reads as absent" \
 check "rc 0 is ok" "$(audit_rc_outcome 0)" "ok"
 check "rc 5 is scanner_failed" "$(audit_rc_outcome 5)" "scanner_failed"
 check "rc 3 is failed" "$(audit_rc_outcome 3)" "failed"
+check "rc 6 is unchanged" "$(audit_rc_outcome 6)" "unchanged"
+check "rc 7 is no_scanner" "$(audit_rc_outcome 7)" "no_scanner"
 LO="$WORK/lo"
 check "no state file: nothing" "$(audit_last_outcome "$LO")" ""
 printf '1700000000 security\n' > "$LO"
@@ -224,6 +254,11 @@ printf '1700000000 security\n' > "$LO"; printf '1700000000 5\n' > "$LO.result"
 check "rc 5 counts as an audit that happened" "$(rc_of _audit_succeeded "$LO" 1700000000)" "0"
 printf '1700000000 4\n' > "$LO.result"
 check "rc 4 does not" "$(rc_of _audit_succeeded "$LO" 1700000000)" "1"
+printf '1700000000 6\n' > "$LO.result"
+check "rc 6 (unchanged code, scanners ran) counts as an audit that happened" "$(rc_of _audit_succeeded "$LO" 1700000000)" "0"
+check "rc 6 shows as unchanged" "$(audit_last_outcome "$LO")" "$(printf '1700000000\tsecurity\t6\tunchanged')"
+printf '1700000000 7\n' > "$LO.result"
+check "rc 7 (no scanner installed, nothing checked) does not" "$(rc_of _audit_succeeded "$LO" 1700000000)" "1"
 
 # ---- calling contract (#360, for #342) -------------------------------------------
 grep -qF -- '<script> <repo-path> --remote <r> --watchlist <wl>' "$ROOT/lib/audit-schedule.sh" \

@@ -28,13 +28,27 @@
 # holds what is the security audit's own: the scanners, the threat-model prompt,
 # the auto-run policy and the issue text.
 #
+# Unchanged code is not reviewed twice (#382): when the poller runs this
+# (audit_run sets RUN_ISSUES_AUDIT_STATE_FILE) and the default branch is still
+# at the commit of the last SUCCESSFUL full audit (audit_sha_file), the agent
+# pass is skipped and only the scanners run — a known-vulnerable dependency
+# needs no commit to appear. Exit 6 says so. A full audit that is accepted
+# leaves its commit for audit_run to record. A hand run (no state file) and
+# --dry-run always audit in full and record nothing.
+#
+# --scanners-only runs the same scanners and the same issue policy with no
+# agent at all — dependency-scan.sh is this mode, scheduled on its own denser
+# interval. Findings carry the security audit's fingerprint, so the two never
+# file the same finding twice. With nothing but the scanners, none installed
+# means nothing was checked: exit 7, never a clean result.
+#
 # Not a result, and nothing is written (CLAUDE.md §9): the agent could not
 # start, the result is empty or unparseable, or the worktree changed (exit 3).
 # A scanner that FAILED does not become an issue (one missing network must not
 # file an issue per audit); it is reported and turns the exit code into 5.
 #
 # Usage:
-#   security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>]
+#   security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--scanners-only]
 #
 #   <repo>             a local clone of the audited repository
 #   --remote <name>    the remote to audit and to file issues in (default origin)
@@ -44,6 +58,7 @@
 #                      ONLY candidate). A repo the watchlist does not list gets
 #                      the built-in default pickup label. Its `assignees` key
 #                      routes the auto-run issues to the first allowed login.
+#   --scanners-only    the scanners alone: no agent call, no launch check
 #
 # Output (stdout): one line per finding — action, severity, location, text —
 # then a summary line. Diagnostics go to stderr.
@@ -55,6 +70,8 @@
 #   3  the audit did not happen: agent launch failure, empty or unparseable result, or the worktree changed — nothing written
 #   4  GitHub read or write failed — issues may be partially written
 #   5  audit done, but at least one scanner failed (its class was not checked deterministically)
+#   6  code unchanged since the last successful audit: the agent pass was skipped, the scanners ran
+#   7  only the scanners were to run (--scanners-only, or unchanged code) and none is installed — nothing was checked
 #
 # Env:
 #   RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY  mildest severity whose issue
@@ -65,6 +82,8 @@
 #   RUN_ISSUES_SECURITY_AUDIT_TIMEOUT   agent call time cap in seconds (default 3600)
 #   RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT  git fetch time cap (default 300)
 #   RUN_ISSUES_WATCHLIST                watchlist override (poller semantics)
+#   RUN_ISSUES_AUDIT_STATE_FILE         internal: set by audit_run (lib/audit-schedule.sh)
+#        for a scheduled run — where the last successfully audited commit is kept
 #   RUN_ISSUES_CLAUDE_CMD and the rest of lib/claude-call.sh's settings; the
 #   scanners' RUN_ISSUES_GITLEAKS_BIN / RUN_ISSUES_OSV_SCANNER_BIN /
 #   RUN_ISSUES_SECURITY_SCAN_TIMEOUT. The machine env file is sourced like
@@ -94,12 +113,14 @@ die_usage() { printf 'security-audit.sh: %s\n' "$1" >&2; exit 1; }
 REPO=""
 REMOTE="origin"
 DRY_RUN=0
+SCANNERS_ONLY=0
 WATCHLIST_OVERRIDE="${RUN_ISSUES_WATCHLIST:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --remote)    shift; [ "$#" -gt 0 ] || die_usage "--remote needs a value"; REMOTE="$1" ;;
     --dry-run)   DRY_RUN=1 ;;
+    --scanners-only) SCANNERS_ONLY=1 ;;
     --watchlist) shift; [ "$#" -gt 0 ] || die_usage "--watchlist needs a value"; WATCHLIST_OVERRIDE="$1" ;;
     -h|--help)   sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          die_usage "unknown argument: $1" ;;
@@ -107,7 +128,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-[ -n "$REPO" ] || die_usage "usage: security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>]"
+[ -n "$REPO" ] || die_usage "usage: security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--scanners-only]"
 
 # Libraries. claude-call.sh (via repo-audit.sh) carries `set -e`; this script
 # does not (every failure below is an explicit exit code), so it is switched
@@ -121,6 +142,8 @@ source_machine_env
 . "$SCRIPT_DIR/lib/security-scan.sh"
 # shellcheck source=lib/issue.sh
 . "$SCRIPT_DIR/lib/issue.sh"
+# shellcheck source=lib/audit-schedule.sh
+. "$SCRIPT_DIR/lib/audit-schedule.sh"
 set +e
 
 say() { repo_audit_say "$@"; }
@@ -136,6 +159,21 @@ AUDIT_TIMEOUT="${RUN_ISSUES_SECURITY_AUDIT_TIMEOUT:-3600}"
 FETCH_TIMEOUT="${RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT:-300}"
 
 repo_audit_resolve "$FETCH_TIMEOUT" || exit $?
+
+# ---- mode: full, unchanged code (scanners only) or --scanners-only -----------
+# SHA_FILE is set only for a scheduled full audit; the scanners-only kind has a
+# state file of its own and neither reads nor records the audited commit.
+SKIP_AGENT=""
+SHA_FILE=""
+if [ "$SCANNERS_ONLY" = 1 ]; then
+  SKIP_AGENT="scanners_only"
+elif [ -n "${RUN_ISSUES_AUDIT_STATE_FILE:-}" ] && [ "$DRY_RUN" = 0 ]; then
+  SHA_FILE=$(audit_sha_file "$RUN_ISSUES_AUDIT_STATE_FILE")
+  if [ -n "$HEAD_SHA" ] && [ "$(head -n 1 "$SHA_FILE" 2>/dev/null)" = "$HEAD_SHA" ]; then
+    SKIP_AGENT="unchanged"
+    say "code unchanged since last successful audit ($HEAD_SHA) — scanners only"
+  fi
+fi
 
 # ---- work area: a temporary detached worktree of the default branch ----------
 repo_audit_worktree || exit $?
@@ -156,7 +194,8 @@ ROUTE_ASSIGNEE=$(pick_assignee_route "$PICK_ASSIGNEES")
 say "auditing $OWNER_REPO at $BASE_REF ($HEAD_SHA); auto-run threshold '$AUTO_RUN_MIN', pickup labels '$PICK_LABELS'${PICK_ASSIGNEES:+, assignees '$PICK_ASSIGNEES' → '${ROUTE_ASSIGNEE:-(none)}'}"
 
 # ---- launch check before anything costs ---------------------------------------
-repo_audit_preflight || exit $?
+# Not when no agent runs: the scanners need no CLI.
+[ -n "$SKIP_AGENT" ] || repo_audit_preflight || exit $?
 
 # ---- known findings (also the dedup index) ------------------------------------
 repo_audit_index "$SECURITY_AUDIT_LABEL" || exit $?
@@ -169,12 +208,19 @@ security_scan audit "$WT" "$SCAN_DIR" >&2 \
 SCANNER_RESULTS=$(security_scan_prompt_text "$SCAN_DIR")
 
 # ---- the agent ----------------------------------------------------------------
-PROMPT="$WORK/$AUDIT_STEP.prompt"
-render_prompt "$SCRIPT_DIR/prompts/$AUDIT_STEP.md" "$PROMPT" \
-  REPO="$OWNER_REPO" HEAD_SHA="$HEAD_SHA" REMOTE="$REMOTE" BASE_REF="$BASE_BRANCH" \
-  SCANNER_RESULTS="$SCANNER_RESULTS" KNOWN_FINDINGS="$KNOWN"
-repo_audit_agent "$AUDIT_STEP" "$PROMPT" "$AUDIT_TIMEOUT" || exit $?
 OUT="$WORK/$AUDIT_STEP.out"
+if [ -n "$SKIP_AGENT" ]; then
+  RESULT="clean"
+else
+  PROMPT="$WORK/$AUDIT_STEP.prompt"
+  render_prompt "$SCRIPT_DIR/prompts/$AUDIT_STEP.md" "$PROMPT" \
+    REPO="$OWNER_REPO" HEAD_SHA="$HEAD_SHA" REMOTE="$REMOTE" BASE_REF="$BASE_BRANCH" \
+    SCANNER_RESULTS="$SCANNER_RESULTS" KNOWN_FINDINGS="$KNOWN"
+  repo_audit_agent "$AUDIT_STEP" "$PROMPT" "$AUDIT_TIMEOUT" || exit $?
+  # The review was accepted: audit_run records this commit if the run counts
+  # as an audit that happened (exit 0 or 5).
+  [ -n "$SHA_FILE" ] && { printf '%s\n' "$HEAD_SHA" > "$SHA_FILE.pending"; } 2>/dev/null
+fi
 
 # Scanner rows join AFTER parsing, as in the merge gate. Failed scanners are
 # not findings here: they are reported and set exit 5.
@@ -289,11 +335,19 @@ repo_audit_apply "$AUDIT_KIND" "$DRY_RUN" "$REOPEN_COMMENT" \
 $FINDINGS
 EOF
 
-printf 'security-audit: %s finding(s)%s%s%s\n' "$REPO_AUDIT_FINDINGS" \
+SCANNERS_RAN=$(security_scan_ran_count "$SCAN_DIR")
+printf 'security-audit: %s finding(s)%s%s%s%s\n' "$REPO_AUDIT_FINDINGS" \
+  "$(case "$SKIP_AGENT" in unchanged) printf ' (code unchanged: scanners only)' ;; scanners_only) printf ' (scanners only)' ;; esac
+     [ -n "$SKIP_AGENT" ] && [ "$SCANNERS_RAN" -eq 0 ] && echo ' — NOT CHECKED: no scanner installed')" \
   "$([ "$DRY_RUN" = 1 ] && echo ' (dry run: nothing written)')" \
   "$([ -n "$SCAN_FAILED" ] && echo "; scanner(s) failed: $SCAN_FAILED")" \
   "$([ "$REPO_AUDIT_WRITE_FAILED" -gt 0 ] && echo "; $REPO_AUDIT_WRITE_FAILED GitHub write(s) failed")"
 
 [ "$REPO_AUDIT_WRITE_FAILED" -gt 0 ] && exit 4
 [ -n "$SCAN_FAILED" ] && exit 5
+if [ -n "$SKIP_AGENT" ] && [ "$SCANNERS_RAN" -eq 0 ]; then
+  say "no scanner is installed and no agent ran — nothing was checked (not a clean result)"
+  exit 7
+fi
+[ "$SKIP_AGENT" = unchanged ] && exit 6
 exit 0

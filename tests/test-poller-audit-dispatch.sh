@@ -23,6 +23,11 @@
 #   w  the watchlist entry's <kind>_audit_interval_days (#373): schedules without
 #      an environment value, `0` switches the environment's value off, the repo
 #      config still wins, a bad value is logged once and starts nothing
+#   p  the dependency-scan kind (#382): scheduled from poller.env's
+#      RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS, from the watchlist's
+#      dependency_scan_interval_days and from the repo's
+#      ."dependency-scan".audit_interval_days; dependency-scan.sh in its own
+#      session with the shared arguments; unset → never; it schedules no other kind
 #
 # Run: bash tests/test-poller-audit-dispatch.sh
 
@@ -351,6 +356,35 @@ done
   || bad "w bad value: $(poller_log_count "$WORK/logs-wb" "in the watchlist") lines"
 [ -z "$(state_of "$WORK/logs-wb" repoa)" ] && ok "w a bad watchlist value starts no audit (fail-closed)" \
                           || bad "w a bad watchlist value fell back to the environment"
+
+# ---- p: the dependency-scan kind (#382) ----------------------------------------------
+echo 0 > "$LS_SEQ"
+run_poller "$WORK/hp" "$WORK/logs-p" "$WL" RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS=1
+[ "$(audit_spawns)" = 1 ] && ok "p poller.env interval: exactly one dependency-scan spawn" \
+                          || bad "p poller.env interval: $(audit_spawns) spawns"
+line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)
+case "$line" in
+  *"-s run-issues-audit-dependency-scan-example-org-repoa "*"'$ROOT/dependency-scan.sh' '$REPO' --remote 'origin' --watchlist '$WL'"*)
+    ok "p spawns dependency-scan.sh in its own session with the shared arguments" ;;
+  *) bad "p unexpected spawn: $line" ;;
+esac
+[ -s "$WORK/logs-p/.audit-last-dependency-scan-example-org-repoa" ] && ok "p start recorded under its own kind" \
+                                                                    || bad "p no dependency-scan state file"
+[ -z "$(find "$WORK/logs-p" -name '.audit-last-security-*' -o -name '.audit-last-coherence-*')" ] \
+  && ok "p the dependency-scan interval schedules no other kind" || bad "p another kind was scheduled"
+mk_watchlist_iv "$WORK/wlp.json" "$REPO" '"dependency_scan_interval_days": 2'
+run_poller "$WORK/hp2" "$WORK/logs-p2" "$WORK/wlp.json"
+[ "$(audit_spawns)" = 1 ] && grep -qF "auditing (dependency-scan, every 2d)" "$WORK/logs-p2/run-issues-poller.log" \
+  && ok "p the watchlist's dependency_scan_interval_days schedules it" || bad "p watchlist key: $(audit_spawns) spawns"
+REPOP="$WORK/repop"
+mk_repo "$REPOP" '{"dependency-scan":{"audit_interval_days":3}}'
+mk_watchlist "$WORK/wlp3.json" "$REPOP"
+run_poller "$WORK/hp3" "$WORK/logs-p3" "$WORK/wlp3.json"
+[ "$(audit_spawns)" = 1 ] && grep -qF "auditing (dependency-scan, every 3d)" "$WORK/logs-p3/run-issues-poller.log" \
+  && ok "p the repo's .\"dependency-scan\".audit_interval_days schedules it" || bad "p repo key: $(audit_spawns) spawns"
+run_poller "$WORK/hp4" "$WORK/logs-p4" "$WL"
+[ -z "$(find "$WORK/logs-p4" -name '.audit-last-dependency-scan-*' 2>/dev/null)" ] \
+  && ok "p unset: dependency-scan never scheduled" || bad "p unset interval scheduled a dependency scan"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "poller-audit-dispatch: all passed" || echo "poller-audit-dispatch: FAILURES"

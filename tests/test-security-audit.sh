@@ -30,6 +30,14 @@
 #                            issue then matches pickup; no key / only `not:` /
 #                            below threshold => no assignee; a reopened issue
 #                            is routed only when it has no assignee
+#   P) unchanged code     -> (issue #382) a scheduled run at the commit of the
+#                            last successful audit: no agent call, the scanners
+#                            ran, exit 6 and the skip on the output; with no
+#                            scanner installed exit 7, not clean
+#   Q) changed base / no recorded commit / hand run / dry run -> full audit
+#   R) accepted full audit -> leaves the audited commit pending for audit_run;
+#                            a rejected one does not
+#   S) --scanners-only     -> no agent call, no launch check
 #
 # Run: bash tests/test-security-audit.sh
 
@@ -480,6 +488,113 @@ WL="$WORK/wl.json" run_audit
   || { show O8; bad O8 "rc $RC, dropped assignee not reported"; }
 done_case
 [ "$FAIL" = "$F0" ] && ok O "assignee routing"
+
+# ---- unchanged code (#382) -----------------------------------------------------
+# gitleaks_clean — a gitleaks shim that finds nothing and counts its calls.
+gitleaks_clean() {
+  cat > "$BIN/gitleaks-clean" <<SH
+#!/usr/bin/env bash
+echo SCAN >> "$WORK/scans.log"
+r=""
+while [ \$# -gt 0 ]; do [ "\$1" = --report-path ] && r="\$2"; shift; done
+echo '[]' > "\$r"
+exit 0
+SH
+  chmod +x "$BIN/gitleaks-clean"
+  GITLEAKS="$BIN/gitleaks-clean"
+}
+agent_calls() { grep -c AUDIT "$WORK/calls.log" 2>/dev/null || true; }
+origin_sha() { git -C "$REPO" rev-parse origin/main; }
+
+echo "=== P: unchanged code -> scanners only ==="
+F0=$FAIL; setup P; gitleaks_clean
+ST="$WORK/state"; origin_sha > "$ST.sha"
+AUDIT_ENV="RUN_ISSUES_AUDIT_STATE_FILE=$ST" run_audit
+[ "$RC" = 6 ] || { show P; bad P "rc $RC, want 6"; }
+[ "$(agent_calls)" = 0 ] || bad P "$(agent_calls) agent call(s), want 0"
+[ "$(grep -c SCAN "$WORK/scans.log" 2>/dev/null)" = 1 ] || bad P "the scanner did not run"
+grep -q 'code unchanged since last successful audit' <<<"$OUT" || bad P "the skip is not on the output"
+grep -q '(code unchanged: scanners only)' <<<"$OUT" || bad P "the summary does not name the mode"
+[ ! -e "$ST.sha.pending" ] || bad P "a skipped audit left a commit to record"
+[ "$FAIL" = "$F0" ] && ok P "unchanged code: scanners only, no agent"
+done_case
+
+F0=$FAIL; setup P2   # unchanged, and no scanner installed: nothing was checked
+ST="$WORK/state"; origin_sha > "$ST.sha"
+AUDIT_ENV="RUN_ISSUES_AUDIT_STATE_FILE=$ST" run_audit
+[ "$RC" = 7 ] || { show P2; bad P2 "rc $RC, want 7"; }
+[ "$(agent_calls)" = 0 ] || bad P2 "$(agent_calls) agent call(s), want 0"
+grep -q 'NOT CHECKED' <<<"$OUT" || bad P2 "the summary reads as clean"
+[ "$FAIL" = "$F0" ] && ok P2 "unchanged code without scanners is not clean"
+done_case
+
+F0=$FAIL; setup P3   # the agent CLI is missing: no launch check when it is not needed
+gitleaks_clean
+ST="$WORK/state"; origin_sha > "$ST.sha"
+AUDIT_ENV="RUN_ISSUES_AUDIT_STATE_FILE=$ST RUN_ISSUES_CLAUDE_CMD=$WORK/no-such-cli" run_audit
+[ "$RC" = 6 ] || { show P3; bad P3 "rc $RC, want 6 (no agent runs, so no launch check)"; }
+[ "$FAIL" = "$F0" ] && ok P3 "unchanged code needs no agent CLI"
+done_case
+
+echo "=== Q: full audit when the base moved, nothing is recorded, or by hand ==="
+F0=$FAIL
+full_case() { # <label> <what> <prepare-cmd> [args...]
+  local label="$1" what="$2" prep="$3"; shift 3
+  setup "$label"; gitleaks_clean
+  ST="$WORK/state"
+  eval "$prep"
+  AUDIT_ENV="${QENV-RUN_ISSUES_AUDIT_STATE_FILE=$ST}" run_audit "$@"
+  if [ "$RC" = 0 ] && [ "$(agent_calls)" = 1 ]; then
+    ok "$label" "$what: full audit"
+  else show "$label"; bad "$label" "$what: rc $RC, $(agent_calls) agent call(s), want 0 and 1"; fi
+  done_case
+}
+full_case Q1 "base moved" 'echo 0000000000000000000000000000000000000000 > "$ST.sha"'
+full_case Q2 "no recorded commit" ':'
+QENV="" full_case Q3 "hand run (no state file)" 'origin_sha > "$ST.sha"'
+full_case Q4 "dry run" 'origin_sha > "$ST.sha"' --dry-run
+[ "$FAIL" = "$F0" ] && ok Q "full audit unless the code is unchanged"
+
+echo "=== R: the audited commit is left for audit_run ==="
+F0=$FAIL; setup R
+ST="$WORK/state"
+AUDIT_ENV="RUN_ISSUES_AUDIT_STATE_FILE=$ST" run_audit
+[ "$RC" = 0 ] || bad R "rc $RC, want 0"
+[ "$(cat "$ST.sha.pending" 2>/dev/null)" = "$(origin_sha)" ] || bad R "pending commit '$(cat "$ST.sha.pending" 2>/dev/null)', want $(origin_sha)"
+[ ! -e "$ST.sha" ] || bad R "the script promoted the commit itself (audit_run's job)"
+done_case
+setup R2   # a rejected audit (unparseable answer) records nothing
+ST="$WORK/state"; printf 'nothing useful\n' > "$WORK/review.txt"
+AUDIT_ENV="RUN_ISSUES_AUDIT_STATE_FILE=$ST" run_audit
+[ "$RC" = 3 ] || bad R2 "rc $RC, want 3"
+[ ! -e "$ST.sha.pending" ] || bad R2 "a rejected audit left a commit to record"
+done_case
+setup R3   # end to end through audit_run: the next scheduled start skips the agent
+gitleaks_clean
+ST="$WORK/state"
+r3() {
+  set +e
+  OUT=$( env PATH="$BIN:$PATH" HOME="$HOME" RUN_ISSUES_CLAUDE_CMD="$BIN/claude-mock" \
+    RUN_ISSUES_SECURITY_AUDIT_TIMEOUT=60 RUN_ISSUES_WATCHLIST="$WORK/no-watchlist.json" \
+    RUN_ISSUES_GITLEAKS_BIN="$GITLEAKS" RUN_ISSUES_OSV_SCANNER_BIN="$WORK/no-osv" \
+    bash -c '. "$0"; audit_run "$@"' "$HERE/../lib/audit-schedule.sh" "$ST" 1800000000 "$AUDIT" "$REPO" 2>&1 )
+  RC=$?
+}
+r3; [ "$RC" = 0 ] || { show R3; bad R3 "first run rc $RC, want 0"; }
+r3; [ "$RC" = 6 ] || { show R3; bad R3 "second run rc $RC, want 6"; }
+[ "$(agent_calls)" = 1 ] || bad R3 "$(agent_calls) agent call(s) over two runs, want 1"
+[ "$(cat "$ST.result" 2>/dev/null)" = "1800000000 6" ] || bad R3 "result '$(cat "$ST.result" 2>/dev/null)', want '1800000000 6'"
+done_case
+[ "$FAIL" = "$F0" ] && ok R "audited commit recorded only through audit_run"
+
+echo "=== S: --scanners-only ==="
+F0=$FAIL; setup S; gitleaks_clean
+AUDIT_ENV="RUN_ISSUES_CLAUDE_CMD=$WORK/no-such-cli" run_audit --scanners-only
+[ "$RC" = 0 ] || { show S; bad S "rc $RC, want 0"; }
+[ "$(agent_calls)" = 0 ] || bad S "$(agent_calls) agent call(s), want 0"
+grep -q '(scanners only)' <<<"$OUT" || bad S "the summary does not name the mode"
+done_case
+[ "$FAIL" = "$F0" ] && ok S "scanners only: no agent, no launch check"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "security-audit: all passed" || echo "security-audit: FAILURES"
