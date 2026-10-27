@@ -197,35 +197,39 @@ fi
 # Enable AI conflict resolution for every watchlist repo by default. pr-watch.sh
 # defaults this OFF (0); the poller flips it ON so that auto-merge can complete
 # through a rebase conflict without a human. Still overridable: export
-# PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0 in the poller's environment to disable.
-# The flag rides on the per-repo command below, so it reaches pr-watch.sh even
-# though the LaunchAgent does not source the machine env file.
-CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
+# PR_WATCH_ENABLE_CONFLICT_RESOLUTION=0 in poller.env to disable.
+PR_WATCH_ENABLE_CONFLICT_RESOLUTION="${PR_WATCH_ENABLE_CONFLICT_RESOLUTION:-1}"
 
-# Likewise enable AI CI-repair for every watchlist repo by default (issue #25).
-# pr-watch.sh defaults this OFF (0); the poller flips it ON so that a red required
-# check on an auto-merge PR is fixed by an agent instead of stalling forever.
-# Same override contract: export PR_WATCH_ENABLE_CI_REPAIR=0 in poller.env to
-# disable. Rides on the per-repo command below like the conflict flag.
-CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
+# Likewise enable AI CI-repair for every watchlist repo by default (issue #25):
+# a red required check on an auto-merge PR is fixed by an agent instead of
+# stalling forever. Same override contract.
+PR_WATCH_ENABLE_CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
 
-# Likewise enable the security merge gate (issue #334): pr-watch.sh defaults it
-# OFF, the poller flips it ON, poller.env can export 0 to disable. The machine's
-# hold threshold rides along ONLY when set: an empty prefix would count as "set"
-# under lib/machine-env.sh and mask a value in the machine env file. A target
-# repo's own .security.hold_min_severity still wins over both.
-SECURITY_GATE="${PR_WATCH_ENABLE_SECURITY_GATE:-1}"
-# Letters only: the value is spliced into the tmux command line, and an unknown
-# word still fails closed in pr-watch.sh (strictest threshold).
-SECURITY_HOLD_PREFIX=""
-SECURITY_HOLD_MIN="$(printf '%s' "${PR_WATCH_SECURITY_HOLD_MIN_SEVERITY:-}" | tr -cd 'A-Za-z')"
-if [ -n "$SECURITY_HOLD_MIN" ]; then
-  SECURITY_HOLD_PREFIX="PR_WATCH_SECURITY_HOLD_MIN_SEVERITY='$SECURITY_HOLD_MIN' "
-fi
+# Likewise the security merge gate (issue #334) and the semantic-conflict merge
+# gate (issue #341): OFF in pr-watch.sh, ON here, poller.env can export 0.
+PR_WATCH_ENABLE_SECURITY_GATE="${PR_WATCH_ENABLE_SECURITY_GATE:-1}"
+PR_WATCH_ENABLE_SEMANTIC_CHECK="${PR_WATCH_ENABLE_SEMANTIC_CHECK:-1}"
 
-# Likewise enable the semantic-conflict merge gate (issue #341): OFF in
-# pr-watch.sh, ON here, poller.env can export 0 to disable.
-SEMANTIC_CHECK="${PR_WATCH_ENABLE_SEMANTIC_CHECK:-1}"
+# Every PR_WATCH_* setting reaches pr-watch.sh on the per-repo command below:
+# the LaunchAgent does not source the machine env file, so poller.env is the
+# only way a setting gets to the watcher (CLAUDE.md §8). One rule over the
+# namespace, not a list of names — a list leaves the next added setting silently
+# without effect (the same reason as lib/machine-env.sh, CLAUDE.md §5.5). A
+# prefix on the command line counts as "set by the caller" there, so a value
+# here wins over the machine env file's. Only non-empty values ride along: an
+# empty prefix would also count as set and mask the env file's value.
+# Each value is single-quoted with its own quotes escaped: it is spliced into a
+# tmux command line, and quoting, not filtering, keeps it a single word.
+PR_WATCH_FORWARD=""
+_pw_sq="'"
+_pw_esc="'\\''"
+for _pw_var in $(compgen -v PR_WATCH_); do
+  [ "$_pw_var" = PR_WATCH_FORWARD ] && continue
+  _pw_val="${!_pw_var-}"
+  [ -n "$_pw_val" ] || continue
+  PR_WATCH_FORWARD="${PR_WATCH_FORWARD}${_pw_var}='${_pw_val//$_pw_sq/$_pw_esc}' "
+done
+unset _pw_var _pw_val _pw_sq _pw_esc
 
 # Materialise the watchlist repos into an array so the rotation cursor below can
 # resume iteration from an arbitrary offset. while-read (not mapfile) for bash
@@ -387,7 +391,7 @@ for (( i=0; i<N; i++ )); do
       echo "$(date -u +%FT%TZ) pr-watch-poller: launching $SESSION for repo=$REPO_PATH remote=$REMOTE" >> "$LOG"
 
       tmux new-session -d -s "$SESSION" \
-        "PR_WATCH_ENABLE_CONFLICT_RESOLUTION='$CONFLICT_RESOLUTION' PR_WATCH_ENABLE_CI_REPAIR='$CI_REPAIR' PR_WATCH_ENABLE_SECURITY_GATE='$SECURITY_GATE' PR_WATCH_ENABLE_SEMANTIC_CHECK='$SEMANTIC_CHECK' ${SECURITY_HOLD_PREFIX}'$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
+        "${PR_WATCH_FORWARD}'$PRWATCH' --remote '$REMOTE' '$REPO_PATH' scan 2>&1 | tee -a '$RUNS_LOG'"
     done
   fi
 

@@ -131,4 +131,32 @@ while IFS= read -r off; do
   done <<< "$SWITCHES"
 done <<< "$SWITCHES"
 
+# ---- case 3: every non-empty PR_WATCH_* setting in poller.env rides along ----
+# One rule over the namespace (issue #375): a setting the poller does not name
+# still reaches pr-watch.sh, an empty one does not (it would mask the machine
+# env file), and a quote in a value stays inside its word.
+ENVF="$WORK/poller-settings.env"
+cat > "$ENVF" <<'ENV'
+export PR_WATCH_SECURITY_REVIEWER=codex
+export PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY=high
+export PR_WATCH_SEMANTIC_REVIEW_TIMEOUT=900
+export PR_WATCH_CI_POLL_SECS=
+export PR_WATCH_TEST_QUOTED="it's; touch /tmp/never"
+ENV
+CMD="$(run_tick "$ENVF")"
+expect "$CMD" PR_WATCH_SECURITY_REVIEWER codex "poller.env setting"
+expect "$CMD" PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY high "poller.env setting"
+expect "$CMD" PR_WATCH_SEMANTIC_REVIEW_TIMEOUT 900 "poller.env setting"
+case "$CMD" in
+  *PR_WATCH_CI_POLL_SECS=*) bad "empty setting forwarded — would mask the env file: $CMD" ;;
+  *) ok "empty setting not forwarded" ;;
+esac
+# The launched command, run by a shell, must see the quoted value intact.
+GOT="$(bash -c "${CMD%%\'$ROOT/pr-watch.sh\'*} env" 2>/dev/null | sed -n 's/^PR_WATCH_TEST_QUOTED=//p')"
+if [ "$GOT" = "it's; touch /tmp/never" ]; then
+  ok "quoted value reaches the watcher as one word"
+else
+  bad "quoted value broke the command line — got '$GOT' from: $CMD"
+fi
+
 exit "$FAIL"
