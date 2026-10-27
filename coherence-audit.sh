@@ -140,16 +140,19 @@ FETCH_TIMEOUT="${RUN_ISSUES_COHERENCE_AUDIT_FETCH_TIMEOUT:-300}"
 SURFACE_MAX="${RUN_ISSUES_COHERENCE_AUDIT_MAX:-60000}"
 case "$SURFACE_MAX" in ''|*[!0-9]*) SURFACE_MAX=60000 ;; esac
 INTERVAL_ENV="${RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS:-$(repo_audit_poller_env_value RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS)}"
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
+
+repo_audit_resolve "$FETCH_TIMEOUT" || exit $?
+
 # The watchlist entry is this machine's per-repo value (#373), resolved the way
 # the poller resolves it, so the first window equals the schedule's interval.
+# After repo_audit_resolve: the entry matches the absolute checkout path, not
+# whatever relative form the caller typed.
 WATCHLIST=$(poller_resolve_watchlist "$WATCHLIST_OVERRIDE" \
   "$HOME/.config/run-issues/watchlist.json" \
   "$HOME/dotfiles/machine-studio/run-issues-watchlist.json") || WATCHLIST=""
 INTERVAL_MACHINE=$(audit_machine_interval \
   "$(audit_watchlist_interval "$WATCHLIST" "$REPO" "$AUDIT_KIND")" "$INTERVAL_ENV")
-LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
-
-repo_audit_resolve "$FETCH_TIMEOUT" || exit $?
 
 # ---- the cursor ---------------------------------------------------------------
 CURSOR_FILE="$LOG_DIR/.audit-coherence-cursor-$(repo_slug "$REPO" "$REMOTE")"
