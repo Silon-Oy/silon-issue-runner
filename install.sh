@@ -646,25 +646,29 @@ apply_plan() {
 # Reporting
 # ---------------------------------------------------------------------------
 
-# The reason a tool is needed is written here (it is installer-specific), while
-# the command that installs it comes from preflight_install_hint — the same
-# source the orchestrator's S0 gate quotes, so a user who reads one message and
-# then hits the other is told to type the same thing.
+# Every row of lib/deps.tsv is reported: the reason a tool is needed comes from
+# the list's purpose column and the install command from preflight_install_hint
+# — the same source the orchestrator's S0 gate quotes, so a user who reads one
+# message and then hits the other is told to type the same thing, and a
+# dependency added to the list reaches this report without an edit here.
 report_preflight() {
-  local tb
+  local name level tb
   log "dependencies (advisory — a missing tool never blocks the install):"
-  log "  $(preflight_report_tool git required "needed to update the package (submodule pin); install: $(preflight_install_hint git)" || true)"
-  log "  $(preflight_report_tool gh required "GitHub CLI — orchestrate.sh and pr-watch.sh depend on it; install: $(preflight_install_hint gh)" || true)"
-  log "  $(preflight_report_tool jq required "JSON handling in orchestrate.sh, poller.sh and pr-watch.sh; install: $(preflight_install_hint jq)" || true)"
-  log "  $(preflight_report_tool claude required "the default RUN_ISSUES_CLAUDE_CMD invokes the native \`claude\` command; install: $(preflight_install_hint claude)" || true)"
-  log "  $(preflight_report_tool tmux optional "only the pollers need it; install: $(preflight_install_hint tmux)" || true)"
-  log "  $(preflight_report_tool python3 optional "only the Ohjaamo action service needs it (action-server.sh); install: $(preflight_install_hint python3)" || true)"
-  tb="$(preflight_timeout_bin)"
-  if [ -n "$tb" ]; then
-    log "  ok: $tb"
-  else
-    log "  MISSING (optional): timeout/gtimeout — claude calls would run unbounded; install: $(preflight_install_hint timeout)"
-  fi
+  for name in $(deps_names); do
+    level="$(deps_field "$name" level)"
+    if [ "$name" = "timeout" ]; then
+      # Either GNU binary satisfies the row, and only a --version probe tells
+      # GNU timeout from the Windows delay tool of the same name.
+      tb="$(preflight_timeout_bin)"
+      if [ -n "$tb" ]; then
+        log "  ok: $tb"
+      else
+        log "  MISSING ($level): timeout/gtimeout — $(deps_field timeout purpose); install: $(preflight_install_hint timeout)"
+      fi
+      continue
+    fi
+    log "  $(preflight_report_tool "$name" "$level" "$(deps_field "$name" purpose); install: $(preflight_install_hint "$name")" || true)"
+  done
   # Repo write-access probe (issue #256): the same source of truth the S0 gate
   # uses, reported advisorily. There is no target repo at install time, so the
   # empty slug yields a "deferred to run time" note rather than a probe — the

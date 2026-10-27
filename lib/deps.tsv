@@ -1,0 +1,32 @@
+# lib/deps.tsv — the package's ONE machine-readable dependency list.
+#
+# Read by lib/deps.sh. The S0 gate (lib/preflight.sh), the installer's advisory
+# report (install.sh) and docs/dependencies.md are all derived from it; a new
+# dependency is one row here, and tests/test-dependencies.sh turns a row without
+# a regenerated table or a runner guide into a red test.
+#
+# Format: TAB-separated, one dependency per line, '#' lines and blank lines are
+# ignored. EVERY field must be non-empty (use '-' for "none"): a tab is an IFS
+# whitespace character, so `read` collapses an empty field into its neighbour.
+#
+# Columns:
+#   name     the command looked up on PATH (timeout: timeout or gtimeout)
+#   level    required | optional — required = S0 fatal (exit 8)
+#   scope    who needs it: core | security | poller | action | reviewer |
+#            driver | maintenance
+#   brew     install hint on macOS (and the default everywhere but apt Linux)
+#   apt      install hint on a Linux with apt-get (Ubuntu, Fly.io Sprite)
+#   license  the tool's own licence (the package never vendors or links any)
+#   purpose  why the package needs it — printed by the installer
+git	required	core	brew install git	sudo apt-get install git	GPL-2.0	needed to update the package (submodule pin) and by every run
+gh	required	core	brew install gh	sudo apt-get install gh (older releases: GitHub's own apt repository, cli.github.com)	MIT	GitHub CLI — orchestrate.sh and pr-watch.sh depend on it
+jq	required	core	brew install jq	sudo apt-get install jq	MIT	JSON handling in orchestrate.sh, poller.sh and pr-watch.sh
+claude	required	core	install Claude Code natively so `claude` is on PATH (npm-package alternative: npm i -g @anthropic-ai/claude-code and set RUN_ISSUES_CLAUDE_CMD to the npx invocation)	install Claude Code natively so `claude` is on PATH (npm-package alternative: npm i -g @anthropic-ai/claude-code and set RUN_ISSUES_CLAUDE_CMD to the npx invocation)	proprietary	the default RUN_ISSUES_CLAUDE_CMD invokes the native `claude` command
+timeout	optional	core	brew install coreutils (Git Bash on Windows: scoop install coreutils)	sudo apt-get install coreutils (preinstalled on Ubuntu)	GPL-3.0	bounds every claude call (timeout or gtimeout); without it calls run unbounded
+gitleaks	optional	security	brew install gitleaks	download the linux_x64 tarball (8.19 or newer) from https://github.com/gitleaks/gitleaks/releases and put gitleaks on PATH; Ubuntu's apt package may be older than 8.19	MIT	deterministic secret scan in the merge gate and the security audit; without it the scan is a logged no-op
+osv-scanner	optional	security	brew install osv-scanner	download osv-scanner_linux_amd64 from https://github.com/google/osv-scanner/releases, rename it to osv-scanner and put it on PATH	Apache-2.0	deterministic dependency-vulnerability scan in the merge gate and the security audit; without it the scan is a logged no-op
+tmux	optional	poller	brew install tmux	sudo apt-get install tmux	ISC	only the pollers need it (they exit 0 without it, so a missing tmux looks like an idle poller)
+python3	optional	action	xcode-select --install	sudo apt-get install python3	PSF-2.0	only the Ohjaamo action service needs it (action-server.sh)
+codex	optional	reviewer	Codex CLI is optional and never installed by this package: install it yourself so `codex` is on PATH, or set PR_WATCH_SECURITY_REVIEWER=claude	Codex CLI is optional and never installed by this package: install it yourself so `codex` is on PATH, or set PR_WATCH_SECURITY_REVIEWER=claude	Apache-2.0	only when PR_WATCH_SECURITY_REVIEWER selects Codex as the merge gate's reviewer
+npx	optional	driver	brew install node (or nvm install --lts)	sudo apt-get install nodejs npm (or nvm install --lts)	MIT	only when RUN_ISSUES_CLAUDE_CMD is the npm-package (npx) invocation
+git-filter-repo	optional	maintenance	brew install git-filter-repo	sudo apt-get install git-filter-repo	MIT	only publish-release.sh (maintainer's mirror publishing)

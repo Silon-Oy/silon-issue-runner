@@ -24,6 +24,8 @@
 #   7. preflight_gate_report: an absent timeout binary is a WARNING, never
 #      fatal — regression guard for the pre-gate behaviour (unbounded claude
 #      calls are allowed to keep running)
+#   7b. preflight_gate_report: absent security scanners (lib/deps.tsv scope
+#      `security`) are WARNINGS, never fatal (#376)
 #   8. preflight_repo_write_report: the push=true/false/unreadable verdicts and
 #      the 0/2 severity split, the deferred (empty-slug) note, and the
 #      fail-closed rule that an unreadable answer is never a green light (#256)
@@ -170,6 +172,9 @@ else
 fi
 
 # ---- Case 4: preflight_install_hint ----
+# The Homebrew wording is pinned: the Ubuntu CI runner has apt-get and would
+# otherwise read the apt column (lib/deps.sh deps_platform).
+export RUN_ISSUES_DEPS_PLATFORM=brew
 check_hint() {
   local key="$1" want="$2" got
   got=$(preflight_install_hint "$key")
@@ -184,7 +189,22 @@ check_hint claude 'install Claude Code natively so `claude` is on PATH (npm-pack
 check_hint jq-binary 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)'
 check_hint gh-auth 'gh auth login'
 check_hint timeout 'brew install coreutils (Git Bash on Windows: scoop install coreutils)'
+check_hint gitleaks 'brew install gitleaks'
+check_hint osv-scanner 'brew install osv-scanner'
 check_hint codex 'Codex CLI is optional and never installed by this package: install it yourself so `codex` is on PATH, or set PR_WATCH_SECURITY_REVIEWER=claude'
+
+got=$(RUN_ISSUES_DEPS_PLATFORM=apt preflight_install_hint jq)
+if [ "$got" = 'sudo apt-get install jq' ]; then
+  echo "PASS: case4 apt platform reads the apt column"
+else
+  echo "FAIL: case4 apt hint for jq was '$got'"; FAIL=1
+fi
+got=$(RUN_ISSUES_DEPS_PLATFORM=apt preflight_install_hint gh-auth)
+if [ "$got" = 'gh auth login' ]; then
+  echo "PASS: case4 non-package keys do not depend on the platform"
+else
+  echo "FAIL: case4 gh-auth hint on apt was '$got'"; FAIL=1
+fi
 
 # ---- Case 4b: preflight_probe_codex (issue #335) ----
 # Codex is optional: the probe must report a missing binary as non-zero and
@@ -254,7 +274,7 @@ fi
 # empty PATH — an interpreter failure indistinguishable from the missing-package
 # 127 this case is about. Hence the absolute interpreter path.
 mkdir -p "$WORK/probe"
-for tool in git gh jq; do
+for tool in git gh jq gitleaks osv-scanner; do
   printf '#!/bin/bash\nexit 0\n' > "$WORK/probe/$tool"
   chmod +x "$WORK/probe/$tool"
 done
@@ -308,6 +328,23 @@ if printf '%s\n' "$out" | grep -qF 'MISSING (optional): timeout/gtimeout'; then
 else
   echo "FAIL: case7 did not warn about the timeout binary — got: $out"; FAIL=1
 fi
+
+# ---- Case 7b: missing security scanners warn but never block (#376) ----
+rm -f "$WORK/probe/gitleaks" "$WORK/probe/osv-scanner"
+out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe claude)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "PASS: case7b missing scanners are not fatal"
+else
+  echo "FAIL: case7b returned $rc (expected 0) — scanners are optional"; FAIL=1
+fi
+for want in 'MISSING (optional): gitleaks' 'MISSING (optional): osv-scanner'; do
+  if printf '%s\n' "$out" | grep -qF "$want"; then
+    echo "PASS: case7b reports '$want'"
+  else
+    echo "FAIL: case7b did not report '$want' — got: $out"; FAIL=1
+  fi
+done
 
 # ---- Case 8: preflight_repo_write_report ----
 # The probe EXECUTES gh, so it is driven with a PATH stub whose answer is set by

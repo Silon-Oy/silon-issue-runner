@@ -18,6 +18,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/deps.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deps.sh"
+
 # preflight_have <cmd> — 0 if <cmd> is callable, 1 otherwise. Prints nothing;
 # the caller owns all output.
 preflight_have() {
@@ -81,28 +84,18 @@ preflight_report_tool() {
 }
 
 # preflight_install_hint <key> — echo the fix command for a dependency.
-#   key = git | gh | jq | jq-binary | npx | claude | codex | gh-auth | timeout |
-#         tmux | python3
+#   key = any name in lib/deps.tsv | gh-auth | jq-binary
 # Returns 1 without output for an unknown key.
 # Single source of truth for fix commands: install.sh reports them advisorily
 # and the orchestrator's S0 gate prints them fatally, so a wording change must
-# not have to be repeated in two files. A `case` (not an associative array)
-# keeps this working on the bash 3.2 that ships with macOS.
+# not have to be repeated in two files. Package hints come from the dependency
+# list (lib/deps.sh picks the Homebrew or apt column for this machine); only
+# the two keys that are fixes rather than packages stay in this `case`.
 preflight_install_hint() {
   case "$1" in
-    git)     printf 'brew install git\n' ;;
-    gh)      printf 'brew install gh\n' ;;
-    jq)      printf 'brew install jq\n' ;;
-    npx)     printf 'brew install node (or nvm install --lts)\n' ;;
-    claude)  printf 'install Claude Code natively so `claude` is on PATH (npm-package alternative: npm i -g @anthropic-ai/claude-code and set RUN_ISSUES_CLAUDE_CMD to the npx invocation)\n' ;;
-    codex)   printf 'Codex CLI is optional and never installed by this package: install it yourself so `codex` is on PATH, or set PR_WATCH_SECURITY_REVIEWER=claude\n' ;;
     gh-auth) printf 'gh auth login\n' ;;
     jq-binary) printf 'upgrade jq to 1.7 or newer (Windows: winget upgrade jqlang.jq)\n' ;;
-    timeout) printf 'brew install coreutils (Git Bash on Windows: scoop install coreutils)\n' ;;
-    tmux)    printf 'brew install tmux\n' ;;
-    python3) printf 'xcode-select --install\n' ;;
-    git-filter-repo) printf 'brew install git-filter-repo\n' ;;
-    *)       return 1 ;;
+    *)       deps_hint "$1" || return 1 ;;
   esac
 }
 
@@ -207,14 +200,18 @@ preflight_jq_binary_ok() {
 # Severity is a fact of the dependency, not of the caller: git/gh/jq/claude are
 # required because no run can complete without them, while a missing timeout
 # binary only degrades claude calls to unbounded — behaviour that predates this
-# gate and must not become fatal.
+# gate and must not become fatal. Levels are read from lib/deps.tsv, as is the
+# optional `security` scope (gitleaks, osv-scanner) that is reported as warnings.
 preflight_gate_report() {
   local mode="$1"
   shift
 
   local fatal=0 cmd line rc
 
-  for cmd in git gh jq; do
+  # The required tools come from the dependency list; claude is the one row
+  # with its own probe/have handling below.
+  for cmd in $(deps_names required core); do
+    [ "$cmd" = "claude" ] && continue
     rc=0
     line=$(preflight_report_tool "$cmd" required "$(preflight_install_hint "$cmd")") || rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -248,6 +245,15 @@ preflight_gate_report() {
   if [ -z "$(preflight_timeout_bin)" ]; then
     printf 'MISSING (optional): timeout/gtimeout — %s\n' "$(preflight_install_hint timeout)"
   fi
+
+  # Optional security scanners: without them the merge gate and the audit run
+  # their deterministic scans as logged no-ops, which is invisible unless the
+  # machine says so itself (issue #376). A warning only — never fatal.
+  for cmd in $(deps_names optional security); do
+    if ! preflight_have "$cmd"; then
+      printf 'MISSING (optional): %s — %s\n' "$cmd" "$(preflight_install_hint "$cmd")"
+    fi
+  done
 
   [ "$fatal" -eq 0 ] || return 2
   return 0

@@ -18,6 +18,11 @@
 #       issue REQUIRED), so it is now rejected in S1 as a usage error (exit 1) —
 #       but AFTER S0 has run and logged, with no lock/claim/run-dir side effects.
 #       That still proves the gate did not block a healthy environment.
+#   B4b a missing optional security scanner (lib/deps.tsv scope `security`) is
+#       a WARNING in the S0 log and the gate stays transparent — the machine
+#       says itself that its scans are no-ops (#376). The scanner is hidden with
+#       a temporary list naming a command no machine has, so the case does not
+#       depend on whether this machine happens to have gitleaks
 #   B5  RUN_ISSUES_SKIP_PREFLIGHT=1 bypasses the gate even when claude is broken
 #   B6  GitHub App mode downgrades the missing personal login to a warning
 #   B7  a Read-only token (permissions.push=false) is fatal at S0 (exit 8),
@@ -203,6 +208,15 @@ if [ -d "$REPO/.claude/run-issues" ]; then
 else
   ok "B4 poll rejection created no run dir"
 fi
+
+# --- B4b: a missing optional scanner warns, never blocks (#376) -----------
+DEPS_TMP="$WORK/deps.tsv"
+grep -v -E '^(gitleaks|osv-scanner)'$'\t' "$HERE/../lib/deps.tsv" > "$DEPS_TMP"
+printf 'run-issues-no-such-scanner\toptional\tsecurity\tbrew install it\tapt-get install it\tMIT\ttest row\n' >> "$DEPS_TMP"
+RUN_ISSUES_DEPS_FILE="$DEPS_TMP" run_orch "$REPO" poll
+rc_is 1 "B4b a missing optional scanner does not change the gate's outcome"
+says 'WARNING: MISSING (optional): run-issues-no-such-scanner' "B4b the missing scanner is logged as a warning"
+says 'S0_Preflight ok' "B4b the gate still passes"
 
 # --- B5: the escape hatch -------------------------------------------------
 # The gate must never be the reason a machine cannot start a run: a broken
