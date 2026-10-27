@@ -29,12 +29,13 @@
       "remotes": ["origin"]
     },
     {
-      "_comment": "Audit-scheduled form (issue #373): this machine runs the whole-repo security audit every 30 days and the coherence audit every 7 days for this repo. Each key is optional and per kind; without it the repo falls back to RUN_ISSUES_<KIND>_AUDIT_INTERVAL_DAYS in poller.env, and with neither it is not audited. `0` switches the audit off for this repo on this machine even when poller.env sets a default. The repo's own .claude/run-issues.json (`.<kind>.audit_interval_days`) still wins over both, because how often an application is audited is a property of the application. See docs/env-reference.md.",
+      "_comment": "Audit-scheduled form (issue #373): this machine runs the whole-repo security audit every 30 days, the coherence audit every 7 days and the scanners-only dependency scan (no agent call, issue #382) every day for this repo. Each key is optional and per kind; without it the repo falls back to RUN_ISSUES_<KIND>_AUDIT_INTERVAL_DAYS (RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS) in poller.env, and with neither it is not audited. `0` switches the audit off for this repo on this machine even when poller.env sets a default. The repo's own .claude/run-issues.json (`.<kind>.audit_interval_days`) still wins over both, because how often an application is audited is a property of the application. See docs/env-reference.md.",
       "path": "/Users/<you>/Projects/<audited-repo>",
       "labels": ["auto-run"],
       "remotes": ["origin"],
       "security_audit_interval_days": 30,
-      "coherence_audit_interval_days": 7
+      "coherence_audit_interval_days": 7,
+      "dependency_scan_interval_days": 1
     }
   ]
 }

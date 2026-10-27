@@ -254,6 +254,21 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä". Työhakemisto jätetään tarkasteltavaksi (polku stderrissä) |
 | 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
 | 5 | Auditointi valmis, mutta vähintään yksi skanneri epäonnistui: sen luokka jäi tarkistamatta deterministisesti. Epäonnistumisesta ei luoda issueta |
+| 6 | Koodi muuttumaton edellisen onnistuneen auditoinnin jälkeen: agenttikierros ohitettiin ja vain skannerit ajettiin. Ajastus kirjaa tämän onnistumiseksi (`unchanged`). Vain ajastetussa ajossa; käsiajo ja `--dry-run` auditoivat aina kokonaan |
+| 7 | Vain skannerit oli määrä ajaa (`--scanners-only` tai muuttumaton koodi), eikä yhtään skanneria ole asennettu: mitään ei tarkistettu, joten tulos ei ole puhdas. Ajastus kirjaa epäonnistumisen (`no_scanner`) ja yrittää uudelleen `RUN_ISSUES_AUDIT_RETRY_HOURS`-ajan päästä |
+
+### Riippuvuusskannaus (`dependency-scan.sh`)
+
+`security-audit.sh --scanners-only`: samat skannerit ja sama issue-politiikka ilman agenttikutsua.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Skannaus valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` valmis |
+| 1 | Käyttövirhe |
+| 2 | Repo, remote tai sen oletushaara ei resolvoidu, tai `git`/`jq`/`gh` puuttuu |
+| 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
+| 5 | Skannaus valmis, mutta vähintään yksi skanneri epäonnistui. Epäonnistumisesta ei luoda issueta |
+| 7 | Yhtään skanneria (`gitleaks`, `osv-scanner`) ei ole asennettu: mitään ei tarkistettu. Ajastus kirjaa epäonnistumisen ja yrittää uudelleen |
 
 ### Koherenssiauditointi (`coherence-audit.sh`)
 

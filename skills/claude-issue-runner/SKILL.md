@@ -63,7 +63,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
 | `epic-attention` | automaatio, kun epicin lapsi tarvitsee ihmistä tai epicin katselmus löytää puutteen | sinä | Suodatettava merkintä epic-issuella |
 | `epic-complete` | automaatio, kun kaikki alaissueet ovat kiinni | sinä | Merkintä epicillä; **runner ei sulje epiciä** |
-| `security` | automaatio, kun tietoturva-auditointi (`security-audit.sh`) luo löydösissuen | sinä tai ajo, joka korjaa löydöksen | Merkitsee auditoinnin löydöksen. Ei poimintaehto: vakavimmat löydökset saavat lisäksi poimintalabelit. Sulje väärä löydös tilaan *not planned*, niin auditointi ei avaa sitä uudelleen |
+| `security` | automaatio, kun tietoturva-auditointi (`security-audit.sh`) tai riippuvuusskannaus (`dependency-scan.sh`) luo löydösissuen | sinä tai ajo, joka korjaa löydöksen | Merkitsee auditoinnin löydöksen. Ei poimintaehto: vakavimmat löydökset saavat lisäksi poimintalabelit. Sulje väärä löydös tilaan *not planned*, niin auditointi ei avaa sitä uudelleen |
 | `coherence` | automaatio, kun koherenssiauditointi (`coherence-audit.sh`) luo löydösissuen | sinä tai ajo, joka refaktoroi | Merkitsee rinnakkaisten ajojen tuottaman epäkoherenssin (kaksoistoteutus, varjostava abstraktio, ristiriitainen konventio). **Ei koskaan poimintalabeleita:** refaktorointi on sinun valintasi, joten lisää poimintalabel itse, jos haluat runnerin tekevän sen. Sulje väärä löydös tilaan *not planned* |
 
 Luo `auto-run`, `wip`, `auto-clean` ja `auto-reset` repoon itse: GitHub ei salli tuntemattoman labelin
@@ -291,7 +291,11 @@ Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suo
 - `cleanup-run.sh` — pura yhden ajon worktree, haara, run-dir, varaus ja lukko.
 - `auto-clean.sh` — sama siivous labelin laukaisemana, ja issuen sulkeminen.
 - `security-audit.sh` — koko repon tietoturva-auditointi (skannerit ja agentin
-  uhkamalli); ei muuta koodia.
+  uhkamalli); ei muuta koodia. Ajastettuna se ohittaa agenttikierroksen, jos oletushaara on
+  yhä edellisen onnistuneen auditoinnin commitissa, ja ajaa vain skannerit (exit 6).
+- `dependency-scan.sh` — pelkät skannerit ilman agenttikutsua (`security-audit.sh
+  --scanners-only`): samat `security`-issuet ilman Claude-kulua, omalla tiheämmällä välillä.
+  Ilman yhtään asennettua skanneria exit 7, ei puhdas tulos.
 - `coherence-audit.sh` — runnerin mergettyjen PR:ien koherenssiauditointi; ei muuta koodia.
 - `auto-reset.sh` — sama purku labelin laukaisemana **ilman** issuen sulkemista: issue palaa
   poimintaan ja ajo alkaa alusta puhtaasta basesta. Turvaportit ovat kirjaimellisesti samat

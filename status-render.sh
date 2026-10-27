@@ -312,7 +312,7 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .runner-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
 .audits{padding:.45rem .8rem;border:1px solid var(--border);border-radius:6px;margin:.5rem 0 .8rem;font-size:.88rem}
 .audit-row{display:flex;gap:.6rem;flex-wrap:wrap;color:var(--muted)}
-.audit-row.ar-failed{color:var(--c-stalled);font-weight:600}
+.audit-row.ar-failed,.audit-row.ar-no_scanner{color:var(--c-stalled);font-weight:600}
 .audit-row.ar-scanner_failed,.audit-row.ar-pending{color:var(--c-attention)}
 .chips{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.5rem;margin:.4rem 0 .8rem}
 .chip{border:1px solid var(--border);background:var(--card);color:var(--fg);
@@ -873,6 +873,8 @@ a:hover{text-decoration:underline}
   var AUDIT_OUTCOMES = {
     ok: "onnistui",
     scanner_failed: "skanneri epäonnistui",
+    unchanged: "koodi muuttumaton, vain skannerit",
+    no_scanner: "ei skannereita, ei tarkistettu",
     failed: "epäonnistui",
     pending: "kesken tai katkesi"
   };

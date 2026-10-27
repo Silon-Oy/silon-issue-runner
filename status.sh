@@ -50,7 +50,7 @@
 # Last audit outcomes (issue #373): the top-level audit_results[] list —
 # {kind, repo_slug, started_at, exit_code, outcome} per (watchlist repo ×
 # git remote × kind) that has a schedule state file in RUN_ISSUES_LOG_DIR.
-# outcome is ok / scanner_failed / failed / pending (no result for the latest
+# outcome is ok / scanner_failed / unchanged / no_scanner / failed / pending (no result for the latest
 # start yet: running, or its session died). Additive, always present: [] when
 # no audit ever started. Two O(1) file reads per entry, never history.
 #
@@ -1200,11 +1200,12 @@ else
     printf '%sVIIMEISIMMÄT AUDITOINNIT (%s)%s\n' "$C_BOLD" "$n_ares" "$C_RESET"
     printf '%s' "$DOC" | jq -r '.audit_results[]
       | [.outcome, "  \(.repo_slug)  \(.kind)  \(.started_at)  exit \(.exit_code // "-")  \(
-          {ok: "onnistui", scanner_failed: "skanneri epäonnistui", failed: "epäonnistui",
-           pending: "kesken tai katkesi"}[.outcome] // .outcome)"] | @tsv' \
+          {ok: "onnistui", scanner_failed: "skanneri epäonnistui",
+           unchanged: "koodi muuttumaton, vain skannerit", no_scanner: "ei skannereita, ei tarkistettu",
+           failed: "epäonnistui", pending: "kesken tai katkesi"}[.outcome] // .outcome)"] | @tsv' \
       | while IFS=$'\t' read -r a_o a_line; do
           case "$a_o" in
-            failed) printf '%s%s%s\n' "$C_RED" "$a_line" "$C_RESET" ;;
+            failed|no_scanner) printf '%s%s%s\n' "$C_RED" "$a_line" "$C_RESET" ;;
             scanner_failed|pending) printf '%s%s%s\n' "$C_YEL" "$a_line" "$C_RESET" ;;
             *) printf '%s\n' "$a_line" ;;
           esac

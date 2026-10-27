@@ -373,7 +373,10 @@ saa sisäänrakennetun oletuksen.
 
 #### Auditointien ajastuksen etusija
 
-Sama ketju koskee kumpaakin lajia (`<laji>` = `security` tai `coherence`, #373).
+Sama ketju koskee jokaista lajia (`<laji>` = `security`, `coherence` tai `dependency-scan`,
+#373, #382). `dependency-scan`-lajin avaimet poikkeavat nimeltään: repossa
+`."dependency-scan".audit_interval_days`, watchlistissä `dependency_scan_interval_days` ja
+ympäristössä `RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS`.
 Ensimmäinen taso, jolla arvo on asetettu, ratkaisee:
 
 | Taso | Lähde | Avain | Voittaa |
@@ -394,7 +397,8 @@ Ensimmäinen taso, jolla arvo on asetettu, ratkaisee:
 
 **Viimeisin tulos.** `status.sh` listaa `audit_results[]`-kentässä jokaisen watchlist-repon
 × git-remoten × lajin viimeisimmän käynnistyksen (`started_at`, `exit_code`, `outcome`:
-`ok`, `scanner_failed` = exit 5, `failed` tai `pending` = ei vielä tulosta), ja ohjaamo näyttää
+`ok`, `scanner_failed` = exit 5, `unchanged` = exit 6, `no_scanner` = exit 7, `failed` tai
+`pending` = ei vielä tulosta), ja ohjaamo näyttää
 saman. Lähde on alla kuvattu tila- ja tulostiedosto, ei historia. Hakemisto on
 `RUN_ISSUES_LOG_DIR` (oletus sama kuin pollereilla), joten `status.sh` näkee vain oman
 koneensa auditoinnit.
@@ -410,7 +414,7 @@ yksiriviseen tiedostoon `$RUN_ISSUES_LOG_DIR/.audit-last-<laji>-<repo-slug>`. Se
 pakottaa auditoinnin seuraavalla tikillä. Kirjaus tehdään käynnistyksessä, joten aina kaatuva
 auditointi ei käynnisty joka tikillä. Istunto kirjaa lopputuloksensa viereen
 (`….result`: käynnistysaika ja exit-koodi). Käynnistys ilman onnistunutta lopputulosta
-(exit muu kuin 0 tai 5, tai istunto katkesi ennen kirjausta) yritetään uudelleen
+(exit muu kuin 0, 5 tai 6, tai istunto katkesi ennen kirjausta) yritetään uudelleen
 `RUN_ISSUES_AUDIT_RETRY_HOURS`-ajan (oletus 24 h) kuluttua eikä vasta koko välin päästä.
 **Pysäytys:** `tmux kill-session -t run-issues-audit-<laji>-<repo-slug>`. `stop-run.sh` ei
 koske auditointiin, koska sillä ei ole run-diriä. Katkaistu istunto ei kirjaa onnistunutta
@@ -428,6 +432,29 @@ Valvo repoa auditoinnin osalta yhdellä koneella: aseta väli sen koneen watchli
 repoon. Repon väli luetaan remoten oletushaaran viimeksi haetusta tilasta
 (`<remote>/HEAD`) ilman verkkokutsua. Skannerit ja agentti käyttävät yllä kuvattuja
 `RUN_ISSUES_GITLEAKS_BIN`-, `RUN_ISSUES_OSV_SCANNER_BIN`- ja `RUN_ISSUES_CLAUDE_*`-asetuksia.
+
+**Muuttumaton koodi** (#382). Onnistunut täysi auditointi (exit 0 tai 5) kirjaa auditoidun
+oletushaaran commitin tiedostoon `.audit-last-security-<repo-slug>.sha`. Kun seuraava ajastettu
+auditointi käynnistyy ja oletushaara on yhä samassa commitissa, agenttikierros ohitetaan ja vain
+skannerit ajetaan (exit 6, `unchanged`): uusi haavoittuvuus muuttumattomassa riippuvuudessa
+löytyy skannerilla, mutta saman koodin uusi katselmus ei tuo uutta tietoa. Epäonnistunut ajo ei
+pyyhi kirjattua committia. Käsiajo ja `--dry-run` auditoivat aina kokonaan. **Täysi uusinta:**
+poista `.sha`-tiedosto.
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_AUDIT_STATE_FILE` | *(tyhjä)* | **Sisäinen injektiopiste, ei käyttäjäkonfiguraatiota.** `audit_run` asettaa sen ajastetulle auditoinnille (tilatiedoston polku). Ilman sitä `security-audit.sh` ei lue eikä kirjaa auditoitua committia |
+
+### Riippuvuusskannaus (`dependency-scan.sh`, #382)
+
+`security-audit.sh --scanners-only`: samat skannerit (`gitleaks`, `osv-scanner`) koko repolle,
+sama sormenjälki, `security`-label, vakavuusraja ja assignee-reititys — ilman agenttikutsua,
+joten ajo ei maksa Claude-kulutusta. Löydös on sama issue, jonka täysi auditointi loisi. Jos
+yhtään skanneria ei ole asennettu, ajo päättyy koodiin 7 eikä raportoi puhdasta tulosta.
+
+| Muuttuja | Oletus | Vaikutus |
+|---|---|---|
+| `RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus samalla mekanismilla kuin auditoinneissa (`lib/audit-schedule.sh`, oma tilatiedosto `.audit-last-dependency-scan-<repo-slug>`). Koneen oletus; watchlistin `dependency_scan_interval_days` ja kohderepon `."dependency-scan".audit_interval_days` voittavat sen ([etusija](#auditointien-ajastuksen-etusija)). Tyypillisesti tiheämpi kuin tietoturva-auditoinnin väli |
 
 ### Koherenssiauditointi (`coherence-audit.sh`, #342)
 

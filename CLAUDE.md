@@ -442,6 +442,7 @@ virhe.** Tämä on koko listan kantava sääntö.
 | `PR_WATCH_ENABLE_SEMANTIC_CHECK` | poller nostaa `1`:ksi | merge ilman sisar-PR:ien vertailua |
 | Tietoturva-auditoinnin ajastus | `security_audit_interval_days`: repo > watchlist > `poller.env` | repoa ei auditoida |
 | Koherenssiauditoinnin ajastus | `coherence_audit_interval_days`: sama ketju | repoa ei auditoida |
+| Riippuvuusskannauksen ajastus | `dependency_scan_interval_days`: sama ketju | skannerit vain auditoinnin mukana |
 
 Neljä sääntöä, jotka eivät näy taulukosta:
 
