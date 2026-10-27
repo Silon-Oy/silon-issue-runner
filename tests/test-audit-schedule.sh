@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # test-audit-schedule.sh — unit tests for lib/audit-schedule.sh (issue #340):
-# the kind table, interval precedence (repo > machine, unset = not scheduled),
-# the due check and the atomic start record. No network, no tmux.
+# the kind table, interval precedence (repo > watchlist > machine, unset = not
+# scheduled), the due check, the atomic start record and the last outcome
+# status.sh shows (#373). No network, no tmux.
 #
 # Run: bash tests/test-audit-schedule.sh
 
@@ -163,6 +164,66 @@ check "parse round-trips every kind" \
 check "parse: an unknown kind is not an audit" "$(rc_of audit_session_parse run-issues-audit-nosuch-o-r)" "1"
 check "parse: a run session is not an audit" "$(rc_of audit_session_parse run-issues-o-r-issue-5)" "1"
 check "parse: no slug is not an audit" "$(rc_of audit_session_parse run-issues-audit-security-)" "1"
+
+# ---- watchlist precedence (#373) -------------------------------------------------
+check "security watchlist key" "$(audit_kind_watchlist_key security)" "security_audit_interval_days"
+check "coherence watchlist key" "$(audit_kind_watchlist_key coherence)" "coherence_audit_interval_days"
+check "unknown kind has no watchlist key" "$(rc_of audit_kind_watchlist_key nosuch)" "1"
+# The chain as the poller composes it: machine = watchlist ?: environment, then
+# audit_interval_days with the repo config.
+eff() { # <repo-config> <watchlist-value> <env-value>
+  audit_interval_days "$1" security "$(audit_machine_interval "$2" "$3")"
+}
+check "watchlist wins over the environment" "$(eff '' 30 7)" "30"
+check "watchlist 0 switches the environment's value off" "$(eff '' 0 7)" ""
+check "absent watchlist key falls back to the environment" "$(eff '' @absent 7)" "7"
+check "absent key and no environment value: not scheduled" "$(eff '' @absent '')" ""
+check "repo wins over the watchlist" "$(eff '{"security":{"audit_interval_days":2}}' 30 7)" "2"
+check "repo wins over the watchlist's 0" "$(eff '{"security":{"audit_interval_days":2}}' 0 '')" "2"
+check "repo 0 wins over the watchlist" "$(eff '{"security":{"audit_interval_days":0}}' 30 7)" ""
+for bad_v in 1.5 x -1 '' true; do
+  check "bad watchlist value '$bad_v' is not scheduled" "$(eff '' "$bad_v" 7)" ""
+  case "$(audit_watchlist_interval_problem "$bad_v" security)" in
+    *"invalid security_audit_interval_days"*"in the watchlist"*) echo "PASS: bad watchlist value '$bad_v' is reported" ;;
+    *) echo "FAIL: bad watchlist value '$bad_v' not reported"; FAIL=1 ;;
+  esac
+done
+check "watchlist 0 is deliberate: no problem" "$(audit_watchlist_interval_problem 0 security)" ""
+check "watchlist positive: no problem" "$(audit_watchlist_interval_problem 30 coherence)" ""
+check "absent watchlist key: no problem" "$(audit_watchlist_interval_problem @absent security)" ""
+# The watchlist read itself: through poller-config.sh when the caller sourced it,
+# `@absent` otherwise (sourcing it here would flip the caller's `set` options).
+printf '{"repos":[{"path":"%s/r","security_audit_interval_days":14}]}\n' "$WORK" > "$WORK/wl.json"
+check "without poller-config.sh the watchlist reads as absent" \
+  "$(audit_watchlist_interval "$WORK/wl.json" "$WORK/r" security)" "@absent"
+check "with poller-config.sh the entry's value is read" \
+  "$( . "$ROOT/lib/poller-config.sh"; set +e; audit_watchlist_interval "$WORK/wl.json" "$WORK/r" security)" "14"
+check "with poller-config.sh an unset kind reads as absent" \
+  "$( . "$ROOT/lib/poller-config.sh"; set +e; audit_watchlist_interval "$WORK/wl.json" "$WORK/r" coherence)" "@absent"
+
+# ---- last outcome (#373) ----------------------------------------------------------
+check "rc 0 is ok" "$(audit_rc_outcome 0)" "ok"
+check "rc 5 is scanner_failed" "$(audit_rc_outcome 5)" "scanner_failed"
+check "rc 3 is failed" "$(audit_rc_outcome 3)" "failed"
+LO="$WORK/lo"
+check "no state file: nothing" "$(audit_last_outcome "$LO")" ""
+printf '1700000000 security\n' > "$LO"
+check "a start without a result is pending" "$(audit_last_outcome "$LO")" "$(printf '1700000000\tsecurity\t\tpending')"
+printf '1700000000 0\n' > "$LO.result"
+check "rc 0 for this start" "$(audit_last_outcome "$LO")" "$(printf '1700000000\tsecurity\t0\tok')"
+printf '1700000000 5\n' > "$LO.result"
+check "rc 5 for this start" "$(audit_last_outcome "$LO")" "$(printf '1700000000\tsecurity\t5\tscanner_failed')"
+printf '1700000000 3\n' > "$LO.result"
+check "rc 3 for this start" "$(audit_last_outcome "$LO")" "$(printf '1700000000\tsecurity\t3\tfailed')"
+printf '1699999999 0\n' > "$LO.result"
+check "a result of an earlier start is pending" "$(audit_last_outcome "$LO")" "$(printf '1700000000\tsecurity\t\tpending')"
+printf 'junk\n' > "$LO"
+check "an unreadable state file: nothing" "$(audit_last_outcome "$LO")" ""
+# The retry decision and the view read exit codes the same way.
+printf '1700000000 security\n' > "$LO"; printf '1700000000 5\n' > "$LO.result"
+check "rc 5 counts as an audit that happened" "$(rc_of _audit_succeeded "$LO" 1700000000)" "0"
+printf '1700000000 4\n' > "$LO.result"
+check "rc 4 does not" "$(rc_of _audit_succeeded "$LO" 1700000000)" "1"
 
 # ---- calling contract (#360, for #342) -------------------------------------------
 grep -qF -- '<script> <repo-path> --remote <r> --watchlist <wl>' "$ROOT/lib/audit-schedule.sh" \

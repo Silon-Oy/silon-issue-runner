@@ -200,10 +200,26 @@ poller_pick_labels() {
 # writes nothing, mutates nothing and never exits: the guarantee that matters
 # for a poller sourcing this at startup is intact.
 _poller_watchlist_repo_csv() {
-  local watchlist="${1-}" repo_path="${2-}" repo_key="${3-}" default_key="${4-}"
-  local default_csv="" repo_csv="" found=""
+  local repo_key="${3-}" default_key="${4-}" default_expr='""'
+  [ -n "$repo_key" ] || { printf '0\t\t\n'; return 0; }
+  [ -n "$default_key" ] && default_expr=".${default_key} | csv"
+  _poller_watchlist_repo_lookup "${1-}" "${2-}" ".${repo_key} | csv" "$default_expr"
+}
 
-  if [ -n "$watchlist" ] && [ -f "$watchlist" ] && [ -n "$repo_path" ] && [ -n "$repo_key" ]; then
+# _poller_watchlist_repo_lookup <watchlist-path> <repo-path> <entry-expr>
+# <default-expr> — the path-matching half shared by every per-repo watchlist
+# key, whatever its shape: _poller_watchlist_repo_csv (string arrays) and
+# poller_watchlist_repo_value (scalars) differ only in the two jq expressions.
+# <entry-expr> runs on the matched `.repos[]` entry, <default-expr> on the
+# whole document; both may use the `csv` and `norm` helpers, both are package
+# constants (never watchlist data) and must yield a string. Same output line
+# and same guarantees as _poller_watchlist_repo_csv above.
+_poller_watchlist_repo_lookup() {
+  local watchlist="${1-}" repo_path="${2-}" entry_expr="${3-}" default_expr="${4-}"
+  local default_csv="" repo_csv="" found=""
+  [ -n "$default_expr" ] || default_expr='""'
+
+  if [ -n "$watchlist" ] && [ -f "$watchlist" ] && [ -n "$repo_path" ] && [ -n "$entry_expr" ]; then
     # THE PATH NEVER CROSSES INTO jq. Under Git Bash, jq is a native Windows
     # program, and MSYS rewrites anything that looks like an absolute POSIX path
     # on its way into one — measured on windows-latest, BOTH channels:
@@ -226,14 +242,11 @@ _poller_watchlist_repo_csv() {
     # read as "covered" by one filter and "not covered" by another. Line 1 is the
     # default CSV; every further line is "<path>\t<that entry's CSV>". Trailing
     # slashes are normalised on both sides — `/repo` and `/repo/` are one checkout.
-    local default_expr='""'
-    [ -n "$default_key" ] && default_expr=".${default_key} | csv"
-
     local prog
     prog='def norm: (. // "" | tostring) | sub("/+$"; "");
           def csv:  (. // []) | map(select(type == "string" and length > 0)) | join(",");
           ('"$default_expr"'),
-          (.repos[]? | ((.path | norm) + "\t" + (.'"$repo_key"' | csv)))'
+          (.repos[]? | ((.path | norm) + "\t" + ('"$entry_expr"')))'
 
     local rows=""
     rows=$(jq -r "$prog" "$watchlist" 2>/dev/null) || rows=""
@@ -324,5 +337,34 @@ poller_watchlist_pick_assignees() {
   # default this key does not have.
   repo_csv="${out##*$'\t'}"
   _poller_trim_csv "$repo_csv"
+  return 0
+}
+
+# poller_watchlist_repo_value <watchlist-path> <repo-path> <key> — the scalar
+# value of `<key>` in the watchlist entry of one repo checkout, as text (a
+# number prints as its digits), or `@absent` when the entry does not set it,
+# sets it to null, or no entry covers the repo (including no watchlist and an
+# unreadable one). Always returns 0.
+#
+# The scalar sister of the string-array lookups above, through the same
+# _poller_watchlist_repo_lookup — so the Windows-safe path comparison (§5.8)
+# stays in one place. What a value MEANS belongs to the caller: the audit
+# schedule (lib/audit-schedule.sh, #373) reads `<kind>_audit_interval_days`.
+# <key> is a package constant, never watchlist data. A tab or newline inside a
+# string value is flattened to a space, because the row format uses both.
+poller_watchlist_repo_value() {
+  local key="${3-}" out found val
+  if [ -z "$key" ]; then printf '@absent'; return 0; fi
+  out=$(_poller_watchlist_repo_lookup "${1-}" "${2-}" \
+    'if type == "object" and has("'"$key"'") and .'"$key"' != null
+     then "=" + (.'"$key"' | tostring | gsub("[\t\r\n]"; " ")) else "@absent" end' '""')
+  found="${out%%$'\t'*}"
+  val="${out#*$'\t'}"
+  val="${val#*$'\t'}"
+  # The `=` prefix keeps an empty string value apart from "no value".
+  case "$found:$val" in
+    1:=*) printf '%s' "${val#=}" ;;
+    *) printf '@absent' ;;
+  esac
   return 0
 }

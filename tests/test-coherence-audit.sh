@@ -18,6 +18,8 @@
 #   G) --dry-run          -> plan printed, no write, cursor unchanged
 #   H) pagination stops at PRs updated before the cursor (cost, §5.4)
 #   I) first run without a cursor: the window is the interval (repo setting wins)
+#   J) first run without a cursor and without a repo setting: the watchlist
+#      entry's coherence_audit_interval_days wins over the environment (#373)
 #
 # Run: bash tests/test-coherence-audit.sh
 
@@ -332,6 +334,20 @@ grep -q '#51' "$WORK/prompt-seen" || bad I "PR inside the window not reviewed"
 grep -q '#52' "$WORK/prompt-seen" && bad I "PR outside the repo's window reviewed"
 [ -s "$(cursor_file)" ] || bad I "cursor not written after the first successful audit"
 [ "$FAIL" = "$F0" ] && ok I "first window is the interval, repo wins"
+done_case
+
+# ===========================================================================
+echo "=== J: first run window from the watchlist ==="
+F0=$FAIL; setup J
+printf '{"repos":[{"path":"%s","coherence_audit_interval_days":2}]}\n' "$REPO" > "$WORK/wl.json"
+page 1 "$(pr 61 "$(iso_ago 1.5)" auto-run/x-issue-9-a)" "$(pr 62 "$T_OLD" auto-run/x-issue-10-b)"
+printf 'lib/a.sh\n' > "$WORK/files/61"; printf 'lib/a.sh\n' > "$WORK/files/62"
+AUDIT_ENV="RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS=30" run_audit --watchlist "$WORK/wl.json"; AUDIT_ENV=""; show J
+[ "$RC" = 0 ] || bad J "rc $RC, want 0"
+grep -q '#61' "$WORK/prompt-seen" || bad J "PR inside the window not reviewed"
+grep -q '#62' "$WORK/prompt-seen" && bad J "PR outside the watchlist's window reviewed"
+echo "$OUT" | grep -q 'last 2 day' || bad J "window not taken from the watchlist"
+[ "$FAIL" = "$F0" ] && ok J "first window is the watchlist interval, which wins over the environment"
 done_case
 
 echo "----------------------------------------"

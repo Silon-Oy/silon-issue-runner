@@ -832,14 +832,15 @@ _dispatch_teardown_pass() {
 # REPO_PATH / REMOTE / REPO_SLUG / WATCHLIST / GLOBAL_MAX / LOG / LOG_DIR /
 # RUNS_LOG / ORCH_ENV from the loop scope, like _dispatch_teardown_pass.
 #
-# Local reads only — no gh call: the interval comes from the environment
-# (poller.env is already sourced) and from .claude/run-issues.json at the
-# remote's default branch as the last fetch left it, which is where the audit
+# Local reads only — no gh call: the interval comes from this repo's watchlist
+# entry (`<kind>_audit_interval_days`, #373), else the environment (poller.env
+# is already sourced), and .claude/run-issues.json at the remote's default
+# branch as the last fetch left it wins over both — that is where the audit
 # itself reads its policy. The audit runs detached in tmux, so the tick never
 # waits for its agent call, and its session name starts with `run-issues-` so
 # it counts against GLOBAL_MAX like every other spawn.
 _dispatch_audit_pass() {
-  local kind="$1" script var days ref cfg="" state session active now problem
+  local kind="$1" script var days ref cfg="" state session active now problem wl machine
   # The slug keys both the state file and the session; without one, every repo
   # would share a single "last audited" time.
   [ -n "$REPO_SLUG" ] || return 0
@@ -849,15 +850,25 @@ _dispatch_audit_pass() {
     cfg=$(git -C "$REPO_PATH" show "$ref:.claude/run-issues.json" 2>/dev/null || true)
   fi
   state=$(audit_state_file "$LOG_DIR" "$kind" "$REPO_SLUG")
+  # The watchlist entry is this machine's per-repo choice and stands in for the
+  # environment's value when set, 0 included (#373).
+  wl=$(audit_watchlist_interval "$WATCHLIST" "$REPO_PATH" "$kind")
+  machine=$(audit_machine_interval "$wl" "${!var:-}")
+  problem=$(audit_watchlist_interval_problem "$wl" "$kind")
+  if [ -n "$problem" ]; then
+    audit_notice "$state" "$LOG" watchlist "$problem for $REPO_PATH (watchlist=$WATCHLIST)"
+  else
+    audit_notice_clear "$state" watchlist
+  fi
   # A config that leaves the audit unscheduled by mistake is logged once (#360,
   # §5.7) — audit_interval_days alone reads it as "off" in silence.
-  problem=$(audit_interval_problem "$cfg" "$kind" "${!var:-}")
+  problem=$(audit_interval_problem "$cfg" "$kind" "$machine")
   if [ -n "$problem" ]; then
     audit_notice "$state" "$LOG" config "$problem in $REPO_PATH (remote=$REMOTE)"
     return 0
   fi
   audit_notice_clear "$state" config
-  days=$(audit_interval_days "$cfg" "$kind" "${!var:-}")
+  days=$(audit_interval_days "$cfg" "$kind" "$machine")
   [ -n "$days" ] || return 0
   now=$(date +%s)
   audit_due "$state" "$days" "$now" || return 0

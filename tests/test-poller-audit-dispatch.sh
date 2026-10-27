@@ -20,6 +20,9 @@
 #   m  "script not executable" and "cannot record" are logged once over two
 #      ticks, and again after the condition went away and came back (#360)
 #   n  a custom RUN_ISSUES_POLLER_ENV_FILE reaches the audit session (#360)
+#   w  the watchlist entry's <kind>_audit_interval_days (#373): schedules without
+#      an environment value, `0` switches the environment's value off, the repo
+#      config still wins, a bad value is logged once and starts nothing
 #
 # Run: bash tests/test-poller-audit-dispatch.sh
 
@@ -312,6 +315,42 @@ case "$line" in
   *"RUN_ISSUES_POLLER_ENV_FILE='$WORK/hn2/.config/run-issues/poller.env' "*) ok "n the default poller.env path is passed too" ;;
   *) bad "n default env file not passed: $line" ;;
 esac
+
+# ---- w: the watchlist entry's interval (#373) ---------------------------------------
+echo 0 > "$LS_SEQ"
+mk_watchlist_iv() {  # <path> <repo-path> <extra-json-members>
+  cat > "$1" <<JSON
+{ "global_max_concurrent": 2, "repos": [ { "path": "$2/", "remotes": ["origin"], $3 } ] }
+JSON
+}
+mk_watchlist_iv "$WORK/wlw.json" "$REPO" '"security_audit_interval_days": 30'
+run_poller "$WORK/hw" "$WORK/logs-w" "$WORK/wlw.json"
+[ "$(audit_spawns)" = 1 ] && ok "w watchlist interval schedules without an environment value" \
+                          || bad "w watchlist interval: $(audit_spawns) spawns"
+grep -qF "every 30d" "$WORK/logs-w/run-issues-poller.log" && ok "w the watchlist interval is the one in effect" \
+                                                           || bad "w interval not logged as 30d"
+[ ! -e "$WORK/logs-w/.audit-last-coherence-example-org-repoa" ] && ok "w a security key schedules only security" \
+                                                              || bad "w coherence scheduled by the security key"
+mk_watchlist_iv "$WORK/wlw0.json" "$REPO" '"security_audit_interval_days": 0'
+run_poller "$WORK/hw0" "$WORK/logs-w0" "$WORK/wlw0.json" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=1
+[ "$(audit_spawns)" = 0 ] && ok "w watchlist 0 switches the environment's interval off" \
+                          || bad "w watchlist 0 ignored"
+mk_watchlist_iv "$WORK/wlwf.json" "$REPOF0" '"security_audit_interval_days": 7'
+run_poller "$WORK/hwf" "$WORK/logs-wf" "$WORK/wlwf.json"
+[ "$(audit_spawns)" = 0 ] && ok "w the repo's 0 wins over the watchlist" || bad "w repo 0 lost to the watchlist"
+mk_watchlist_iv "$WORK/wlwr.json" "$REPOF" '"security_audit_interval_days": 0'
+run_poller "$WORK/hwr" "$WORK/logs-wr" "$WORK/wlwr.json"
+[ "$(audit_spawns)" = 1 ] && grep -qF "every 30d" "$WORK/logs-wr/run-issues-poller.log" \
+  && ok "w the repo's interval wins over the watchlist's 0" || bad "w repo interval lost to the watchlist 0"
+mk_watchlist_iv "$WORK/wlwb.json" "$REPO" '"security_audit_interval_days": "weekly"'
+for _ in 1 2; do
+  run_poller "$WORK/hwb" "$WORK/logs-wb" "$WORK/wlwb.json" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=1
+done
+[ "$(poller_log_count "$WORK/logs-wb" "invalid security_audit_interval_days weekly in the watchlist")" = 1 ] \
+  && ok "w a bad watchlist value: one line over two ticks" \
+  || bad "w bad value: $(poller_log_count "$WORK/logs-wb" "in the watchlist") lines"
+[ -z "$(state_of "$WORK/logs-wb" repoa)" ] && ok "w a bad watchlist value starts no audit (fail-closed)" \
+                          || bad "w a bad watchlist value fell back to the environment"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "poller-audit-dispatch: all passed" || echo "poller-audit-dispatch: FAILURES"

@@ -28,8 +28,9 @@
 # only on exit 0 (never on --dry-run). The poller's schedule file cannot serve:
 # it records when an audit STARTED, so a failed audit would silently drop its
 # PRs from review. Without a cursor the window is the audit interval (repo
-# `.coherence.audit_interval_days` > RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS >
-# 7 days) back from now.
+# `.coherence.audit_interval_days` > the watchlist entry's
+# `coherence_audit_interval_days` > RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS >
+# 7 days) back from now — the same precedence the poller schedules by.
 #
 # No new PRs => exit 0 BEFORE any worktree or agent call.
 #
@@ -41,8 +42,9 @@
 #   --dry-run          print the findings and the planned action per finding
 #                      (create / exists / reopen / dismissed); no GitHub write,
 #                      the cursor does not move
-#   --watchlist <path> accepted so the poller can call every audit kind alike;
-#                      unused — coherence issues never get pickup labels
+#   --watchlist <path> where this repo's `coherence_audit_interval_days` comes
+#                      from (poller semantics: the ONLY candidate), for the
+#                      first window. Coherence issues never get pickup labels.
 #
 # Output (stdout): the review set, one line per finding — action, severity,
 # location, text — then a summary line. Diagnostics go to stderr.
@@ -57,7 +59,10 @@
 # Env:
 #   RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS  the first window when no cursor
 #        exists (and the poller's schedule). Read from the environment, else from
-#        poller.env; the repo's `.coherence.audit_interval_days` wins. Default 7.
+#        poller.env; the watchlist entry's `coherence_audit_interval_days` wins
+#        over it and the repo's `.coherence.audit_interval_days` over both.
+#        Default 7.
+#   RUN_ISSUES_WATCHLIST                      watchlist override (poller semantics)
 #   RUN_ISSUES_COHERENCE_AUDIT_TIMEOUT        agent call time cap in seconds (default 3600)
 #   RUN_ISSUES_COHERENCE_AUDIT_FETCH_TIMEOUT  git fetch time cap (default 300)
 #   RUN_ISSUES_COHERENCE_AUDIT_MAX            change-surface size cap in the prompt,
@@ -92,12 +97,13 @@ die_usage() { printf 'coherence-audit.sh: %s\n' "$1" >&2; exit 1; }
 REPO=""
 REMOTE="origin"
 DRY_RUN=0
+WATCHLIST_OVERRIDE="${RUN_ISSUES_WATCHLIST:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --remote)    shift; [ "$#" -gt 0 ] || die_usage "--remote needs a value"; REMOTE="$1" ;;
     --dry-run)   DRY_RUN=1 ;;
-    --watchlist) shift; [ "$#" -gt 0 ] || die_usage "--watchlist needs a value" ;;
+    --watchlist) shift; [ "$#" -gt 0 ] || die_usage "--watchlist needs a value"; WATCHLIST_OVERRIDE="$1" ;;
     -h|--help)   sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          die_usage "unknown argument: $1" ;;
     *)           [ -z "$REPO" ] || die_usage "only one <repo> may be given"; REPO="$1" ;;
@@ -116,6 +122,10 @@ source_machine_env
 . "$SCRIPT_DIR/lib/pr-surface.sh"
 # shellcheck source=lib/audit-schedule.sh
 . "$SCRIPT_DIR/lib/audit-schedule.sh"
+# poller_resolve_watchlist / poller_watchlist_repo_value for the watchlist's
+# interval (#373). Carries `set -e` too, hence before the `set +e` below.
+# shellcheck source=lib/poller-config.sh
+. "$SCRIPT_DIR/lib/poller-config.sh"
 # shellcheck source=lib/paths.sh
 . "$SCRIPT_DIR/lib/paths.sh"
 set +e
@@ -129,7 +139,14 @@ AUDIT_TIMEOUT="${RUN_ISSUES_COHERENCE_AUDIT_TIMEOUT:-3600}"
 FETCH_TIMEOUT="${RUN_ISSUES_COHERENCE_AUDIT_FETCH_TIMEOUT:-300}"
 SURFACE_MAX="${RUN_ISSUES_COHERENCE_AUDIT_MAX:-60000}"
 case "$SURFACE_MAX" in ''|*[!0-9]*) SURFACE_MAX=60000 ;; esac
-INTERVAL_MACHINE="${RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS:-$(repo_audit_poller_env_value RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS)}"
+INTERVAL_ENV="${RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS:-$(repo_audit_poller_env_value RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS)}"
+# The watchlist entry is this machine's per-repo value (#373), resolved the way
+# the poller resolves it, so the first window equals the schedule's interval.
+WATCHLIST=$(poller_resolve_watchlist "$WATCHLIST_OVERRIDE" \
+  "$HOME/.config/run-issues/watchlist.json" \
+  "$HOME/dotfiles/machine-studio/run-issues-watchlist.json") || WATCHLIST=""
+INTERVAL_MACHINE=$(audit_machine_interval \
+  "$(audit_watchlist_interval "$WATCHLIST" "$REPO" "$AUDIT_KIND")" "$INTERVAL_ENV")
 LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 
 repo_audit_resolve "$FETCH_TIMEOUT" || exit $?

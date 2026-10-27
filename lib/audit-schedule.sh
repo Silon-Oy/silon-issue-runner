@@ -75,6 +75,17 @@ audit_kind_env_var() {
   esac
 }
 
+# audit_kind_watchlist_key <kind> — the per-repo watchlist key of <kind>'s
+# interval (#373), spelled out per kind for the same greppability as
+# audit_kind_env_var. rc 1 for an unknown kind.
+audit_kind_watchlist_key() {
+  case "${1:-}" in
+    security)  printf 'security_audit_interval_days' ;;
+    coherence) printf 'coherence_audit_interval_days' ;;
+    *) return 1 ;;
+  esac
+}
+
 # _audit_positive_days <value> — prints <value> as a plain integer when it is a
 # positive whole number of days (at most six digits), else nothing.
 _audit_positive_days() {
@@ -84,6 +95,61 @@ _audit_positive_days() {
   v=$((10#$v))
   [ "$v" -gt 0 ] && printf '%s' "$v"
   return 0
+}
+
+# _audit_days_valid <value> — rc 0 when <value> is a legal interval: 0
+# (deliberately off) or a positive whole number of days (at most six digits).
+_audit_days_valid() {
+  local v="${1:-}"
+  [ -n "$(_audit_positive_days "$v")" ] && return 0
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#v}" -le 6 ] && [ "$((10#$v))" -eq 0 ]
+}
+
+# audit_watchlist_interval <watchlist> <repo-path> <kind> — the raw value of
+# <kind>'s interval key in this repo's watchlist entry, or `@absent` (#373).
+# The watchlist is read through lib/poller-config.sh's poller_watchlist_repo_value
+# (the Windows-safe path comparison, CLAUDE.md §5.8), which the CALLER must have
+# sourced: that file sets `set -euo pipefail`, so sourcing it from here would
+# change the caller's shell options. Not sourced => `@absent`.
+audit_watchlist_interval() {
+  local key
+  key=$(audit_kind_watchlist_key "${3:-}") || { printf '@absent'; return 0; }
+  if ! declare -F poller_watchlist_repo_value >/dev/null; then
+    printf '@absent'
+    return 0
+  fi
+  poller_watchlist_repo_value "${1:-}" "${2:-}" "$key"
+}
+
+# audit_machine_interval <watchlist-value> <env-value> — the MACHINE value that
+# audit_interval_days takes as its third argument (#373). The watchlist is this
+# machine's configuration, so its per-repo entry is a finer machine value: when
+# the entry sets the key (audit_watchlist_interval is not `@absent`) it wins over
+# poller.env / the environment, `0` included — that is how one machine opts a
+# repo out of a default poller.env schedules. A bad watchlist value passes
+# through as-is and audit_interval_days reads it as "not scheduled" (fail-closed).
+# The repo's own .claude/run-issues.json still wins over both.
+audit_machine_interval() {
+  local wl="${1-@absent}"
+  if [ "$wl" = "@absent" ]; then
+    printf '%s' "${2:-}"
+  else
+    printf '%s' "$wl"
+  fi
+}
+
+# audit_watchlist_interval_problem <watchlist-value> <kind> — one line when the
+# watchlist sets <kind>'s interval to something that is neither 0 nor a positive
+# whole number, else nothing. The poller logs it once (§5.7), like
+# audit_interval_problem: a bad value reads as "off", which is safe but silent.
+audit_watchlist_interval_problem() {
+  local wl="${1-@absent}" key
+  key=$(audit_kind_watchlist_key "${2:-}") || return 0
+  [ "$wl" = "@absent" ] && return 0
+  _audit_days_valid "$wl" && return 0
+  printf 'invalid %s %s in the watchlist (want 0 or a positive whole number of days) — read as off unless .claude/run-issues.json sets the interval' \
+    "$key" "$(printf '%s' "$wl" | cut -c1-40)"
 }
 
 # audit_interval_days <repo-config-json> <kind> <machine-value> — the interval
@@ -138,8 +204,7 @@ audit_interval_problem() {
     return 0
   fi
   [ "$val" = "@absent" ] && return 0
-  [ -n "$(_audit_positive_days "$val")" ] && return 0
-  case "$val" in ''|*[!0-9]*) ;; *) [ "${#val}" -le 6 ] && [ "$((10#$val))" -eq 0 ] && return 0 ;; esac
+  _audit_days_valid "$val" && return 0
   printf 'invalid .%s.audit_interval_days %s in .claude/run-issues.json (want 0 or a positive whole number of days) — %s audit not scheduled' \
     "$kind" "$(printf '%s' "$val" | tr -d '\n' | cut -c1-40)" "$kind"
 }
@@ -226,8 +291,47 @@ _audit_succeeded() {
   start="${r%% *}"
   rc="${r#* }"
   [ "$start" = "${2:-}" ] || return 1
-  case "$rc" in 0|5) return 0 ;; esac
+  case "$(audit_rc_outcome "$rc")" in ok|scanner_failed) return 0 ;; esac
   return 1
+}
+
+# audit_rc_outcome <exit-code> — the calling contract's reading of an audit's
+# exit code, in ONE place for the retry decision (_audit_succeeded) and the
+# status view (audit_last_outcome): `ok` (0), `scanner_failed` (5: done, but one
+# scanner failed — the review itself ran) or `failed` (anything else). A kind
+# whose script never exits 5 simply never produces `scanner_failed`.
+audit_rc_outcome() {
+  case "${1:-}" in
+    0) printf 'ok' ;;
+    5) printf 'scanner_failed' ;;
+    *) printf 'failed' ;;
+  esac
+}
+
+# audit_last_outcome <state-file> — the latest recorded audit of one
+# (kind, repo × remote), for status.sh (#373): one tab-separated line
+# "<start-epoch>\t<kind>\t<exit-code>\t<outcome>", or nothing when the state
+# file is missing or unreadable. <outcome> is audit_rc_outcome's word, or
+# `pending` with an empty <exit-code> when no result belongs to this start yet:
+# the audit is still running, or its session died before audit_run wrote one.
+# Two O(1) reads (CLAUDE.md §5.3, §5.4); never writes.
+audit_last_outcome() {
+  local f="${1:-}" s start kind r rstart rc
+  s=$(deadline_file_read "$f")
+  start="${s%% *}"
+  [ "$start" -gt 0 ] 2>/dev/null || return 0
+  kind=""
+  case "$s" in *" "*) kind="${s#* }" ;; esac
+  r=$(deadline_file_read "$(audit_result_file "$f")")
+  rstart="${r%% *}"
+  rc=""
+  case "$r" in *" "*) rc="${r#* }" ;; esac
+  case "$rc" in ''|*[!0-9]*) rc="" ;; esac
+  if [ "$rstart" = "$start" ] && [ -n "$rc" ]; then
+    printf '%s\t%s\t%s\t%s\n' "$start" "$kind" "$rc" "$(audit_rc_outcome "$rc")"
+  else
+    printf '%s\t%s\t\tpending\n' "$start" "$kind"
+  fi
 }
 
 # audit_retry_secs — how long after an unsuccessful start the audit is retried:

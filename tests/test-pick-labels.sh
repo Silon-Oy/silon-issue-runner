@@ -27,6 +27,8 @@
 #   8. poller.sh resolves its pickup labels through the shared function
 #   9. poller_watchlist_pick_assignees: the optional per-repo allow-list
 #  10. poller.sh and drain-queue.sh resolve assignees through that one function
+#  11. poller_watchlist_repo_value: the scalar per-repo lookup (#373) shares the
+#      path matching, keeps 0 and "" apart from "absent"
 #
 # Run: bash tests/test-pick-labels.sh
 
@@ -254,6 +256,46 @@ for f in "$POLLER" "$DRAIN"; do
     ok "case10 $(basename "$f") has no inline assignees read"
   fi
 done
+
+# ---- Case 11: poller_watchlist_repo_value (#373) ----
+if ! command -v jq >/dev/null 2>&1; then
+  echo "SKIP: jq not in PATH — scalar lookup cases (11) skipped"
+else
+  VWL="$WORK/values.json"
+  cat > "$VWL" <<'JSON'
+{
+  "repos": [
+    { "path": "/tmp/repo-a/", "security_audit_interval_days": 30, "coherence_audit_interval_days": 0 },
+    { "path": "/tmp/repo-b", "security_audit_interval_days": "", "coherence_audit_interval_days": null },
+    { "path": "/tmp/repo-c", "security_audit_interval_days": "a\tb" }
+  ]
+}
+JSON
+  sv_case() {
+    local desc="$1" want="$2" wl="$3" path="$4" key="$5" got rc
+    got=$(poller_watchlist_repo_value "$wl" "$path" "$key"); rc=$?
+    if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+      ok "$desc"
+    else
+      bad "$desc (rc=$rc/0, got '$got', expected '$want')"
+    fi
+  }
+  sv_case "case11 a number prints as its digits"                '30'      "$VWL" '/tmp/repo-a'  security_audit_interval_days
+  sv_case "case11 both trailing slashes are normalised"         '30'      "$VWL" '/tmp/repo-a/' security_audit_interval_days
+  sv_case "case11 0 is a value, not absent"                     '0'       "$VWL" '/tmp/repo-a'  coherence_audit_interval_days
+  sv_case "case11 an empty string is a value, not absent"       ''        "$VWL" '/tmp/repo-b'  security_audit_interval_days
+  sv_case "case11 null reads as absent"                         '@absent' "$VWL" '/tmp/repo-b'  coherence_audit_interval_days
+  sv_case "case11 a missing key reads as absent"                '@absent' "$VWL" '/tmp/repo-c'  coherence_audit_interval_days
+  sv_case "case11 a tab inside a value cannot split the row"    'a b'     "$VWL" '/tmp/repo-c'  security_audit_interval_days
+  sv_case "case11 an uncovered repo reads as absent"            '@absent' "$VWL" '/tmp/repo-z'  security_audit_interval_days
+  sv_case "case11 no watchlist reads as absent"                 '@absent' "$WORK/none.json" '/tmp/repo-a' security_audit_interval_days
+  printf '{"repos": [' > "$WORK/broken-values.json"
+  sv_case "case11 an unparseable watchlist reads as absent"     '@absent' "$WORK/broken-values.json" '/tmp/repo-a' security_audit_interval_days
+  # The labels of a covered repo are unaffected by the shared lookup's refactor.
+  got=$(poller_watchlist_pick_labels "$VWL" /tmp/repo-a); rc=$?
+  [ "$rc" -eq 0 ] && ok "case11 a scalar-only entry still counts as covered for labels" \
+                  || bad "case11 a scalar-only entry reads as uncovered (rc=$rc, '$got')"
+fi
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "pick-labels: all passed" || echo "pick-labels: FAILURES"
