@@ -35,8 +35,9 @@ Rajoittimet eivät ole lupakyselyssä vaan rakenteessa: ajo tapahtuu omassa git-
 omalla feature-haarallaan, ja pull request on ihmisen katselmoitavissa ennen mergeä — **paitsi
 kun issuella on `auto-merge`-label** (epicin alaissueilla oletuksena, ellei `manual-merge`
 estä). Silloin pull request mergeytyy ilman ihmisen katselmusta heti kun vaaditut
-CI-tarkistukset ovat vihreät, ja voimassa ovat vain rakenteelliset rajat: oma worktree, oma
-feature-haara ja CI:n läpäisy. Älä siis oleta, että joku lukee muutoksesi ennen kuin se on oletushaarassa.
+CI-tarkistukset ovat vihreät ja merge-portit (tietoturva- ja semanttinen tarkistus) on
+läpäisty, ja voimassa ovat vain rakenteelliset rajat: oma worktree, oma feature-haara, CI:n
+läpäisy ja merge-portit. Älä siis oleta, että joku lukee muutoksesi ennen kuin se on oletushaarassa.
 
 ## Rajat
 

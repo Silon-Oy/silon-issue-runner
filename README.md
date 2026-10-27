@@ -817,15 +817,13 @@ konfliktinratkaisu — ajetaan lipulla `--dangerously-skip-permissions`
 (`lib/claude-call.sh`). Agentti ei siis kysy lupaa yksittäisiin tiedostomuutoksiin,
 komentoihin tai verkkokutsuihin sen jälkeen kun ajo on käynnistetty.
 
-Tämä on koko paketin toimintaperiaate, ei asetus: ihmistä ei ole silmukassa, joten
-lupakysely jäisi vastaamatta ja ajo jäisi roikkumaan. Rajoittimet ovat muualla: ajo tapahtuu
-omassa git-worktreessään omalla feature-haarallaan, ja PR on ihmisen katselmoitavissa ennen
-mergeä — **paitsi kun issuella on `auto-merge`-label**. Orkestraattori siirtää labelin
-PR:lle, ja PR-vahti mergeää PR:n ilman ihmisen katselmusta heti kun vaaditut CI-tarkistukset
-ovat vihreät ja PR on mergeattavissa. Epicin alaissueet saavat labelin oletuksena, ellei
-epic tai alaissue kanna `manual-merge`-labelia. Ilman katselmusta voimassa
-ovat vain rakenteelliset rajat: oma worktree, oma feature-haara (ei koskaan suoraan
-oletushaaraan) ja CI:n läpäisy.
+Tämä on toimintaperiaate, ei asetus: ihmistä ei ole silmukassa, joten lupakysely jäisi
+vastaamatta. Rajoittimet ovat muualla: ajo tapahtuu omassa worktreessään omalla
+feature-haarallaan, ja PR on ihmisen katselmoitavissa ennen mergeä — **paitsi kun issuella on
+`auto-merge`-label** (epicin alaissueilla oletuksena, ellei `manual-merge` estä). Silloin
+PR-vahti mergeää PR:n ilman ihmistä, kun vaaditut CI-tarkistukset ovat vihreät ja merge-portit
+(tietoturva §7.12, semanttinen §7.13) on läpäisty. Voimassa ovat vain rakenteelliset rajat:
+oma worktree, oma feature-haara (ei koskaan oletushaaraan), CI ja portit.
 
 ### 7.2 Kohderepon oma shell-koodi ajetaan
 
@@ -1108,7 +1106,8 @@ Auto-merge-PR:n koodia ei katselmoi ihminen, ja rebasen, konfliktinratkaisun ja 
 agentit muuttavat sitä vielä ajon jälkeen. Siksi `pr-watch.sh` ajaa ennen jokaista mergeä
 **tietoturvakatselmuksen PR:n lopullisesta diffistä** erillisessä agenttikutsussa
 ([`prompts/06-security-review.md`](prompts/06-security-review.md)). Kytkin
-`PR_WATCH_ENABLE_SECURITY_GATE` on skriptissä `0`, ja poller nostaa sen päälle.
+`PR_WATCH_ENABLE_SECURITY_GATE` on skriptissä `0`, ja poller nostaa sen päälle. Katselmoijaksi
+voi valita valinnaisen Codexin: `PR_WATCH_SECURITY_REVIEWER=codex`.
 
 - Pidätysrajan ylittävät löydökset (oletus `critical` ja `high`) korjaa agentti
   feature-worktreessä ([`prompts/07-security-fix.md`](prompts/07-security-fix.md)). Sen
