@@ -264,7 +264,21 @@ _labels_query_csv() {
 # no prioritised issue every first key is equal, so the order is exactly the
 # listing order. Blocked-probing walks this list unchanged, so a blocked
 # prioritised issue is skipped like any other blocked candidate.
+#
+# _pick_assignee_sets_jq — the ALLOW/DENY split above as a jq `def`, prepended
+# to every program that reads the `assignees` syntax (issue #374). The pickup
+# filter and pick_assignee_route both use it, so "which login this machine
+# picks up" exists in one place.
+_pick_assignee_sets_jq() {
+  printf '%s' 'def assignee_sets:
+     split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))
+     | { allow: map(select(startswith("not:") | not)),
+         deny:  map(select(startswith("not:")) | .[4:]) };
+   '
+}
+
 _pick_filter_jq() {
+  _pick_assignee_sets_jq
   printf '%s' '[ .[]
      | select(.pull_request == null)
      | select([.labels[].name] as $l
@@ -275,10 +289,9 @@ _pick_filter_jq() {
               and ($l | index($ENV.RUN_ISSUES_PICK_CLEAN)) == null
               and ($l | index($ENV.RUN_ISSUES_PICK_RESET)) == null)
      | select(
-         (($ENV.RUN_ISSUES_PICK_ASSIGNEES // "")
-          | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $want
-         | ($want | map(select(startswith("not:") | not))) as $allow
-         | ($want | map(select(startswith("not:")) | .[4:])) as $deny
+         (($ENV.RUN_ISSUES_PICK_ASSIGNEES // "") | assignee_sets) as $sets
+         | $sets.allow as $allow
+         | $sets.deny as $deny
          | [ (.assignees // [])[] | .login // empty ] as $has
          | (.user.login // "") as $author
          | (if ($has | length) == 0 then [$author] else $has end) as $target
@@ -289,6 +302,24 @@ _pick_filter_jq() {
    | to_entries
    | sort_by([ ($prio == "" or ([.value.labels[].name] | index($prio)) == null), .key ])
    | .[].value.number'
+}
+
+# pick_assignee_route <assignees-csv> — the login an issue must be assigned to
+# so that THIS machine's pickup matches it, or nothing. Always returns 0.
+#
+# An issue written by the runner itself (an audit finding, #374) has the
+# runner's identity — possibly a GitHub App — as its author, and in a repo
+# with an ALLOW list that author is normally not listed: without an assignee
+# the issue would carry the pickup labels and never be picked up. The first
+# ALLOW login fixes that. A login that is also in DENY is skipped, because DENY
+# wins in the filter and the assignee would not match. With no ALLOW login
+# (empty list, or only `not:` entries) nothing is printed: an unassigned issue
+# then matches through its author unless the author itself is denied.
+pick_assignee_route() {
+  jq -rn --arg csv "${1-}" "$(_pick_assignee_sets_jq)"'
+    $csv | assignee_sets | .deny as $deny
+    | [ .allow[] | select(. as $l | ($deny | index($l)) == null) ] | .[0] // empty' 2>/dev/null
+  return 0
 }
 
 pick_oldest_candidate() {

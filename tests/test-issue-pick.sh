@@ -319,6 +319,25 @@ JSON
 check "unassigned issue by a DENY author is skipped" \
   "$(pick_oldest_candidate "$REPO" "auto-run" "o/r" "" "not:runner-a")" ""
 
+# --- 9c2. the route a runner-written issue is assigned to (issue #374) -----
+# pick_assignee_route reads the same `assignees` syntax through the same jq def
+# as the filter: the first ALLOW login that DENY does not also name, or nothing.
+check "route: empty list => no assignee" "$(pick_assignee_route "")" ""
+check "route: first ALLOW login" "$(pick_assignee_route "runner-a,runner-b")" "runner-a"
+check "route: only negations => no assignee" "$(pick_assignee_route "not:runner-a")" ""
+check "route: negation does not count as ALLOW" "$(pick_assignee_route "not:runner-a,runner-b")" "runner-b"
+check "route: a login DENY also names is skipped" "$(pick_assignee_route "runner-a,runner-b,not:runner-a")" "runner-b"
+check "route: entries are trimmed" "$(pick_assignee_route " , runner-a ,runner-b")" "runner-a"
+# The routed issue must match the filter it was routed for: author is the
+# runner's own identity, which the ALLOW list does not name.
+ROUTE_CSV="runner-a,not:runner-b"
+ROUTED=$(jq -n --arg a "$(pick_assignee_route "$ROUTE_CSV")" \
+  '[{number:90,labels:[{name:"auto-run"}],assignees:[{login:$a}],user:{login:"runner-bot[bot]"}},
+    {number:91,labels:[{name:"auto-run"}],assignees:[],user:{login:"runner-bot[bot]"}}]')
+check "route: the routed issue is picked, the unrouted one is not" \
+  "$(RUN_ISSUES_PICK_ASSIGNEES="$ROUTE_CSV" RUN_ISSUES_PICK_CLEAN=auto-clean RUN_ISSUES_PICK_RESET=auto-reset \
+      jq -r "$(_pick_filter_jq)" <<<"$ROUTED" | tr '\n' ' ')" "90 "
+
 # --- 9d. priority-high reorders, never filters (issue #316) -----------------
 # The listing arrives oldest-first; 52 and 54 are the newer, prioritised ones.
 # 53 carries the label AND a disqualifier, so the ordering must run AFTER the
