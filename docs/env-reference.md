@@ -231,6 +231,7 @@ ohitetaan, joten tiedostosiirrot eivät kilpaile ajavan orkestraattorin kanssa) 
 | `RUN_ISSUES_STATUS_CACHE_FILE` | `${XDG_CACHE_HOME:-$HOME/Library/Caches}/run-issues/status-github.json` | **Vain `--github` (#60).** GitHub-rikastuksen TTL-cache, avaimena owner/repo. Atominen kirjoitus (`mktemp`+`mv -f`) |
 | `RUN_ISSUES_STATUS_CACHE_TTL` | `300` | **Vain `--github`.** Cachen tuoreusikkuna sekunteina. `--cache-ttl <s>` ohittaa, `--no-cache` pakottaa haun. Vertailu on **eksklusiivinen** (`age < ttl`, #147): `0` poistaa owner-cachen käytöstä samalla semantiikalla kuin `DETAIL_TTL=0` poistaa carry-forwardin (kaksi TTL-vertailua ovat samaa mieltä rajatapauksesta). Sivuseuraus: 300 s:n TTL on tuore välillä 0…299 s aiemman 0…300 s sijaan — käytännön merkitys olematon, mutta ilman eksklusiivisuutta `--cache-ttl 0` tarjoili saman sekunnin sisällä kirjoitetun merkinnän cachesta, mikä teki `tests/test-status-github.sh`:sta ei-deterministisen |
 | `RUN_ISSUES_STATUS_DETAIL_TTL` | `86400` | **Vain `--github` (#125).** Per-merkintä-TTL suljettujen issueiden detail-luvuille (`status_github_issue_detail`: tila, sulkusyy, otsikko, labelit). Toisin kuin owner-laajuinen `CACHE_TTL`, joka koskee PR/issue/epic-listoja, detail on **terminaalitilan** tieto ⇒ se **kannetaan cache-missin yli** ja luetaan uudelleen vasta kun merkinnän `fetched_epoch` on tätä vanhempi. Vakaassa tilassa poistaa ~318 turhaa `gh issue view` -kutsua per päivitys (mitattu Studiolla). `0` poistaa carry-forwardin (detail luetaan joka missillä). Aikaleimaton legacy-merkintä käsitellään vanhentuneena (kertaluontoinen luku deployn jälkeen). `--no-cache` ohittaa carry-forwardin kokonaan |
+| `RUN_ISSUES_LOG_DIR` | *(kuten pollerit)* | Hakemisto, josta `audit_results[]` (#373) lukee auditointien tila- ja tulostiedostot. Vain luku |
 | `RUN_ISSUES_HOME` | *(scriptin oma hakemisto)* | Testien injektiopiste, luetaan vain ympäristöstä |
 
 `--github` lukee myös PR-vahdin togglet (`PR_WATCH_ENABLE_CONFLICT_RESOLUTION`,
@@ -354,10 +355,38 @@ kun se on mergetty. Kelvoton JSON tai tuntematon arvo tulkitaan tiukimmaksi (`lo
 | `RUN_ISSUES_SECURITY_AUDIT_TIMEOUT` | `3600` | Auditointiagentin kutsun aikakatto sekunteina |
 | `RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT` | `300` | Remoten `git fetch`in aikakatto ennen auditointia |
 | `RUN_ISSUES_AUDIT_RETRY_HOURS` | `24` | Pollerin ajastus (#340): montako tuntia epäonnistuneen tai kesken katkenneen auditoinnin käynnistyksestä on kuluttava ennen uutta yritystä. Koskee kaikkia auditointilajeja. Muu kuin positiivinen kokonaisluku ⇒ oletus |
-| `RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus (#340): montako päivää edellisen auditoinnin **käynnistyksestä** on kuluttava, ennen kuin poller käynnistää uuden repo×remote-parille. Luetaan `poller.env`:stä. **Kohderepon `.claude/run-issues.json` `.security.audit_interval_days` voittaa tämän**, kun avain on asetettu: repo voi ajastaa auditoinnin, jota kone ei ajasta, ja `0` poistaa koneen ajastuksen. Arvoksi kelpaa positiivinen kokonaisluku. `0`, muu arvo tai kelvoton JSON tarkoittaa, ettei repoa auditoida (§9) |
+| `RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus (#340): montako päivää edellisen auditoinnin **käynnistyksestä** on kuluttava, ennen kuin poller käynnistää uuden repo×remote-parille. Luetaan `poller.env`:stä. Koneen oletus, jonka watchlistin repomerkintä ja kohderepo voittavat: ks. [etusija](#auditointien-ajastuksen-etusija). Arvoksi kelpaa positiivinen kokonaisluku. `0`, muu arvo tai kelvoton JSON tarkoittaa, ettei repoa auditoida (§9) |
 
 Poimintalabelit tulevat watchlististä (`poller_pick_labels`); repo, jota watchlist ei listaa,
 saa sisäänrakennetun oletuksen.
+
+#### Auditointien ajastuksen etusija
+
+Sama ketju koskee kumpaakin lajia (`<laji>` = `security` tai `coherence`, #373).
+Ensimmäinen taso, jolla arvo on asetettu, ratkaisee:
+
+| Taso | Lähde | Avain | Voittaa |
+|---|---|---|---|
+| 1 | Kohderepon `.claude/run-issues.json` (remoten oletushaarasta) | `.<laji>.audit_interval_days` | kaikki — väli on sovelluksen ominaisuus |
+| 2 | Watchlistin repomerkintä | `<laji>_audit_interval_days` | `poller.env`in / ympäristön |
+| 3 | `poller.env` tai ympäristö | `RUN_ISSUES_<LAJI>_AUDIT_INTERVAL_DAYS` | — |
+
+- **Avain puuttuu** (tai on `null`) ⇒ seuraava taso. Jos millään tasolla ei ole arvoa,
+  repoa ei auditoida (§9: puuttuva konfiguraatio on no-op).
+- **`0` on asetettu arvo**, ei puuttuva: watchlistin `0` kytkee auditoinnin pois tältä
+  koneelta, vaikka `poller.env` asettaisi oletuksen. Repon oma arvo voittaa silti myös sen.
+- **Kelvoton arvo** (`1.5`, `"x"`, `-1`) tarkoittaa, ettei ajasteta (fail-closed). Watchlistin
+  kelvoton arvo kirjataan pollerin lokiin kerran (`… in the watchlist`), repon samoin.
+- Watchlist on koneen konfiguraatiota, joten se syötetään `audit_interval_days`ille koneen
+  arvona (`audit_machine_interval`); toista etusijalogiikkaa ei ole. Luku kulkee
+  `lib/poller-config.sh`:n `poller_watchlist_repo_value`n kautta (§5.8).
+
+**Viimeisin tulos.** `status.sh` listaa `audit_results[]`-kentässä jokaisen watchlist-repon
+× git-remoten × lajin viimeisimmän käynnistyksen (`started_at`, `exit_code`, `outcome`:
+`ok`, `scanner_failed` = exit 5, `failed` tai `pending` = ei vielä tulosta), ja ohjaamo näyttää
+saman. Lähde on alla kuvattu tila- ja tulostiedosto, ei historia. Hakemisto on
+`RUN_ISSUES_LOG_DIR` (oletus sama kuin pollereilla), joten `status.sh` näkee vain oman
+koneensa auditoinnit.
 
 **Ajastus pollerista** (`lib/audit-schedule.sh`). Poller ajaa auditoinnin irrallisessa
 tmux-istunnossa `run-issues-audit-<laji>-<repo-slug>`. Istunto lasketaan samaan
@@ -384,7 +413,8 @@ on välillä poistunut (`.audit-last-….notice-<tag>`). Istunto saa pollerin
 `RUN_ISSUES_POLLER_ENV_FILE`-polun, joten auditointi lukee saman `poller.env`in kuin poller.
 **Tunnettu rajoite:** ajastus ei koordinoi koneiden välillä. Jos kaksi konetta valvoo samaa
 repoa ja repo asettaa välin, molemmat auditoivat sen ja voivat luoda samat löydösissuet.
-Valvo repoa auditoinnin osalta yhdellä koneella. Repon väli luetaan remoten oletushaaran viimeksi haetusta tilasta
+Valvo repoa auditoinnin osalta yhdellä koneella: aseta väli sen koneen watchlistiin, ei
+repoon. Repon väli luetaan remoten oletushaaran viimeksi haetusta tilasta
 (`<remote>/HEAD`) ilman verkkokutsua. Skannerit ja agentti käyttävät yllä kuvattuja
 `RUN_ISSUES_GITLEAKS_BIN`-, `RUN_ISSUES_OSV_SCANNER_BIN`- ja `RUN_ISSUES_CLAUDE_*`-asetuksia.
 
@@ -392,7 +422,7 @@ Valvo repoa auditoinnin osalta yhdellä koneella. Repon väli luetaan remoten ol
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
-| `RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus samalla mekanismilla kuin tietoturva-auditoinnissa (`lib/audit-schedule.sh`, oma tilatiedosto `.audit-last-coherence-<repo-slug>`). **Kohderepon `.claude/run-issues.json` `.coherence.audit_interval_days` voittaa tämän** (`0` = pois). Sama arvo on ensimmäisen ajon ikkuna, kun kursoria ei vielä ole; käsiajossa ilman kumpaakaan ikkuna on 7 päivää. Skripti lukee arvon ympäristöstä, muuten `poller.env`:stä |
+| `RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS` | *(tyhjä)* = ei ajastusta | Pollerin ajastus samalla mekanismilla kuin tietoturva-auditoinnissa (`lib/audit-schedule.sh`, oma tilatiedosto `.audit-last-coherence-<repo-slug>`). Koneen oletus; watchlistin repomerkintä ja kohderepo voittavat sen ([etusija](#auditointien-ajastuksen-etusija)). Sama ketjun tulos on ensimmäisen ajon ikkuna, kun kursoria ei vielä ole; käsiajossa ilman arvoa ikkuna on 7 päivää. Skripti lukee arvon ympäristöstä, muuten `poller.env`:stä, ja watchlistin `--watchlist`-polusta tai pollerin tavalla resolvoidusta watchlististä |
 | `RUN_ISSUES_COHERENCE_AUDIT_TIMEOUT` | `3600` | Auditointiagentin kutsun aikakatto sekunteina |
 | `RUN_ISSUES_COHERENCE_AUDIT_FETCH_TIMEOUT` | `300` | Remoten `git fetch`in aikakatto ennen auditointia |
 | `RUN_ISSUES_COHERENCE_AUDIT_MAX` | `60000` | Promptiin menevän muutospinnan kokokatto tavuina. Katkaisu näkyy aineistossa itsessään; ei-numeerinen arvo ⇒ oletus |

@@ -438,6 +438,10 @@ virhe.** Tämä on koko listan kantava sääntö.
 | Ohjaamon toimintopalvelu | `RUN_ISSUES_ACTION_BASE` **ja** host-portti | sivu on puhdas lukupinta, ei nappeja |
 | `PR_WATCH_ENABLE_CONFLICT_RESOLUTION` | poller nostaa `1`:ksi | konflikti jää ihmiselle |
 | `PR_WATCH_ENABLE_CI_REPAIR` | poller nostaa `1`:ksi | punainen CI ⇒ `WAIT_CI` |
+| `PR_WATCH_ENABLE_SECURITY_GATE` | poller nostaa `1`:ksi | merge ilman diffin tietoturvakatselmusta |
+| `PR_WATCH_ENABLE_SEMANTIC_CHECK` | poller nostaa `1`:ksi | merge ilman sisar-PR:ien vertailua |
+| Tietoturva-auditoinnin ajastus | `security_audit_interval_days`: repo > watchlist > `poller.env` | repoa ei auditoida |
+| Koherenssiauditoinnin ajastus | `coherence_audit_interval_days`: sama ketju | repoa ei auditoida |
 
 Neljä sääntöä, jotka eivät näy taulukosta:
 
