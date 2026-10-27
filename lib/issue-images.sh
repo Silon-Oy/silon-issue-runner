@@ -115,11 +115,44 @@ _detect_image_ext() {
   esac
 }
 
+# _image_url_gets_token <url> — rc 0 iff the gh token may be sent to <url>.
+# Pure (no network), so the decision is unit-testable. The host is parsed out
+# of the URL and compared EXACTLY; a shell glob such as
+# "https://*.githubusercontent.com/<anything>" is not a host check, because `*` also
+# matches `/`, `?`, `#` and `@` — https://attacker.example/x.githubusercontent.com/a.png
+# would match it. Allowed targets:
+#   - https://github.com/user-attachments/...      (private attachments)
+#   - https://user-images.githubusercontent.com/... (legacy attachments)
+# The authority must not carry userinfo (`@`), a port (`:`), a backslash or
+# whitespace. Comparison is case-sensitive on purpose: fail-closed.
+_image_url_gets_token() {
+  local url="$1"
+  case "$url" in
+    https://*) ;;
+    *) return 1 ;;
+  esac
+
+  local rest authority path
+  rest=${url#https://}
+  authority=${rest%%[/?#]*}
+  path=${rest#"$authority"}
+
+  case "$authority" in
+    *[@:\\[:space:]]*) return 1 ;;
+  esac
+
+  case "$authority" in
+    github.com) [[ "$path" == /user-attachments/* ]] ;;
+    user-images.githubusercontent.com) [[ "$path" == /* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 # _download_one <url> <out-base> <token> — download a single image best-effort.
 # On success renames to <out-base><ext> and prints that path; returns non-zero
 # on any failure (bad scheme, HTTP error, network, or non-image content). The gh
-# token is sent ONLY to github.com hosts (private user-attachments need it) and
-# is never forwarded across a redirect to a different host — curl drops the
+# token is sent ONLY to the exactly parsed hosts of _image_url_gets_token
+# (private user-attachments need it) and is never forwarded across a redirect to a different host — curl drops the
 # Authorization header on cross-host redirects by default, so it cannot leak to
 # the signed S3 asset URL the attachment redirects to.
 _download_one() {
@@ -132,10 +165,9 @@ _download_one() {
   esac
 
   local -a auth=()
-  case "$url" in
-    https://github.com/*|https://*.githubusercontent.com/*)
-      [ -n "$token" ] && auth=(-H "Authorization: Bearer $token") ;;
-  esac
+  if [ -n "$token" ] && _image_url_gets_token "$url"; then
+    auth=(-H "Authorization: Bearer $token")
+  fi
 
   local tmp="${out_base}.download"
   # -f fail on HTTP >=400, -s/-S quiet but show errors, -L follow redirects,
