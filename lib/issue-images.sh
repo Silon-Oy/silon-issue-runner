@@ -152,9 +152,10 @@ _image_url_gets_token() {
 # On success renames to <out-base><ext> and prints that path; returns non-zero
 # on any failure (bad scheme, HTTP error, network, or non-image content). The gh
 # token is sent ONLY to the exactly parsed hosts of _image_url_gets_token
-# (private user-attachments need it) and is never forwarded across a redirect to a different host — curl drops the
-# Authorization header on cross-host redirects by default, so it cannot leak to
-# the signed S3 asset URL the attachment redirects to.
+# (private user-attachments need it) and is never forwarded across a redirect
+# to a different host — curl drops the Authorization header on cross-host
+# redirects by default, so it cannot leak to the signed S3 asset URL the
+# attachment redirects to.
 _download_one() {
   local url="$1" out_base="$2" token="$3"
 
