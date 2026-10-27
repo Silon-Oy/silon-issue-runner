@@ -120,7 +120,7 @@ asentaja varoittavat niiden puuttumisesta.
 Asenna julkaisubinääreinä eikä aptilla: runner käyttää gitleaksin `git`-alikomentoa, joka
 vaatii version **8.19 tai uudemman**, ja Ubuntun `gitleaks`-paketti voi olla sitä vanhempi.
 `~/.local/bin` on Spritessä jo PATHissa (`claude` asuu siellä). Komennot ovat x86_64-koneelle;
-`uname -m` = `aarch64` ⇒ vaihda tiedostonimeen `linux_arm64` / `linux_arm64`.
+`uname -m` = `aarch64` ⇒ vaihda kummankin tiedostonimen arkkitehtuuriosa (`linux_x64`, `linux_amd64`) muotoon `linux_arm64`.
 
 ```bash
 mkdir -p ~/.local/bin
