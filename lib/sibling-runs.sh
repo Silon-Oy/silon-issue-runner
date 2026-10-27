@@ -34,6 +34,8 @@ _SIBLING_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_SIBLING_LIB_DIR/issue.sh"
 # shellcheck source=host.sh
 . "$_SIBLING_LIB_DIR/host.sh"
+# shellcheck source=runner-pr.sh
+. "$_SIBLING_LIB_DIR/runner-pr.sh"
 
 # Files listed per sibling before the rest is summarised as a count, so a
 # sibling with a sweeping diff does not bloat the review prompt.
@@ -75,9 +77,9 @@ _sibling_remote_prs() {
   raw=$(cd "$repo_root" && _issue_gh --remote "$remote" -- api \
     "$(_rest_pulls_path "$owner_repo" "state=open&per_page=100")") || return 2
   printf '%s' "$raw" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
-  printf '%s' "$raw" | jq -c '
+  printf '%s' "$raw" | jq -c --arg p "$RUNNER_BRANCH_PREFIX" '
     .[]
-    | select((.head.ref // "") | startswith("auto-run/"))
+    | select((.head.ref // "") | startswith($p))
     | {
         issue: ((.body // "")
                 | [match("(?i)\\b(?:closes|fixes|resolves)\\s+#([0-9]+)"; "g")

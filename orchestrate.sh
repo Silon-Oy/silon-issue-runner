@@ -306,6 +306,9 @@ source "$SCRIPT_DIR/lib/host.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 # shellcheck source=lib/sibling-runs.sh
 source "$SCRIPT_DIR/lib/sibling-runs.sh"
+# The runner's head-branch prefix (S4 names the branch with it).
+# shellcheck source=lib/runner-pr.sh
+source "$SCRIPT_DIR/lib/runner-pr.sh"
 # shellcheck source=lib/status-read.sh
 # For _iso_to_epoch: the S7 serialize gate compares a sibling's start with this
 # run's in the same epoch arithmetic the poller and status.sh use (issue #338).
@@ -987,7 +990,7 @@ phase_a() {
 
   # Branch is also namespaced for non-origin so two orgs' issue #5 do not
   # collide on a single local branch name in the shared clone.
-  BRANCH="auto-run/${id_label}-${slug}"
+  BRANCH="${RUNNER_BRANCH_PREFIX}${id_label}-${slug}"
   state_set "$RUN_DIR" "branch" "$BRANCH"
 
   # ---------- S2: lock ----------

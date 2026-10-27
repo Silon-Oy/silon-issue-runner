@@ -16,7 +16,8 @@
 #                            unchanged
 #   F) unreadable PR set or change surface -> exit 4, no agent call
 #   G) --dry-run          -> plan printed, no write, cursor unchanged
-#   H) pagination stops at PRs updated before the cursor (cost, §5.4)
+#   H) pagination stops at PRs updated before the cursor (cost, §5.4); a
+#      listing still inside the window at the page cap fails closed (exit 4)
 #   I) first run without a cursor: the window is the interval (repo setting wins)
 #   J) first run without a cursor and without a repo setting: the watchlist
 #      entry's coherence_audit_interval_days wins over the environment (#373)
@@ -302,7 +303,7 @@ grep -q '^create \[coherence\]' <<<"$OUT" || bad G "planned action not printed (
 done_case
 
 # ===========================================================================
-echo "=== H: pagination stops at the cursor ==="
+echo "=== H: pagination stops at the cursor, bounded by the page cap ==="
 F0=$FAIL; setup H
 set_cursor "$T1"
 P1=(); for i in $(seq 1 99); do P1+=("$(pr $((1000 + i)) null feature/x "$T2")"); done
@@ -317,6 +318,26 @@ grep -q 'page=2' "$WORK/gh.log" || bad H "a full first page did not read the nex
 grep -q 'page=3' "$WORK/gh.log" && bad H "listing went past PRs updated before the cursor"
 grep -q '#31' "$WORK/prompt-seen" || bad H "PR on the first page not reviewed"
 [ "$FAIL" = "$F0" ] && ok H "listing cost bounded by the cursor"
+done_case
+setup H2
+# Every page of the cap is full and still inside the window (issue #375): the
+# listing is bounded, and a cut-short review set is a failure, not a pass that
+# would move the cursor past PRs nobody reviewed.
+set_cursor "$T1"
+for n in $(seq 1 10); do
+  jq -nc --argjson n "$n" --arg u "$T2" \
+    '[range(0; 100) | {number: ($n * 1000 + .), title: "x", merged_at: null, updated_at: $u, head: {ref: "feature/x"}}]' \
+    > "$WORK/pulls/page-$n.json"
+done
+page 11 "$(pr 41 "$T2" auto-run/never-read)"
+run_audit; show H2
+[ "$RC" = 4 ] || bad H2 "rc $RC, want 4"
+grep -q 'listing the merged PRs of .* failed — nothing written' <<<"$OUT" || bad H2 "cut-short listing not reported as a failure"
+grep -q 'page=10' "$WORK/gh.log" || bad H2 "listing stopped before the cap"
+grep -q 'page=11' "$WORK/gh.log" && bad H2 "listing went past the page cap"
+[ "$(agent_calls)" = 0 ] || bad H2 "agent called on a cut-short review set"
+[ "$(cursor)" = "$(epoch_of "$T1")" ] || bad H2 "cursor moved on a cut-short listing"
+[ "$FAIL" = "$F0" ] && ok H2 "page cap fails closed"
 done_case
 
 # ===========================================================================

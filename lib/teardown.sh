@@ -75,6 +75,8 @@
 _TEARDOWN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=host.sh
 . "$_TEARDOWN_LIB_DIR/host.sh"
+# shellcheck source=runner-pr.sh
+. "$_TEARDOWN_LIB_DIR/runner-pr.sh"
 
 # teardown_log <message…> — one stderr line, prefixed with the verb so the two
 # verbs' lines never read as each other's in a shared tick log.
@@ -339,7 +341,7 @@ teardown_run() {
           ;;
         ,,)
           case "$b" in
-            auto-run/*) delete_branches+=("$b|no PR, runner-owned") ;;
+            "$RUNNER_BRANCH_PREFIX"*) delete_branches+=("$b|no PR, runner-owned") ;;
             *) teardown_log "issue #$issue: branch $b has no PR and is not runner-owned — remote branch left alone" ;;
           esac
           ;;

@@ -39,6 +39,9 @@
 # Sourced by status-digest.sh, which sources rate-limit.sh, github-app-auth.sh
 # and git-remote.sh first. Function-only; no top-level work.
 
+# shellcheck source=runner-pr.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner-pr.sh"
+
 # fix_rate_repos_from_watchlist <watchlist> — print the distinct owner/repo of
 # every watchlist checkout on disk, one per line, across each entry's `remotes`
 # (default origin). An unresolvable remote is skipped, not an error.
@@ -87,14 +90,14 @@ _fix_rate_list() {
 # print {repo, merged, fixed, reverted, merged_prs, fixed_prs, reverted_prs}.
 # Kept separate from the fetch so the heuristic is testable without gh.
 fix_rate_classify() {
-  jq -c '
+  jq -c --arg p "$RUNNER_BRANCH_PREFIX" '
     .repo as $repo | .since as $since
     | ($repo | gsub("(?<c>[.\\-])"; "\\\(.c)")) as $rre
     | def refs($n): (. // "") | test("(^|[^A-Za-z0-9_/&.-])#\($n)(?![0-9])")
                     or test("(?i)\($rre)(#|/pull/|/issues/)\($n)(?![0-9])");
     [ .pulls[]?
       | select(.merged_at != null and .merged_at >= $since
-               and ((.head.ref // "") | startswith("auto-run/"))) ] as $merged
+               and ((.head.ref // "") | startswith($p))) ] as $merged
     | (.commits // []) as $commits
     | (.items // []) as $items
     | [ $merged[]

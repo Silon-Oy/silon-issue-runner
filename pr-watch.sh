@@ -2081,43 +2081,38 @@ _pr_semantic_trigger() {
   [ -n "$since" ] || return 2
 
   # The listing, page by page while the last page still reaches into the window
-  # (semantic_page_needs_more). A failed page is classified: a permanent answer
-  # (401/403/404, not a rate limit) is rc 3 so the gate can hold after it
-  # repeats; anything else is rc 2, retried next poll.
-  local owner_repo="$PR_OWNER_REPO" page=1 json siblings="" page_sibs errf err more=0
-  [ -n "$owner_repo" ] || owner_repo='{owner}/{repo}'
+  # (runner_merged_prs, lib/runner-pr.sh). A failed page is classified: a
+  # permanent answer (401/403/404, not a rate limit) is rc 3 so the gate can hold
+  # after it repeats; anything else is rc 2, retried next poll.
+  local json siblings errf err list_rc=0
   errf=$(mktemp -t pr-watch-semantic-err.XXXXXX)
-  while :; do
-    : > "$errf"
-    if ! json=$(gh_route api "repos/$owner_repo/pulls?state=closed&base=$base_ref&sort=updated&direction=desc&per_page=$SEMANTIC_LIST_PER_PAGE&page=$page" 2>"$errf"); then
-      err=$(cat "$errf" 2>/dev/null || true)
-      rm -f "$errf"
+  json=$(runner_merged_prs gh_route "$PR_OWNER_REPO" "$base_ref" "$since" "$SEMANTIC_LIST_MAX_PAGES" "$errf") || list_rc=$?
+  err=$(cat "$errf" 2>/dev/null || true)
+  rm -f "$errf"
+  case "$list_rc" in
+    0) ;;
+    1)
       [ -n "$err" ] && printf '%s\n' "$err" >&2
       if [ "$(semantic_list_error_kind "$err")" = permanent ]; then
         GATE_TRIGGER_WHY="suljettujen PR:ien listaus epäonnistui pysyvästi ($(printf '%s' "$err" | grep -oE 'HTTP [0-9]{3}[^(]*' | head -n 1 | sed 's/[[:space:]]*$//'))"
-        log "semantic gate: listing closed PRs failed permanently for PR #$pr_num (page $page): $(printf '%s' "$err" | head -n 1)"
+        log "semantic gate: listing closed PRs failed permanently for PR #$pr_num: $(printf '%s' "$err" | head -n 1)"
         return 3
       fi
-      log "semantic gate: listing closed PRs failed for PR #$pr_num (page $page) — retrying next poll"
-      return 2
-    fi
-    if ! page_sibs=$(semantic_merged_siblings "$json" "$pr_num"); then
-      rm -f "$errf"
+      log "semantic gate: listing closed PRs failed for PR #$pr_num — retrying next poll"
+      return 2 ;;
+    3)
+      log "semantic gate: $SEMANTIC_LIST_MAX_PAGES pages of closed PRs for PR #$pr_num still reach into the window since $since — cannot see every sibling, not a pass"
+      return 2 ;;
+    *)
       GATE_TRIGGER_WHY="suljettujen PR:ien listaus ei ollut JSON-taulukko"
       log "semantic gate: closed-PR listing for PR #$pr_num is not a JSON array — not a pass"
-      return 3
-    fi
-    [ -n "$page_sibs" ] && siblings="${siblings:+$siblings$'\n'}$page_sibs"
-    more=0
-    semantic_page_needs_more "$json" "$since" && more=1
-    [ "$more" = 1 ] && [ "$page" -lt "$SEMANTIC_LIST_MAX_PAGES" ] || break
-    page=$((page + 1))
-  done
-  rm -f "$errf"
-  if [ "$more" = 1 ]; then
-    log "semantic gate: $SEMANTIC_LIST_MAX_PAGES pages of closed PRs for PR #$pr_num still reach into the window since $since — cannot see every sibling, not a pass"
-    return 2
-  fi
+      return 3 ;;
+  esac
+  siblings=$(semantic_merged_siblings "$json" "$pr_num") || {
+    GATE_TRIGGER_WHY="suljettujen PR:ien listaus ei ollut JSON-taulukko"
+    log "semantic gate: closed-PR listing for PR #$pr_num is not a JSON array — not a pass"
+    return 3
+  }
 
   local spans num ref from to dirs overlap hits="" tmp
   spans=$(semantic_sibling_spans "$boundary"$'\n'"$range" "$siblings")

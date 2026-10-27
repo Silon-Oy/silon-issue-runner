@@ -22,25 +22,22 @@ if ! command -v rate_limit_matches >/dev/null 2>&1; then
   # shellcheck source=rate-limit.sh
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rate-limit.sh"
 fi
+# shellcheck source=runner-pr.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner-pr.sh"
 
 # Byte cap on the sibling diffs fed to the review prompt (same order as the CI
 # log excerpt): a sweeping sibling must not crowd the review out of its context.
 PR_WATCH_SEMANTIC_CONTEXT_MAX="${PR_WATCH_SEMANTIC_CONTEXT_MAX:-60000}"
-
-# The head-branch prefix of the runner's own PRs (orchestrate.sh's branch name).
-SEMANTIC_SIBLING_PREFIX="auto-run/"
 
 # How many of the base's newest first-parent commits the window looks at. A
 # bound, so the walk is O(work) (CLAUDE.md §5.4); a window that fills it is
 # reported as cut short, never as complete.
 SEMANTIC_WINDOW_MAX=500
 
-# The closed-PR listing is read page by page, newest update first, and only as
-# far as the window reaches: a sibling updated since the window started is on a
-# page whose last row is not older than the window. A bound, not --paginate
-# (CLAUDE.md §5.4) — a listing that still reaches into the window on its last
-# page is "could not decide", never a pass.
-SEMANTIC_LIST_PER_PAGE=100
+# The closed-PR listing (runner_merged_prs, lib/runner-pr.sh) is read page by
+# page, newest update first, and only as far as the window reaches. A bound, not
+# --paginate (CLAUDE.md §5.4) — a listing that still reaches into the window on
+# its last page is "could not decide", never a pass.
 SEMANTIC_LIST_MAX_PAGES=3
 
 # semantic_window <since-iso> — reads "<sha> <committer-time>" lines of the base's
@@ -86,7 +83,7 @@ semantic_dirs_overlap() {
 # array: an unreadable listing is not "no siblings".
 semantic_merged_siblings() {
   local json="$1" this="$2"
-  jq -r --arg p "$SEMANTIC_SIBLING_PREFIX" --argjson me "${this:-0}" '
+  jq -r --arg p "$RUNNER_BRANCH_PREFIX" --argjson me "${this:-0}" '
     if type != "array" then error("not an array") else . end
     | .[]
     | select(.merged_at != null and (.merge_commit_sha // "") != "")
@@ -113,20 +110,6 @@ semantic_sibling_spans() {
       if (prev == "") { prev = $1; next }
       if ($1 in num) { printf "%s\t%s\t%s\t%s\n", num[$1], ref[$1], prev, $1; prev = $1 }
     }' <(printf '%s\n' "$siblings") <(printf '%s\n' "$range")
-}
-
-# semantic_page_needs_more <pulls-json> <since-iso> — whether the next page of an
-# updated-desc listing may still hold a PR updated at or after <since-iso>: rc 0
-# when the page is full (SEMANTIC_LIST_PER_PAGE rows) and its last row's
-# updated_at is not older than <since-iso>; rc 1 otherwise. rc 2 if the page is
-# not a JSON array. A sibling's updated_at is never older than its merge, so a
-# page that ends before the window has listed every sibling merged in it.
-semantic_page_needs_more() {
-  local json="$1" since="$2" out
-  out=$(jq -r --argjson n "$SEMANTIC_LIST_PER_PAGE" --arg s "$since" '
-    if type != "array" then error("not an array") else . end
-    | if length >= $n and ((last.updated_at // "") >= $s) then "more" else "done" end'     <<<"$json" 2>/dev/null) || return 2
-  [ "$out" = more ]
 }
 
 # semantic_list_error_kind <stderr-text> — "permanent" or "transient" for a

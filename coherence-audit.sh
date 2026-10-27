@@ -87,8 +87,12 @@ AUDIT_KIND="coherence"
 # The label every coherence issue carries — also the finding kind in the marker.
 COHERENCE_AUDIT_LABEL="coherence"
 AUDIT_STEP="12-coherence-audit"
-RUNNER_BRANCH_PREFIX="auto-run/"
 DEFAULT_WINDOW_DAYS=7
+# Pages of the closed-PR listing read at most (runner_merged_prs). A bound, not
+# --paginate (CLAUDE.md §5.4): a window that still reaches past the last page
+# fails the listing — a cut-short review set would advance the cursor past PRs
+# nobody reviewed.
+COHERENCE_LIST_MAX_PAGES=10
 
 REPO_AUDIT_NAME="coherence-audit"
 
@@ -128,6 +132,8 @@ source_machine_env
 . "$SCRIPT_DIR/lib/poller-config.sh"
 # shellcheck source=lib/paths.sh
 . "$SCRIPT_DIR/lib/paths.sh"
+# shellcheck source=lib/runner-pr.sh
+. "$SCRIPT_DIR/lib/runner-pr.sh"
 set +e
 
 say() { repo_audit_say "$@"; }
@@ -175,28 +181,19 @@ SINCE=$(jq -rn --argjson e "$SINCE_EPOCH" '$e | todate')
 
 # _coherence_merged_prs <since-iso> — the runner's PRs into BASE_BRANCH merged
 # after <since-iso>, one TSV row each: number, merged_at, head branch, title.
-# REST, not search (CLAUDE.md §5.2). Sorted by update time, newest first, and
-# paged by hand: merging updates a PR, so once a page reaches PRs last updated
-# before <since-iso> no later page can hold a newer merge — the cost is the
-# work since the cursor, not the repo's PR history (§5.4). rc 1 on any read
-# failure.
+# The listing is runner_merged_prs (lib/runner-pr.sh), shared with the semantic
+# merge gate: REST, paged only as far as <since-iso> reaches, bounded by
+# COHERENCE_LIST_MAX_PAGES. rc 1 on any read failure or a cut-short listing.
 _coherence_merged_prs() {
-  local since="$1" base page=1 raw rows n oldest
-  base=$(jq -rn --arg s "$BASE_BRANCH" '$s|@uri') || return 1
-  while :; do
-    raw=$(labels_gh api "repos/$OWNER_REPO/pulls?state=closed&base=$base&sort=updated&direction=desc&per_page=100&page=$page" 2>/dev/null) || return 1
-    rows=$(jq -r --arg s "$since" --arg p "$RUNNER_BRANCH_PREFIX" '
-      .[] | select(.merged_at != null and .merged_at > $s
-                   and ((.head.ref // "") | startswith($p)))
-      | [(.number | tostring), .merged_at, .head.ref, ((.title // "") | gsub("[\t\r\n]"; " "))]
-      | @tsv' <<<"$raw" 2>/dev/null) || return 1
-    [ -n "$rows" ] && printf '%s\n' "$rows"
-    n=$(jq -r 'length' <<<"$raw" 2>/dev/null) || return 1
-    [ "$n" -lt 100 ] && return 0
-    oldest=$(jq -r '[.[].updated_at] | min // ""' <<<"$raw" 2>/dev/null) || return 1
-    [[ "$oldest" < "$since" ]] && return 0
-    page=$((page + 1))
-  done
+  local since="$1" json errf rc=0
+  errf=$(mktemp -t coherence-audit-list.XXXXXX) || return 1
+  json=$(runner_merged_prs labels_gh "$OWNER_REPO" "$BASE_BRANCH" "$since" "$COHERENCE_LIST_MAX_PAGES" "$errf") || rc=$?
+  rm -f "$errf"
+  [ "$rc" = 0 ] || return 1
+  jq -r --arg s "$since" '
+    .[] | select(.merged_at > $s)
+    | [(.number | tostring), .merged_at, .head.ref, ((.title // "") | gsub("[\t\r\n]"; " "))]
+    | @tsv' <<<"$json" 2>/dev/null
 }
 
 if ! PRS=$(_coherence_merged_prs "$SINCE"); then
