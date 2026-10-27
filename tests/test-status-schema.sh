@@ -104,7 +104,7 @@ check "exit code clean" "$rc" "0"
 if jq -e . "$OUT" >/dev/null 2>&1; then ok "output is valid JSON"; else bad "output is not valid JSON"; fi
 
 # ---- top-level required keys ----
-for k in schema_version generated_at host stale_after_seconds runner enrichment sources totals runs recent_usage epics audits read_errors; do
+for k in schema_version generated_at host stale_after_seconds runner enrichment sources totals runs recent_usage epics audits audit_results read_errors; do
   if jq -e "has(\"$k\")" "$OUT" >/dev/null 2>&1; then ok "top-level key: $k"; else bad "missing top-level key: $k"; fi
 done
 
@@ -237,6 +237,48 @@ HOME="$FX/home" PATH="$TBIN:$PATH" RUN_ISSUES_WATCHLIST="$WL" bash "$STATUS" --j
 check "no tmux server: exit clean" "$rc_au" "0"
 check "no tmux server: audits is []" "$(jq -c '.audits' "$OUT_AU")" "[]"
 check "no tmux server: totals.audits 0" "$(jq -r '.totals.audits' "$OUT_AU")" "0"
+
+# ---- audit_results[] (issue #373): the last audit per (repo × remote × kind),
+# read from the schedule's state and result files in RUN_ISSUES_LOG_DIR. ----
+check "no audit state files: audit_results is []" "$(jq -c '.audit_results' "$OUT")" "[]"
+REPO_B="$FX/repo-b"
+mkdir -p "$REPO_B"
+git -C "$REPO_B" init -q
+git -C "$REPO_B" remote add origin "git@github.com:example-org/repo-b.git"
+git -C "$REPO_B" remote add fork "git@github.com:other-org/repo-b.git"
+WL_B="$FX/watchlist-b.json"
+cat > "$WL_B" <<JSON
+{"repos":[{"path":"$REPO","remotes":["origin"]},{"path":"$REPO_B","remotes":["origin","fork"]}]}
+JSON
+ALOGS="$FX/alogs"; mkdir -p "$ALOGS"
+printf '1700000000 security\n' > "$ALOGS/.audit-last-security-example-org-repo-b"
+printf '1700000000 5\n'        > "$ALOGS/.audit-last-security-example-org-repo-b.result"
+printf '1700000100 coherence\n' > "$ALOGS/.audit-last-coherence-example-org-repo-b"
+printf '1700000100 3\n'         > "$ALOGS/.audit-last-coherence-example-org-repo-b.result"
+printf '1700000200 security\n' > "$ALOGS/.audit-last-security-other-org-repo-b"
+# A repo no watchlist lists is not reported, even with a state file.
+printf '1700000300 security\n' > "$ALOGS/.audit-last-security-example-org-gone"
+OUT_AR="$FX/out-audit-results.json"
+HOME="$FX/home" RUN_ISSUES_LOG_DIR="$ALOGS" RUN_ISSUES_WATCHLIST="$WL_B" bash "$STATUS" --json > "$OUT_AR"; rc_ar=$?
+if [ "$rc_ar" -eq 0 ] || [ "$rc_ar" -eq 3 ]; then ok "audit_results run exits 0/3 ($rc_ar)"; else bad "audit_results run exit=$rc_ar"; fi
+check "audit_results: one entry per state file of a listed repo × remote × kind" \
+  "$(jq -c '[.audit_results[] | [.repo_slug, .kind, .exit_code, .outcome]]' "$OUT_AR")" \
+  '[["example-org-repo-b","coherence",3,"failed"],["example-org-repo-b","security",5,"scanner_failed"],["other-org-repo-b","security",null,"pending"]]'
+check "audit_results: started_at is ISO" "$(jq -r '.audit_results[0].started_at' "$OUT_AR")" "2023-11-14T22:15:00Z"
+check "audit_results: schema_version still 1" "$(jq -r '.schema_version' "$OUT_AR")" "1"
+HOME="$FX/home" RUN_ISSUES_LOG_DIR="$ALOGS" RUN_ISSUES_WATCHLIST="$WL_B" bash "$STATUS" --json --repo "$REPO" > "$OUT_AR"
+check "--repo narrows audit_results to that repo" "$(jq -r '.audit_results | length' "$OUT_AR")" "0"
+HUM_AR="$(HOME="$FX/home" RUN_ISSUES_LOG_DIR="$ALOGS" RUN_ISSUES_WATCHLIST="$WL_B" bash "$STATUS" --human 2>/dev/null)"
+case "$HUM_AR" in
+  *"VIIMEISIMMÄT AUDITOINNIT (3)"*"example-org-repo-b  coherence"*"exit 3  epäonnistui"*"skanneri epäonnistui"*"exit -  kesken tai katkesi"*)
+    ok "human output lists the last audits with their reading" ;;
+  *) bad "human output: $(printf '%s' "$HUM_AR" | grep -A4 AUDITOINNIT)" ;;
+esac
+if grep -nE 'state\.jsonl|runs\.log' "$ROOT/status.sh" | grep -i audit >/dev/null; then
+  bad "the audit view reads history"
+else
+  ok "the audit view reads no history (§5.3)"
+fi
 
 # ---- runner degrades cleanly outside a git repo (issue #105, criterion 5).
 # Point RUN_ISSUES_HOME at a non-git dir (with lib/ symlinked so status.sh can

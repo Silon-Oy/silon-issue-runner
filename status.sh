@@ -47,6 +47,13 @@
 # totals.audits. Additive (schema_version stays 1), local, always present: []
 # without tmux. An audit has no run-dir, so it is not a run and never in runs[].
 #
+# Last audit outcomes (issue #373): the top-level audit_results[] list —
+# {kind, repo_slug, started_at, exit_code, outcome} per (watchlist repo ×
+# git remote × kind) that has a schedule state file in RUN_ISSUES_LOG_DIR.
+# outcome is ok / scanner_failed / failed / pending (no result for the latest
+# start yet: running, or its session died). Additive, always present: [] when
+# no audit ever started. Two O(1) file reads per entry, never history.
+#
 # Exit codes:
 #   0  read OK
 #   1  usage error (unknown flag / bad value)
@@ -70,6 +77,8 @@
 #                                a day, not every time the main cache TTL lapses.
 #                                0 disables the carry-forward (details re-read on
 #                                every miss).
+#   RUN_ISSUES_LOG_DIR           where the audit schedule's state files live
+#                                (default: the pollers' log dir, lib/paths.sh)
 #   RUN_ISSUES_HOME              install root (test injection point; defaults to
 #                                this script's directory)
 
@@ -115,6 +124,9 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 # the SAME name rule the poller spawns them under, never a second derivation.
 # shellcheck source=lib/audit-schedule.sh
 . "$RUN_ISSUES_HOME/lib/audit-schedule.sh"
+# default_log_dir: the audit state files (#373) live in the pollers' log dir.
+# shellcheck source=lib/paths.sh
+. "$RUN_ISSUES_HOME/lib/paths.sh"
 # --github enrichment: pr_decide / pr_ci_state (pr-watch-lib.sh), gha_with_token
 # (github-app-auth.sh), the shared epic child-set resolver (issue.sh's
 # list_epic_children — issue #91: the view resolves epic children through the SAME
@@ -138,6 +150,7 @@ set +e
 STATUS_TAIL="${RUN_ISSUES_STATUS_TAIL_LINES:-40}"
 STALE_AFTER="${RUN_ISSUES_STALE_AFTER:-3600}"
 THIS_HOST="$(runner_host)"
+LOG_DIR="${RUN_ISSUES_LOG_DIR:-$(default_log_dir)}"
 
 # ---- argument parsing ----
 OUT_MODE=""          # "", json, human
@@ -502,6 +515,42 @@ AUDITS_JSON="$(jq -R -s -c --argjson now "$NOW_EPOCH" '
        age_seconds: (if .[3] == "" then null
                      else (($now - (.[3] | tonumber)) as $a | if $a < 0 then 0 else $a end) end)})
   | sort_by(.repo_slug, .kind)' "$AUDITS_TSV" 2>/dev/null || echo '[]')"
+
+# ---- last audit outcomes (issue #373) -----------------------------------------
+# A failed audit used to be visible only in the log. The schedule already keeps
+# the latest start and its exit code per (kind, repo × remote) next to each
+# other (lib/audit-schedule.sh); audit_last_outcome reads them — O(1) per entry,
+# never state.jsonl or a log (CLAUDE.md §5.3, §5.4). The slug is the poller's
+# own (repo_slug per git remote), so a key always names the file it wrote.
+AUDIT_RESULTS_TSV="$TMPD/audit_results.tsv"
+: > "$AUDIT_RESULTS_TSV"
+while IFS= read -r rp; do
+  [ -n "$rp" ] || continue
+  if [ -n "$REPO_FILTER" ] && [ "$rp" != "$REPO_FILTER" ]; then continue; fi
+  [ -d "$rp" ] || continue
+  for a_rem in $(git -C "$rp" remote 2>/dev/null); do
+    a_slug="$(repo_slug "$rp" "$a_rem" 2>/dev/null)"
+    [ -n "$a_slug" ] || continue
+    for a_kind in $(audit_kinds); do
+      a_out="$(audit_last_outcome "$(audit_state_file "$LOG_DIR" "$a_kind" "$a_slug")")"
+      [ -n "$a_out" ] || continue
+      # Split by hand: `IFS=$'\t' read` collapses the empty exit code of a
+      # pending start (tab is whitespace). The loop's kind, not the file's tag,
+      # is reported: the file name is what keyed it.
+      a_start="${a_out%%$'\t'*}"
+      a_verdict="${a_out##*$'\t'}"
+      a_rc="${a_out%$'\t'*}"
+      a_rc="${a_rc##*$'\t'}"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$a_kind" "$a_slug" "$a_start" "${a_rc:--}" "$a_verdict" >> "$AUDIT_RESULTS_TSV"
+    done
+  done
+done < "$REPO_PATHS_FILE"
+AUDIT_RESULTS_JSON="$(sort -u "$AUDIT_RESULTS_TSV" | jq -R -s -c '
+  split("\n") | map(select(length > 0) | split("\t")
+    | {kind: .[0], repo_slug: .[1], started_at: (.[2] | tonumber | todate),
+       exit_code: (if .[3] == "-" then null else (.[3] | tonumber) end), outcome: .[4]})
+  | sort_by(.repo_slug, .kind)' 2>/dev/null || echo '[]')"
+[ -n "$AUDIT_RESULTS_JSON" ] || AUDIT_RESULTS_JSON="[]"
 
 # ---- optional GitHub enrichment (--github) ----------------------------------
 # Fill each run's `github` sub-object from `gh pr list` ONCE per owner/repo,
@@ -1037,6 +1086,7 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
     recent_usage: \$recent_usage,
     epics: \$epics,
     audits: \$audits,
+    audit_results: \$audit_results,
     read_errors: \$read_errors
   }
 "
@@ -1049,6 +1099,7 @@ DOC="$(jq -n \
   --slurpfile ghmap "$TMPD/ghmap.json" \
   --argjson epics "$EPICS_JSON" \
   --argjson audits "$AUDITS_JSON" \
+  --argjson audit_results "$AUDIT_RESULTS_JSON" \
   --argjson runner "$RUNNER_JSON" \
   --argjson now "$NOW_EPOCH" \
   --argjson stale "$STALE_AFTER" \
@@ -1141,6 +1192,24 @@ else
     printf '%s' "$DOC" | jq -r '.audits[]
       | "  \(.repo_slug)  \(.kind)  \(if .age_seconds == null then "?" else "\((.age_seconds/60)|floor) min" end)"'
     printf '  %spysäytys: tmux kill-session -t run-issues-audit-<laji>-<repo-slug>%s\n\n' "$C_DIM" "$C_RESET"
+  fi
+
+  # Last audit outcomes (#373): a failed audit is shown here, not only in the log.
+  n_ares="$(printf '%s' "$DOC" | jq -r '.audit_results | length')"
+  if [ "$n_ares" != "0" ]; then
+    printf '%sVIIMEISIMMÄT AUDITOINNIT (%s)%s\n' "$C_BOLD" "$n_ares" "$C_RESET"
+    printf '%s' "$DOC" | jq -r '.audit_results[]
+      | [.outcome, "  \(.repo_slug)  \(.kind)  \(.started_at)  exit \(.exit_code // "-")  \(
+          {ok: "onnistui", scanner_failed: "skanneri epäonnistui", failed: "epäonnistui",
+           pending: "kesken tai katkesi"}[.outcome] // .outcome)"] | @tsv' \
+      | while IFS=$'\t' read -r a_o a_line; do
+          case "$a_o" in
+            failed) printf '%s%s%s\n' "$C_RED" "$a_line" "$C_RESET" ;;
+            scanner_failed|pending) printf '%s%s%s\n' "$C_YEL" "$a_line" "$C_RESET" ;;
+            *) printf '%s\n' "$a_line" ;;
+          esac
+        done
+    printf '\n'
   fi
 
   # Cleanup queue collapsed to a per-repo counter.

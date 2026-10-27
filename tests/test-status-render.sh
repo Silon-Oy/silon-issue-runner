@@ -627,6 +627,45 @@ if [ -f "$HTMLAU" ]; then
   absent "the session name field is not read" "a.session" "$HTMLAU"
 fi
 
+# ---- Case 10: last audit outcomes (#373) --------------------------------------
+# audit_results[] with an XSS payload in repo_slug and an unknown outcome. The
+# page is data-free; the JS reads only the named fields and maps the outcome
+# through its own static table.
+AR_LEAK="AUDIT-RESULT-<script>alert(10)</script>-SECRET"
+cat > "$FX/audit-results.json" <<JSON
+{"schema_version":1,"generated_at":"2026-10-23T12:00:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "enrichment":{"mode":"local","fetched_at":null,"cache_age_seconds":null},
+ "totals":{"runs":0,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":0},"audits":0,"degraded":false},
+ "read_errors":[],"runs":[],"epics":[],"audits":[],
+ "audit_results":[{"kind":"security","repo_slug":"$AR_LEAK","started_at":"2026-10-20T10:00:00Z","exit_code":3,"outcome":"failed"},
+                  {"kind":"coherence","repo_slug":"o-r","started_at":"2026-10-20T10:00:00Z","exit_code":null,"outcome":"<img src=x>"}]}
+JSON
+OUTAR="$FX/wwwar"
+RUN_ISSUES_STATUS_OUT_DIR="$OUTAR" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/audit-results.json"; rcar=$?
+HTMLAR="$OUTAR/index.html"
+check "audit_results doc renders (exit 0)" "$rcar" "0"
+if [ -f "$HTMLAR" ]; then
+  absent "audit result slug not embedded" "$AR_LEAK" "$HTMLAR"
+  absent "audit result outcome not embedded" "<img src=x>" "$HTMLAR"
+  present "JS reads data.audit_results" "data.audit_results" "$HTMLAR"
+  present "JS renders the last audits" "renderAuditResults(data)" "$HTMLAR"
+  present "last audits have their mount point" 'id="audit-results"' "$HTMLAR"
+  for f in r.kind r.repo_slug r.started_at r.exit_code r.outcome; do
+    present "JS reads the named field $f" "$f" "$HTMLAR"
+  done
+  for t in onnistui "skanneri epäonnistui" "kesken tai katkesi" "(tuntematon)"; do
+    present "outcome text '$t' comes from the static map" "$t" "$HTMLAR"
+  done
+  present "a failed audit is styled for attention" ".audit-row.ar-failed" "$HTMLAR"
+  if grep -n 'renderAuditResults' -A30 "$HTMLAR" | grep -q 'innerHTML'; then
+    bad "renderAuditResults uses innerHTML"
+  else
+    ok "renderAuditResults inserts text only"
+  fi
+fi
+
 echo "----------------------------------------"
 echo "status-render: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

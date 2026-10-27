@@ -50,7 +50,10 @@
 #      epic_title, epic_url, sub_issues[].{number,state,repo,repo_slug}, source —
 #      the same way (sub_issues[].repo/repo_slug added for cross-repo, issue #92).
 #      The audits[] strip (#360) reads only kind, repo_slug, age_seconds and
-#      totals.audits — never the session name or any other field.
+#      totals.audits — never the session name or any other field. The
+#      audit_results[] list (#373) reads only kind, repo_slug, started_at,
+#      exit_code and outcome; the outcome's text comes from the JS's own static
+#      map, so an unknown outcome is shown as "(tuntematon)", never as data.
 #
 # EPIC ROLLUP (#79). status.sh --github also emits a top-level epics[] list (open
 # epic-labelled issues + their sub-issues). The JS renders one lane per epic
@@ -309,6 +312,8 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .runner-next{color:var(--muted);font-size:.85rem;margin-top:.2rem}
 .audits{padding:.45rem .8rem;border:1px solid var(--border);border-radius:6px;margin:.5rem 0 .8rem;font-size:.88rem}
 .audit-row{display:flex;gap:.6rem;flex-wrap:wrap;color:var(--muted)}
+.audit-row.ar-failed{color:var(--c-stalled);font-weight:600}
+.audit-row.ar-scanner_failed,.audit-row.ar-pending{color:var(--c-attention)}
 .chips{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.5rem;margin:.4rem 0 .8rem}
 .chip{border:1px solid var(--border);background:var(--card);color:var(--fg);
   padding:.35rem .7rem;border-radius:999px;font-size:.85rem;cursor:pointer;
@@ -415,6 +420,7 @@ a:hover{text-decoration:underline}
   <div id="banners"></div>
   <div id="runner"></div>
   <div id="audits"></div>
+  <div id="audit-results"></div>
   <ul class="chips" id="chips"></ul>
   <div class="controls">
     <label>Järjestys:
@@ -860,6 +866,40 @@ a:hover{text-decoration:underline}
     box.appendChild(wrap);
   }
 
+  // renderAuditResults — the last audit per repo × remote × kind (#373). A failed
+  // audit used to be visible only in the poller's log. Named fields only (kind,
+  // repo_slug, started_at, exit_code, outcome); the reading is the static
+  // AUDIT_OUTCOMES map, never a data string; everything via el() => textContent.
+  var AUDIT_OUTCOMES = {
+    ok: "onnistui",
+    scanner_failed: "skanneri epäonnistui",
+    failed: "epäonnistui",
+    pending: "kesken tai katkesi"
+  };
+  function renderAuditResults(data){
+    var box = document.getElementById("audit-results");
+    clear(box);
+    var list = Array.isArray(data.audit_results) ? data.audit_results : [];
+    if (list.length === 0) return;
+    var wrap = el("div", "audits");
+    wrap.appendChild(el("div", "runner-label", "Viimeisimmät auditoinnit"));
+    list.forEach(function(r){
+      var known = typeof r.outcome === "string" &&
+        Object.prototype.hasOwnProperty.call(AUDIT_OUTCOMES, r.outcome);
+      var row = el("div", "audit-row" + (known ? " ar-" + r.outcome : ""));
+      row.appendChild(el("span", null, typeof r.repo_slug === "string" ? r.repo_slug : "?"));
+      row.appendChild(el("span", null, typeof r.kind === "string" ? r.kind : "?"));
+      var t = typeof r.started_at === "string" ? Date.parse(r.started_at) : NaN;
+      row.appendChild(el("span", null, isNaN(t) ? "—"
+        : "aloitettu " + dur(Math.max(0, (Date.now() - t) / 1000)) + " sitten"));
+      row.appendChild(el("span", null,
+        typeof r.exit_code === "number" ? "exit " + r.exit_code : "exit —"));
+      row.appendChild(el("span", null, known ? AUDIT_OUTCOMES[r.outcome] : "(tuntematon)"));
+      wrap.appendChild(row);
+    });
+    box.appendChild(wrap);
+  }
+
   function renderChips(data){
     var box = document.getElementById("chips");
     clear(box);
@@ -1151,6 +1191,7 @@ a:hover{text-decoration:underline}
     renderBanners(data);
     renderRunner(data);
     renderAudits(data);
+    renderAuditResults(data);
     renderChips(data);
     document.getElementById("sort").value = sortMode;
 
