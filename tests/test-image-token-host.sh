@@ -89,7 +89,9 @@ export CURL_ARGS_LOG="$ARGS_LOG"
 
 run_download() {
   local url="$1" n="$2"
-  PATH="$SHIM_DIR:$PATH" _download_one "$url" "$WORK/image-$n" "tok" >/dev/null 2>&1
+  # Subshell: a set -u abort inside _download_one must fail this test (the
+  # shim-invoked check below), not end the whole script silently.
+  ( PATH="$SHIM_DIR:$PATH" _download_one "$url" "$WORK/image-$n" "tok" ) >/dev/null 2>&1
 }
 
 ATTACK="https://attacker.example/x.githubusercontent.com/a.png"

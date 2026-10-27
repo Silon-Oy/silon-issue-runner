@@ -173,7 +173,8 @@ _download_one() {
   local tmp="${out_base}.download"
   # -f fail on HTTP >=400, -s/-S quiet but show errors, -L follow redirects,
   # bounded by time and advertised size.
-  if ! curl -fsSL "${auth[@]}" \
+  # ${auth[@]+...}: an empty array is "unbound" under set -u on bash 3.2.
+  if ! curl -fsSL ${auth[@]+"${auth[@]}"} \
         --max-time "$RUN_ISSUES_IMAGE_TIMEOUT" \
         --max-filesize "$RUN_ISSUES_MAX_IMAGE_BYTES" \
         -o "$tmp" "$url" 2>/dev/null; then
