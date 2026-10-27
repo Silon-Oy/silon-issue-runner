@@ -66,7 +66,15 @@ vanhentuneisiin Command Line Toolsiin. `coreutils` (`gtimeout`) on jälkimmäist
 ```bash
 brew install git gh jq tmux        # pullot löytyvät
 brew install coreutils             # kaatuu ilman Xcode 26.3:n Command Line Toolsia
+brew install gitleaks osv-scanner  # valinnaiset tietoturvaskannerit
 ```
+
+Kaikki riippuvuudet tasoineen, lisensseineen ja asennustapoineen ovat yhteisessä taulukossa
+[`dependencies.md`](dependencies.md). Ilman skannereita merge-portti ja tietoturva-auditointi
+ajavat deterministiset skannauksensa no-opeina; S0-portti ja asentaja varoittavat siitä.
+Skannerien pullojen saatavuutta Intel-macOS:llä ei ole todettu — jos ne kaatuvat kuten
+`coreutils`, käytä julkaisubinäärejä (`dependencies.md`, Ubuntu-sarakkeen lähteet;
+macOS-tiedostonimet `darwin_x64` / `darwin_amd64`).
 
 Ilman `gtimeout`ia runner ajaa **ilman aikarajaa** (preflight pitää sitä valinnaisena, ja
 `lib/claude-call.sh` varoittaa). Jumiutunut mallikutsu ei silloin katkea 3600 s:ssa. Väliaikainen

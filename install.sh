@@ -667,7 +667,11 @@ report_preflight() {
       fi
       continue
     fi
-    log "  $(preflight_report_tool "$name" "$level" "$(deps_field "$name" purpose); install: $(preflight_install_hint "$name")" || true)"
+    if preflight_dep_present "$name"; then
+      log "  ok: $name"
+    else
+      log "  MISSING ($level): $name — $(deps_field "$name" purpose); install: $(preflight_install_hint "$name")"
+    fi
   done
   # Repo write-access probe (issue #256): the same source of truth the S0 gate
   # uses, reported advisorily. There is no target repo at install time, so the

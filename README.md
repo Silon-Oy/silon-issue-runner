@@ -52,6 +52,11 @@ Riippuvuuslista **haarautuu käyttötavan mukaan**. Pelkkä interaktiivinen käy
 vähemmän kuin poller, ja ero on syytä tietää etukäteen: pollerin puuttuva riippuvuus ei
 tuota virhettä vaan hiljaisuutta.
 
+**Täydellinen luettelo** (taso, asennus Homebrew'lla ja Ubuntussa, lisenssi, käyttötarkoitus)
+on [`docs/dependencies.md`](docs/dependencies.md), joka generoidaan samasta
+`lib/deps.tsv`-luettelosta kuin S0-portti ja asentajan raportti. Alla oleva on
+käyttötapakohtainen yhteenveto.
+
 ### Interaktiivinen käyttö (pakolliset)
 
 | Työkalu | Asennus |
@@ -79,8 +84,9 @@ tarkistetaan komennolla `gh auth token` eikä `gh auth status`:lla
 ei virhettä — mutta silloin claude-kutsut ajetaan **ilman aikakattoa** ja voivat jäädä
 roikkumaan. Poller nojaa erikseen omaan liveness-rajaansa (`RUN_ISSUES_STALE_AFTER`).
 
-`gitleaks` ja `osv-scanner`: paketti ei asenna niitä, mutta asennettuina merge-portti
-käyttää niitä (osio 7.12).
+`gitleaks` ja `osv-scanner` (`brew install gitleaks osv-scanner`): paketti ei asenna niitä,
+mutta asennettuina merge-portti käyttää niitä (osio 7.12). Puuttuessa S0-portti ja asentaja
+varoittavat ([`docs/dependencies.md`](docs/dependencies.md)).
 
 ### Pollerikäyttö (edellisten lisäksi)
 

@@ -108,6 +108,41 @@ env-tiedoston ilman sitä:
 RUN_ISSUES_ENV_FILE=/nonexistent bash ~/projektit/claude-issue-runner/tests/run-all.sh
 ```
 
+### 2b. Valinnaiset riippuvuudet: tietoturvaskannerit
+
+Kaikkien ajokonemallien riippuvuudet ovat yhdessä taulukossa,
+[`dependencies.md`](dependencies.md), jossa on Ubuntu-sarake jokaiselle riville. Valmiustaulukon
+ulkopuolelta Spriteltä puuttuvat tyypillisesti **`gitleaks`** (MIT) ja **`osv-scanner`**
+(Apache-2.0). Ne ovat valinnaisia, mutta ilman niitä merge-portti ja tietoturva-auditointi
+ajavat deterministiset skannauksensa no-opeina (`lib/security-scan.sh`). S0-portti ja
+asentaja varoittavat niiden puuttumisesta.
+
+Asenna julkaisubinääreinä eikä aptilla: runner käyttää gitleaksin `git`-alikomentoa, joka
+vaatii version **8.19 tai uudemman**, ja Ubuntun `gitleaks`-paketti voi olla sitä vanhempi.
+`~/.local/bin` on Spritessä jo PATHissa (`claude` asuu siellä). Komennot ovat x86_64-koneelle;
+`uname -m` = `aarch64` ⇒ vaihda tiedostonimeen `linux_arm64` / `linux_arm64`.
+
+```bash
+mkdir -p ~/.local/bin
+
+# gitleaks (MIT) — 8.19+
+v=$(gh api repos/gitleaks/gitleaks/releases/latest --jq .tag_name)
+curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/$v/gitleaks_${v#v}_linux_x64.tar.gz" \
+  | tar -xz -C ~/.local/bin gitleaks
+gitleaks version
+
+# osv-scanner (Apache-2.0)
+v=$(gh api repos/google/osv-scanner/releases/latest --jq .tag_name)
+curl -fsSL -o ~/.local/bin/osv-scanner \
+  "https://github.com/google/osv-scanner/releases/download/$v/osv-scanner_linux_amd64"
+chmod +x ~/.local/bin/osv-scanner
+osv-scanner --version
+```
+
+Kummankin julkaisun mukana on checksum-tiedosto, jolla latauksen voi todentaa ennen
+käyttöönottoa. Binääreihin voi myös osoittaa suoraan muuttujilla `RUN_ISSUES_GITLEAKS_BIN`
+ja `RUN_ISSUES_OSV_SCANNER_BIN` (`env-reference.md`).
+
 ### 3. Kohderepo ja konfiguraatio
 
 ```bash
@@ -465,7 +500,8 @@ sprite exec -s claude-issue-runner -- bash -lc '
   echo "ilkka   -> [$(pick_oldest_candidate "$PWD" "auto-run-ilkka" "Silon-Oy/myrepo")]"
   echo "auto-run -> [$(pick_oldest_candidate "$PWD" "auto-run" "Silon-Oy/myrepo")]"'
 
-# 2. Preflight nimeää puuttuvat riippuvuudet
+# 2. Preflight nimeää puuttuvat riippuvuudet — pakolliset virheinä, puuttuvat
+#    skannerit ja timeout varoituksina (WARNING: MISSING (optional): …)
 sprite exec -s claude-issue-runner -- bash -lc \
   'cd ~/projektit/myrepo && ~/.claude/scripts/run-issues/orchestrate.sh'
 

@@ -20,6 +20,10 @@ set -euo pipefail
 
 # shellcheck source=lib/deps.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deps.sh"
+# security_scan_bin is the one answer to "is this scanner usable" (it honours
+# the RUN_ISSUES_*_BIN overrides); sourcing defines functions only.
+# shellcheck source=lib/security-scan.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/security-scan.sh"
 
 # preflight_have <cmd> — 0 if <cmd> is callable, 1 otherwise. Prints nothing;
 # the caller owns all output.
@@ -58,6 +62,24 @@ preflight_timeout_bin() {
     fi
   done
   printf '%s' "$bin"
+}
+
+# preflight_dep_present <name> — 0 when a lib/deps.tsv dependency is usable on
+# this machine, 1 otherwise. Prints nothing. Most rows are a name on PATH; two
+# kinds are answered by the code that will actually call them, so the check and
+# the call cannot disagree: `timeout` by preflight_timeout_bin (either GNU
+# binary, never the Windows delay tool) and the `security` scope by
+# security_scan_bin (which honours RUN_ISSUES_GITLEAKS_BIN and friends).
+preflight_dep_present() {
+  if [ "$1" = "timeout" ]; then
+    [ -n "$(preflight_timeout_bin)" ]
+    return
+  fi
+  if [ "$(deps_field "$1" scope 2>/dev/null)" = "security" ]; then
+    security_scan_bin "$1" >/dev/null
+    return
+  fi
+  preflight_have "$1"
 }
 
 # preflight_report_tool <cmd> <level> <hint>
@@ -250,7 +272,7 @@ preflight_gate_report() {
   # their deterministic scans as logged no-ops, which is invisible unless the
   # machine says so itself (issue #376). A warning only — never fatal.
   for cmd in $(deps_names optional security); do
-    if ! preflight_have "$cmd"; then
+    if ! preflight_dep_present "$cmd"; then
       printf 'MISSING (optional): %s — %s\n' "$cmd" "$(preflight_install_hint "$cmd")"
     fi
   done

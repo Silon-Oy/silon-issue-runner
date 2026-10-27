@@ -330,8 +330,11 @@ else
 fi
 
 # ---- Case 7b: missing security scanners warn but never block (#376) ----
+# The overrides are unset too: security_scan_bin honours them, and a machine
+# (or an orchestrated run) exporting them would otherwise "find" the scanners.
 rm -f "$WORK/probe/gitleaks" "$WORK/probe/osv-scanner"
-out=$(unset -f jq; PATH="$WORK/probe" preflight_gate_report probe claude)
+out=$(unset -f jq; unset RUN_ISSUES_GITLEAKS_BIN RUN_ISSUES_OSV_SCANNER_BIN
+      PATH="$WORK/probe" preflight_gate_report probe claude)
 rc=$?
 if [ "$rc" -eq 0 ]; then
   echo "PASS: case7b missing scanners are not fatal"
@@ -345,6 +348,16 @@ for want in 'MISSING (optional): gitleaks' 'MISSING (optional): osv-scanner'; do
     echo "FAIL: case7b did not report '$want' — got: $out"; FAIL=1
   fi
 done
+
+# An override naming an executable counts as installed, exactly as it does for
+# the scan itself — the warning must not contradict the scanner that runs.
+out=$(unset -f jq; RUN_ISSUES_GITLEAKS_BIN="$WORK/probe/git" RUN_ISSUES_OSV_SCANNER_BIN="$WORK/probe/git" \
+      PATH="$WORK/probe" preflight_gate_report probe claude)
+if printf '%s\n' "$out" | grep -qE 'MISSING \(optional\): (gitleaks|osv-scanner)'; then
+  echo "FAIL: case7b an executable RUN_ISSUES_*_BIN override was reported missing — got: $out"; FAIL=1
+else
+  echo "PASS: case7b the scanner overrides count as installed"
+fi
 
 # ---- Case 8: preflight_repo_write_report ----
 # The probe EXECUTES gh, so it is driven with a PATH stub whose answer is set by
