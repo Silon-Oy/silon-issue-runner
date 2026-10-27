@@ -171,7 +171,7 @@ repo_audit_agent() {
 }
 
 # repo_audit_apply <kind> <dry-run 0|1> <reopen-comment> <key-fn> <labels-fn>
-#                  <title-fn> <body-fn>
+#                  <title-fn> <body-fn> [<assignee-fn>]
 # Read findings `<origin>|<severity>|<confidence>|<location>|<description>` on
 # stdin (origin: agent | scanner) and carry each out. The audit's own parts are
 # the four functions:
@@ -180,13 +180,16 @@ repo_audit_agent() {
 #   <labels-fn> <severity>                  → the labels CSV, <kind>'s label first
 #   <title-fn> <severity> <location> <description>
 #   <body-fn> <severity> <confidence> <location> <description> <source> <fingerprint>
+#   <assignee-fn> <severity>                → the login to route the issue to, or
+#                                             nothing (optional; finding_issue_apply)
 #
 # Prints one line per finding: <action>\t<severity>\t<location>\t<description>.
 # Sets REPO_AUDIT_FINDINGS and REPO_AUDIT_WRITE_FAILED (counts). Uses OWNER_REPO
 # and INDEX.
 repo_audit_apply() {
   local kind="$1" dry="$2" comment="$3" key_fn="$4" labels_fn="$5" title_fn="$6" body_fn="$7"
-  local row origin rest sev conf loc desc sk source key fp labels plan title body res seen=" "
+  local assignee_fn="${8:-}"
+  local row origin rest sev conf loc desc sk source key fp labels assignee plan title body res seen=" "
   REPO_AUDIT_FINDINGS=0
   REPO_AUDIT_WRITE_FAILED=0
   while IFS= read -r row; do
@@ -206,17 +209,19 @@ repo_audit_apply() {
     seen="$seen$fp "
 
     labels=$("$labels_fn" "$sev")
+    assignee=""
+    [ -n "$assignee_fn" ] && assignee=$("$assignee_fn" "$sev")
 
     if [ "$dry" = 1 ]; then
       plan=$(finding_issue_plan "$INDEX" "$kind" "$fp")
-      case "$plan" in create|reopen*) plan="$plan [$labels]" ;; esac
+      case "$plan" in create|reopen*) plan="$plan [$labels]${assignee:+ @$assignee}" ;; esac
       printf '%s\t%s\t%s\t%s\n' "$plan" "$sev" "$loc" "$desc"
       continue
     fi
 
     title=$("$title_fn" "$sev" "$loc" "$desc")
     body=$("$body_fn" "$sev" "$conf" "$loc" "$desc" "$source" "$fp")
-    if res=$(finding_issue_apply "$OWNER_REPO" "$INDEX" "$kind" "$fp" "$title" "$body" "$labels" "$comment"); then
+    if res=$(finding_issue_apply "$OWNER_REPO" "$INDEX" "$kind" "$fp" "$title" "$body" "$labels" "$comment" "$assignee"); then
       printf '%s\t%s\t%s\t%s\n' "$res" "$sev" "$loc" "$desc"
     else
       REPO_AUDIT_WRITE_FAILED=$((REPO_AUDIT_WRITE_FAILED + 1))

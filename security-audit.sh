@@ -16,7 +16,10 @@
 #      completed one is reopened only when the finding recurs, one closed as
 #      not planned is never reopened
 #   4. findings at or above the auto-run threshold get this machine's pickup
-#      labels (poller_pick_labels), so the runner fixes them like any issue.
+#      labels (poller_pick_labels), so the runner fixes them like any issue —
+#      and, when the repo's watchlist entry routes by `assignees`, the first
+#      allowed login as assignee (pick_assignee_route, issue #374): the issue
+#      is written by the runner's own identity, which the list does not name.
 #
 # The audit never changes code. It runs in a temporary detached worktree of
 # <remote>/<default-branch> (removed on exit); the operator's working tree is
@@ -39,7 +42,8 @@
 #                      (create / exists / reopen / dismissed); no GitHub write
 #   --watchlist <path> where the pickup labels come from (poller semantics: the
 #                      ONLY candidate). A repo the watchlist does not list gets
-#                      the built-in default pickup label.
+#                      the built-in default pickup label. Its `assignees` key
+#                      routes the auto-run issues to the first allowed login.
 #
 # Output (stdout): one line per finding — action, severity, location, text —
 # then a summary line. Diagnostics go to stderr.
@@ -115,6 +119,8 @@ source_machine_env
 . "$SCRIPT_DIR/lib/poller-config.sh"
 # shellcheck source=lib/security-scan.sh
 . "$SCRIPT_DIR/lib/security-scan.sh"
+# shellcheck source=lib/issue.sh
+. "$SCRIPT_DIR/lib/issue.sh"
 set +e
 
 say() { repo_audit_say "$@"; }
@@ -142,7 +148,12 @@ WATCHLIST=$(poller_resolve_watchlist "$WATCHLIST_OVERRIDE" \
   "$HOME/dotfiles/machine-studio/run-issues-watchlist.json") || WATCHLIST=""
 PICK_LABELS=$(poller_watchlist_pick_labels "$WATCHLIST" "$REPO") \
   || say "$REPO is not in a watchlist — using the default pickup labels ($PICK_LABELS)"
-say "auditing $OWNER_REPO at $BASE_REF ($HEAD_SHA); auto-run threshold '$AUTO_RUN_MIN', pickup labels '$PICK_LABELS'"
+# The assignee axis of pickup (#238): read with the poller's own reader and
+# resolved with the pickup filter's own split, so the issue matches this
+# machine's pickup. Empty when the repo does not route by assignee.
+PICK_ASSIGNEES=$(poller_watchlist_pick_assignees "$WATCHLIST" "$REPO")
+ROUTE_ASSIGNEE=$(pick_assignee_route "$PICK_ASSIGNEES")
+say "auditing $OWNER_REPO at $BASE_REF ($HEAD_SHA); auto-run threshold '$AUTO_RUN_MIN', pickup labels '$PICK_LABELS'${PICK_ASSIGNEES:+, assignees '$PICK_ASSIGNEES' → '${ROUTE_ASSIGNEE:-(none)}'}"
 
 # ---- launch check before anything costs ---------------------------------------
 repo_audit_preflight || exit $?
@@ -214,6 +225,13 @@ _audit_labels() {
   fi
 }
 
+# _audit_assignee <severity> — the routed assignee, on the same condition as
+# the pickup labels: an issue that is not picked up needs no route.
+_audit_assignee() {
+  finding_issues_auto_runs "$AUTO_RUN_MIN" "$1" && printf '%s' "$ROUTE_ASSIGNEE"
+  return 0
+}
+
 _audit_title() {
   local sev="$1" loc="$2" desc="$3" short file
   file=$(finding_location_file "$loc")
@@ -267,7 +285,7 @@ EOF
 # ---- apply --------------------------------------------------------------------
 REOPEN_COMMENT="Löydös toistui koko repon tietoturva-auditoinnissa (\`security-audit.sh\`, commit \`$HEAD_SHA\`), joten issue avattiin uudelleen."
 repo_audit_apply "$AUDIT_KIND" "$DRY_RUN" "$REOPEN_COMMENT" \
-  _audit_source_key _audit_labels _audit_title _audit_body <<EOF
+  _audit_source_key _audit_labels _audit_title _audit_body _audit_assignee <<EOF
 $FINDINGS
 EOF
 

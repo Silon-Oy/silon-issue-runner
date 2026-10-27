@@ -120,14 +120,24 @@ finding_issue_note() {
 }
 
 # finding_issue_apply <owner/repo> <index-file> <kind> <fingerprint> <title>
-#                     <body> <labels-csv> <reopen-comment>
+#                     <body> <labels-csv> <reopen-comment> [<assignee>]
 # Carries out finding_issue_plan. <labels-csv> is every label the issue should
 # carry (the kind's label first, then e.g. pickup labels); each is ensured in the
 # repo before use. A reopened issue gets <reopen-comment> and the labels.
+#
+# <assignee> (optional, issue #374) routes the issue to a login — the caller
+# resolves it with pick_assignee_route so the issue matches this machine's
+# pickup in a repo with an `assignees` list. A created issue gets it in the SAME
+# POST, so there is never a labelled-but-unrouted issue (the #239 rule). A
+# reopened issue gets it only when it has no assignee: an existing assignment
+# is a human's routing and stays. GitHub silently drops an assignee without
+# repo access; that, like a failed assignee write on reopen, is a warning on
+# stderr and not rc 1 — the issue exists either way.
 # The body must already contain finding_marker. Prints "<action> #<N>" (create
 # prints "created #N"); rc 1 on a failed GitHub write, with the reason on stderr.
 finding_issue_apply() {
   local owner_repo="$1" index="$2" kind="$3" fp="$4" title="$5" body="$6" labels="$7" comment="$8"
+  local assignee="${9:-}"
   local plan action n lbl resp
   plan=$(finding_issue_plan "$index" "$kind" "$fp")
   action="${plan%% *}"
@@ -149,9 +159,13 @@ finding_issue_apply() {
 $(printf '%s' "$labels" | tr ',' '\n')
 EOF
 
+  local -a assignee_args=()
+  [ -n "$assignee" ] && assignee_args=(-f "assignees[]=$assignee")
+
   if [ "$action" = "create" ]; then
     if ! resp=$(labels_gh api --method POST "repos/$owner_repo/issues" \
-                  -f "title=$title" -f "body=$body" ${label_args[@]+"${label_args[@]}"} 2>&1); then
+                  -f "title=$title" -f "body=$body" ${label_args[@]+"${label_args[@]}"} \
+                  ${assignee_args[@]+"${assignee_args[@]}"} 2>&1); then
       _labels_diag "finding_issue_apply($owner_repo: create $fp)" "$resp"
       return 1
     fi
@@ -160,15 +174,29 @@ EOF
       _labels_diag "finding_issue_apply($owner_repo: create $fp)" "no issue number in the response"
       return 1
     fi
+    if [ -n "$assignee" ] \
+       && ! printf '%s' "$resp" | jq -e --arg a "$assignee" 'any(.assignees[]?; .login == $a)' >/dev/null 2>&1; then
+      _labels_diag "finding_issue_apply($owner_repo#$n: assign $assignee)" \
+        "GitHub did not keep the assignee (no repo access?) — the issue is not routed"
+    fi
     finding_issue_note "$index" "$kind" "$fp" "$n" "$title"
     printf 'created #%s' "$n"
     return 0
   fi
 
   # reopen
-  if ! resp=$(labels_gh api --method PATCH "repos/$owner_repo/issues/$n" -f state=open 2>&1 >/dev/null); then
+  if ! resp=$(labels_gh api --method PATCH "repos/$owner_repo/issues/$n" -f state=open 2>&1); then
     _labels_diag "finding_issue_apply($owner_repo#$n: reopen)" "$resp"
     return 1
+  fi
+  local assigned
+  assigned=$(printf '%s' "$resp" | jq -r '(.assignees // []) | length' 2>/dev/null)
+  if [ -n "$assignee" ] && [ "$assigned" = 0 ]; then
+    local aresp
+    if ! aresp=$(labels_gh api --method POST "repos/$owner_repo/issues/$n/assignees" \
+                   -f "assignees[]=$assignee" 2>&1 >/dev/null); then
+      _labels_diag "finding_issue_apply($owner_repo#$n: assign $assignee)" "$aresp"
+    fi
   fi
   finding_issue_note "$index" "$kind" "$fp" "$n" "$title"
   if ! resp=$(labels_gh api --method POST "repos/$owner_repo/issues/$n/comments" -f "body=$comment" 2>&1 >/dev/null); then

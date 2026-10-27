@@ -25,6 +25,11 @@
 #   L) scanner failed     -> exit 5, the failure is not an issue
 #   M) listing failed     -> exit 4, no agent call, no write
 #   N) scanner finding    -> a gitleaks row becomes an issue keyed on its rule
+#   O) assignee routing   -> (issue #374) a watchlist `assignees` list routes an
+#                            auto-run issue to its first allowed login and the
+#                            issue then matches pickup; no key / only `not:` /
+#                            below threshold => no assignee; a reopened issue
+#                            is routed only when it has no assignee
 #
 # Run: bash tests/test-security-audit.sh
 
@@ -99,9 +104,18 @@ case "\$*" in
         body=*)  printf '%s' "\${a#body=}" > "$WORK/created/\$n.body" ;;
         title=*) printf '%s' "\${a#title=}" > "$WORK/created/\$n.title" ;;
         labels\[\]=*) printf '%s\n' "\${a#labels[]=}" >> "$WORK/created/\$n.labels" ;;
+        assignees\[\]=*) printf '%s\n' "\${a#assignees[]=}" >> "$WORK/created/\$n.assignees" ;;
       esac
     done
-    printf '{"number":%s}\n' "\$n"; exit 0 ;;
+    if [ -f "$WORK/created/\$n.assignees" ] && [ ! -f "$WORK/drop-assignee" ]; then
+      printf '{"number":%s,"assignees":[{"login":"%s"}]}\n' "\$n" "\$(head -1 "$WORK/created/\$n.assignees")"
+    else
+      printf '{"number":%s,"assignees":[]}\n' "\$n"
+    fi
+    exit 0 ;;
+  *"--method PATCH repos/Silon-Oy/app/issues/"*)
+    cat "$WORK/patch-resp" 2>/dev/null || echo '{"assignees":[]}'
+    exit 0 ;;
 esac
 exit 0
 SH
@@ -372,6 +386,100 @@ grep -qF "fp=$(fp_of gitleaks config/app.php generic-api-key) " "$WORK/created/1
 grep -q 'kierrätys' "$WORK/created/100.body" 2>/dev/null || bad N "secret issue lacks the rotation note"
 [ "$FAIL" = "$F0" ] && ok N "scanner finding filed"
 done_case
+
+# ===========================================================================
+echo "=== O: assignee routing (issue #374) ==="
+F0=$FAIL
+# wl_with <assignees-json-or-empty> — a watchlist entry for the repo.
+wl_with() {
+  if [ -n "$1" ]; then
+    jq -n --arg p "$REPO" --argjson a "$1" '{repos: [{path: $p, labels: ["auto-run"], assignees: $a}]}'
+  else
+    jq -n --arg p "$REPO" '{repos: [{path: $p, labels: ["auto-run"]}]}'
+  fi > "$WORK/wl.json"
+}
+# picked_by_filter <n> <assignees-csv> — does issue <n>, as created (labels,
+# assignees, author = the runner's own identity), pass the pickup filter?
+picked_by_filter() (
+  . "$HERE/../lib/issue.sh"; set +e
+  jq -n --argjson n "$1" \
+    --rawfile l "$WORK/created/$1.labels" \
+    --arg a "$(cat "$WORK/created/$1.assignees" 2>/dev/null)" \
+    '[{number:$n, labels:($l | split("\n") | map(select(length > 0)) | map({name:.})),
+       assignees:($a | split("\n") | map(select(length > 0)) | map({login:.})),
+       user:{login:"runner-app[bot]"}}]' \
+  | RUN_ISSUES_PICK_ASSIGNEES="$2" RUN_ISSUES_PICK_CLEAN=auto-clean RUN_ISSUES_PICK_RESET=auto-reset \
+      jq -r "$(_pick_filter_jq)"
+)
+
+setup O1   # routed repo: first allowed login, and pickup matches
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+wl_with '["not:runner-b","runner-a","other"]'
+WL="$WORK/wl.json" run_audit
+if [ "$RC" = 0 ] && [ "$(cat "$WORK/created/100.assignees" 2>/dev/null)" = runner-a ] \
+   && grep -qx auto-run "$WORK/created/100.labels" \
+   && [ "$(picked_by_filter 100 'not:runner-b,runner-a,other')" = 100 ]; then
+  ok O1 "routed to the first allowed login, and the issue matches pickup"
+else show O1; bad O1 "rc $RC, assignee '$(cat "$WORK/created/100.assignees" 2>/dev/null)', want runner-a and a pickup match"; fi
+# Without the route the same issue would not match: the guard is not vacuous.
+rm -f "$WORK/created/100.assignees"
+[ -z "$(picked_by_filter 100 'not:runner-b,runner-a,other')" ] || bad O1 "the unrouted issue matches too — the check proves nothing"
+done_case
+
+no_assignee_case() { # <label> <assignees-json-or-empty> <finding> <what>
+  setup "$1"
+  printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$3" > "$WORK/review.txt"
+  wl_with "$2"
+  WL="$WORK/wl.json" run_audit
+  if [ "$RC" = 0 ] && [ "$(creates)" = 1 ] && [ ! -e "$WORK/created/100.assignees" ] \
+     && ! grep -q 'assignees\[\]' "$WORK/gh.log"; then
+    ok "$1" "$4: no assignee"
+  else show "$1"; bad "$1" "$4: rc $RC, assignee '$(cat "$WORK/created/100.assignees" 2>/dev/null)'"; fi
+  done_case
+}
+no_assignee_case O2 "" "$F_HIGH" "no assignees key"
+no_assignee_case O3 '["not:someone"]' "$F_HIGH" "only a negation"
+no_assignee_case O4 '["runner-a"]' "$F_MED" "below the auto-run threshold"
+
+setup O5   # the route is shown in the dry-run plan
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+wl_with '["runner-a"]'
+WL="$WORK/wl.json" run_audit --dry-run
+grep -q '^create \[security,auto-run\] @runner-a' <<<"$OUT" && [ "$(writes)" = 0 ] \
+  && ok O5 "dry run names the route" || { show O5; bad O5 "dry-run plan lacks '@runner-a'"; }
+done_case
+
+setup O6   # reopen of an unassigned issue: routed
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+issue_json 8 closed completed "$FP_XSS" > "$WORK/issues.json"
+wl_with '["runner-a"]'
+WL="$WORK/wl.json" run_audit
+grep -q 'POST repos/Silon-Oy/app/issues/8/assignees -f assignees\[\]=runner-a' "$WORK/gh.log" \
+  && [ "$RC" = 0 ] && ok O6 "reopened unassigned issue routed" \
+  || { show O6; bad O6 "rc $RC, no assignee write on reopen"; }
+done_case
+
+setup O7   # reopen of an assigned issue: the human's routing stays
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+issue_json 8 closed completed "$FP_XSS" > "$WORK/issues.json"
+echo '{"assignees":[{"login":"human"}]}' > "$WORK/patch-resp"
+wl_with '["runner-a"]'
+WL="$WORK/wl.json" run_audit
+! grep -q 'issues/8/assignees' "$WORK/gh.log" && [ "$RC" = 0 ] \
+  && ok O7 "reopened assigned issue keeps its assignee" \
+  || { show O7; bad O7 "rc $RC, the existing assignment was touched"; }
+done_case
+
+setup O8   # GitHub drops the assignee (no repo access): warning, not a failure
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+touch "$WORK/drop-assignee"
+wl_with '["runner-a"]'
+WL="$WORK/wl.json" run_audit
+[ "$RC" = 0 ] && grep -q 'did not keep the assignee' <<<"$OUT" \
+  && ok O8 "dropped assignee reported, issue still filed" \
+  || { show O8; bad O8 "rc $RC, dropped assignee not reported"; }
+done_case
+[ "$FAIL" = "$F0" ] && ok O "assignee routing"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "security-audit: all passed" || echo "security-audit: FAILURES"

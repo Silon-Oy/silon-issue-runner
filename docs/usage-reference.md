@@ -73,6 +73,15 @@ Muoto ratkaisee kahden koneen jaon ilman toista repo-oikeuksin varustettua tunnu
 DENY-tunnukselta vaadita repo-oikeutta**. **Varoitus:** liian laaja DENY tuottaa **nolla osumaa
 yhtä hiljaa kuin väärä poimintalabel** (README §6.2) — repo lakkaa poimimasta ilman virhettä ja lokia.
 
+**Runnerin itse kirjoittamat issuet (issue #374).** Tietoturva-auditoinnin
+(`security-audit.sh`) löydösissuen avaaja on runnerin oma identiteetti, usein GitHub App,
+jota lista ei yleensä nimeä. Siksi auditointi assignaa poimintalabelit saavan löydösissuen
+listan **ensimmäiselle ALLOW-tunnukselle**, jota DENY ei myös nimeä (`pick_assignee_route`,
+sama ALLOW/DENY-jako kuin poiminnalla). Pelkillä `not:`-alkioilla assigneeta ei aseteta,
+koska avaaja ei silloin ole kielletty. Uudelleen avattuun issueen assignee lisätään vain, jos
+sillä ei ole assigneeta: olemassa oleva assignaatio on ihmisen reititys. GitHub pudottaa
+hiljaa assigneen, jolla ei ole repo-oikeutta; auditointi kirjoittaa siitä varoituksen.
+
 ### Prioriteetti: `priority-high` (issue #316)
 
 Ehdokkaiden järjestys repon sisällä on **ensin prioriteetti, sitten vanhin**. Issue, jolla on
