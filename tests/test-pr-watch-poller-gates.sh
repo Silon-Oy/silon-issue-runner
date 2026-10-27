@@ -151,8 +151,9 @@ case "$CMD" in
   *PR_WATCH_CI_POLL_SECS=*) bad "empty setting forwarded — would mask the env file: $CMD" ;;
   *) ok "empty setting not forwarded" ;;
 esac
-# The launched command, run by a shell, must see the quoted value intact.
-GOT="$(bash -c "${CMD%%\'$ROOT/pr-watch.sh\'*} env" 2>/dev/null | sed -n 's/^PR_WATCH_TEST_QUOTED=//p')"
+# The launched command's prefixes, run by a shell (with `env` in place of the
+# watcher), must hand over the quoted value intact.
+GOT="$(bash -c "${CMD% \'*/pr-watch.sh\' --remote*} env" 2>/dev/null | sed -n 's/^PR_WATCH_TEST_QUOTED=//p')"
 if [ "$GOT" = "it's; touch /tmp/never" ]; then
   ok "quoted value reaches the watcher as one word"
 else
