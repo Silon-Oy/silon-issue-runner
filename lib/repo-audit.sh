@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lib/repo-audit.sh — the skeleton every whole-repo audit shares: the security
-# audit (security-audit.sh, #339) and the coherence audit (coherence-audit.sh,
-# #342).
+# audit (security-audit.sh, #339), the coherence audit (coherence-audit.sh,
+# #342) and the quality audit (quality-audit.sh, #395).
 #
 # An audit differs from another in WHAT it asks (its prompt, its material, its
 # issue text, which findings may start a run). It does not differ in how the

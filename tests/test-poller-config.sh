@@ -321,7 +321,7 @@ done
 # kind's interval variable.
 EXAMPLE_READERS=("${POLLERS[@]}" "$LIB" "$ROOT/status-render.sh" \
   "$ROOT/action-server.sh" "$ROOT/lib/action-service.py" "$ROOT/self-update.sh" \
-  "$ROOT/lib/github-app-auth.sh" "$ROOT/security-audit.sh" "$ROOT/coherence-audit.sh" "$ROOT/lib/audit-schedule.sh")
+  "$ROOT/lib/github-app-auth.sh" "$ROOT/security-audit.sh" "$ROOT/coherence-audit.sh" "$ROOT/quality-audit.sh" "$ROOT/lib/audit-schedule.sh")
 EXAMPLE="$ROOT/examples/run-issues-poller.env.example"
 if [ ! -f "$EXAMPLE" ]; then
   bad "case9 examples/run-issues-poller.env.example is missing"

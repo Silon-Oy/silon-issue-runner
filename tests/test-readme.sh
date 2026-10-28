@@ -134,6 +134,8 @@ DEPSCAN_CODES="$(sed -n '/^# Exit codes/,/^#$/p' "$ROOT/dependency-scan.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 COHERENCE_CODES="$(sed -n '/^# Exit codes/,/^#$/p' "$ROOT/coherence-audit.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
+QUALITY_CODES="$(sed -n '/^# Exit codes/,/^#$/p' "$ROOT/quality-audit.sh" \
+  | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 ESCAPE_TRACE_CODES="$(sed -n '/^# Exit codes/,/^#$/p' "$ROOT/escape-trace.sh" \
   | sed -n 's/^#[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]].*/\1/p')"
 PUBLISH_CODES=""
@@ -154,6 +156,7 @@ assert_exit_codes "evolution-digest" "evolution-digest.sh" "$EVO_DIGEST_CODES"
 assert_exit_codes "security-audit" "security-audit.sh" "$AUDIT_CODES"
 assert_exit_codes "dependency-scan" "dependency-scan.sh" "$DEPSCAN_CODES"
 assert_exit_codes "coherence-audit" "coherence-audit.sh" "$COHERENCE_CODES"
+assert_exit_codes "quality-audit" "quality-audit.sh" "$QUALITY_CODES"
 assert_exit_codes "escape-trace" "escape-trace.sh" "$ESCAPE_TRACE_CODES"
 # The maintainer tool is not shipped in the public mirror; its exit codes are
 # checked only where the script exists (the upstream).

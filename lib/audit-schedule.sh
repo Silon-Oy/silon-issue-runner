@@ -15,7 +15,7 @@
 # logs or GitHub.
 #
 # Kinds: security (security-audit.sh, #339), coherence (coherence-audit.sh,
-# #342) and dependency-scan (dependency-scan.sh, #382: the security audit's
+# #342), quality (quality-audit.sh, #395) and dependency-scan (dependency-scan.sh, #382: the security audit's
 # scanners alone, no agent call, so it can run on a denser interval).
 #
 # CALLING CONTRACT — every kind's script MUST accept exactly this form, because
@@ -59,7 +59,7 @@ _AUDIT_SCHEDULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # audit_kinds — the audit kinds the poller schedules, space-separated.
 audit_kinds() {
-  printf 'security coherence dependency-scan'
+  printf 'security coherence quality dependency-scan'
 }
 
 # audit_kind_script <kind> — the package-root script that runs <kind>. An
@@ -69,6 +69,7 @@ audit_kind_script() {
   case "${1:-}" in
     security)  printf 'security-audit.sh' ;;
     coherence) printf 'coherence-audit.sh' ;;
+    quality)   printf 'quality-audit.sh' ;;
     dependency-scan) printf 'dependency-scan.sh' ;;
     *) return 1 ;;
   esac
@@ -83,6 +84,7 @@ audit_kind_env_var() {
   case "${1:-}" in
     security)  printf 'RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS' ;;
     coherence) printf 'RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS' ;;
+    quality)   printf 'RUN_ISSUES_QUALITY_AUDIT_INTERVAL_DAYS' ;;
     dependency-scan) printf 'RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS' ;;
     *) return 1 ;;
   esac
@@ -95,6 +97,7 @@ audit_kind_watchlist_key() {
   case "${1:-}" in
     security)  printf 'security_audit_interval_days' ;;
     coherence) printf 'coherence_audit_interval_days' ;;
+    quality)   printf 'quality_audit_interval_days' ;;
     dependency-scan) printf 'dependency_scan_interval_days' ;;
     *) return 1 ;;
   esac

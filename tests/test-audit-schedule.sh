@@ -31,12 +31,15 @@ WORK=$(mktemp -d -t audit-schedule.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- kind table -----------------------------------------------------------------
-check "security, coherence and dependency-scan are the scheduled kinds" "$(audit_kinds)" "security coherence dependency-scan"
+check "security, coherence, quality and dependency-scan are the scheduled kinds" "$(audit_kinds)" "security coherence quality dependency-scan"
 check "security runs security-audit.sh" "$(audit_kind_script security)" "security-audit.sh"
 check "the script exists in the package root" "$([ -x "$ROOT/$(audit_kind_script security)" ] && echo y)" "y"
 check "security interval variable" "$(audit_kind_env_var security)" "RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS"
 check "coherence runs coherence-audit.sh" "$(audit_kind_script coherence)" "coherence-audit.sh"
 check "coherence interval variable" "$(audit_kind_env_var coherence)" "RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS"
+check "quality runs quality-audit.sh" "$(audit_kind_script quality)" "quality-audit.sh"
+check "quality interval variable" "$(audit_kind_env_var quality)" "RUN_ISSUES_QUALITY_AUDIT_INTERVAL_DAYS"
+check "quality watchlist key" "$(audit_kind_watchlist_key quality)" "quality_audit_interval_days"
 check "dependency-scan runs dependency-scan.sh" "$(audit_kind_script dependency-scan)" "dependency-scan.sh"
 check "dependency-scan interval variable" "$(audit_kind_env_var dependency-scan)" "RUN_ISSUES_DEPENDENCY_SCAN_INTERVAL_DAYS"
 check "dependency-scan watchlist key" "$(audit_kind_watchlist_key dependency-scan)" "dependency_scan_interval_days"
@@ -70,6 +73,17 @@ check "another kind's key does not apply" "$(audit_interval_days '{"coherence":{
 check "coherence reads its own key" "$(audit_interval_days '{"coherence":{"audit_interval_days":3}}' coherence 7)" "3"
 check "security's key does not apply to coherence" "$(audit_interval_days '{"security":{"audit_interval_days":1}}' coherence '')" ""
 check "coherence 0 switches the machine's schedule off" "$(audit_interval_days '{"coherence":{"audit_interval_days":0}}' coherence 7)" ""
+check "quality: unset everywhere is not scheduled" "$(audit_interval_days '' quality '')" ""
+check "quality: another kind's repo key does not apply" "$(audit_interval_days '{"security":{"audit_interval_days":1},"coherence":{"audit_interval_days":1}}' quality '')" ""
+check "quality reads its own key" "$(audit_interval_days '{"quality":{"audit_interval_days":14}}' quality 30)" "14"
+check "quality: repo 0 switches the machine's schedule off" "$(audit_interval_days '{"quality":{"audit_interval_days":0}}' quality 30)" ""
+qeff() { # <repo-config> <watchlist-value> <env-value> — the poller's chain for quality
+  audit_interval_days "$1" quality "$(audit_machine_interval "$2" "$3")"
+}
+check "quality: watchlist wins over the environment" "$(qeff '' 30 7)" "30"
+check "quality: absent watchlist key falls back to the environment" "$(qeff '' @absent 7)" "7"
+check "quality: repo wins over the watchlist" "$(qeff '{"quality":{"audit_interval_days":2}}' 30 7)" "2"
+check "quality: nothing set anywhere is not scheduled" "$(qeff '' @absent '')" ""
 check "dependency-scan reads its own (dashed) repo key" "$(audit_interval_days '{"dependency-scan":{"audit_interval_days":2}}' dependency-scan 7)" "2"
 check "dependency-scan: machine value without a repo key" "$(audit_interval_days '{"security":{"audit_interval_days":30}}' dependency-scan 1)" "1"
 check "dependency-scan: repo 0 switches it off" "$(audit_interval_days '{"dependency-scan":{"audit_interval_days":0}}' dependency-scan 1)" ""
@@ -187,7 +201,7 @@ check "the prefix counts against the run-issues- cap" "${_pre%%audit-}" "run-iss
 check "parse: kind and a dashed slug" "$(audit_session_parse run-issues-audit-coherence-example-org-repo-a)" "coherence example-org-repo-a"
 check "parse round-trips every kind" \
   "$(for k in $(audit_kinds); do audit_session_parse "$(audit_session_name "$k" o-r)"; echo; done | tr '\n' '|')" \
-  "security o-r|coherence o-r|dependency-scan o-r|"
+  "security o-r|coherence o-r|quality o-r|dependency-scan o-r|"
 check "parse: a dashed kind with a dashed slug" "$(audit_session_parse run-issues-audit-dependency-scan-example-org-repo-a)" "dependency-scan example-org-repo-a"
 check "parse: an unknown kind is not an audit" "$(rc_of audit_session_parse run-issues-audit-nosuch-o-r)" "1"
 check "parse: a run session is not an audit" "$(rc_of audit_session_parse run-issues-o-r-issue-5)" "1"
@@ -228,6 +242,9 @@ check "with poller-config.sh the entry's value is read" \
   "$( . "$ROOT/lib/poller-config.sh"; set +e; audit_watchlist_interval "$WORK/wl.json" "$WORK/r" security)" "14"
 check "with poller-config.sh an unset kind reads as absent" \
   "$( . "$ROOT/lib/poller-config.sh"; set +e; audit_watchlist_interval "$WORK/wl.json" "$WORK/r" coherence)" "@absent"
+printf '{"repos":[{"path":"%s/r","quality_audit_interval_days":21}]}\n' "$WORK" > "$WORK/wl-q.json"
+check "with poller-config.sh the quality key is read" \
+  "$( . "$ROOT/lib/poller-config.sh"; set +e; audit_watchlist_interval "$WORK/wl-q.json" "$WORK/r" quality)" "21"
 
 # ---- last outcome (#373) ----------------------------------------------------------
 check "rc 0 is ok" "$(audit_rc_outcome 0)" "ok"

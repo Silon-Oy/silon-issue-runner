@@ -15,6 +15,8 @@
 #   h  a usage-limited tick starts no audit
 #   k  the coherence kind (#342): its own interval and session, the same
 #      spawn arguments; each kind's interval schedules only that kind
+#   q  the quality kind (#395): quality-audit.sh in its own session with the
+#      shared arguments; its interval schedules no other kind
 #   l  machine interval set but the repo config is unparseable, or its value is
 #      `1.5` → one log line over two ticks; `0` → no line (#360)
 #   m  "script not executable" and "cannot record" are logged once over two
@@ -234,6 +236,21 @@ esac
                                                               || bad "k no coherence state file"
 [ ! -e "$WORK/logs-k/.audit-last-security-example-org-repoa" ] && ok "k the coherence interval does not schedule security" \
                                                               || bad "k security scheduled by the coherence interval"
+
+# ---- q: the quality kind (#395) ----------------------------------------------------
+echo 0 > "$LS_SEQ"
+run_poller "$WORK/hq" "$WORK/logs-q" "$WL" RUN_ISSUES_QUALITY_AUDIT_INTERVAL_DAYS=30
+[ "$(audit_spawns)" = 1 ] && ok "q quality interval: exactly one audit spawn" || bad "q quality: $(audit_spawns) spawns"
+line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)
+case "$line" in
+  *"-s run-issues-audit-quality-example-org-repoa "*"'$ROOT/quality-audit.sh' '$REPO' --remote 'origin' --watchlist '$WL'"*)
+    ok "q spawns quality-audit.sh in its own session with the shared arguments" ;;
+  *) bad "q unexpected spawn: $line" ;;
+esac
+[ -s "$WORK/logs-q/.audit-last-quality-example-org-repoa" ] && ok "q quality start recorded under its own kind" \
+                                                            || bad "q no quality state file"
+[ -z "$(find "$WORK/logs-q" -name '.audit-last-*' ! -name '.audit-last-quality-*')" ] \
+  && ok "q the quality interval schedules no other kind" || bad "q another kind scheduled by the quality interval"
 
 # ---- l: an unusable repo config is logged once ------------------------------------
 echo 0 > "$LS_SEQ"
