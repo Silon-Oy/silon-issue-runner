@@ -118,6 +118,17 @@
 #                                        failures (e.g. the sibling listing's
 #                                        403/404) in a row before the PR is held
 #                                        for a human instead of retried.
+#   PR_WATCH_ENABLE_DATA_MIGRATION_GATE  default 0 — OFF. When 1, before the merge
+#                                        gates (issue #409) the PR's diff is
+#                                        scanned DETERMINISTICALLY (no agent) for
+#                                        data-destroying statements in migration
+#                                        files (lib/data-migration.sh; extra paths
+#                                        from the BASE branch's
+#                                        `.data_migration.paths`). A hit, or a scan
+#                                        that cannot run, adds manual-merge + one
+#                                        marker comment and holds the PR (exit 10);
+#                                        a PR carrying manual-merge is never merged
+#                                        by the watcher while this is on.
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
 #   PR_WATCH_LABELS_CSV                  optional scan filter (unused gate today;
 #                                        the merge label is the real gate).
@@ -141,7 +152,9 @@
 #      durable condition, not the transient "retry next poll" of code 4
 #   10 a merge gate held the PR for a human (findings at or above the hold
 #      threshold the agent could not fix, fix cap spent, or the review could not
-#      run — PR commented with the findings, needs-human label added)
+#      run — PR commented with the findings, needs-human label added), or the
+#      data-migration hold found a data-destroying statement or could not scan
+#      (manual-merge label + one marker comment, issue #409)
 
 set -euo pipefail
 
@@ -196,6 +209,13 @@ machine_env_capture
 # shellcheck source=lib/security-scan.sh
 # Optional deterministic scanners (issue #336) a gate can feed its reviewer.
 . "$SCRIPT_DIR/lib/security-scan.sh"
+# shellcheck source=lib/data-migration.sh
+# The deterministic data-destroying-migration scan (issue #409).
+. "$SCRIPT_DIR/lib/data-migration.sh"
+# shellcheck source=lib/poller-config.sh
+# EPIC_MANUAL_MERGE_LABEL, the ONE source of the manual-merge label's name, which
+# the data-migration hold writes and honours. Functions and constants only.
+. "$SCRIPT_DIR/lib/poller-config.sh"
 
 # rate_limit_* (issue #126): the watcher spends the SAME GitHub quota as the
 # pollers, so it must be able to trip the shared backoff. Functions only.
@@ -247,6 +267,7 @@ PR_WATCH_SEMANTIC_REVIEW_TIMEOUT="${PR_WATCH_SEMANTIC_REVIEW_TIMEOUT:-1800}"
 PR_WATCH_SEMANTIC_FIX_TIMEOUT="${PR_WATCH_SEMANTIC_FIX_TIMEOUT:-1800}"
 PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY="${PR_WATCH_SEMANTIC_HOLD_MIN_SEVERITY:-low}"
 PR_WATCH_GATE_TRIGGER_FAIL_MAX="${PR_WATCH_GATE_TRIGGER_FAIL_MAX:-3}"
+PR_WATCH_ENABLE_DATA_MIGRATION_GATE="${PR_WATCH_ENABLE_DATA_MIGRATION_GATE:-0}"
 case "$PR_WATCH_GATE_TRIGGER_FAIL_MAX" in ''|*[!0-9]*|0) PR_WATCH_GATE_TRIGGER_FAIL_MAX=3 ;; esac
 PR_WATCH_CODEX_CMD_DEFAULT="codex"
 PR_WATCH_CODEX_CMD="${PR_WATCH_CODEX_CMD:-$PR_WATCH_CODEX_CMD_DEFAULT}"
@@ -674,6 +695,17 @@ watch_one() {
   # For a gate not keyed by the base the repeat costs one fetch and finds the
   # new head's own record.
   PR_GATE_HEAD_SHA=""
+  # The data-migration hold (issue #409) runs first: it is deterministic and
+  # cheap, and a PR it holds must not spend agent reviews first.
+  local dm_rc
+  if [ "$PR_WATCH_ENABLE_DATA_MIGRATION_GATE" = "1" ]; then
+    dm_rc=0
+    pr_run_data_migration_gate "$pr_num" "$rid" "$run_dir" "$pr_json" || dm_rc=$?
+    if [ "$dm_rc" -ne 0 ]; then
+      _release
+      return "$dm_rc"
+    fi
+  fi
   local gate grc gates_on=0 gate_moved
   for gate in $MERGE_GATES; do
     _merge_gate_spec "$gate" && [ "$GATE_ENABLED" = "1" ] && gates_on=$((gates_on + 1))
@@ -693,6 +725,26 @@ watch_one() {
     done
     [ "$gate_moved" = 1 ] || break
   done
+  # A merge gate's fix moves the head after the data-migration scan, so the new
+  # head is scanned too. Without merge gates the merge is bound to the scanned
+  # head, so a push after the scan cannot slip in unscanned.
+  if [ "$PR_WATCH_ENABLE_DATA_MIGRATION_GATE" = "1" ]; then
+    if [ -z "$PR_GATE_HEAD_SHA" ]; then
+      PR_GATE_HEAD_SHA="$DATA_MIGRATION_SCANNED_SHA"
+    elif [ "$PR_GATE_HEAD_SHA" != "$DATA_MIGRATION_SCANNED_SHA" ]; then
+      dm_rc=0
+      pr_run_data_migration_gate "$pr_num" "$rid" "$run_dir" "$pr_json" || dm_rc=$?
+      if [ "$dm_rc" -ne 0 ]; then
+        _release
+        return "$dm_rc"
+      fi
+      if [ "$DATA_MIGRATION_SCANNED_SHA" != "$PR_GATE_HEAD_SHA" ]; then
+        log "data-migration gate: PR #$pr_num head moved again after the merge gates — not merging, retrying next poll"
+        _release
+        return 4
+      fi
+    fi
+  fi
 
   # ----- P6: Merge --------------------------------------------------------
   # Merge as the App so the "Merged by" attribution on the PR is <app>[bot].
@@ -1580,6 +1632,125 @@ _merge_gate_spec() {
       ;;
     *) return 1 ;;
   esac
+}
+
+# pr_run_data_migration_gate <pr-number> <run-id> <run-dir> <pr-json>
+# The data-migration hold (issue #409). Deterministic, no agent: scans what the
+# PR brings (base...head on the PR's own remote) with lib/data-migration.sh and
+# holds a PR that adds a data-destroying statement for a manual merge. It is not
+# a MERGE_GATES entry because that mechanism is an agent review with a fix loop,
+# and a destructive migration is not something an agent may "fix" away.
+#
+# The hold flag is the manual-merge label (EPIC_MANUAL_MERGE_LABEL): read from
+# the payload already fetched, so a held PR costs no gh call on later ticks. The
+# scan runs in REPO_ROOT, which shares the object store with the run's worktree,
+# so a missing worktree does not stop it. Extra paths come from the BASE
+# branch's config: the PR under review must not narrow its own scan.
+#
+# Sets DATA_MIGRATION_SCANNED_SHA (the head that was scanned and passed).
+# Returns: 0  no hit — continue to the merge gates
+#          10 held now (label + one marker comment per head)
+#          4  not this tick: already held by the label, or the fetch failed
+#             (transient) — never a merge
+pr_run_data_migration_gate() {
+  local pr_num="$1" rid="$2" run_dir="$3" pr_json="$4"
+  DATA_MIGRATION_SCANNED_SHA=""
+
+  if pr_has_label "$pr_json" "$EPIC_MANUAL_MERGE_LABEL"; then
+    log "PR #$pr_num carries $EPIC_MANUAL_MERGE_LABEL — held for a manual merge; not merging"
+    return 4
+  fi
+
+  local remote="${PR_ROUTE_REMOTE:-origin}" branch base_ref
+  branch=$(run_field "$rid" '.branch')
+  [ -n "$branch" ] || branch=$(jq -r '.headRefName // empty' <<<"$pr_json" 2>/dev/null || true)
+  base_ref=$(jq -r '.baseRefName // "main"' <<<"$pr_json" 2>/dev/null || echo main)
+  if [ -z "$branch" ]; then
+    _pr_data_migration_hold "$pr_num" "$run_dir" "?" \
+      "PR:n haaraa ei voitu selvittää, joten skannausta ei voitu ajaa" ""
+    return 10
+  fi
+
+  if ! _pr_fetch "$REPO_ROOT" "$base_ref" "$branch"; then
+    log "data-migration gate: git fetch failed for PR #$pr_num — not merging, retrying next poll"
+    [ -n "$run_dir" ] && [ -d "$run_dir" ] && \
+      state_event "$run_dir" "pr_watch_skipped" "pr=$pr_num" "reason=fetch_failed"
+    return 4
+  fi
+  local sha
+  sha=$( cd "$REPO_ROOT" && git rev-parse --verify -q "$remote/$branch^{commit}" 2>/dev/null || true )
+
+  local cfg hits src=0
+  cfg=$( cd "$REPO_ROOT" && git show "$remote/$base_ref:.claude/run-issues.json" 2>/dev/null || true )
+  hits=$( cd "$REPO_ROOT" && data_migration_scan "$remote/$base_ref" "$remote/$branch" "$cfg" ) || src=$?
+  case "$src" in
+    1)
+      log "data-migration gate: no data-destroying statement in PR #$pr_num head ${sha:-?} — passing"
+      DATA_MIGRATION_SCANNED_SHA="$sha"
+      return 0
+      ;;
+    0)
+      _pr_data_migration_hold "$pr_num" "$run_dir" "${sha:-?}" "" "$hits"
+      return 10
+      ;;
+    *)
+      # A scan that could not run is never "no hits" (fail-closed).
+      _pr_data_migration_hold "$pr_num" "$run_dir" "${sha:-?}" \
+        "skannaus epäonnistui (rc=$src: viite ei resolvoitunut, git diff kaatui tai base-haaran \`.claude/run-issues.json\` on kelvoton)" ""
+      return 10
+      ;;
+  esac
+}
+
+# _pr_data_migration_hold <pr-number> <run-dir> <sha> <why> <hits> — attach
+# manual-merge and post the marker comment, once per head: the label stops later
+# ticks before the scan, and the state.jsonl record keeps a failed label write
+# from turning into a comment on every tick. <why> non-empty = the scan did not
+# run; otherwise <hits> are the scanner's lines.
+_pr_data_migration_hold() {
+  local pr_num="$1" run_dir="$2" sha="$3" why="$4" hits="$5"
+  local label="$EPIC_MANUAL_MERGE_LABEL" n=0
+  [ -n "$hits" ] && n=$(printf '%s\n' "$hits" | grep -c . || true)
+  log "data-migration gate: holding PR #$pr_num for a manual merge — ${why:-$n data-destroying statement(s)}"
+
+  ( cd "$REPO_ROOT" && labels_ensure "$PR_OWNER_REPO" "$label" FBCA04 "Mergetään käsin — automaatio ei mergeä" ) \
+    || log "could not ensure $label label for PR #$pr_num"
+  ( cd "$REPO_ROOT" && labels_add "$PR_OWNER_REPO" "$pr_num" "$label" ) \
+    || log "could not add $label label to PR #$pr_num"
+
+  local have_dir=0
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] && have_dir=1
+  if [ "$have_dir" = 1 ] && data_migration_held_before "$run_dir/state.jsonl" "$pr_num" "$sha"; then
+    log "data-migration gate: hold comment for PR #$pr_num head $sha already posted — not repeating it"
+    return 0
+  fi
+
+  local opening list
+  if [ -n "$why" ]; then
+    opening="Datamigraation tarkistus **ei toteutunut** headille \`$sha\`: $why. Muutosta ei siis voitu todeta vaarattomaksi, joten PR:ää ei mergetä automaattisesti."
+    list=""
+  else
+    opening="Datamigraation tarkistus löysi headista \`$sha\` lauseita, jotka voivat tuhota dataa ($n kpl). PR:ää ei mergetä automaattisesti."
+    list=$'\n\n'"Osumat (\`tiedosto:rivi\` ja lause):"$'\n\n```\n'"$hits"$'\n```\n'
+  fi
+  local body
+  body=$(printf '%s\n\n%s%s\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
+    "<!-- run-issues:data-migration-gate -->" \
+    "$opening" \
+    "$list" \
+    "Tarkista ennen mergeä:" \
+    "- Palautuuko data, jos muutos osoittautuu vääräksi — onko tuore varmuuskopio olemassa?" \
+    "- Onko muutos tehty laajenna–supista-mallilla: uusi muoto rinnalle, vanha poistetaan vasta erillisessä muutoksessa?" \
+    "- Onko PR-kuvauksessa rivimäärät ennen ja jälkeen ajon kloonikannassa (osio \`## Datamigraation todennus\`)?" \
+    "- Osuuko tunnistus oikeaan? Se on tarkoituksella karkea (esim. \`ON DELETE CASCADE\` osuu)." \
+    "PR:lle on lisätty \`$label\`-label, eikä valvoja mergeä sitä. Mergeä PR käsin, kun olet tarkistanut muutoksen. (Portti on päällä \`PR_WATCH_ENABLE_DATA_MIGRATION_GATE=1\`; labelin poisto ei vapauta PR:ää, koska uusi skannaus osuu samaan muutokseen.)")
+  if printf '%s' "$body" | gh_route pr comment "$pr_num" --body-file -; then
+    [ "$have_dir" = 1 ] && \
+      state_event "$run_dir" "pr_data_migration_held" "pr=$pr_num" "sha=$sha" "hits=$n" "scan_failed=$([ -n "$why" ] && echo 1 || echo 0)"
+  else
+    log "failed to post data-migration hold comment on PR #$pr_num"
+  fi
+  return 0
 }
 
 # pr_run_merge_gate <gate> <pr-number> <run-id> <run-dir> <pr-json>

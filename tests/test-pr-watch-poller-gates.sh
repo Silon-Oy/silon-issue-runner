@@ -44,7 +44,7 @@ ANCHOR=PR_WATCH_ENABLE_SECURITY_GATE
 SWITCHES="$(grep -oE '"\$\{PR_WATCH_ENABLE_[A-Z_]+:-1\}"' "$ROOT/pr-watch-poller.sh" \
   | sed 's/^"\${//; s/:-1}"$//' | sort -u)"
 COUNT="$(printf '%s\n' "$SWITCHES" | grep -c '[A-Z]')"
-if [ "$COUNT" -lt 4 ] || ! printf '%s\n' "$SWITCHES" | grep -qx "$ANCHOR"; then
+if [ "$COUNT" -lt 5 ] || ! printf '%s\n' "$SWITCHES" | grep -qx "$ANCHOR"; then
   bad "switch derivation broke — got $COUNT switch(es), anchor '$ANCHOR' missing?"
   printf '%s\n' "$SWITCHES" | sed 's/^/      derived: /'
   exit 1

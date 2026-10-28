@@ -210,6 +210,10 @@ PR_WATCH_ENABLE_CI_REPAIR="${PR_WATCH_ENABLE_CI_REPAIR:-1}"
 PR_WATCH_ENABLE_SECURITY_GATE="${PR_WATCH_ENABLE_SECURITY_GATE:-1}"
 PR_WATCH_ENABLE_SEMANTIC_CHECK="${PR_WATCH_ENABLE_SEMANTIC_CHECK:-1}"
 
+# Likewise the data-migration hold (issue #409): a deterministic scan that holds a
+# PR adding a data-destroying statement for a manual merge. OFF in pr-watch.sh.
+PR_WATCH_ENABLE_DATA_MIGRATION_GATE="${PR_WATCH_ENABLE_DATA_MIGRATION_GATE:-1}"
+
 # Every PR_WATCH_* setting reaches pr-watch.sh on the per-repo command below:
 # the LaunchAgent does not source the machine env file, so poller.env is the
 # only way a setting gets to the watcher (CLAUDE.md §8). One rule over the
