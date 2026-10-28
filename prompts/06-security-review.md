@@ -42,6 +42,11 @@ aina vähintään `high`. Käytä aikasi siihen, mitä skannerit eivät kattanee
 ole asennettu tai se epäonnistui, arvioi sen luokka itse askeleessa 2. Skannerin OK-tulos ei
 myöskään vapauta muista luokista.
 
+Skannerin rivillä salaisuuden arvo on peitetty (enintään neljä ensimmäistä ja kaksi viimeistä
+merkkiä sekä pituus). **Älä hae koko arvoa tiedostosta äläkä lainaa sitä** löydöksiisi tai
+vastaukseesi — eikä mitään muutakaan salaisuuden näköistä arvoa, jonka löydät itse. Viittaa
+sijaintiin.
+
 ## Tehtävä
 
 1. Lue muutos: `git diff {{REMOTE}}/{{BASE_REF}}...HEAD` ja tarvittaessa

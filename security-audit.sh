@@ -295,12 +295,30 @@ _audit_title() {
 }
 
 _audit_body() {
-  local sev="$1" conf="$2" loc="$3" desc="$4" source="$5" fp="$6" src_txt fix
+  local sev="$1" conf="$2" loc="$3" desc="$4" source="$5" fp="$6" src_txt fix extra=""
   case "$source" in
     gitleaks)
+      # A scanner hit is a question, not a verdict (#398): the body says what to
+      # find out and what each answer means, and never claims rotation is due.
       src_txt="gitleaks (salaisuusskanneri, koko historia)"
-      fix="- [ ] Salaisuus on poistettu koodista ja konfiguraatiosta, ja sovellus lukee sen ympäristöstä tai salaisuusvarastosta.
-- [ ] PR-kuvaus muistuttaa, että arvo on jo git-historiassa: avaimen kierrätys palvelussa on ihmisen tehtävä, eikä pelkkä poisto riitä." ;;
+      fix="Selvitä ensin, onko osuma oikea salaisuus. Skannerin kuvauksessa näkyy arvosta enintään neljä ensimmäistä ja kaksi viimeistä merkkiä sekä pituus: älä lainaa koko arvoa issueen, kommenttiin, PR-kuvaukseen tai lokiin.
+
+1. **Onko arvo oikea salaisuus?** Vaihtoehdot: oikea avain tai salasana, testidata, täytearvo (esim. CI:n placeholder tai \`.env.example\`n paikallinen arvo) tai julkiseksi tarkoitettu avain (esim. JWT, jonka \`role\`-kenttä on julkinen rooli kuten \`anon\`).
+2. **Onko arvo HEADissa vai vain historiassa?** Tarkista, löytyykö se yhä sijainnista \`$loc\` vai vain löydöksen commitista.
+
+Mitä vastaus tarkoittaa:
+
+- **Oikea salaisuus HEADissa:** arvo poistetaan koodista ja konfiguraatiosta, ja sovellus lukee sen ympäristöstä tai salaisuusvarastosta. Arvo on jo git-historiassa, joten pelkkä poisto ei riitä: myös avaimen kierrätys palvelussa tarvitaan. Se on ihmisen tehtävä, ja PR-kuvaus muistuttaa siitä.
+- **Oikea salaisuus vain historiassa:** koodimuutosta ei tarvita. Avaimen kierrätys palvelussa riittää, ja se on ihmisen tehtävä.
+- **Väärä hälytys** (testidata, täytearvo, julkinen avain): koodia ei muuteta, ja issue suljetaan tilaan *not planned* (ks. alla).
+
+- [ ] Osuman luokka (oikea salaisuus / väärä hälytys) ja sijainti (HEAD / vain historia) on selvitetty.
+- [ ] Oikean salaisuuden HEADissa oleva arvo on poistettu, ja kierrätyksen tarve on kirjattu ihmiselle."
+      extra="
+## Väärä hälytys
+
+Jos osuma on väärä hälytys, sulje issue tilaan *not planned*. Auditointi ei avaa sitä uudelleen, vaikka sama osuma löytyisi seuraavalla kierroksella. Kommentointi ennen sulkemista ei ole tarpeen: kommentti avoimeen issueen käynnistäisi ajon uudelleen.
+" ;;
     osv-scanner)
       src_txt="osv-scanner (riippuvuuksien tunnetut haavoittuvuudet)"
       fix="- [ ] Riippuvuus on päivitetty versioon, jossa advisory on korjattu, ja lukkotiedosto on päivitetty.
@@ -331,7 +349,7 @@ $fix
 
 - Vain tämä yksi löydös. Auditoinnin muut löydökset ovat omia issueitaan.
 - Jos löydös osoittautuu vääräksi, älä muuta koodia: kirjaa perustelu ja pysähdy. Ihminen sulkee issuen tilaan *not planned*, jolloin auditointi ei avaa sitä uudelleen.
-
+$extra
 $(finding_marker "$AUDIT_KIND" "$fp")
 EOF
 }

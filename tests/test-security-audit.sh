@@ -24,7 +24,10 @@
 #   K) --dry-run          -> plan printed, no write
 #   L) scanner failed     -> exit 5, the failure is not an issue
 #   M) listing failed     -> exit 4, no agent call, no write
-#   N) scanner finding    -> a gitleaks row becomes an issue keyed on its rule
+#   N) scanner finding    -> a gitleaks row becomes an issue keyed on its rule;
+#                            the value is masked, the body asks what to find out
+#                            (#398) and says how to dismiss a false positive
+#  N2) scanner recurs     -> reopen comment without the value
 #   O) assignee routing   -> (issue #374) a watchlist `assignees` list routes an
 #                            auto-run issue to its first allowed login and the
 #                            issue then matches pickup; no key / only `not:` /
@@ -407,22 +410,58 @@ done_case
 
 # ===========================================================================
 echo "=== N: scanner finding ==="
+# The mock reports the raw value (gitleaks runs without --redact, #398): it may
+# reach neither GitHub (every gh call is logged, bodies included) nor the agent.
+# Built at run time from a repeated filler: a synthetic value, not a credential,
+# so the source carries no token-shaped literal. 4 + 23 + 2 = 29 characters.
+N_SECRET="ghp_$(printf 'x%.0s' $(seq 23))42"
 F0=$FAIL; setup N
-cat > "$BIN/gitleaks-mock" <<'SH'
+cat > "$BIN/gitleaks-mock" <<SH
 #!/usr/bin/env bash
 r=""
-while [ $# -gt 0 ]; do [ "$1" = --report-path ] && r="$2"; shift; done
-echo '[{"File":"config/app.php","StartLine":3,"RuleID":"generic-api-key","Description":"Generic API Key","Commit":"abcdef1234567890"}]' > "$r"
+while [ \$# -gt 0 ]; do [ "\$1" = --report-path ] && r="\$2"; shift; done
+echo '[{"File":"config/app.php","StartLine":3,"RuleID":"generic-api-key","Description":"Generic API Key","Commit":"abcdef1234567890","Secret":"$N_SECRET"}]' > "\$r"
 exit 99
 SH
 chmod +x "$BIN/gitleaks-mock"
 GITLEAKS="$BIN/gitleaks-mock" run_audit; show N
+B="$WORK/created/100.body"
 [ "$RC" = 0 ] || bad N "rc $RC, want 0"
 [ "$(creates)" = 1 ] || bad N "created $(creates) issues, want 1"
-grep -qF "fp=$(fp_of gitleaks config/app.php generic-api-key) " "$WORK/created/100.body" 2>/dev/null \
+grep -qF "fp=$(fp_of gitleaks config/app.php generic-api-key) " "$B" 2>/dev/null \
   || bad N "gitleaks finding not keyed on its rule"
-grep -q 'kierrätys' "$WORK/created/100.body" 2>/dev/null || bad N "secret issue lacks the rotation note"
-[ "$FAIL" = "$F0" ] && ok N "scanner finding filed"
+grep -qF "$N_SECRET" "$WORK/gh.log" "$WORK/created"/* && bad N "secret value reached GitHub"
+[ -f "$WORK/prompt-seen" ] && grep -qF "$N_SECRET" "$WORK/prompt-seen" && bad N "secret value reached the agent's prompt"
+grep -qF 'ghp_…42 (29 merkkiä)' "$B" 2>/dev/null || bad N "body lacks the masked value"
+# The body asks, it does not conclude (#398).
+grep -q 'kierrätettävä' "$B" 2>/dev/null && bad N "body claims rotation is due before anyone assessed the value"
+for q in 'Onko arvo oikea salaisuus' 'testidata' 'julkiseksi tarkoitettu avain' 'role' 'HEADissa vai vain historiassa' 'kierrätys palvelussa'; do
+  grep -qF "$q" "$B" 2>/dev/null || bad N "body lacks '$q'"
+done
+grep -qx '## Väärä hälytys' "$B" 2>/dev/null || bad N "body lacks the false-positive section"
+grep -q 'not planned' "$B" 2>/dev/null || bad N "body lacks the not-planned instruction"
+grep -q 'Kommentointi ennen sulkemista ei ole tarpeen' "$B" 2>/dev/null \
+  && grep -q 'käynnistäisi ajon uudelleen' "$B" 2>/dev/null || bad N "body does not say a comment would restart the run"
+grep -q '`' "$B" 2>/dev/null || bad N "body lost its code spans"
+[ "$FAIL" = "$F0" ] && ok N "scanner finding filed, value masked"
+done_case
+
+echo "=== N2: scanner finding recurs -> reopen comment without the value ==="
+F0=$FAIL; setup N2
+cat > "$BIN/gitleaks-mock" <<SH
+#!/usr/bin/env bash
+r=""
+while [ \$# -gt 0 ]; do [ "\$1" = --report-path ] && r="\$2"; shift; done
+echo '[{"File":"config/app.php","StartLine":3,"RuleID":"generic-api-key","Description":"Generic API Key","Commit":"abcdef1234567890","Secret":"$N_SECRET"}]' > "\$r"
+exit 99
+SH
+chmod +x "$BIN/gitleaks-mock"
+issue_json 9 closed completed "$(fp_of gitleaks config/app.php generic-api-key)" > "$WORK/issues.json"
+GITLEAKS="$BIN/gitleaks-mock" run_audit; show N2
+[ "$RC" = 0 ] || bad N2 "rc $RC, want 0"
+grep -q 'POST repos/Silon-Oy/app/issues/9/comments' "$WORK/gh.log" || bad N2 "no reopen comment"
+grep -qF "$N_SECRET" "$WORK/gh.log" && bad N2 "secret value reached GitHub"
+[ "$FAIL" = "$F0" ] && ok N2 "reopen comment carries no value"
 done_case
 
 # ===========================================================================

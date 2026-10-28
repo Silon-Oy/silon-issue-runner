@@ -535,7 +535,9 @@ merged && bad R "merged without a review"
 [ -s "$WORK/calls.log" ] && bad R "an agent was called: $(tr '\n' ' ' < "$WORK/calls.log")"
 grep -q 'tuntematon' "$WORK/comments.log" || bad R "comment does not name the unknown reviewer"
 [ "$FAIL" = "$FAIL_BEFORE" ] && ok R "unknown reviewer held"
-=======
+[ -n "${KEEP:-}" ] || rm -rf "$WORK"
+
+# ===========================================================================
 echo "=== S: agent CLEAN, gitleaks finds a secret -> hold ==="
 FAIL_BEFORE=$FAIL
 setup S
@@ -558,6 +560,9 @@ grep -q 'aws-access-token' "$WORK/comments.log" || bad S "hold comment does not 
 grep -q 'AKIAREALSECRET' "$WORK/comments.log" "$RD/$(echo 06-security-review.prompt)" "$RD/merge-gate-security-$SHA.findings" && bad S "secret value leaked"
 grep -q "\"sha\":\"$SHA\".*\"result\":\"findings\".*\"holding\":\"1\"" "$RD/state.jsonl" || bad S "merged findings not recorded against the head"
 grep -q 'gitleaks: aws-access-token' "$RD/06-security-review.prompt" || bad S "scanner result not in the reviewer's prompt"
+grep -qF 'AKIA…ET (14 merkkiä)' "$RD/merge-gate-security-$SHA.findings" || bad S "masked value not in the findings (#398)"
+grep -qF 'AKIA…ET (14 merkkiä)' "$WORK/comments.log" || bad S "masked value not in the hold comment (#398)"
+grep -qF 'AKIA…ET (14 merkkiä)' "$RD/06-security-review.prompt" || bad S "masked value not in the reviewer's prompt (#398)"
 [ "$FAIL" = "$FAIL_BEFORE" ] && ok S "scanner secret held despite a clean review"
 [ -n "${KEEP:-}" ] || rm -rf "$WORK"
 

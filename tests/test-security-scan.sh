@@ -5,9 +5,11 @@
 # installed, and a real scanner on the machine is never run.
 #
 #   1  missing scanners      -> "ei asennettu" summary rows, no findings, no failure
-#   2  gitleaks leak         -> high row with rule + location, the secret's
-#                               value appears in no output file
-#   3  gitleaks diff mode    -> base-ref..HEAD range, config pinned to the base
+#   2  gitleaks leak         -> high row with rule + location and the masked
+#                               value; the whole value appears in no output
+#                               file and not in the prompt text (#398)
+#   3  gitleaks diff mode    -> base-ref..HEAD range, config pinned to the base,
+#                               no --redact, raw report removed after parsing
 #   4  gitleaks crash/garbage-> scan.failed + summary row, gate row `low`
 #   5  osv severity map      -> CVSS 9.8 critical, 7.5 high, 5 medium, 2 low,
 #                               no score -> advisory rating / medium
@@ -17,6 +19,8 @@
 #   9  tamper signals        -> head edits .gitleaksignore / adds gitleaks:allow
 #  10  usage errors          -> unknown mode, diff without base-ref: rc 1
 #  11  gate rows             -> no out-dir => one failure row; prompt text
+#  12  secret_mask           -> 4+2 chars and length; < 8 chars: length only;
+#                               row-safe; short / REDACTED values via the shim
 #
 # Run: bash tests/test-security-scan.sh
 
@@ -71,10 +75,11 @@ while [ \$# -gt 0 ]; do
   esac
   shift
 done
+secret=\$(cat "$WORK/gitleaks.secret" 2>/dev/null || printf '%s' "$SECRET")
 case "\$(cat "$WORK/gitleaks.mode" 2>/dev/null || echo clean)" in
   clean) echo '[]' > "\$report"; exit 0 ;;
   leak)
-    jq -n --arg s "$SECRET" '[{Description:"AWS Access Key",StartLine:3,File:"conf/app.env",
+    jq -n --arg s "\$secret" '[{Description:"AWS Access Key",StartLine:3,File:"conf/app.env",
       Commit:"0123456789abcdef0123",RuleID:"aws-access-token",Secret:\$s,Match:("key=" + \$s)}]' > "\$report"
     echo "leaks found: 1" >&2
     exit "\$code" ;;
@@ -161,11 +166,17 @@ row=$(grep '^high|high|conf/app.env:3|gitleaks: aws-access-token' "$O/scan.findi
 yes_ "2 leak is a high row with rule and location" test -n "$row"
 no_ "2 secret value in no output file" grep -rqF "$SECRET" "$O/scan.findings" "$O/scan.summary" "$O/scan.failed"
 no_ "2 secret value not in the prompt text" has "$SECRET" "$(security_scan_prompt_text "$O")"
+yes_ "2 row carries the masked value" grep -qF 'arvo: AKIA…23 (25 merkkiä)' "$O/scan.findings"
+yes_ "2 prompt text carries the masked value" has 'AKIA…23 (25 merkkiä)' "$(security_scan_prompt_text "$O")"
+no_ "2 row claims no rotation is due" grep -q 'kierrätettävä' "$O/scan.findings"
 yes_ "2 summary counts the leak" grep -q '^gitleaks: OK, 1 löydöstä' "$O/scan.summary"
 printf 'FINDING: %s\n' "$(sed 's/|/ | /g' "$O/scan.findings")" > "$WORK/as-gate.out"
 check "2 row is valid merge-gate form" "$(cat "$O/scan.findings")" "$(merge_gate_findings "$WORK/as-gate.out")"
 yes_ "3 range base..HEAD" grep -qx 'main..HEAD' "$WORK/gitleaks.args"
-yes_ "3 --redact passed" grep -qx -- '--redact' "$WORK/gitleaks.args"
+no_ "3 --redact not passed (the mask needs the value)" grep -qx -- '--redact' "$WORK/gitleaks.args"
+no_ "3 raw report removed after parsing" test -e "$O/gitleaks.json"
+no_ "3 raw stdout removed after parsing" test -e "$O/gitleaks.stdout"
+no_ "3 secret value nowhere in the out-dir" grep -rqF "$SECRET" "$O"
 yes_ "3 config pinned (default when the base has none)" grep -q 'useDefault = true' "$WORK/gitleaks.config-seen"
 yes_ "2 worktree untouched" status_clean
 
@@ -254,6 +265,33 @@ echo "=== 11: gate rows and prompt text ==="
 yes_ "11 scan that never ran is a failure row" has '^low|high|security-scan|' "$(security_scan_gate_findings "$WORK/never-ran")"
 yes_ "11 prompt text lists the summary" has 'gitleaks: ei asennettu' "$(security_scan_prompt_text "$WORK/o1")"
 yes_ "11 prompt text lists findings" has 'critical | high | package-lock.json' "$(security_scan_prompt_text "$WORK/o5")"
+
+# --- 12 -----------------------------------------------------------------------
+echo "=== 12: secret_mask ==="
+check "12 20 chars" 'abcd…yz (20 merkkiä)' "$(secret_mask 'abcdefghijklmnopqryz')"
+check "12 8 chars (threshold)" 'abcd…gh (8 merkkiä)' "$(secret_mask 'abcdefgh')"
+check "12 7 chars: length only" '(7 merkkiä)' "$(secret_mask 'abcdefg')"
+check "12 empty: nothing" '' "$(secret_mask '')"
+check "12 row-safe (pipe, newline)" 'a b …YZ (12 merkkiä)' "$(secret_mask $'a|b\nc\td-eXYZ')"
+echo leak > "$WORK/gitleaks.mode"
+printf '%s' 'hunter2' > "$WORK/gitleaks.secret"
+O="$WORK/o12"
+RUN_ISSUES_OSV_SCANNER_BIN="$WORK/none" RUN_ISSUES_GITLEAKS_BIN="$BIN/gitleaks" security_scan audit "$REPO" "$O"
+yes_ "12 short value: length only in the row" grep -qF 'arvo: (7 merkkiä)' "$O/scan.findings"
+no_ "12 short value not in the row" grep -qF 'hunter2' "$O/scan.findings"
+no_ "12 short value not in the prompt text" has 'hunter2' "$(security_scan_prompt_text "$O")"
+printf 'line1-abcdef\nline2-ghijkl' > "$WORK/gitleaks.secret"
+O="$WORK/o12m"
+RUN_ISSUES_OSV_SCANNER_BIN="$WORK/none" RUN_ISSUES_GITLEAKS_BIN="$BIN/gitleaks" security_scan audit "$REPO" "$O"
+yes_ "12 multi-line value: masked across the line break" grep -qF 'arvo: line…kl (25 merkkiä)' "$O/scan.findings"
+check "12 multi-line value: one row" 1 "$(grep -c . "$O/scan.findings")"
+printf '%s' 'REDACTED' > "$WORK/gitleaks.secret"
+O="$WORK/o12r"
+RUN_ISSUES_OSV_SCANNER_BIN="$WORK/none" RUN_ISSUES_GITLEAKS_BIN="$BIN/gitleaks" security_scan audit "$REPO" "$O"
+yes_ "12 REDACTED value: row without a mask" grep -q '^high|high|conf/app.env:3|gitleaks: aws-access-token' "$O/scan.findings"
+no_ "12 REDACTED value: no mask" grep -q 'arvo:' "$O/scan.findings"
+rm -f "$WORK/gitleaks.secret"
+echo clean > "$WORK/gitleaks.mode"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "security-scan: all passed" || echo "security-scan: FAILURES"

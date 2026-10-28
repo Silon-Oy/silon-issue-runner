@@ -38,8 +38,11 @@ Kielletty:
 - `skip` / `only` / `xfail` / `continue-on-error` lisääminen,
 - CI-workflown muokkaaminen niin, ettei vaihe enää aja.
 
-Salaisuuden poistaminen koodista ei poista sitä historiasta. Poista se koodista silti ja
-mainitse vastauksessasi, että salaisuus on vaihdettava.
+Salaisuuden poistaminen koodista ei poista sitä historiasta. Jos arvo on oikea salaisuus,
+poista se koodista silti ja mainitse vastauksessasi, että se on vaihdettava palvelussa. Jos se
+on testidata, täytearvo tai julkiseksi tarkoitettu avain, älä muuta koodia: perustele se ja
+päätä tulokseen `UNRESOLVED`, jolloin ihminen ratkaisee. Älä lainaa arvoa kokonaisena —
+viittaa sijaintiin.
 
 **Jos oikea korjaus ei ole yksiselitteinen, oikea lopputulos on luovutus ihmiselle, ei
 hiljennetty löydös.**

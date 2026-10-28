@@ -45,6 +45,11 @@ läpäisy ja merge-portit. Älä siis oleta, että joku lukee muutoksesi ennen k
   luonut ajolle oman feature-haaran ja worktreen; pysy niissä.
 - **Älä lisää salaisuuksia** (API-avaimet, salasanat, tokenit) committeihin, prompteihin,
   lokeihin tai PR-kommentteihin.
+- **Älä lainaa salaisuuden näköistä arvoa kokonaisena**, vaikka löysit tai luit sen itse
+  tiedostosta, skannerin tulosteesta tai historiasta: et issue-runkoon, kommenttiin,
+  PR-kuvaukseen, lokiin etkä vastaukseesi. Viittaa sijaintiin ja kerro, mikä arvo on;
+  näytä arvosta enintään neljä ensimmäistä ja kaksi viimeistä merkkiä sekä pituus, ja alle
+  kahdeksan merkin arvosta pelkkä pituus. Et voi tietää etukäteen, onko arvo oikea salaisuus.
 - **Älä aja destruktiivisia komentoja tuotantoon** (tietokannan pudotus, force push remoteen,
   `rm -rf` repon ulkopuolelle, tuotantopalvelinten muutokset). Käytä ajolle kloonattua
   tietokantaa, jos sellainen on annettu.

@@ -55,8 +55,11 @@
 # Severity: a gitleaks finding is always `high` (never less — a secret the
 # scanner found is not the reviewer's to downgrade). osv-scanner by CVSS score:
 # >= 9 critical, >= 7 high, >= 4 medium, else low; no score => the advisory's
-# own rating, else `medium`. A secret's value is never written anywhere: only
-# the rule id, the rule description and the location.
+# own rating, else `medium`. A secret's value is never written anywhere whole:
+# a row carries the rule id, the rule description, the location and at most the
+# masked form of lib/secret-mask.sh (secret_mask). gitleaks runs without
+# --redact so that the mask can be computed; its raw report is removed as soon
+# as it is parsed.
 #
 # Env:
 #   RUN_ISSUES_GITLEAKS_BIN            gitleaks binary (default: command -v gitleaks)
@@ -64,6 +67,9 @@
 #   RUN_ISSUES_SECURITY_SCAN_TIMEOUT   per-scanner-call time cap in seconds (default 600)
 #
 # Sourced; defines functions only and does no top-level work.
+
+# shellcheck source=lib/secret-mask.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/secret-mask.sh"
 
 SECURITY_SCANNERS="gitleaks osv-scanner"
 
@@ -144,11 +150,42 @@ _security_scan_added_lines() {
 
 # ----- gitleaks --------------------------------------------------------------
 
+# _security_scan_gitleaks_rows <report> — one finding row per leak. The value
+# leaves jq only base64-encoded (a private key spans lines) and is shown only
+# through secret_mask (lib/secret-mask.sh). The rule id stays the first word
+# after "gitleaks: " — security-audit.sh's _audit_source_key keys on it. The row
+# states what to find out, not that the key must be rotated: whether the value
+# is a secret at all is the open question. rc 1 on an unparseable report.
+_security_scan_gitleaks_rows() {
+  local tsv row b64 v mask
+  tsv=$(jq -r '
+        def clean: tostring | gsub("[|\r\n\t]"; " ");
+        if type != "array" then error("not an array") else .[] end
+        | "high|high|\((.File // "?") | clean):\(.StartLine // 0)|gitleaks: \((.RuleID // "?") | clean) — \((.Description // "salaisuus") | clean)"
+          + (if (.Commit // "") != "" then " (commit \(.Commit[0:12]))" else "" end)
+          + "\t" + ((.Secret // "") | tostring | @base64)
+      ' "$1" 2>/dev/null) || return 1
+  while IFS=$'\t' read -r row b64; do
+    [ -n "$row" ] || continue
+    mask=""
+    if [ -n "$b64" ]; then
+      # `--decode`: the one spelling GNU and BSD/macOS base64 share. The x keeps
+      # trailing newlines that $(...) would strip from the length.
+      v=$(printf '%s' "$b64" | base64 --decode 2>/dev/null; printf x)
+      v=${v%x}
+      [ "$v" = "REDACTED" ] || mask=$(secret_mask "$v")
+      v=""
+    fi
+    printf '%s%s. Selvitä ennen kierrätystä, onko arvo oikea salaisuus, testidata vai julkiseksi tarkoitettu avain, ja onko se HEADissa vai vain historiassa\n' \
+      "$row" "${mask:+; arvo: $mask}"
+  done <<<"$tsv"
+}
+
 # _security_scan_gitleaks <mode> <repo-dir> <out-dir> <bin> [<range> <merge-base>]
 _security_scan_gitleaks() {
   local mode="$1" repo="$2" out="$3" bin="$4" range="${5:-}" mb="${6:-}"
   local report="$out/gitleaks.json" rc
-  local -a args=(git "$repo" --no-banner --redact --report-format json
+  local -a args=(git "$repo" --no-banner --report-format json
     --report-path "$report" --exit-code "$_SECURITY_SCAN_GITLEAKS_LEAK_RC")
   rm -f "$report"
 
@@ -165,21 +202,20 @@ _security_scan_gitleaks() {
   fi
 
   rc=$(cd "$out" && _security_scan_run "$out/gitleaks.stdout" "$out/gitleaks.stderr" "$bin" "${args[@]}")
+  # The raw report holds every secret in full and <out-dir> may be a persistent
+  # run dir: it is parsed once and removed on every path below.
   if [ "$rc" != 0 ] && [ "$rc" != "$_SECURITY_SCAN_GITLEAKS_LEAK_RC" ]; then
+    rm -f "$report" "$out/gitleaks.stdout"
     _security_scan_fail "$out" gitleaks "$rc" "$(_security_scan_excerpt "$out/gitleaks.stderr")"
     return 0
   fi
   local rows
-  if ! rows=$(jq -r '
-        def clean: tostring | gsub("[|\r\n\t]"; " ");
-        if type != "array" then error("not an array") else .[] end
-        | "high|high|\((.File // "?") | clean):\(.StartLine // 0)|gitleaks: \((.RuleID // "?") | clean) — \((.Description // "salaisuus") | clean)"
-          + (if (.Commit // "") != "" then " (commit \(.Commit[0:12]))" else "" end)
-          + ". Arvo on jo historiassa: avain on kierrätettävä, pelkkä poisto ei riitä"
-      ' "$report" 2>/dev/null); then
+  if ! rows=$(_security_scan_gitleaks_rows "$report"); then
+    rm -f "$report" "$out/gitleaks.stdout"
     _security_scan_fail "$out" gitleaks "$rc" "raportti puuttui tai ei ollut jäsennettävää JSONia"
     return 0
   fi
+  rm -f "$report" "$out/gitleaks.stdout"
   if [ "$rc" = "$_SECURITY_SCAN_GITLEAKS_LEAK_RC" ] && [ -z "$rows" ]; then
     _security_scan_fail "$out" gitleaks "$rc" "gitleaks ilmoitti vuodosta, mutta raportti oli tyhjä"
     return 0

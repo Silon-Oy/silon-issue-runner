@@ -73,7 +73,8 @@ raportoit sen asian uudelleen, joten älä raportoi korjattua asiaa.
      `[template-injection]`, `[header-injection]`, `[ssrf]`.
    - **Salaisuudet** `[secret]`: avaimet, tokenit ja salasanat koodissa, konfiguraatiossa,
      testidatassa tai lokitulosteissa. **Älä koskaan kirjoita salaisuuden arvoa
-     tulokseesi** — vain sijainti ja mikä se on.
+     tulokseesi** — vain sijainti ja mikä se on. Skannerin rivillä arvo on jo peitetty;
+     älä hae koko arvoa tiedostosta lainataksesi sitä.
    - **Turvaton deserialisointi** `[deserialization]` ja **heikko kryptografia** `[crypto]`.
    - **Tietoturvakonfiguraatio** `[misconfiguration]`: debug-tila tuotannossa, liian väljä CORS,
      puuttuvat tietoturvaotsakkeet, julkiset hakemistot.
