@@ -188,7 +188,7 @@ fi
 
 # === The prompt carries the instructions the issue asks for ===============
 PROMPT_SRC="$ROOT/prompts/03-evolution.md"
-for needle in '{{ISSUE_BODY}}' '{{CYCLE_REVIEW_OUTPUT}}' 'Ω' 'juurisy' 'Δψ' 'EVOLUTION_DELTA_PSI: <tooling|product> |' 'Ω-osiota ei ole'; do
+for needle in '{{ISSUE_BODY}}' '{{CYCLE_REVIEW_OUTPUT}}' 'Ω' 'juurisy' 'Δψ' 'EVOLUTION_DELTA_PSI: <tooling|product> |' 'Ω-osiota ei ole' 'Invarianttiluokat'; do
   grep -qF "$needle" "$PROMPT_SRC" && pass "prompt carries '$needle'" || fail "prompt lost '$needle'"
 done
 

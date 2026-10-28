@@ -87,6 +87,9 @@ alkavat ankkurin symbolilla (`## α — tarkoitus` jne.), jotta toteutus ja Evol
    olemassa olevaa abstraktiota josta uusi koodi voisi periytyä?
 5. **τ — integraatiopinnat:** Mitkä rajapinnat (API-kentät, DB-skeema, UI-tilakomponentit,
    ulkoiset palvelut, testit jotka assertoivat muutettavaa) saattavat rikkoutua?
+   Nimeä lisäksi koodausperiaatteiden luvun *Invarianttiluokat* tunnisteilla ne invariantit,
+   joita muutos koskee, ja kustakin yhdellä virkkeellä, missä kohdassa. Jos mikään ei koske
+   muutosta, kirjoita se näkyviin.
 6. **π — lähestymistapa:** Valittu lähestymistapa ja sen perustelu. Hylätyt vaihtoehdot
    yhdellä rivillä kukin: vaihtoehto ja miksi ei.
 7. **φ — suunniteltu ratkaisu:** Mitä Implementer tekee: muutokset tiedostoittain tai
@@ -100,6 +103,8 @@ Kirjoita lopuksi oma osionsa otsikolla **täsmälleen** `## Ω — todennussuunn
 - Yksi rivi per hyväksyntäkriteeri: kriteeri ja komento tai testi, joka todentaa sen
   (esim. `bash tests/test-x.sh`, `grep -n '…' polku`). Komennon on oltava ajettavissa
   worktreessä sellaisenaan.
+- Yksi rivi per τ:ssa nimetty invariantti: rivi alkaa tunnisteella ja sisältää komennon,
+  testin tai täsmällisen diffin tarkistuksen, joka todentaa, että muutos pitää sen.
 - Jos issuessa ei ole muodollista hyväksyntäkriteerilistaa, johda kriteerit tavoitteesta ja
   merkitse ne johdetuiksi.
 - Jos kriteeriä ei voi todentaa komennolla, kerro miten se tarkistetaan käsin ja miksi

@@ -37,7 +37,9 @@ Hypoteesien on oltava aidosti kilpailevia: ne ennustavat eri tuloksen samasta ko
 - mikä tulos olisi odottamaton (ei vastaa yhtäkään ennustetta)
 
 φ-osio kuvaa korjauksen ehdollisena: mitä korjataan kunkin hypoteesin vahvistuessa. Toteutus
-ajaa kokeen ensin ja korjaa vain vahvistetun syyn.
+ajaa kokeen ensin ja korjaa vain vahvistetun syyn. Nimeä kunkin hypoteesin korjauksen
+kohdalla, mitä τ:ssa nimetyistä luvun *Invarianttiluokat* invarianteista se koskee; Ω:n
+invarianttirivit todentavat vahvistetun hypoteesin korjauksen.
 
 **3. Rajauksen ulkopuolinen vika.** Jos näet vian, joka ei ole tämän issuen bugi, älä kirjaa
 sitä hypoteesiksi. Kirjaa se `CYCLE_REVIEW_OBSERVED_DEFECT`-rivillä ennen päätösriviä

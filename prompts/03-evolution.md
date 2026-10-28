@@ -50,14 +50,20 @@ ennen PR:n avaamista.
    **Jos Ω-osiota ei ole** (vanhempi cycle review -tulos, restart tai tyhjä tulos),
    älä keksi suunnitelmaa äläkä pysähdy: ohita tämä kohta ja jatka muilla kohdilla
    kuten ennenkin.
-4. **Arvioi tavoite ja juurisyy.** Vertaa diffiä issuen tavoitteeseen ja
+4. **Tarkista nimetyt invariantit.** Lue cycle review -tuloksen τ-kohdasta invariantit,
+   jotka se nimeää koodausperiaatteiden luvun *Invarianttiluokat* tunnisteilla, ja tarkista
+   jokainen diffistä. Kirjaa vastaukseesi kustakin tunniste ja tulos (pitää / rikottu ja
+   missä). Pieni rikkomus korjataan kohdan 6 mukaan; iso johtaa
+   `NEEDS_FOLLOWUP`-tulokseen. Jos τ ei nimeä invariantteja (vanhempi tulos tai restart),
+   ohita tämä kohta kuten puuttuva Ω.
+5. **Arvioi tavoite ja juurisyy.** Vertaa diffiä issuen tavoitteeseen ja
    hyväksyntäkriteereihin: ratkaiseeko muutos sen, mitä issue tavoittelee — ei vain
    läpäise testejä? Kohdistuuko se juurisyyhyn vai oireeseen? Kirjaa arvio
    vastaukseesi muutamalla virkkeellä. Täyttämätön kriteeri tai oireen paikkaus on
    `NEEDS_FOLLOWUP`, ellei puute ole pieni ja korjattavissa tässä.
-5. **Jos löydät pienen korjattavan**, korjaa se yhdellä committilla
+6. **Jos löydät pienen korjattavan**, korjaa se yhdellä committilla
    (`POST_COMMIT_SYNC=1 git commit -am "fix: ..."`). **Älä laajenna scopea.**
-6. **Jos löydät ison ongelman**, älä yritä korjata sitä — kirjaa se PR-kuvaukseen ja
+7. **Jos löydät ison ongelman**, älä yritä korjata sitä — kirjaa se PR-kuvaukseen ja
    lopeta `EVOLUTION_RESULT: NEEDS_FOLLOWUP -- <selitys>` -rivillä.
 
 {{RUN_PATH_SECTION}}
