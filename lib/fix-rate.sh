@@ -37,53 +37,22 @@
 # is NOT written: like status.sh, the digest is a read-only view (§5.1).
 #
 # Sourced by status-digest.sh, which sources rate-limit.sh, github-app-auth.sh
-# and git-remote.sh first. Function-only; no top-level work.
+# (gha_gh) and git-remote.sh (watchlist_owner_repos) first. Function-only; no top-level work.
 
 # shellcheck source=runner-pr.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner-pr.sh"
 
 # fix_rate_repos_from_watchlist <watchlist> — print the distinct owner/repo of
-# every watchlist checkout on disk, one per line, across each entry's `remotes`
-# (default origin). An unresolvable remote is skipped, not an error.
+# every watchlist checkout on disk, one per line (lib/git-remote.sh's
+# watchlist_owner_repos, the owner column only).
 fix_rate_repos_from_watchlist() {
-  local wl="${1-}" rp rem owner
-  [ -n "$wl" ] && [ -f "$wl" ] || return 0
-  jq -r '.repos[]? | (.path // empty) as $p
-         | ((.remotes // ["origin"]) | if length == 0 then ["origin"] else . end)[]
-         | [$p, .] | @tsv' "$wl" 2>/dev/null \
-    | while IFS=$'\t' read -r rp rem; do
-        [ -n "$rp" ] && [ -d "$rp" ] || continue
-        owner="$(resolve_remote_to_owner_repo "$rp" "$rem" 2>/dev/null || true)"
-        [ -n "$owner" ] && printf '%s\n' "$owner"
-      done | sort -u
+  watchlist_owner_repos "${1-}" | cut -f1 | sort -u
 }
 
-# _fix_rate_list <path?query> <stop-jq> <max-pages> <out-file> <err-file> —
-# page a REST listing into <out-file> as ONE JSON array. Stops on a short page or
-# when <stop-jq> (evaluated on the page array) is true. Returns 0 complete,
-# 1 gh failure / unparseable page (stderr kept in <err-file>), 2 page cap hit.
+# _fix_rate_list <path?query> <stop-jq> <max-pages> <out-file> <err-file> — the
+# shared REST pager (lib/runner-pr.sh's runner_rest_list) under the App identity.
 _fix_rate_list() {
-  local path="$1" stop="$2" max="$3" out="$4" err="$5" page=1 n
-  # Pages go to files, never through argv: a REST page of 100 PR objects is
-  # megabytes, past ARG_MAX for `--argjson`.
-  rm -f "$out".page.*
-  while [ "$page" -le "$max" ]; do
-    gha_with_token gh api "${path}&per_page=100&page=${page}" >"$out.page.$page" 2>"$err" \
-      || { rm -f "$out".page.*; return 1; }
-    n="$(jq 'if type == "array" then length else error end' "$out.page.$page" 2>/dev/null)" \
-      || { rm -f "$out".page.*; return 1; }
-    if [ "$n" -lt 100 ] || [ "$(jq -r "$stop" "$out.page.$page" 2>/dev/null)" = "true" ]; then
-      break
-    fi
-    page=$((page + 1))
-  done
-  local last="$page" i=1 rc=0
-  [ "$page" -le "$max" ] || { last="$max"; rc=2; }
-  local -a files=()
-  while [ "$i" -le "$last" ]; do files+=("$out.page.$i"); i=$((i + 1)); done
-  jq -s 'add // []' "${files[@]}" > "$out" 2>/dev/null || rc=1
-  rm -f "$out".page.*
-  return "$rc"
+  runner_rest_list gha_gh "$@"
 }
 
 # fix_rate_classify — pure: read {repo, since, pulls, commits, items} on stdin,

@@ -239,3 +239,24 @@ session_suffix() {
     printf '%s' "$base"
   fi
 }
+
+# watchlist_owner_repos <watchlist> [<repo-path>] — every watchlist checkout on
+# disk as `owner/repo<TAB>repo-slug` lines, across each entry's `remotes` (default
+# origin), one line per distinct owner/repo (the first checkout wins its slug).
+# <repo-path> restricts the walk to that entry. An unresolvable remote is
+# skipped, not an error. The ONE watchlist-to-GitHub walk: the digest's fix-rate
+# meter and status.sh's human queue (#414) both read it.
+watchlist_owner_repos() {
+  local wl="${1-}" only="${2-}" rp rem owner
+  [ -n "$wl" ] && [ -f "$wl" ] || return 0
+  jq -r '.repos[]? | (.path // empty) as $p
+         | ((.remotes // ["origin"]) | if length == 0 then ["origin"] else . end)[]
+         | [$p, .] | @tsv' "$wl" 2>/dev/null \
+    | while IFS=$'\t' read -r rp rem; do
+        [ -n "$rp" ] && [ -d "$rp" ] || continue
+        [ -z "$only" ] || [ "$rp" = "$only" ] || continue
+        owner="$(resolve_remote_to_owner_repo "$rp" "$rem" 2>/dev/null || true)"
+        [ -n "$owner" ] || continue
+        printf '%s\t%s\n' "$owner" "$(repo_slug "$rp" "$rem" 2>/dev/null || true)"
+      done | awk -F'\t' '!seen[$1]++'
+}

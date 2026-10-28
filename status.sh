@@ -144,6 +144,10 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$HERE}"
 # classifies rather than aborting on the first non-zero read), so turn errexit
 # back off after the source. -u / pipefail already match status.sh's own `set`.
 set +e
+# runner-pr.sh: RUNNER_BRANCH_PREFIX + the shared REST pager runner_rest_list,
+# for the human queue (issue #414).
+# shellcheck source=lib/runner-pr.sh
+. "$RUN_ISSUES_HOME/lib/runner-pr.sh"
 # shellcheck source=lib/status-github.sh
 . "$RUN_ISSUES_HOME/lib/status-github.sh"
 
@@ -561,6 +565,7 @@ AUDIT_RESULTS_JSON="$(sort -u "$AUDIT_RESULTS_TSV" | jq -R -s -c '
 # confidence) or {github:<obj>} (an OPEN or NOT_OPEN sub-object).
 GHMAP_JSON="{}"
 EPICS_JSON="[]"          # top-level epics[] (issue #79); [] in local mode
+HUMAN_QUEUE_JSON="null"  # top-level human_queue (issue #414); null = not asked
 ENRICH_MODE="local"
 ENRICH_FETCHED_AT="null"
 ENRICH_CACHE_AGE="null"
@@ -866,6 +871,98 @@ if [ "$GITHUB_MODE" -eq 1 ]; then
     gh_i=$((gh_i + 1))
   done < "$GH_OWNERS"
 
+  # ---- human queue (issue #414) ----
+  # Runner PRs waiting for a human (manual-merge / needs-human) in EVERY
+  # watchlist repo — also repos without a local run, which the sweep above never
+  # asks. One paged REST listing per repo plus one events read per queued PR
+  # whose labelling time is not cached (lib/status-github.sh). The cache lives
+  # under the cache file's `human_queue` key, per owner, on the same TTL; a
+  # labelling time read from the events is carried across a miss while the PR
+  # keeps the same queue labels, because it cannot change while they stay.
+  # Fail-soft like the sweep above: a failed repo lands in repos_failed, the
+  # others still report, the exit code is untouched, and a rate-limit rejection
+  # stops the remaining reads.
+  HQ_PAGES="${RUN_ISSUES_STATUS_HUMAN_QUEUE_PAGES:-5}"
+  case "$HQ_PAGES" in ''|*[!0-9]*|0) HQ_PAGES=5 ;; esac
+  HQ_DIR="$TMPD/hq"; mkdir -p "$HQ_DIR"
+  HQ_ROWS="$HQ_DIR/rows.jsonl"; : > "$HQ_ROWS"
+  HQ_FAILED="$HQ_DIR/failed.txt"; : > "$HQ_FAILED"
+  HQ_TRUNC="$HQ_DIR/truncated.txt"; : > "$HQ_TRUNC"
+  HQ_LIMITED="$ENRICH_RATE_LIMITED"
+  while IFS=$'\t' read -r hq_owner hq_slug; do
+    [ -n "$hq_owner" ] || continue
+    if [ "$HQ_LIMITED" -eq 1 ]; then
+      printf '%s\n' "$hq_owner" >> "$HQ_FAILED"
+      continue
+    fi
+    hq_cached="$(printf '%s' "$CACHE_IN" | jq -c --arg k "$hq_owner" '.human_queue[$k]? // empty' 2>/dev/null || true)"
+    hq_entry=""
+    if [ "$NO_CACHE" -ne 1 ] && [ -n "$hq_cached" ]; then
+      c_epoch="$(printf '%s' "$hq_cached" | jq -r '.fetched_epoch // empty' 2>/dev/null || true)"
+      case "$c_epoch" in ''|*[!0-9]*) ;; *)
+        age=$((NOW_EPOCH - c_epoch))
+        if [ "$age" -ge 0 ] && [ "$age" -lt "$CACHE_TTL" ]; then hq_entry="$hq_cached"; fi ;;
+      esac
+    fi
+    if [ -z "$hq_entry" ]; then
+      status_github_fetch_runner_open_prs "$hq_owner" "$HQ_DIR/pulls.json" "$HQ_DIR/pulls.err" "$HQ_PAGES" </dev/null
+      hq_rc=$?
+      if [ "$hq_rc" -eq 1 ]; then
+        printf '%s\n' "$hq_owner" >> "$HQ_FAILED"
+        rate_limit_file_matches "$HQ_DIR/pulls.err" && HQ_LIMITED=1
+        continue
+      fi
+      hq_trunc=false
+      [ "$hq_rc" -eq 2 ] && hq_trunc=true
+      hq_sel="$(status_github_select_human_queue < "$HQ_DIR/pulls.json")"
+      [ -n "$hq_sel" ] || hq_sel="[]"
+      HQ_PRS="$HQ_DIR/prs.jsonl"; : > "$HQ_PRS"
+      hq_carry="${hq_cached:-}"
+      [ -n "$hq_carry" ] || hq_carry="{}"
+      while IFS= read -r hq_pr; do
+        [ -n "$hq_pr" ] || continue
+        # Carried labelling time: the cached row of the same PR, read from the
+        # events, with the same queue labels. A created-time fallback is never
+        # carried — the next miss tries the events again.
+        hq_since="$(jq -r --argjson pr "$hq_pr" '
+          [ (.prs // [])[] | select(.number == $pr.number
+              and .waiting_source == "labeled"
+              and ((.labels // []) | sort) == ($pr.labels | sort)) ]
+          | .[0].waiting_since // empty' <<<"$hq_carry" 2>/dev/null || true)"
+        if [ -z "$hq_since" ] && [ "$HQ_LIMITED" -ne 1 ]; then
+          hq_num="$(jq -r '.number' <<<"$hq_pr")"
+          hq_labels="$(jq -c '.labels' <<<"$hq_pr")"
+          if ! hq_since="$(status_github_label_since "$hq_owner" "$hq_num" "$hq_labels" "$HQ_DIR" "$HQ_PAGES" </dev/null)"; then
+            hq_since=""
+            rate_limit_file_matches "$HQ_DIR/events.err" && HQ_LIMITED=1
+          fi
+        fi
+        jq -c --arg s "$hq_since" '
+          . + (if $s != "" then {waiting_since: $s, waiting_source: "labeled"}
+               else {waiting_since: .created_at, waiting_source: "created"} end)' \
+          <<<"$hq_pr" >> "$HQ_PRS" 2>/dev/null || true
+      done < <(jq -c '.[]' <<<"$hq_sel" 2>/dev/null)
+      hq_entry="$(jq -sc --argjson fe "$NOW_EPOCH" --arg fa "$GENERATED_AT" --argjson t "$hq_trunc" \
+        '{fetched_epoch: $fe, fetched_at: $fa, truncated: $t, prs: .}' "$HQ_PRS" 2>/dev/null || true)"
+      [ -n "$hq_entry" ] || { printf '%s\n' "$hq_owner" >> "$HQ_FAILED"; continue; }
+      CACHE_OUT="$(printf '%s' "$CACHE_OUT" | jq -c --arg k "$hq_owner" --argjson e "$hq_entry" \
+        '.human_queue = ((.human_queue // {}) + {($k): $e})' 2>/dev/null || printf '%s' "$CACHE_OUT")"
+    fi
+    # repo / repo_slug are injected at emit, never cached: the slug is a LOCAL
+    # (watchlist) concept, like the epics' (issue #79).
+    printf '%s' "$hq_entry" | jq -c --arg r "$hq_owner" --arg slug "$hq_slug" \
+      '(.prs // [])[] | {repo: $r, repo_slug: $slug} + .' >> "$HQ_ROWS" 2>/dev/null || true
+    if [ "$(printf '%s' "$hq_entry" | jq -r '.truncated // false' 2>/dev/null)" = "true" ]; then
+      printf '%s\n' "$hq_owner" >> "$HQ_TRUNC"
+    fi
+  done < <(watchlist_owner_repos "$WATCHLIST" "$REPO_FILTER")
+  hq_sorted="$(jq -sc '.' "$HQ_ROWS" 2>/dev/null | status_github_human_queue_sort "$NOW_EPOCH")"
+  [ -n "$hq_sorted" ] || hq_sorted="[]"
+  HUMAN_QUEUE_JSON="$(jq -nc --argjson p "$hq_sorted" --rawfile f "$HQ_FAILED" --rawfile t "$HQ_TRUNC" '
+    {prs: $p, repos_failed: ($f | split("\n") | map(select(length > 0))),
+     repos_truncated: ($t | split("\n") | map(select(length > 0)))}' 2>/dev/null)"
+  [ -n "$HUMAN_QUEUE_JSON" ] || HUMAN_QUEUE_JSON='{"prs":[],"repos_failed":[],"repos_truncated":[]}'
+
   # Persist the refreshed cache (best-effort, atomic).
   status_github_write_cache "$CACHE_FILE" "$CACHE_OUT"
 
@@ -1085,6 +1182,7 @@ ${_STATUS_GITHUB_RECLASSIFY_JQ}
     runs: \$runs_final,
     recent_usage: \$recent_usage,
     epics: \$epics,
+    human_queue: \$human_queue,
     audits: \$audits,
     audit_results: \$audit_results,
     read_errors: \$read_errors
@@ -1098,6 +1196,7 @@ DOC="$(jq -n \
   --slurpfile state "$TMPD/state.json" \
   --slurpfile ghmap "$TMPD/ghmap.json" \
   --argjson epics "$EPICS_JSON" \
+  --argjson human_queue "$HUMAN_QUEUE_JSON" \
   --argjson audits "$AUDITS_JSON" \
   --argjson audit_results "$AUDIT_RESULTS_JSON" \
   --argjson runner "$RUNNER_JSON" \

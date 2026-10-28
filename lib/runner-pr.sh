@@ -10,6 +10,9 @@
 # gate (pr-watch.sh) and the coherence audit both page the same REST listing,
 # and two pagers had two different stop rules.
 #
+# runner_rest_list is the generic REST pager behind the read-only views: the
+# digest's fix-rate meter and status.sh's human queue (#414) page through it.
+#
 # Functions and constants only, no top-level work, no dependencies.
 
 RUNNER_BRANCH_PREFIX="auto-run/"
@@ -73,4 +76,39 @@ runner_merged_prs() {
   jq -cs 'add // []' <<<"$all" 2>/dev/null || return 2
   [ "$more" = 1 ] && return 3
   return 0
+}
+
+# runner_rest_list <gh-runner> <path[?query]> <stop-jq> <max-pages> <out-file> <err-file>
+# Page a REST listing into <out-file> as ONE JSON array. Stops on a short page or
+# when <stop-jq> (evaluated on the page array) is true. REST, never search
+# (CLAUDE.md §5.2); the cost is pages read, bounded by <max-pages> (§5.4).
+# <gh-runner> is as in runner_merged_prs (e.g. gha_gh for the App identity);
+# <path> may carry its own query, the paging parameters are appended to it.
+#
+# rc 0 complete · 1 gh failure or a page that is not a JSON array (stderr kept in
+# <err-file>) · 2 <max-pages> pages read and the last was full: the list may be
+# cut short, so it is never a complete answer.
+runner_rest_list() {
+  local gh_runner="$1" path="$2" stop="$3" max="$4" out="$5" err="$6" page=1 n sep='?'
+  case "$path" in *\?*) sep='&' ;; esac
+  # Pages go to files, never through argv: a REST page of 100 PR objects is
+  # megabytes, past ARG_MAX for `--argjson`.
+  rm -f "$out".page.*
+  while [ "$page" -le "$max" ]; do
+    "$gh_runner" api "${path}${sep}per_page=${RUNNER_PR_PER_PAGE}&page=${page}" >"$out.page.$page" 2>"$err" \
+      || { rm -f "$out".page.*; return 1; }
+    n="$(jq 'if type == "array" then length else error end' "$out.page.$page" 2>/dev/null)" \
+      || { rm -f "$out".page.*; return 1; }
+    if [ "$n" -lt "$RUNNER_PR_PER_PAGE" ] || [ "$(jq -r "$stop" "$out.page.$page" 2>/dev/null)" = "true" ]; then
+      break
+    fi
+    page=$((page + 1))
+  done
+  local last="$page" i=1 rc=0
+  [ "$page" -le "$max" ] || { last="$max"; rc=2; }
+  local -a files=()
+  while [ "$i" -le "$last" ]; do files+=("$out.page.$i"); i=$((i + 1)); done
+  jq -s 'add // []' "${files[@]}" > "$out" 2>/dev/null || rc=1
+  rm -f "$out".page.*
+  return "$rc"
 }

@@ -421,3 +421,94 @@ status_github_issue_only_object() {
       issue_labels: []
     }'
 }
+
+# ---------------------------------------------------------------------------
+# Human queue (issue #414).
+#
+# Runner PRs that wait for a human: `manual-merge` (the watcher leaves them for
+# a hand merge on purpose — heavy-run, an epic or child opt-out) and
+# `needs-human` (the watcher handed them over). Neither set showed its waiting
+# time anywhere, so a growing queue was only seen when someone went looking.
+# status.sh sweeps EVERY watchlist repo for them (not only repos with local
+# runs) into the top-level `human_queue` object; this part only shows, it never
+# notifies or escalates.
+#
+# Cost (§5.2, §5.4): one REST listing of open PRs per repo, paged, plus one REST
+# events read per QUEUED PR whose labelling time is not cached yet — the time a
+# label was added does not change while the label stays, so it is carried
+# across cache misses. Never `gh pr list --label` / `--search`.
+#
+# Needs runner-pr.sh (RUNNER_BRANCH_PREFIX, runner_rest_list), poller-config.sh
+# (EPIC_MANUAL_MERGE_LABEL) and github-app-auth.sh (gha_gh), all sourced by
+# status.sh before this file.
+# ---------------------------------------------------------------------------
+
+# status_github_human_queue_labels — the labels that put a runner PR in the
+# queue, as a jq array. The manual-merge name comes from its shared constant.
+status_github_human_queue_labels() {
+  jq -nc --arg m "$EPIC_MANUAL_MERGE_LABEL" '[$m, "needs-human"]'
+}
+
+# status_github_fetch_runner_open_prs <owner/repo> <out-file> <err-file> <max-pages>
+# Every open PR of the repo (REST, paged) as one JSON array in <out-file>.
+# runner_rest_list's rc: 0 complete, 1 failed (stderr in <err-file>), 2 cut at
+# <max-pages>.
+status_github_fetch_runner_open_prs() {
+  runner_rest_list gha_gh "repos/$1/pulls?state=open" false "$4" "$2" "$3"
+}
+
+# status_github_select_human_queue — pure: a REST pulls array on stdin, the
+# queued runner PRs on stdout as
+#   [{number, url, title, labels, created_at}]
+# where labels holds only the queue labels (the PR's full label set never
+# reaches the payload). A head branch without RUNNER_BRANCH_PREFIX is a human's
+# PR, not the runner's, and stays out.
+status_github_select_human_queue() {
+  jq -c --arg p "$RUNNER_BRANCH_PREFIX" --argjson wl "$(status_github_human_queue_labels)" '
+    [ (if type == "array" then .[] else empty end)
+      | select(((.head.ref // "") | startswith($p)))
+      | ([.labels[]?.name] | map(select(. as $n | $wl | index($n)))) as $l
+      | select($l | length > 0)
+      | {number, url: (.html_url // null), title: (.title // ""),
+         labels: $l, created_at: (.created_at // null)} ]' 2>/dev/null
+}
+
+# status_github_label_since_pick <labels-json> — pure: an issue events array on
+# stdin; print the time the PR has waited since: for each label in
+# <labels-json> (those on the PR now) its LAST `labeled` event, then the
+# earliest of those. Empty when no such event is in the array.
+status_github_label_since_pick() {
+  jq -r --argjson l "$1" '
+    [ (if type == "array" then .[] else empty end)
+      | select(.event == "labeled" and ((.label.name // "") as $n | $l | index($n)))
+      | {name: .label.name, at: (.created_at // "")} | select(.at != "") ]
+    | group_by(.name) | map(max_by(.at).at) | min // empty' 2>/dev/null
+}
+
+# status_github_label_since <owner/repo> <pr-number> <labels-json> <tmp-dir> <max-pages>
+# Read the PR's events (REST, paged) and print status_github_label_since_pick's
+# answer, or empty when the read fails or is cut at <max-pages> — a cut list may
+# miss the latest event, and the caller then falls back to the creation time.
+# rc 0 read (even if empty) · 1 the read failed (stderr in <tmp-dir>/events.err).
+status_github_label_since() {
+  local repo="$1" num="$2" labels="$3" tmp="$4" max="$5" rc
+  runner_rest_list gha_gh "repos/$repo/issues/$num/events" false "$max" \
+    "$tmp/events.json" "$tmp/events.err"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    status_github_label_since_pick "$labels" < "$tmp/events.json"
+  fi
+  rm -f "$tmp/events.json"
+  [ "$rc" -eq 1 ] && return 1
+  return 0
+}
+
+# status_github_human_queue_sort <now-epoch> — pure: the emitted PR rows
+# [{…, waiting_since}] on stdin, each given waiting_seconds and the whole list
+# ordered oldest first (an unparseable time sorts last, waiting_seconds null).
+status_github_human_queue_sort() {
+  jq -c --argjson now "$1" '
+    map(. + {waiting_seconds: (((.waiting_since // "") | try fromdateiso8601 catch null)
+                               | if . == null then null else ($now - .) end)})
+    | sort_by([(.waiting_seconds == null), -(.waiting_seconds // 0), .repo, .number])' 2>/dev/null
+}

@@ -416,6 +416,12 @@ gha_with_token() {
   GH_TOKEN="$tok" GITHUB_TOKEN="$tok" "$@"
 }
 
+# gha_gh <gh-args…> — `gh` under gha_with_token, as one command name: the shape
+# a <gh-runner> argument takes (lib/runner-pr.sh's listings call "$runner" api …).
+gha_gh() {
+  gha_with_token gh "$@"
+}
+
 # ---------- public: git push header ----------
 # gha_git_push_header — print the value for `git -c http.extraheader="<this>"`
 # so callers can authenticate `git push` as the App without putting the token
