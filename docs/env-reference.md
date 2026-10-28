@@ -501,11 +501,11 @@ auditoinnin (exit 3). Skannerien löydöksiä ei tarkisteta, koska ne ovat deter
 
 ### Auditointilöydösten ryhmittely (`--group`, `lib/repo-audit.sh`, #396)
 
-Käsiajon tila tietoturva- ja koherenssiauditoinnille; poller ei käytä sitä. Uudet vahvistetut
+Käsiajon tila tietoturva-, koherenssi- ja laatuauditoinnille; poller ei käytä sitä. Uudet vahvistetut
 löydökset ryhmitellään korjauksen kokoisiksi issueiksi ja ne epiceiksi vakavuuden mukaan
 (`prompts/15-finding-group.md`, step-id `15-finding-group`, vaihe `FINDING_GROUP`). Pelkkä
 `--group` tulostaa suunnitelman eikä kirjoita mitään; `--group --write` kirjoittaa epicin,
-lapset, sub-issue-linkit ja riippuvuudet ilman poimintalabeleita.
+lapset, sub-issue-linkit ja riippuvuudet ilman poimintalabeleita. Löydös, jonka avaimessa on tunnistejoukko (paketin version riippuvuuslöydös, #397), ei ryhmity vaan kulkee tavallista polkuaan samalla sormenjäljellä ja korvattujen issueiden sulkemisella.
 
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|

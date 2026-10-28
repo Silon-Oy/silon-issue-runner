@@ -348,7 +348,7 @@ $body"
 # gets a pickup label, not even a reopened single-finding issue.
 _repo_audit_group_labels() {
   local l
-  l=$("$_REPO_AUDIT_GROUP_LABELS_FN" "$1")
+  l=$("$_REPO_AUDIT_GROUP_LABELS_FN" "$@")
   printf '%s' "${l%%,*}"
 }
 
@@ -458,7 +458,7 @@ _repo_audit_group_md() {
 }
 
 # repo_audit_group <kind> <write 0|1> <title-prefix> <reopen-comment> <key-fn>
-#                  <labels-fn> <title-fn> <body-fn>
+#                  <labels-fn> <title-fn> <body-fn> [<after-fn>]
 # The grouping mode (issue #396), run instead of repo_audit_apply: the
 # findings are grouped into fix-sized issues and those into epics by severity,
 # rather than one issue per finding. Reads the global FINDINGS (the rows
@@ -469,7 +469,12 @@ _repo_audit_group_md() {
 # and the verifier did not leave UNSURE — confirmed, new findings. A finding
 # that already has an issue stays with it (exists / dismissed / reopen), and an
 # UNSURE one is filed alone with its note; both go through repo_audit_apply as
-# before, with the kind's label only. A group issue carries every member's
+# before, with the kind's label only. So does a finding whose key carries an id
+# set (a package version's advisories, #397): its issue is the package's own,
+# and the next ordinary audit would rewrite a group issue's body with the
+# package body when the id set grows. <after-fn> (repo_audit_apply's) runs for
+# these pass-through findings, so a replaced per-advisory issue is closed in
+# this mode too. A group issue carries every member's
 # finding marker and the kind's label, so the index of the next audit sees each
 # member through it: open → exists, completed → reopen, not planned → dismissed.
 #
@@ -490,7 +495,8 @@ _repo_audit_group_md() {
 # issues failed.
 repo_audit_group() {
   local kind="$1" write="$2" prefix="$3" comment="$4" key_fn="$5" labels_fn="$6" title_fn="$7" body_fn="$8"
-  local row origin rest sev conf loc desc sk source key fp plan seen=" " n=0 pass="" dups=""
+  local after_fn="${9:-}"
+  local row origin rest sev conf loc desc sk source key ids fp plan seen=" " n=0 pass="" dups=""
   local cand="$WORK/group.candidates.tsv" out_plan="$WORK/group-plan.json"
   local timeout="${RUN_ISSUES_AUDIT_GROUP_TIMEOUT:-1800}"
   local step="15-finding-group" total failed=0
@@ -505,7 +511,10 @@ repo_audit_group() {
     IFS='|' read -r sev conf loc desc <<<"$rest"
     desc="${rest#*|*|*|}"
     sk=$("$key_fn" "$origin" "$desc")
-    source="${sk%%$'\t'*}"; key="${sk#*$'\t'}"
+    # The key and its optional id set split exactly as in repo_audit_apply, so a
+    # finding has the same fingerprint in both modes.
+    source="${sk%%$'\t'*}"; key="${sk#*$'\t'}"; ids=""
+    case "$key" in *$'\t'*) ids="${key#*$'\t'}"; key="${key%%$'\t'*}" ;; esac
     fp=$(finding_fingerprint "$source" "$loc" "$key")
     REPO_AUDIT_FINDINGS=$((REPO_AUDIT_FINDINGS + 1))
     if [[ "$seen" == *" $fp "* ]]; then
@@ -513,8 +522,8 @@ repo_audit_group() {
       continue
     fi
     seen="$seen$fp "
-    plan=$(finding_issue_plan "$INDEX" "$kind" "$fp")
-    if [ "$plan" = create ] && ! { [ -s "$WORK/verify.unsure" ] && grep -qxF -- "$row" "$WORK/verify.unsure"; }; then
+    plan=$(finding_issue_plan "$INDEX" "$kind" "$fp" "$ids")
+    if [ "$plan" = create ] && [ -z "$ids" ] && ! { [ -s "$WORK/verify.unsure" ] && grep -qxF -- "$row" "$WORK/verify.unsure"; }; then
       n=$((n + 1))
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$sev" "$conf" "$loc" "$(printf '%s' "$desc" | tr '\t' ' ')" "$fp" >> "$cand"
     else
@@ -576,7 +585,7 @@ repo_audit_group() {
     printf '# Ennallaan (ei ryhmitelty)\n'
     printf '%s' "$dups"
     if [ -n "$pass" ]; then
-      repo_audit_apply "$kind" "$((1 - write))" "$comment" "$key_fn" _repo_audit_group_labels "$title_fn" "$body_fn" <<<"$pass"
+      repo_audit_apply "$kind" "$((1 - write))" "$comment" "$key_fn" _repo_audit_group_labels "$title_fn" "$body_fn" "" "$after_fn" <<<"$pass"
       failed=$REPO_AUDIT_WRITE_FAILED
     fi
     printf '\n'

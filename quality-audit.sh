@@ -29,12 +29,20 @@
 # property of the whole repo, not of what was merged recently.
 #
 # Usage:
-#   quality-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>]
+#   quality-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--group [--write]]
 #
 #   <repo>             a local clone of the audited repository
 #   --remote <name>    the remote to audit and to file issues in (default origin)
 #   --dry-run          print the findings and the planned action per finding
 #                      (create / exists / reopen / dismissed); no GitHub write
+#   --group            group the new confirmed findings into fix-sized issues and
+#                      those into epics by severity (prompts/15-finding-group.md,
+#                      lib/repo-audit.sh); alone it prints the plan (markdown and
+#                      a JSON file) and writes nothing, like --dry-run
+#   --write            with --group: write the plan — epic, children, sub-issue
+#                      links, dependencies (lib/epic-write.sh). No pickup label
+#                      and no assignee on anything; a finding that already has an
+#                      issue, or an unsure one, keeps its single-finding issue
 #   --watchlist <path> where the pickup labels come from (poller semantics: the
 #                      ONLY candidate). A repo the watchlist does not list gets
 #                      the built-in default pickup label. Its `assignees` key
@@ -46,9 +54,9 @@
 # Exit codes (own space; 0-4 mean what they mean in security-audit.sh, its
 # scanner codes 5-7 do not exist here because this audit runs no scanner):
 #   0  audit done, issues written (also: no findings); or --dry-run done
-#   1  usage error
+#   1  usage error (also --write without --group, or with --dry-run)
 #   2  repo, remote or its default branch does not resolve, or git/jq/gh is missing
-#   3  the audit did not happen: agent launch failure, empty or unparseable result, or the worktree changed — nothing written
+#   3  the audit did not happen: agent launch failure, empty or unparseable result, or the worktree changed; with --group also a failed grouping agent or a rejected plan — nothing written
 #   4  GitHub read or write failed — issues may be partially written
 #
 # Env:
@@ -69,6 +77,7 @@
 #        refuted ones are dropped, unsure ones filed without pickup labels or
 #        assignee (default 0; the poller sets 1)
 #   RUN_ISSUES_AUDIT_VERIFY_TIMEOUT         time cap per verifier call in seconds (default 600)
+#   RUN_ISSUES_AUDIT_GROUP_TIMEOUT          time cap of the grouping agent (--group) in seconds (default 1800)
 #   RUN_ISSUES_CLAUDE_CMD and the rest of lib/claude-call.sh's settings. The
 #   machine env file is sourced like orchestrate.sh does (lib/machine-env.sh,
 #   caller wins in RUN_ISSUES_*).
@@ -101,12 +110,16 @@ die_usage() { printf 'quality-audit.sh: %s\n' "$1" >&2; exit 1; }
 REPO=""
 REMOTE="origin"
 DRY_RUN=0
+GROUP=0
+GROUP_WRITE=0
 WATCHLIST_OVERRIDE="${RUN_ISSUES_WATCHLIST:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --remote)    shift; [ "$#" -gt 0 ] || die_usage "--remote needs a value"; REMOTE="$1" ;;
     --dry-run)   DRY_RUN=1 ;;
+    --group)     GROUP=1 ;;
+    --write)     GROUP_WRITE=1 ;;
     --watchlist) shift; [ "$#" -gt 0 ] || die_usage "--watchlist needs a value"; WATCHLIST_OVERRIDE="$1" ;;
     -h|--help)   sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          die_usage "unknown argument: $1" ;;
@@ -114,7 +127,11 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-[ -n "$REPO" ] || die_usage "usage: quality-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>]"
+[ -n "$REPO" ] || die_usage "usage: quality-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--group [--write]]"
+[ "$GROUP_WRITE" = 0 ] || [ "$GROUP" = 1 ] || die_usage "--write needs --group"
+[ "$GROUP_WRITE" = 0 ] || [ "$DRY_RUN" = 0 ] || die_usage "--write and --dry-run contradict each other"
+# The grouping plan alone writes nothing: it is a dry run in every other respect.
+[ "$GROUP" = 1 ] && [ "$GROUP_WRITE" = 0 ] && DRY_RUN=1
 
 # Libraries. claude-call.sh (via repo-audit.sh) carries `set -e`; this script
 # does not (every failure below is an explicit exit code), so it is switched
@@ -267,10 +284,15 @@ EOF
 
 # ---- apply --------------------------------------------------------------------
 REOPEN_COMMENT="Löydös toistui koko repon laatuauditoinnissa (\`quality-audit.sh\`, commit \`$HEAD_SHA\`), joten issue avattiin uudelleen."
-repo_audit_apply "$AUDIT_KIND" "$DRY_RUN" "$REOPEN_COMMENT" \
-  _quality_key _quality_labels _quality_title _quality_body _quality_assignee <<EOF
+if [ "$GROUP" = 1 ]; then
+  repo_audit_group "$AUDIT_KIND" "$GROUP_WRITE" "Laatu" "$REOPEN_COMMENT" \
+    _quality_key _quality_labels _quality_title _quality_body || exit $?
+else
+  repo_audit_apply "$AUDIT_KIND" "$DRY_RUN" "$REOPEN_COMMENT" \
+    _quality_key _quality_labels _quality_title _quality_body _quality_assignee <<EOF
 $FINDINGS
 EOF
+fi
 
 printf 'quality-audit: %s finding(s)%s%s\n' "$REPO_AUDIT_FINDINGS" \
   "$([ "$DRY_RUN" = 1 ] && echo ' (dry run: nothing written)')" \

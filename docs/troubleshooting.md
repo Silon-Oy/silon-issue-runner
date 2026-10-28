@@ -286,10 +286,10 @@ Koodit 0–4 tarkoittavat samaa kuin tietoturva-auditoinnissa. Skannerikoodeja 5
 
 | Koodi | Merkitys |
 |---|---|
-| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` valmis |
-| 1 | Käyttövirhe |
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` tai pelkkä `--group` valmis |
+| 1 | Käyttövirhe (myös `--write` ilman `--group`ia tai yhdessä `--dry-run`in kanssa) |
 | 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
-| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä" |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. `--group`: myös ryhmittelyagentin epäonnistuminen tai hylätty suunnitelma. Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä" |
 | 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
 
 ### Evolutionin havaintojen kooste (`evolution-digest.sh`)

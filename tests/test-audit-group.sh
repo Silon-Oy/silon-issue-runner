@@ -32,6 +32,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 AUDIT="$HERE/../security-audit.sh"
 COHERENCE="$HERE/../coherence-audit.sh"
+QUALITY="$HERE/../quality-audit.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "SKIP: jq not available"
@@ -306,7 +307,9 @@ run_audit --group --write --dry-run
 [ "$RC" = 1 ] || { show E2; bad E2 "--group --write --dry-run: rc $RC"; }
 set +e; OUT=$("$COHERENCE" "$REPO" --write 2>&1); RC=$?
 [ "$RC" = 1 ] || { show E3; bad E3 "coherence --write alone: rc $RC"; }
-grep -q -- '--group' "$AUDIT" "$COHERENCE" || bad E4 "flag missing from an audit"
+set +e; OUT=$("$QUALITY" "$REPO" --write 2>&1); RC=$?
+[ "$RC" = 1 ] && grep -q -- '--write needs --group' <<<"$OUT" || { show E5; bad E5 "quality --write alone: rc $RC"; }
+for f in "$AUDIT" "$COHERENCE" "$QUALITY"; do grep -q -- '--group' "$f" || bad E4 "flag missing from $(basename "$f")"; done
 [ "$(writes)" = 0 ] || bad E "a usage error wrote something"
 [ "$FAIL" = "$F0" ] && ok E "usage errors"
 done_case
@@ -371,6 +374,45 @@ grep -q 'issues/3/dependencies/blocked_by -F issue_id=20' "$G/log" || bad G7 "d 
 [ "$(grep -c '^sub_issue' "$G/ledger")" = 2 ] || bad G8 "written children not linked"
 rm -rf "$G"
 [ "$FAIL" = "$F0" ] && ok G "partial failures"
+
+# ===========================================================================
+echo "=== H: a finding with an id set is not grouped (#397) ==="
+# A package version's advisories ride as "<key>\t<ids>" from the key-fn. The
+# grouping mode splits them off exactly as repo_audit_apply does, so the
+# fingerprint matches the ordinary audit's, and passes the finding through to
+# its single-finding path with <after-fn>: no grouping agent is called.
+F0=$FAIL
+export TMPDIR="${TMPDIR_ORIG:-/tmp}"
+H=$(mktemp -d "$TMPDIR/auditgroup-H.XXXXXX")
+HFP=$(fp_of osv-scanner-pkg package-lock.json npm/left-pad@1.0.0)
+(
+  export TMPDIR="$H"
+  . "$HERE/../lib/repo-audit.sh"
+  set +e
+  WORK="$H"; OWNER_REPO=Silon-Oy/app; HEAD_SHA=abc; BASE_REF=main
+  INDEX="$H/index.tsv"
+  # An open issue of the same package version, covering both ids already.
+  printf '%s\tsecurity\t42\topen\tleft-pad\tGHSA-1,GHSA-2\n' "$HFP" > "$INDEX"
+  FINDINGS="scanner|high|high|package-lock.json:1|left-pad advisories
+scanner|high|high|package-lock.json:1|left-pad advisories, new id"
+  k_fn() { case "$2" in *"new id"*) printf 'osv-scanner-pkg\tnpm/left-pad@1.0.0\tGHSA-1,GHSA-2,GHSA-3' ;;
+                        *) printf 'osv-scanner-pkg\tnpm/left-pad@1.0.0\tGHSA-1,GHSA-2' ;; esac; }
+  l_fn() { printf 'security,auto-run'; }
+  t_fn() { printf 'T'; }
+  b_fn() { printf 'B'; }
+  a_fn() { printf 'AFTER %s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >> "$H/after.log"; }
+  call_claude() { echo CALLED >> "$H/calls.log"; return 1; }
+  repo_audit_group security 0 Tietoturva c k_fn l_fn t_fn b_fn a_fn > "$H/out" 2>&1
+  echo $? > "$H/rc"
+)
+[ "$(cat "$H/rc")" = 0 ] || bad H1 "rc $(cat "$H/rc"), want 0 ($(cat "$H/out"))"
+[ -s "$H/calls.log" ] && bad H2 "the grouping agent was called for a finding with an id set"
+grep -q '^exists 42' "$H/out" || bad H3 "the stripped key did not match the open issue's fingerprint ($(cat "$H/out"))"
+[ "$(grep -c '^AFTER osv-scanner-pkg|npm/left-pad@1.0.0|' "$H/after.log" 2>/dev/null)" = 1 ] \
+  || bad H4 "<after-fn> did not run once for the passed-through finding ($(cat "$H/after.log" 2>/dev/null))"
+grep -q '^duplicate' "$H/out" || bad H5 "the second row of the same fingerprint is not a duplicate"
+rm -rf "$H"
+[ "$FAIL" = "$F0" ] && ok H "id-set findings pass through with the ordinary fingerprint"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "audit-group: all passed" || echo "audit-group: FAILURES"
