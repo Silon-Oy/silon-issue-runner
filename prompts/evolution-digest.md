@@ -6,6 +6,8 @@ vuorokauden ajalta. Havaintoja on kolmea lajia:
 - `FIXED`: Evolution korjasi asian itse, eli Implementer jätti sen tekemättä.
 - `NEEDS_FOLLOWUP`: Evolution jätti asian korjaamatta, ja PR jäi luonnokseksi.
 - `DELTA_PSI`: rakenteellinen ongelma, jonka Evolution näki mutta rajasi PR:n ulkopuolelle.
+  Sen kenttä `class` kertoo lajin: `tooling` (testiympäristö, provisiointi tai runnerin oma
+  toiminta), `product` (kohdesovelluksen koodi) tai `unclassified` (vanha rivi ilman lajia).
 
 Tehtäväsi on **vain raportti**. Älä muokkaa tiedostoja, älä aja git- tai gh-komentoja äläkä
 kirjoita mitään GitHubiin. Vastauksesi on koko tuotos.
@@ -14,7 +16,8 @@ kirjoita mitään GitHubiin. Vastauksesi on koko tuotos.
 
 1. Ryhmittele havainnot **aiheittain merkityksen perusteella**, ei sanamuodon. Kaksi havaintoa
    kuuluu samaan aiheeseen, jos sama korjaus ohjeeseen tai rakenteeseen olisi estänyt
-   molemmat.
+   molemmat. Älä yhdistä `tooling`-havaintoa muun lajin havaintoon samaksi aiheeksi, vaikka
+   ne mainitsisivat saman tiedoston: ne korjataan eri paikassa.
 2. Ota mukaan vain aiheet, joissa on havaintoja **vähintään {{MIN_COUNT}} eri ajosta**. Saman
    ajon useampi havainto lasketaan yhdeksi.
 3. Ehdota jokaiselle aiheelle **yksi** kohde perusteluineen:
@@ -24,6 +27,8 @@ kirjoita mitään GitHubiin. Vastauksesi on koko tuotos.
      tunne. Nimeä repo.
    - **Uusi issue**, kun aihe on korjaamaton rakenteellinen vika eikä ohjeen puute. Anna
      ehdotettu otsikko ja repo.
+   - **Testiympäristö tai provisiointi** (kohderepon `.claude/provision-test-env.sh`, nimeä
+     repo) **tai runnerin paketti**, kun aihe on `tooling`-lajin kitkaa. Kerro kumpi.
 4. Ehdota kullekin aiheelle konkreettinen muotoilu: lisättävä ohjerivi tai issuen otsikko ja
    yhden virkkeen kuvaus.
 
@@ -33,7 +38,7 @@ Kirjoita suomeksi. Jokaisesta aiheesta:
 
 ```
 ### <aiheen nimi>
-- Kohde: <Implementerin prompti | kohderepon CLAUDE.md (<repo>) | uusi issue (<repo>)>
+- Kohde: <Implementerin prompti | kohderepon CLAUDE.md (<repo>) | uusi issue (<repo>) | testiympäristö tai provisiointi (<repo>) | runnerin paketti>
 - Perustelu: <yksi virke>
 - Ehdotus: <ohjerivi tai issuen otsikko + kuvaus>
 - Havainnot: <repo>#<issue> (<laji>), …

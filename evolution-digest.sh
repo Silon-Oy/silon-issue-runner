@@ -30,6 +30,10 @@
 #                                           the implementer does not know)
 #   * one repo, only unfixed / Δψ         → a new issue (a structural defect,
 #                                           not a missing instruction)
+# Tooling-class Δψ findings (issue #392: test environment, provisioning, the
+# runner itself) form their own lane: they are grouped apart from the rest even
+# when they mention the same file, and their target is always the target repo's
+# test environment / provisioning hook or the runner package.
 # With --claude (opt-in) the findings and the mechanical groups are handed to one
 # call_claude call that groups by MEANING; on failure the deterministic report is
 # printed instead (exit 3).
@@ -165,11 +169,12 @@ EOF
       [ -n "$at_epoch" ] || continue
       [ "$at_epoch" -ge "$CUTOFF" ] || continue
       RUNS_READ=$((RUNS_READ + 1))
-      while IFS=$'\t' read -r kind text; do
+      while IFS=$'\t' read -r kind class text; do
         [ -n "$kind" ] || continue
         jq -nc --arg repo "$repo_label" --arg issue "$issue" --arg run_id "${run_id:-$(basename "$rd")}" \
-          --arg at "$at" --arg kind "$kind" --arg text "$text" \
-          '{repo: $repo, issue: $issue, run_id: $run_id, at: $at, kind: $kind, text: $text}' \
+          --arg at "$at" --arg kind "$kind" --arg class "$class" --arg text "$text" \
+          '{repo: $repo, issue: $issue, run_id: $run_id, at: $at, kind: $kind,
+            class: (if $class == "-" then null else $class end), text: $text}' \
           >> "$FINDINGS_JSONL"
       done <<EOF
 $(evolution_findings "$evo_out")
@@ -190,62 +195,72 @@ fi
 # ---- deterministic grouping ----
 # Keys: backticked spans, plus file-like words (a slash, or a known extension).
 # Groups with the same member run set are merged so one recurrence that touches
-# three files is one topic, not three.
+# three files is one topic, not three. Both steps are per lane, so a tooling
+# finding never joins a product topic.
 DOC="$TMPD/doc.json"
 jq -s --argjson days "$SINCE_DAYS" --argjson min "$MIN_COUNT" '
   def keys_of:
     ([scan("`[^`]+`") | ltrimstr("`") | rtrimstr("`")]
      + [scan("[A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\\.(?:sh|md|json|ya?ml|php|js|mjs|ts|tsx|py|css|scss|plist|toml)\\b")])
     | map(sub("[.,:;]+$"; "")) | map(select(length > 1)) | unique;
+  def lane: if .class == "tooling" then "tooling" else "product" end;
   def target:
-    if (.repos | length) > 1 then "implementer_prompt"
+    if .lane == "tooling" then "test_env_or_runner"
+    elif (.repos | length) > 1 then "implementer_prompt"
     elif any(.findings[]; .kind == "FIXED") then "repo_claude_md"
     else "new_issue" end;
-  (sort_by(.at) | to_entries | map(.value + {id: .key})) as $f
-  | ([ $f[] | . as $x | (.text | keys_of)[] | {key: ., id: $x.id} ]
-     | group_by(.key)
-     | map({key: .[0].key, ids: (map(.id) | unique)})
+  (sort_by(.at) | to_entries | map(.value + {id: .key, class: (.value.class // null)})) as $f
+  | ([ $f[] | . as $x | (.text | keys_of)[] | {lane: ($x | lane), key: ., id: $x.id} ]
+     | group_by([.lane, .key])
+     | map({lane: .[0].lane, key: .[0].key, ids: (map(.id) | unique)})
      | map(. + {runs: ([.ids[] as $i | $f[$i].run_id] | unique)})
      | map(select((.runs | length) >= $min))
-     | group_by(.ids)
-     | map({keys: (map(.key) | unique), ids: .[0].ids, runs: .[0].runs})
+     | group_by([.lane, .ids])
+     | map({lane: .[0].lane, keys: (map(.key) | unique), ids: .[0].ids, runs: .[0].runs})
      | map({
+         lane,
          keys,
          run_count: (.runs | length),
          repos: ([.ids[] as $i | $f[$i].repo] | unique),
          findings: [.ids[] as $i | $f[$i] | del(.id)]
        } | . + {target: target})
      | sort_by(-.run_count, .keys[0])) as $groups
-  | ([$groups[].findings[] | [.run_id, .kind, .text]] ) as $grouped
+  | ([$groups[].findings[] | [.run_id, .kind, .class, .text]] ) as $grouped
   | { window_days: $days, min_count: $min,
       findings: [$f[] | del(.id)],
       groups: $groups,
-      ungrouped: [$f[] | del(.id) | select([.run_id, .kind, .text] as $k | any($grouped[]; . == $k) | not)] }
+      ungrouped: [$f[] | del(.id) | select([.run_id, .kind, .class, .text] as $k | any($grouped[]; . == $k) | not)] }
 ' "$FINDINGS_JSONL" > "$DOC" || { printf 'evolution-digest.sh: grouping failed\n' >&2; exit 2; }
 
 # ---- report rendering ----
 render_human() {
   jq -r --argjson repos "$REPOS_SCANNED" --argjson runs "$RUNS_READ" '
-    def kind_fi: {FIXED: "korjattu", NEEDS_FOLLOWUP: "jatkotoimi", DELTA_PSI: "Δψ"}[.] // .;
+    def kind_fi: ({FIXED: "korjattu", NEEDS_FOLLOWUP: "jatkotoimi", DELTA_PSI: "Δψ"}[.kind] // .kind)
+      + (if .kind == "DELTA_PSI" and .class != null then "/\(.class)" else "" end);
     def target_fi:
-      if .target == "implementer_prompt" then "Implementerin prompti (prompts/02-implementer.md) — toistuu \(.repos | length) repossa"
+      if .target == "test_env_or_runner" then "kohderepon testiympäristö tai provisiointi (`.claude/provision-test-env.sh`, \(.repos | join(", "))) tai runnerin paketti — toistuva ympäristökitka"
+      elif .target == "implementer_prompt" then "Implementerin prompti (prompts/02-implementer.md) — toistuu \(.repos | length) repossa"
       elif .target == "repo_claude_md" then "kohderepon CLAUDE.md (\(.repos[0])) — Evolution korjasi saman asian toistuvasti"
       else "uusi issue (\(.repos[0])) — korjaamaton rakenteellinen havainto" end;
-    def row: "  - \(.repo)#\(.issue) (\(.kind | kind_fi)): \(.text)";
+    def row: "  - \(.repo)#\(.issue) (\(kind_fi)): \(.text)";
+    def topics($lane; $title):
+      ([.groups[] | select(.lane == $lane)]) as $g
+      | "## Toistuvat aiheet — \($title)",
+        "",
+        (if ($g | length) == 0 then "Ei toistuvia aiheita.", ""
+         else ($g[] |
+           "### \(.keys | map("`\(.)`") | join(", ")) — \(.run_count) ajoa",
+           "Ehdotettu kohde: \(target_fi)",
+           (.findings[] | row),
+           "")
+         end);
     "# Evolutionin havaintojen kooste",
     "",
     "Jakso: \(.window_days) vrk · repoja: \($repos) · ajoja jaksossa: \($runs) · havaintoja: \(.findings | length)",
     "Toistuvaksi lasketaan aihe, joka esiintyy vähintään \(.min_count) eri ajossa. Ryhmittely on mekaaninen (mainitut tiedostot ja tunnisteet); --claude ryhmittelee merkityksen perusteella.",
     "",
-    "## Toistuvat aiheet",
-    "",
-    (if (.groups | length) == 0 then "Ei toistuvia aiheita.", ""
-     else (.groups[] |
-       "### \(.keys | map("`\(.)`") | join(", ")) — \(.run_count) ajoa",
-       "Ehdotettu kohde: \(target_fi)",
-       (.findings[] | row),
-       "")
-     end),
+    topics("product"; "tuote"),
+    topics("tooling"; "testiympäristö ja runner"),
     "## Muut havainnot",
     "",
     (if (.ungrouped | length) == 0 then "Ei muita havaintoja."

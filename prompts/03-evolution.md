@@ -68,12 +68,20 @@ Jos huomasit toistuvan tai rakenteellisen ongelman, jonka korjaus ei kuulu täh�
 PR:ään, kirjaa se omalle rivilleen ennen tulosriviä:
 
 ```
-EVOLUTION_DELTA_PSI: <yksi virke: ongelma ja missä se näkyy>
+EVOLUTION_DELTA_PSI: <tooling|product> | <yksi virke: ongelma ja missä se näkyy>
 ```
 
-Orkestraattori kokoaa nämä rivit PR-kuvaukseen omaksi osiokseen. Rivi ei vaikuta
-tulokseen eikä luonnos-PR:ään. Jätä rivit pois, jos havaittavaa ei ole — älä keksi
-niitä.
+Rivin alussa on laji, koska lajit kuuluvat eri vastaanottajille:
+
+- `tooling` — testiympäristö, provisiointi tai runnerin oma toiminta (esim. testiajon
+  esto, puuttuva `.env`, hidas tai rikkinäinen ympäristön pystytys).
+- `product` — kohdesovelluksen koodin rakenteellinen vika.
+
+Kirjaa sama kitka **kerran**, vaikka törmäisit siihen monta kertaa.
+
+Orkestraattori kokoaa nämä rivit PR-kuvaukseen omaksi osiokseen, lajeittain omien
+alaotsikoidensa alle. Rivi ei vaikuta tulokseen eikä luonnos-PR:ään. Jätä rivit pois,
+jos havaittavaa ei ole — älä keksi niitä.
 
 ## Sääntöjä
 

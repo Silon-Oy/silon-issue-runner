@@ -16,6 +16,9 @@
 #   (b) no 01-cycle-review.out (older run / restart) -> evolution still runs,
 #       PR body is written, no Δψ section when evolution emits none
 #   (c) the draft decision still follows EVOLUTION_RESULT alone
+#   (d) classified Δψ lines (#392) -> one subheading per class present, in the
+#       order product, tooling; a class without lines prints no subheading; a
+#       classless line (case a) lands under "Unclassified"
 #
 # Run: bash tests/test-evolution-context.sh   (exit 0 = all pass)
 
@@ -123,6 +126,9 @@ if grep -qF -- '- lock files leak on every timeout' "$RD/pr-body.md" 2>/dev/null
 else
   fail "(a): Δψ line did not reach pr-body.md"
 fi
+grep -qF '### Unclassified' "$RD/pr-body.md" 2>/dev/null \
+  && pass "(a): classless Δψ line lands under ### Unclassified" \
+  || fail "(a): classless Δψ line has no Unclassified subheading"
 if grep -qF -- '--draft' "$WORK/gh-pr-create.args" 2>/dev/null; then
   fail "(c): a Δψ line must not turn the PR into a draft"
 else
@@ -155,9 +161,34 @@ else
   fail "(c): NEEDS_FOLLOWUP no longer drafts"
 fi
 
+# === (d) classified Δψ lines =============================================
+setup_run
+printf '%s\n' "EVOLUTION_DELTA_PSI: tooling | playwright needs e2e/.env" \
+  "EVOLUTION_DELTA_PSI: product | cache invalidation is ad hoc" "EVOLUTION_RESULT: CLEAN" > "$WORK/evo-reply"
+run_orch
+B="$(cat "$RD/pr-body.md" 2>/dev/null)"
+if printf '%s' "$B" | grep -qF -- '- cache invalidation is ad hoc' \
+   && printf '%s' "$B" | grep -qF -- '- playwright needs e2e/.env' \
+   && [ "$(printf '%s\n' "$B" | grep -E '^### (Product|Tooling)' | cut -c5-11 | tr '\n' ',')" = "Product,Tooling," ]; then
+  pass "(d): product and tooling rows under their own subheadings, product first"
+else
+  fail "(d): classified Δψ subheadings wrong: $(printf '%s\n' "$B" | grep -E '^(###|- )' | tr '\n' '|')"
+fi
+printf '%s' "$B" | grep -qF '### Unclassified' \
+  && fail "(d): empty Unclassified subheading printed" || pass "(d): no empty Unclassified subheading"
+
+setup_run
+printf '%s\n' "EVOLUTION_DELTA_PSI: product | only a product row" "EVOLUTION_RESULT: CLEAN" > "$WORK/evo-reply"
+run_orch
+if grep -qF '### Product' "$RD/pr-body.md" 2>/dev/null && ! grep -qF '### Tooling' "$RD/pr-body.md"; then
+  pass "(d): product-only Δψ prints no Tooling subheading"
+else
+  fail "(d): product-only Δψ subheadings wrong"
+fi
+
 # === The prompt carries the instructions the issue asks for ===============
 PROMPT_SRC="$ROOT/prompts/03-evolution.md"
-for needle in '{{ISSUE_BODY}}' '{{CYCLE_REVIEW_OUTPUT}}' 'Ω' 'juurisy' 'Δψ' 'EVOLUTION_DELTA_PSI:' 'Ω-osiota ei ole'; do
+for needle in '{{ISSUE_BODY}}' '{{CYCLE_REVIEW_OUTPUT}}' 'Ω' 'juurisy' 'Δψ' 'EVOLUTION_DELTA_PSI: <tooling|product> |' 'Ω-osiota ei ole'; do
   grep -qF "$needle" "$PROMPT_SRC" && pass "prompt carries '$needle'" || fail "prompt lost '$needle'"
 done
 

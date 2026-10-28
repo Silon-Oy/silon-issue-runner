@@ -6,7 +6,9 @@
 # watchlist nor the machine env file is read.
 #
 # Cases:
-#   1. parser: FIXED / NEEDS_FOLLOWUP / Δψ extraction, CLEAN yields only Δψ
+#   1. parser: FIXED / NEEDS_FOLLOWUP / Δψ extraction, CLEAN yields only Δψ;
+#      Δψ class: tooling / product, a classless (pre-#392) or unknown-class line
+#      reads as unclassified with its whole text kept
 #   2. live + archived runs in the window are read; a run outside it is not
 #   3. a key shared by two runs in two repos → implementer-prompt target
 #   4. one repo, FIXED → CLAUDE.md target; one repo, only follow-ups → new issue
@@ -15,6 +17,8 @@
 #   7. --json shape; --claude with a stub agent; --claude failure → exit 3
 #   8. read-only: the fixture tree is byte-identical afterwards
 #   9. usage errors → exit 1; no watchlist → exit 2
+#  10. tooling Δψ forms its own lane: not merged with a product finding on the
+#      same file, target is the test environment / provisioning or the runner
 #
 # Run: bash tests/test-evolution-digest.sh   (exit 0 = all pass)
 
@@ -52,11 +56,16 @@ printf '%s\n' "noise" "EVOLUTION_DELTA_PSI: lock leaks in \`lib/locking.sh\`" \
   "EVOLUTION_RESULT: FIXED — added missing test" > "$P"
 check "parser: result payload" "$(evolution_result_payload "$P")" "FIXED — added missing test"
 check "parser: findings" "$(evolution_findings "$P" | tr '\t' '|' | tr '\n' ';')" \
-  "FIXED|added missing test;DELTA_PSI|lock leaks in \`lib/locking.sh\`;"
+  "FIXED|-|added missing test;DELTA_PSI|unclassified|lock leaks in \`lib/locking.sh\`;"
 printf '%s\n' "EVOLUTION_RESULT: NEEDS_FOLLOWUP -- goal not met" > "$P"
-check "parser: -- separator" "$(evolution_findings "$P" | tr '\t' '|')" "NEEDS_FOLLOWUP|goal not met"
+check "parser: -- separator" "$(evolution_findings "$P" | tr '\t' '|')" "NEEDS_FOLLOWUP|-|goal not met"
 printf '%s\n' "EVOLUTION_DELTA_PSI: x" "EVOLUTION_RESULT: CLEAN" > "$P"
-check "parser: CLEAN keeps only Δψ" "$(evolution_findings "$P" | tr '\t' '|')" "DELTA_PSI|x"
+check "parser: CLEAN keeps only Δψ" "$(evolution_findings "$P" | tr '\t' '|')" "DELTA_PSI|unclassified|x"
+printf '%s\n' "EVOLUTION_DELTA_PSI: tooling | x" "EVOLUTION_DELTA_PSI: product|y" \
+  "EVOLUTION_DELTA_PSI: infra | z" "EVOLUTION_DELTA_PSI: productive w" > "$P"
+check "parser: Δψ classes" "$(evolution_findings "$P" | tr '\t' '|' | tr '\n' ';')" \
+  "DELTA_PSI|tooling|x;DELTA_PSI|product|y;DELTA_PSI|unclassified|infra | z;DELTA_PSI|unclassified|productive w;"
+check "parser: classified helper" "$(evolution_delta_psi_classified "$P" | sed -n 1p | tr '\t' '|')" "tooling|x"
 check "parser: missing file is empty, rc 0" "$(evolution_findings "$FX/nope"; echo "rc=$?")" "rc=0"
 
 # ---- fixtures ----
@@ -112,7 +121,7 @@ has   "cross-repo key grouped" "$OUT" '`orchestrate.sh` — 2 ajoa'
 has   "cross-repo → implementer prompt" "$OUT" "Implementerin prompti (prompts/02-implementer.md) — toistuu 2 repossa"
 has   "one repo FIXED → CLAUDE.md" "$OUT" "kohderepon CLAUDE.md (repo-alpha)"
 has   "one repo follow-ups → new issue" "$OUT" "uusi issue (repo-beta)"
-has   "archived run read" "$OUT" "repo-beta#21 (Δψ)"
+has   "archived run read" "$OUT" "repo-beta#21 (Δψ/unclassified)"
 has   "single-run key listed as other finding" "$OUT" "repo-alpha#14 (korjattu): one-off"
 lacks "single-run key not a topic" "$OUT" '`lonely.sh` —'
 
@@ -165,6 +174,31 @@ run --json --claude;      check "--json --claude → 1" "$RC" "1"
 run --bogus;              check "unknown flag → 1" "$RC" "1"
 OUT="$(RUN_ISSUES_WATCHLIST="$FX/none.json" bash "$DIGEST" 2>/dev/null)"; RC=$?
 check "missing watchlist → 2" "$RC" "2"
+
+# ---- 10. tooling lane ----
+C="$FX/repo-gamma"
+mkrun "$C" live c1 31 1 "EVOLUTION_DELTA_PSI: tooling | Playwright needs \`e2e/.env\` before the run" "EVOLUTION_RESULT: CLEAN"
+mkrun "$C" live c2 32 1 "EVOLUTION_DELTA_PSI: tooling | again no \`e2e/.env\` for Playwright" "EVOLUTION_RESULT: CLEAN"
+mkrun "$C" live c3 33 1 "EVOLUTION_DELTA_PSI: product | \`e2e/.env\` is read by the app at runtime" "EVOLUTION_RESULT: CLEAN"
+mkrun "$C" live c4 34 1 "EVOLUTION_RESULT: NEEDS_FOLLOWUP — \`e2e/.env\` parsing is brittle"
+WL2="$FX/watchlist2.json"
+jq -n --arg c "$C" '{repos: [{path: $c}]}' > "$WL2"
+OUT="$(RUN_ISSUES_WATCHLIST="$WL2" $TO bash "$DIGEST" --json 2>"$FX/err")"; RC=$?
+check "lane json: exit 0" "$RC" "0"
+check "lane json: two groups, one per lane" \
+  "$(printf '%s' "$OUT" | jq -r '[.groups[] | "\(.lane):\(.run_count):\(.target)"] | sort | join(",")')" \
+  "product:2:new_issue,tooling:2:test_env_or_runner"
+check "lane json: class carried" "$(printf '%s' "$OUT" | jq -r '[.findings[] | .class // "-"] | sort | join(",")')" \
+  "-,product,tooling,tooling"
+OUT="$(RUN_ISSUES_WATCHLIST="$WL2" $TO bash "$DIGEST" 2>"$FX/err")"
+has   "lane human: product section" "$OUT" "## Toistuvat aiheet — tuote"
+has   "lane human: tooling section" "$OUT" "## Toistuvat aiheet — testiympäristö ja runner"
+has   "lane human: tooling target" "$OUT" "kohderepon testiympäristö tai provisiointi (\`.claude/provision-test-env.sh\`, repo-gamma) tai runnerin paketti"
+has   "lane human: class in row" "$OUT" "repo-gamma#31 (Δψ/tooling)"
+OUT="$(RUN_ISSUES_WATCHLIST="$WL" $TO bash "$DIGEST" 2>"$FX/err")"
+has   "lane human: empty tooling section says so" "$OUT" "## Toistuvat aiheet — testiympäristö ja runner
+
+Ei toistuvia aiheita."
 
 printf '\nevolution-digest: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

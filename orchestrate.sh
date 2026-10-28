@@ -2895,9 +2895,10 @@ phase_b_deliver() {
   state_set "$RUN_DIR" evolution_result "$(_result_class "$evo_result")"
   # Δψ observations: structural problems evolution saw but left out of this PR.
   # The PR is created only in S11, so evolution cannot edit its description;
-  # these lines are its route into the body. Absent lines = no section.
+  # these lines are its route into the body. Absent lines = no section; the
+  # section has one subheading per class (#392), an empty one is not printed.
   local evo_delta_psi
-  evo_delta_psi=$(evolution_delta_psi_payloads "$evo_out" | sed 's/^/- /')
+  evo_delta_psi=$(evolution_delta_psi_classified "$evo_out")
 
   # ---------- S10: PR ----------
   enter_state "S10_PR"
@@ -2958,8 +2959,20 @@ phase_b_deliver() {
     if [ -n "$evo_delta_psi" ]; then
       echo "## Δψ — follow-up outside this PR"
       echo
-      echo "$evo_delta_psi"
-      echo
+      local dp_class dp_heading dp_rows
+      for dp_class in product tooling unclassified; do
+        dp_rows=$(printf '%s\n' "$evo_delta_psi" | awk -F '\t' -v c="$dp_class" '$1 == c { sub(/^[^\t]*\t/, ""); print "- " $0 }')
+        [ -n "$dp_rows" ] || continue
+        case "$dp_class" in
+          product) dp_heading="Product (target application)" ;;
+          tooling) dp_heading="Tooling (test environment, provisioning, runner)" ;;
+          *)       dp_heading="Unclassified" ;;
+        esac
+        echo "### $dp_heading"
+        echo
+        echo "$dp_rows"
+        echo
+      done
     fi
     echo "Run dir: \`$RUN_DIR\`"
     echo

@@ -12,3 +12,6 @@ Lue tiedosto ja vertaa diffiä vahvistetun hypoteesin väitteeseen:
 
 Kirjaa arvio vastaukseesi. Jos korjaus ei kohdistu vahvistettuun hypoteesiin tai raakatulos
 ei tue sitä, lopeta `EVOLUTION_RESULT: NEEDS_FOLLOWUP — <selitys>` -rivillä.
+
+Diagnostisen kokeen ympäristökitka (esim. testiajon esto tai puuttuva `.env`) ei ole
+tuotevika: kirjaa se Δψ-osion muodossa lajilla `tooling` (`EVOLUTION_DELTA_PSI: tooling | …`).

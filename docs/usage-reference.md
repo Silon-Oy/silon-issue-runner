@@ -701,6 +701,14 @@ backtickeissä olevan tunnisteen. Aihe on toistuva, kun se esiintyy vähintään
 | Useampi repo | Implementerin prompti (`prompts/02-implementer.md`) | Implementer ohittaa yleisen työtavan |
 | Yksi repo, Evolution korjasi (`FIXED`) | Kohderepon `CLAUDE.md` | Repon konventio, jota Implementer ei tunne |
 | Yksi repo, vain jatkotoimia tai Δψ-rivejä | Uusi issue | Korjaamaton rakenteellinen vika, ei ohjeen puute |
+| `tooling`-lajin Δψ-rivit | Kohderepon testiympäristö tai provisiointi (`.claude/provision-test-env.sh`) tai runnerin paketti | Toistuva ympäristökitka, ei tuotevika |
+
+Δψ-rivillä on laji (`EVOLUTION_DELTA_PSI: <tooling|product> | <virke>`): `tooling` koskee
+testiympäristöä, provisiointia tai runnerin omaa toimintaa, `product` kohdesovelluksen koodia.
+Lajiton vanha rivi luetaan lajiksi `unclassified`. Kooste ryhmittelee `tooling`-havainnot omaksi
+kaistakseen, joten ne eivät yhdisty tuotehavaintoon, vaikka mainitsisivat saman tiedoston, ja
+raportissa on erilliset osiot tuotteen ja testiympäristön toistuville aiheille. PR-kuvauksen
+Δψ-osiossa on vastaavasti alaotsikko kullekin lajille, jolla on rivejä.
 
 Mekaaninen ryhmittely ei tunnista saman asian eri sanamuotoja. `--claude` antaa havainnot ja
 mekaaniset ryhmät yhdelle Claude-kutsulle, joka ryhmittelee merkityksen perusteella ja ehdottaa
