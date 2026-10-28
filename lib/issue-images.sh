@@ -192,8 +192,10 @@ _image_url_may_fetch() {
   mid=${host#"$prefix"}
   mid=${mid%"$suffix"}
   [ -n "$mid" ] || return 1
+  # Spelled out, not a range: bash 3.2 matches [a-z] by locale collation, so
+  # under a UTF-8 locale it also accepts uppercase (aAbB…z).
   case "$mid" in
-    *[!a-z0-9]*) return 1 ;;
+    *[!abcdefghijklmnopqrstuvwxyz0123456789]*) return 1 ;;
   esac
   return 0
 }
