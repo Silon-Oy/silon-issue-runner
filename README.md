@@ -1150,8 +1150,9 @@ migraatiotiedostoihin lisätyt rivit ilman agenttia (`PR_WATCH_ENABLE_DATA_MIGRA
   Repo voi lisätä polkuja (esim. backfill-skriptit) avaimella `.data_migration.paths`, joka
   luetaan base-haarasta.
 - Osuma tai epäonnistunut skannaus ⇒ `manual-merge`-label ja yksi kommentti osumineen. Vahti
-  ei mergeä `manual-merge`-PR:ää, vaan ihminen mergeää sen käsin. Kloonikannan todennus ei
-  vapauta PR:ää.
+  skannaa jokaisen headin eikä mergeä PR:ää, jonka muutos osuu; ihminen mergeää sen käsin.
+  Kloonikannan todennus ei vapauta PR:ää. Label ei yksin pidätä: raskaan PR:n `auto-merge`-ohitus
+  toimii ilman osumaa.
 
 Yksityiskohdat: [`docs/env-reference.md`](docs/env-reference.md#pr-vahti).
 

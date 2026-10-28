@@ -12,11 +12,13 @@
 #
 # PR watcher (gh is a PATH shim, no agent; FOREIGN host so the run-dir survives):
 #   W1) hit -> manual-merge label, one marker comment, no merge, exit 10
-#   W2) next tick (payload carries manual-merge) -> no comment, no merge
+#   W2) next tick (payload carries manual-merge) -> rescanned and held: no new
+#       comment, no new label, no merge
 #   W3) same head, label write lost -> label again, comment NOT repeated
 #   W4) scan cannot run (invalid base config) -> held, no merge
 #   W5) no hit -> merge bound to the scanned head
 #   W6) switch off -> no scan, merge
+#   W7) heavy-run override: manual-merge + auto-merge, no hit -> merged
 #
 # Run: bash tests/test-data-migration.sh
 
@@ -229,7 +231,7 @@ grep -q '"event":"pr_data_migration_held"' "$RD/state.jsonl" || bad W1 "no pr_da
 FB=$FAIL
 echo '[{"name":"auto-merge"},{"name":"manual-merge"}]' > "$WORK/pr_labels"
 run_watch
-[ "$RC" = 4 ] || { show W2; bad W2 "rc $RC, want 4"; }
+[ "$RC" = 10 ] || { show W2; bad W2 "rc $RC, want 10"; }
 merged && bad W2 "merged a manual-merge PR"
 [ "$(comments)" = 1 ] || bad W2 "marker comments $(comments), want still 1"
 [ "$(label_adds)" = 1 ] || bad W2 "label written again"
@@ -273,6 +275,19 @@ run_watch PR_WATCH_ENABLE_DATA_MIGRATION_GATE=0
 merged || bad W6 "not merged with the switch off"
 [ "$(comments)" = 0 ] || bad W6 "commented with the switch off"
 [ "$FAIL" = "$FB" ] && ok W6 "switch off -> no scan"
+
+# ---- W7 ---------------------------------------------------------------------
+# A heavy-run PR carries manual-merge from birth; a human releases it by adding
+# auto-merge. Without a data-destroying statement the hold must not stop it.
+FB=$FAIL
+setup W7 migrations/002.sql 'ALTER TABLE users ADD COLUMN phone2 text;'
+echo '[{"name":"auto-merge"},{"name":"manual-merge"}]' > "$WORK/pr_labels"
+run_watch
+[ "$RC" = 0 ] || { show W7; bad W7 "rc $RC, want 0"; }
+merged || bad W7 "heavy-run override not merged"
+[ "$(comments)" = 0 ] || bad W7 "commented"
+[ "$(label_adds)" = 0 ] || bad W7 "label written"
+[ "$FAIL" = "$FB" ] && ok W7 "manual-merge alone does not hold a PR without a hit"
 
 echo "----------------------------------------"
 if [ "$FAIL" = 0 ]; then echo "data-migration: ALL PASS"; else echo "data-migration: FAILURES"; fi

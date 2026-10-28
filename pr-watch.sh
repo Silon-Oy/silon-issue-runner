@@ -126,9 +126,12 @@
 #                                        from the BASE branch's
 #                                        `.data_migration.paths`). A hit, or a scan
 #                                        that cannot run, adds manual-merge + one
-#                                        marker comment and holds the PR (exit 10);
-#                                        a PR carrying manual-merge is never merged
-#                                        by the watcher while this is on.
+#                                        marker comment and holds the PR (exit 10).
+#                                        Every head is scanned again: a held PR
+#                                        stays held because its change still hits,
+#                                        and the label alone does not hold a PR
+#                                        (a heavy-run PR a human released with
+#                                        auto-merge still merges without a hit).
 #   PR_WATCH_MERGE_LABEL                 default "auto-merge".
 #   PR_WATCH_LABELS_CSV                  optional scan filter (unused gate today;
 #                                        the merge label is the real gate).
@@ -1641,25 +1644,24 @@ _merge_gate_spec() {
 # a MERGE_GATES entry because that mechanism is an agent review with a fix loop,
 # and a destructive migration is not something an agent may "fix" away.
 #
-# The hold flag is the manual-merge label (EPIC_MANUAL_MERGE_LABEL): read from
-# the payload already fetched, so a held PR costs no gh call on later ticks. The
-# scan runs in REPO_ROOT, which shares the object store with the run's worktree,
+# The hold is the manual-merge label (EPIC_MANUAL_MERGE_LABEL) plus one marker
+# comment per head. The label is not read as "held": a heavy-run PR carries it
+# from birth, and a human releases such a PR by adding auto-merge (the skill's
+# documented override). So every head is scanned; a held PR stays held because
+# its change still hits, and the label and comment are not written again (the
+# label is read from the payload already fetched). The scan runs in REPO_ROOT, which shares the object store with the run's worktree,
 # so a missing worktree does not stop it. Extra paths come from the BASE
 # branch's config: the PR under review must not narrow its own scan.
 #
 # Sets DATA_MIGRATION_SCANNED_SHA (the head that was scanned and passed).
 # Returns: 0  no hit — continue to the merge gates
 #          10 held now (label + one marker comment per head)
-#          4  not this tick: already held by the label, or the fetch failed
-#             (transient) — never a merge
+#          4  not this tick: the fetch failed (transient) — never a merge
 pr_run_data_migration_gate() {
   local pr_num="$1" rid="$2" run_dir="$3" pr_json="$4"
   DATA_MIGRATION_SCANNED_SHA=""
-
-  if pr_has_label "$pr_json" "$EPIC_MANUAL_MERGE_LABEL"; then
-    log "PR #$pr_num carries $EPIC_MANUAL_MERGE_LABEL — held for a manual merge; not merging"
-    return 4
-  fi
+  local has_label=0
+  pr_has_label "$pr_json" "$EPIC_MANUAL_MERGE_LABEL" && has_label=1
 
   local remote="${PR_ROUTE_REMOTE:-origin}" branch base_ref
   branch=$(run_field "$rid" '.branch')
@@ -1667,7 +1669,7 @@ pr_run_data_migration_gate() {
   base_ref=$(jq -r '.baseRefName // "main"' <<<"$pr_json" 2>/dev/null || echo main)
   if [ -z "$branch" ]; then
     _pr_data_migration_hold "$pr_num" "$run_dir" "?" \
-      "PR:n haaraa ei voitu selvittää, joten skannausta ei voitu ajaa" ""
+      "PR:n haaraa ei voitu selvittää, joten skannausta ei voitu ajaa" "" "$has_label"
     return 10
   fi
 
@@ -1690,33 +1692,36 @@ pr_run_data_migration_gate() {
       return 0
       ;;
     0)
-      _pr_data_migration_hold "$pr_num" "$run_dir" "${sha:-?}" "" "$hits"
+      _pr_data_migration_hold "$pr_num" "$run_dir" "${sha:-?}" "" "$hits" "$has_label"
       return 10
       ;;
     *)
       # A scan that could not run is never "no hits" (fail-closed).
       _pr_data_migration_hold "$pr_num" "$run_dir" "${sha:-?}" \
-        "skannaus epäonnistui (rc=$src: viite ei resolvoitunut, git diff kaatui tai base-haaran \`.claude/run-issues.json\` on kelvoton)" ""
+        "skannaus epäonnistui (rc=$src: viite ei resolvoitunut, git diff kaatui tai base-haaran \`.claude/run-issues.json\` on kelvoton)" "" "$has_label"
       return 10
       ;;
   esac
 }
 
-# _pr_data_migration_hold <pr-number> <run-dir> <sha> <why> <hits> — attach
+# _pr_data_migration_hold <pr-number> <run-dir> <sha> <why> <hits> [<has-label>] — attach
 # manual-merge and post the marker comment, once per head: the label stops later
 # ticks before the scan, and the state.jsonl record keeps a failed label write
 # from turning into a comment on every tick. <why> non-empty = the scan did not
-# run; otherwise <hits> are the scanner's lines.
+# run; otherwise <hits> are the scanner's lines. <has-label> 1 = the payload
+# already carries the label, so it is not written again.
 _pr_data_migration_hold() {
-  local pr_num="$1" run_dir="$2" sha="$3" why="$4" hits="$5"
+  local pr_num="$1" run_dir="$2" sha="$3" why="$4" hits="$5" has_label="${6:-0}"
   local label="$EPIC_MANUAL_MERGE_LABEL" n=0
   [ -n "$hits" ] && n=$(printf '%s\n' "$hits" | grep -c . || true)
   log "data-migration gate: holding PR #$pr_num for a manual merge — ${why:-$n data-destroying statement(s)}"
 
-  ( cd "$REPO_ROOT" && labels_ensure "$PR_OWNER_REPO" "$label" FBCA04 "Mergetään käsin — automaatio ei mergeä" ) \
-    || log "could not ensure $label label for PR #$pr_num"
-  ( cd "$REPO_ROOT" && labels_add "$PR_OWNER_REPO" "$pr_num" "$label" ) \
-    || log "could not add $label label to PR #$pr_num"
+  if [ "$has_label" != 1 ]; then
+    ( cd "$REPO_ROOT" && labels_ensure "$PR_OWNER_REPO" "$label" FBCA04 "Mergetään käsin — automaatio ei mergeä" ) \
+      || log "could not ensure $label label for PR #$pr_num"
+    ( cd "$REPO_ROOT" && labels_add "$PR_OWNER_REPO" "$pr_num" "$label" ) \
+      || log "could not add $label label to PR #$pr_num"
+  fi
 
   local have_dir=0
   [ -n "$run_dir" ] && [ -d "$run_dir" ] && have_dir=1
