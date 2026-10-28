@@ -1,8 +1,8 @@
 ---
 name: claude-issue-runner
-description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run, heavy-run, priority-high or security label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:epic-review, /issue-runner:pr-watch, /issue-runner:cleanup-run, /issue-runner:security-audit or /issue-runner:coherence-audit commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
+description: Use when working in a repository watched by the claude-issue-runner / run-issues automation — you see an auto-run, auto-claimed, needs-human, waiting, wip, epic, auto-clean, auto-reset, auto-merge, light-run, heavy-run, priority-high, security or quality label; a branch whose name starts with auto-run/ (e.g. auto-run/<repo>-issue-<N>-<slug>); a run.json artifact or a .claude/run-issues-archive/ directory; an issue comment carrying a <!-- run-issues:… --> marker; a bot-opened PR closing an issue; or the /issue-runner:run-issue, /issue-runner:run-epic, /issue-runner:epic-review, /issue-runner:pr-watch, /issue-runner:cleanup-run, /issue-runner:security-audit, /issue-runner:coherence-audit or /issue-runner:quality-audit commands. Covers what the system is, when it picks an issue up, what every label means and who writes it (including the auto-claimed reservation label), how to read and unstick a blocked or stalled run, and which command or script to reach for.
 when_to_use: You are in a repository the run-issues automation watches — writing or labelling an issue you want it to run, or looking at something it left behind (a label, a branch, a bot PR, a question comment, a run that stopped) and deciding what to do next.
-version: 2.4.0
+version: 2.5.0
 ---
 
 # claude-issue-runner — järjestelmän käyttöohje
@@ -66,6 +66,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `security` | automaatio, kun tietoturva-auditointi (`security-audit.sh`) tai riippuvuusskannaus (`dependency-scan.sh`) luo löydösissuen | sinä tai ajo, joka korjaa löydöksen | Merkitsee auditoinnin löydöksen. Ei poimintaehto: vakavimmat löydökset saavat lisäksi poimintalabelit. Sulje väärä löydös tilaan *not planned*, niin auditointi ei avaa sitä uudelleen |
 | `observed` | automaatio, kun ajon cycle review havaitsee rajauksen ulkopuolisen perityn vian (`CYCLE_REVIEW_OBSERVED_DEFECT`) | sinä tai ajo, joka korjaa vian | Merkitsee olemassa olevan vian, jonka jokin ajo näki mutta jota se ei saanut korjata. Rungossa linkki ajon issueen. **Ei koskaan poimintalabeleita:** lisää poimintalabel itse, jos haluat runnerin korjaavan sen. Sulje väärä havainto tilaan *not planned*, niin seuraava ajo ei avaa sitä uudelleen |
 | `coherence` | automaatio, kun koherenssiauditointi (`coherence-audit.sh`) luo löydösissuen | sinä tai ajo, joka refaktoroi | Merkitsee rinnakkaisten ajojen tuottaman epäkoherenssin (kaksoistoteutus, varjostava abstraktio, ristiriitainen konventio). **Ei koskaan poimintalabeleita:** refaktorointi on sinun valintasi, joten lisää poimintalabel itse, jos haluat runnerin tekevän sen. Sulje väärä löydös tilaan *not planned* |
+| `quality` | automaatio, kun laatuauditointi (`quality-audit.sh`) luo löydösissuen | sinä tai ajo, joka korjaa löydöksen | Merkitsee koko repon laatuvian (datan eheys, sääntöjen johdonmukaisuus, oletuksena salliva rajaus, sietokyky, testien luotettavuus, ylläpidettävyys, saavutettavuus). Ei poimintaehto. **Oletuksena ei poimintalabeleita:** raja on `RUN_ISSUES_QUALITY_AUDIT_AUTO_RUN_MIN_SEVERITY` tai repon `.quality.audit_auto_run_min_severity` (oletus `none`). Sulje väärä löydös tilaan *not planned*, niin auditointi ei avaa sitä uudelleen |
 
 Luo `auto-run`, `wip`, `auto-clean` ja `auto-reset` repoon itse: GitHub ei salli tuntemattoman labelin
 liittämistä, ja automaatio luo vain omat labelinsa. Kolme kallista sekaannusta:
@@ -280,6 +281,9 @@ skriptejä):
   runnerin PR:t yhdessä: kaksoistoteutuksista, varjostavista abstraktioista ja ristiriitaisista
   konventioista `coherence`-labeloituja refaktorointi-issueita ilman poimintalabeleita.
   `--dry-run` ei kirjoita mitään.
+- `/issue-runner:quality-audit` — koko repon laatuauditointi seitsemässä luokassa:
+  löydöksistä `quality`-labeloituja issueita, oletuksena ilman poimintalabeleita.
+  `--dry-run` ei kirjoita mitään.
 
 Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suoraan:
 
@@ -298,6 +302,7 @@ Skriptit ovat hakemistossa `$HOME/.claude/scripts/run-issues` ja ajettavissa suo
   --scanners-only`): samat `security`-issuet ilman Claude-kulua, omalla tiheämmällä välillä.
   Ilman yhtään asennettua skanneria exit 7, ei puhdas tulos.
 - `coherence-audit.sh` — runnerin mergettyjen PR:ien koherenssiauditointi; ei muuta koodia.
+- `quality-audit.sh` — koko repon laatuauditointi (agentti, ei skannereita); ei muuta koodia.
 - `auto-reset.sh` — sama purku labelin laukaisemana **ilman** issuen sulkemista: issue palaa
   poimintaan ja ajo alkaa alusta puhtaasta basesta. Turvaportit ovat kirjaimellisesti samat
   rivit kuin siivouksessa (`lib/teardown.sh`); ero on vain lopputulos.

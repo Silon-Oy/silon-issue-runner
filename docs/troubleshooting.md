@@ -280,6 +280,18 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, kursori ei siirry, eikä tämä ole "ei löydöksiä" |
 | 4 | GitHub-luku tai -kirjoitus epäonnistui: PR-joukko, muutospinta, issue-indeksi tai issuen kirjoitus. Kursori ei siirry, joten seuraava ajo katselmoi samat PR:t; dedup estää duplikaatit |
 
+### Laatuauditointi (`quality-audit.sh`)
+
+Koodit 0–4 tarkoittavat samaa kuin tietoturva-auditoinnissa. Skannerikoodeja 5–7 ei ole, koska laatuauditointi ei aja skannereita.
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` valmis |
+| 1 | Käyttövirhe |
+| 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä" |
+| 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
+
 ### Evolutionin havaintojen kooste (`evolution-digest.sh`)
 
 | Koodi | Merkitys |
