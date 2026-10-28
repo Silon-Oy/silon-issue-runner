@@ -276,7 +276,7 @@ if [ "$JSON_MODE" = 1 ]; then
 fi
 printf 'location\tcommit\tpr\tclass\tmethod\tissue\tsource\tnote\n'
 cat "$ROWS"
-share() { if [ "$TOTAL" -gt 0 ]; then awk -v n="$1" -v t="$TOTAL" 'BEGIN { printf "%.1f", 100 * n / t }'; else echo "0.0"; fi; }
+share() { if [ "$TOTAL" -gt 0 ]; then LC_ALL=C awk -v n="$1" -v t="$TOTAL" 'BEGIN { printf "%.1f", 100 * n / t }'; else echo "0.0"; fi; }
 echo
 echo "Yhteenveto ($TOTAL viittausta):"
 printf '  runner      %4d  %5s %%\n' "$N_RUNNER" "$(share "$N_RUNNER")"
