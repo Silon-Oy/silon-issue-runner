@@ -446,6 +446,7 @@ virhe.** Tämä on koko listan kantava sääntö.
 | Koherenssiauditoinnin ajastus | `coherence_audit_interval_days`: sama ketju | repoa ei auditoida |
 | Laatuauditoinnin ajastus | `quality_audit_interval_days`: sama ketju | repoa ei auditoida |
 | Riippuvuusskannauksen ajastus | `dependency_scan_interval_days`: sama ketju | skannerit vain auditoinnin mukana |
+| Riippuvuuslöydösten merge-label | oletus päällä; `dependency_auto_merge`: sama ketju | poimittava riippuvuuspäivitys odottaa käsin mergeä |
 
 Neljä sääntöä, jotka eivät näy taulukosta:
 

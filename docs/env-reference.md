@@ -367,6 +367,7 @@ kun se on mergetty. Kelvoton JSON tai tuntematon arvo tulkitaan tiukimmaksi (`lo
 | Muuttuja | Oletus | Vaikutus |
 |---|---|---|
 | `RUN_ISSUES_SECURITY_AUDIT_AUTO_RUN_MIN_SEVERITY` | `high` | Lievin vakavuus, jonka löydösissue saa poimintalabelit (`critical`, `high`, `medium`, `low` tai `none`). Rajan alittavat luodaan ilman niitä. Luetaan ympäristöstä (kutsuja tai `env`-tiedosto), muuten `poller.env`:stä — vain tämä yksi muuttuja, alikuoressa. **Kohderepon `.claude/run-issues.json` `.security.audit_auto_run_min_severity` voittaa tämän** samalla perusteella kuin pidätysrajassa; repon arvo luetaan remoten oletushaarasta. Tuntematon arvo tai kelvoton JSON ⇒ `none`: issuet luodaan, mutta mikään ei käynnisty itsestään (turvallinen suunta on päinvastainen kuin merge-portissa) |
+| `RUN_ISSUES_SECURITY_AUDIT_DEPENDENCY_AUTO_MERGE` | `true` | Saako riippuvuuslöydös, joka saa poimintalabelit, myös merge-labelin (`PR_WATCH_MERGE_LABEL`, `poller_merge_label`), jolloin sen PR mergeytyy merge-porttien kautta ilman ihmistä (#397). Agentin koodilöydös ei saa merge-labelia koskaan. Ketju: kohderepon `.security.dependency_auto_merge` (oletushaarasta) > watchlistin repomerkinnän `security_dependency_auto_merge` > tämä (ympäristö, muuten `poller.env`) > oletus `true`. Kelpaa `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`. Tuntematon arvo tai kelvoton JSON ⇒ `false`: turvallinen suunta on ihmisen merge |
 | `RUN_ISSUES_SECURITY_AUDIT_TIMEOUT` | `3600` | Auditointiagentin kutsun aikakatto sekunteina |
 | `RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT` | `300` | Remoten `git fetch`in aikakatto ennen auditointia |
 | `RUN_ISSUES_AUDIT_RETRY_HOURS` | `24` | Pollerin ajastus (#340): montako tuntia epäonnistuneen tai kesken katkenneen auditoinnin käynnistyksestä on kuluttava ennen uutta yritystä. Koskee kaikkia auditointilajeja. Muu kuin positiivinen kokonaisluku ⇒ oletus |
@@ -374,6 +375,25 @@ kun se on mergetty. Kelvoton JSON tai tuntematon arvo tulkitaan tiukimmaksi (`lo
 
 Poimintalabelit tulevat watchlististä (`poller_pick_labels`); repo, jota watchlist ei listaa,
 saa sisäänrakennetun oletuksen.
+
+**Riippuvuuslöydökset ryhmitellään paketin version mukaan (#397, `lib/dependency-findings.sh`).**
+osv-scannerin löydöksistä syntyy yksi issue per `<ekosysteemi>/<paketti>@<versio>`, ei yksi per
+haavoittuvuustunniste: yksi versiopäivitys korjaa ne kaikki. Runko listaa jokaisen tunnisteen
+(vakavuus ja korjaava versio), lukkotiedostot ja pienimmän version, joka korjaa kaikki
+tunnisteet, jos skanneri kertoo korjatun version jokaiselle. Issuen vakavuus on sen
+vakavimman tunnisteen vakavuus. Sormenjälki on paketti ja versio, joten:
+
+- uusi tunniste samaan versioon **täydentää** avointa issueta (runko päivitetään, kommentti
+  nimeää uudet tunnisteet, labelit lisätään, jos vakavuus nousi rajan yli)
+- päivitetyn version issue ei avaudu uudelleen, ja uuden version löydökset saavat uuden issuen
+- ennen #397:ää luodut tunnistekohtaiset **avoimet** issuet tunnistetaan vanhasta
+  sormenjäljestä ja suljetaan (`completed`) kommentilla, joka viittaa pakettikohtaiseen
+  issueen. Siirtymä toistuu joka ajossa niin kauan kuin skanneri raportoi tunnisteen, joten
+  epäonnistunut sulkeminen konvergoi seuraavalla ajolla. Tunnistekohtaista issueta, jonka
+  paketti on jo päivitetty pois, ei löydetä sormenjäljellä, ja se jää ennalleen.
+
+`--dry-run` näyttää toiminnot `update` ja `supersede #vanha → #uusi`. Sama ryhmittely ja
+merge-politiikka koskevat `dependency-scan.sh`:ta, koska se on sama koodipolku.
 
 #### Auditointien ajastuksen etusija
 
@@ -452,7 +472,8 @@ poista `.sha`-tiedosto.
 ### Riippuvuusskannaus (`dependency-scan.sh`, #382)
 
 `security-audit.sh --scanners-only`: samat skannerit (`gitleaks`, `osv-scanner`) koko repolle,
-sama sormenjälki, `security`-label, vakavuusraja ja assignee-reititys — ilman agenttikutsua,
+sama sormenjälki ja ryhmittely paketin version mukaan, `security`-label, vakavuusraja,
+riippuvuuslöydösten merge-label ja assignee-reititys — ilman agenttikutsua,
 joten ajo ei maksa Claude-kulutusta. Löydös on sama issue, jonka täysi auditointi loisi. Jos
 yhtään skanneria ei ole asennettu, ajo päättyy koodiin 7 eikä raportoi puhdasta tulosta.
 
