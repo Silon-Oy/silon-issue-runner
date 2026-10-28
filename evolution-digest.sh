@@ -11,6 +11,12 @@
 # repo's CLAUDE.md are missing a rule — or that a structural problem deserves an
 # issue of its own. This script closes that loop by putting them side by side.
 #
+# A fourth kind comes from outside the run-dirs: with --escapes, the runner-class
+# locations of an `escape-trace.sh --json` document become ESCAPE findings — a
+# defect found in main later whose line a runner PR last changed (issue #390).
+# The file is the user's own material: it is read as is, with no window, and
+# never produced here (escape-trace.sh calls gh; this script does not).
+#
 # READ-ONLY, by contract: it writes nothing to any repo nor to GitHub and makes no
 # gh call. The only output is the report (stdout, or --out <file>). Run it by
 # hand; there is deliberately no LaunchAgent for it.
@@ -25,6 +31,8 @@
 # the files and backticked identifiers they mention, and a key shared by at least
 # --min-count distinct runs is a recurring topic. The suggested target follows
 # from the group's shape:
+#   * any ESCAPE finding                 → a stage's prompt or a merge gate (a
+#                                           runner run let the defect into main)
 #   * more than one repo                 → the implementer prompt
 #   * one repo, evolution FIXED it        → that repo's CLAUDE.md (a convention
 #                                           the implementer does not know)
@@ -40,7 +48,8 @@
 #
 # Usage:
 #   evolution-digest.sh [--since <days>] [--min-count <n>] [--repo <path>]
-#                       [--watchlist <path>] [--json] [--claude] [--out <file>]
+#                       [--watchlist <path>] [--escapes <file>] [--json]
+#                       [--claude] [--out <file>]
 #
 #   --since <days>     window in days, measured from the run's finished_at
 #                      (fallback started_at). Default 30.
@@ -48,6 +57,10 @@
 #                      Default 2.
 #   --repo <path>      restrict to one watchlist repo path.
 #   --watchlist <path> watchlist override (poller semantics: the ONLY candidate).
+#   --escapes <file>   an `escape-trace.sh --json` document; its runner-class
+#                      locations join the findings as kind ESCAPE (one runner
+#                      PR = one run). With --repo, a document of another repo
+#                      is skipped.
 #   --json             machine output: { window_days, min_count, findings[],
 #                      groups[] }. Not combinable with --claude.
 #   --claude           group with one Claude call (opt-in; costs a call).
@@ -55,7 +68,8 @@
 #
 # Exit codes (own space):
 #   0  report produced (also when there are no findings)
-#   1  usage error (unknown flag / bad value), or --out is not writable
+#   1  usage error (unknown flag / bad value), --escapes is not a readable
+#      escape-trace JSON document, or --out is not writable
 #   2  no watchlist, no readable repo on disk, or jq missing
 #   3  --claude grouping failed — the deterministic report was produced instead
 #
@@ -95,6 +109,7 @@ WATCHLIST_OVERRIDE="${RUN_ISSUES_WATCHLIST:-}"
 JSON_MODE=0
 CLAUDE_MODE=0
 OUT_FILE=""
+ESCAPES_FILE=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -102,6 +117,7 @@ while [ "$#" -gt 0 ]; do
     --min-count) shift; [ "$#" -gt 0 ] || die_usage "--min-count needs a value"; MIN_COUNT="$1" ;;
     --repo)      shift; [ "$#" -gt 0 ] || die_usage "--repo needs a value"; REPO_FILTER="$1" ;;
     --watchlist) shift; [ "$#" -gt 0 ] || die_usage "--watchlist needs a value"; WATCHLIST_OVERRIDE="$1" ;;
+    --escapes)   shift; [ "$#" -gt 0 ] || die_usage "--escapes needs a value"; ESCAPES_FILE="$1" ;;
     --json)      JSON_MODE=1 ;;
     --claude)    CLAUDE_MODE=1 ;;
     --out)       shift; [ "$#" -gt 0 ] || die_usage "--out needs a value"; OUT_FILE="$1" ;;
@@ -122,6 +138,12 @@ fi
 if ! command -v jq >/dev/null 2>&1; then
   printf 'evolution-digest.sh: jq is required but not installed\n' >&2
   exit 2
+fi
+
+if [ -n "$ESCAPES_FILE" ]; then
+  [ -f "$ESCAPES_FILE" ] && [ -r "$ESCAPES_FILE" ] || die_usage "--escapes file not readable: $ESCAPES_FILE"
+  jq -e '(.locations | type == "array") and (.repo | type == "string")' "$ESCAPES_FILE" >/dev/null 2>&1 \
+    || die_usage "--escapes is not an escape-trace.sh --json document: $ESCAPES_FILE"
 fi
 
 CONFIG_WL="$HOME/.config/run-issues/watchlist.json"
@@ -192,6 +214,27 @@ if [ "$REPOS_SCANNED" -eq 0 ]; then
   exit 2
 fi
 
+# ---- ESCAPE findings from an escape-trace.sh --json document ----
+# Same schema as the run-dir findings, so grouping and rendering need no second
+# path. The path sits in backticks so keys_of groups by file, not by line; at is
+# empty (escape-trace has no run timestamp), so these sort first. The repo filter
+# compares in bash, not in jq (CLAUDE.md §5.8: a path crossing into jq changes).
+if [ -n "$ESCAPES_FILE" ]; then
+  esc_repo="$(jq -r '.repo' "$ESCAPES_FILE")"
+  if [ -z "$REPO_FILTER" ] || [ "$esc_repo" = "$REPO_FILTER" ]; then
+    jq -c '
+      (.repo | sub("/+$"; "") | sub(".*/"; "")) as $repo
+      | .locations[] | select(.class == "runner")
+      | (.location | capture("^(?<path>.*):(?<line>[^:]*)$")) as $l
+      | (if .pr == "-" then "runner-ajo" else "runner-PR #\(.pr)" end) as $by
+      | {repo: $repo, issue: (.issue | ltrimstr("#")),
+         run_id: (if .pr == "-" then "issue-\(.issue)" else "pr-\(.pr)" end),
+         at: "", kind: "ESCAPE",
+         text: "`\($l.path)` rivi \($l.line) — löydös \(.source), \($by) (\(.method))"}
+    ' "$ESCAPES_FILE" >> "$FINDINGS_JSONL"
+  fi
+fi
+
 # ---- deterministic grouping ----
 # Keys: backticked spans, plus file-like words (a slash, or a known extension).
 # Groups with the same member run set are merged so one recurrence that touches
@@ -205,7 +248,8 @@ jq -s --argjson days "$SINCE_DAYS" --argjson min "$MIN_COUNT" '
     | map(sub("[.,:;]+$"; "")) | map(select(length > 1)) | unique;
   def lane: if .class == "tooling" then "tooling" else "product" end;
   def target:
-    if .lane == "tooling" then "test_env_or_runner"
+    if any(.findings[]; .kind == "ESCAPE") then "stage_or_gate"
+    elif .lane == "tooling" then "test_env_or_runner"
     elif (.repos | length) > 1 then "implementer_prompt"
     elif any(.findings[]; .kind == "FIXED") then "repo_claude_md"
     else "new_issue" end;
@@ -235,10 +279,11 @@ jq -s --argjson days "$SINCE_DAYS" --argjson min "$MIN_COUNT" '
 # ---- report rendering ----
 render_human() {
   jq -r --argjson repos "$REPOS_SCANNED" --argjson runs "$RUNS_READ" '
-    def kind_fi: ({FIXED: "korjattu", NEEDS_FOLLOWUP: "jatkotoimi", DELTA_PSI: "Δψ"}[.kind] // .kind)
+    def kind_fi: ({FIXED: "korjattu", NEEDS_FOLLOWUP: "jatkotoimi", DELTA_PSI: "Δψ", ESCAPE: "läpi päässyt"}[.kind] // .kind)
       + (if .kind == "DELTA_PSI" and .class != null then "/\(.class)" else "" end);
     def target_fi:
-      if .target == "test_env_or_runner" then "kohderepon testiympäristö tai provisiointi (`.claude/provision-test-env.sh`, \(.repos | join(", "))) tai runnerin paketti — toistuva ympäristökitka"
+      if .target == "stage_or_gate" then "vaiheen prompti tai merge-portti (cycle review, toteutus, Evolution, tietoturva- tai semanttinen portti) — runnerin ajo päästi vian mainiin"
+      elif .target == "test_env_or_runner" then "kohderepon testiympäristö tai provisiointi (`.claude/provision-test-env.sh`, \(.repos | join(", "))) tai runnerin paketti — toistuva ympäristökitka"
       elif .target == "implementer_prompt" then "Implementerin prompti (prompts/02-implementer.md) — toistuu \(.repos | length) repossa"
       elif .target == "repo_claude_md" then "kohderepon CLAUDE.md (\(.repos[0])) — Evolution korjasi saman asian toistuvasti"
       else "uusi issue (\(.repos[0])) — korjaamaton rakenteellinen havainto" end;

@@ -19,6 +19,10 @@
 #   9. usage errors → exit 1; no watchlist → exit 2
 #  10. tooling Δψ forms its own lane: not merged with a product finding on the
 #      same file, target is the test environment / provisioning or the runner
+#  11. --escapes (issue #390): without it the output is byte-identical to a
+#      golden taken before the flag existed, and to a run whose file has no
+#      runner rows; runner rows become ESCAPE findings → stage_or_gate; a bad
+#      file → exit 1; still no gh call and no state.jsonl read
 #
 # Run: bash tests/test-evolution-digest.sh   (exit 0 = all pass)
 
@@ -163,6 +167,111 @@ has   "claude failure: deterministic report instead" "$OUT" "## Toistuvat aiheet
 run --out "$FX/report.md"
 check "--out: exit 0, nothing on stdout" "$RC|$OUT" "0|"
 has   "--out: report in file" "$(cat "$FX/report.md")" "## Toistuvat aiheet"
+
+# ---- 11. --escapes ----
+# Golden: the output of evolution-digest.sh before --escapes existed (#390),
+# with the run-relative `at` timestamps dropped from the JSON.
+GOLDEN_HUMAN=$(cat <<'EOF'
+# Evolutionin havaintojen kooste
+
+Jakso: 30 vrk · repoja: 2 · ajoja jaksossa: 7 · havaintoja: 7
+Toistuvaksi lasketaan aihe, joka esiintyy vähintään 2 eri ajossa. Ryhmittely on mekaaninen (mainitut tiedostot ja tunnisteet); --claude ryhmittelee merkityksen perusteella.
+
+## Toistuvat aiheet — tuote
+
+### `.env.example` — 2 ajoa
+Ehdotettu kohde: kohderepon CLAUDE.md (repo-alpha) — Evolution korjasi saman asian toistuvasti
+  - repo-alpha#13 (korjattu): again no `.env.example` update
+  - repo-alpha#12 (korjattu): missing `.env.example` entry
+
+### `orchestrate.sh` — 2 ajoa
+Ehdotettu kohde: Implementerin prompti (prompts/02-implementer.md) — toistuu 2 repossa
+  - repo-beta#21 (Δψ/unclassified): orchestrate.sh has no unit test seam
+  - repo-alpha#11 (korjattu): `orchestrate.sh` lacked a test
+
+### `src/cache.ts` — 2 ajoa
+Ehdotettu kohde: uusi issue (repo-beta) — korjaamaton rakenteellinen havainto
+  - repo-beta#23 (Δψ/unclassified): src/cache.ts invalidation is ad hoc
+  - repo-beta#22 (jatkotoimi): `src/cache.ts` races
+
+## Toistuvat aiheet — testiympäristö ja runner
+
+Ei toistuvia aiheita.
+
+## Muut havainnot
+
+### repo-alpha
+  - repo-alpha#14 (korjattu): one-off in `lonely.sh`
+EOF
+)
+GOLDEN_JSON=$(cat <<'EOF'
+{"findings":[{"class":"unclassified","issue":"23","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b3","text":"src/cache.ts invalidation is ad hoc"},{"class":null,"issue":"22","kind":"NEEDS_FOLLOWUP","repo":"repo-beta","run_id":"b2","text":"`src/cache.ts` races"},{"class":null,"issue":"13","kind":"FIXED","repo":"repo-alpha","run_id":"a3","text":"again no `.env.example` update"},{"class":"unclassified","issue":"21","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b1","text":"orchestrate.sh has no unit test seam"},{"class":null,"issue":"14","kind":"FIXED","repo":"repo-alpha","run_id":"a4","text":"one-off in `lonely.sh`"},{"class":null,"issue":"12","kind":"FIXED","repo":"repo-alpha","run_id":"a2","text":"missing `.env.example` entry"},{"class":null,"issue":"11","kind":"FIXED","repo":"repo-alpha","run_id":"a1","text":"`orchestrate.sh` lacked a test"}],"groups":[{"findings":[{"class":null,"issue":"13","kind":"FIXED","repo":"repo-alpha","run_id":"a3","text":"again no `.env.example` update"},{"class":null,"issue":"12","kind":"FIXED","repo":"repo-alpha","run_id":"a2","text":"missing `.env.example` entry"}],"keys":[".env.example"],"lane":"product","repos":["repo-alpha"],"run_count":2,"target":"repo_claude_md"},{"findings":[{"class":"unclassified","issue":"21","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b1","text":"orchestrate.sh has no unit test seam"},{"class":null,"issue":"11","kind":"FIXED","repo":"repo-alpha","run_id":"a1","text":"`orchestrate.sh` lacked a test"}],"keys":["orchestrate.sh"],"lane":"product","repos":["repo-alpha","repo-beta"],"run_count":2,"target":"implementer_prompt"},{"findings":[{"class":"unclassified","issue":"23","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b3","text":"src/cache.ts invalidation is ad hoc"},{"class":null,"issue":"22","kind":"NEEDS_FOLLOWUP","repo":"repo-beta","run_id":"b2","text":"`src/cache.ts` races"}],"keys":["src/cache.ts"],"lane":"product","repos":["repo-beta"],"run_count":2,"target":"new_issue"}],"min_count":2,"repos_scanned":2,"runs_read":7,"ungrouped":[{"class":null,"issue":"14","kind":"FIXED","repo":"repo-alpha","run_id":"a4","text":"one-off in `lonely.sh`"}],"window_days":30}
+EOF
+)
+nojq_at() { jq -cS 'del(.findings[].at, .groups[].findings[].at, .ungrouped[].at)'; }
+run;        check "golden: human output unchanged" "$(printf '%s' "$OUT" | cksum)" "$(printf '%s' "$GOLDEN_HUMAN" | cksum)"
+run --json; check "golden: --json unchanged" "$(printf '%s' "$OUT" | nojq_at)" "$GOLDEN_JSON"
+
+# A gh that fails and records: the digest must not call it, with --escapes too.
+mkdir -p "$FX/bin"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s"\nexit 1\n' "$FX/gh-calls" > "$FX/bin/gh"
+chmod +x "$FX/bin/gh"
+erun() { OUT="$(PATH="$FX/bin:$PATH" RUN_ISSUES_WATCHLIST="$WL" $TO bash "$DIGEST" "$@" 2>"$FX/err")"; RC=$?; }
+# esc <file> <repo-path> <location|pr|class|method|issue|source>...
+esc() {
+  local f="$1" repo="$2"; shift 2
+  printf '%s\n' "$@" | jq -Rn --arg repo "$repo" '
+    {repo: $repo, owner_repo: "o/r",
+     locations: [inputs | split("|") | {location: .[0], commit: "abc", pr: .[1], class: .[2],
+                 method: .[3], issue: .[4], source: .[5], note: ""}],
+     summary: {}, limitation: ""}' > "$f"
+}
+esc "$FX/esc-none.json" "$A" "lib/x.sh:3|-|peritty|-|-|#301" "lib/y.sh:9|-|tuntematon|-|-|#301"
+erun --escapes "$FX/esc-none.json"
+check "no runner rows: exit 0" "$RC" "0"
+check "no runner rows: human output unchanged" "$(printf '%s' "$OUT" | cksum)" "$(printf '%s' "$GOLDEN_HUMAN" | cksum)"
+erun --escapes "$FX/esc-none.json" --json
+check "no runner rows: --json unchanged" "$(printf '%s' "$OUT" | nojq_at)" "$GOLDEN_JSON"
+
+esc "$FX/esc.json" "$A/" "lib/x.sh:3|5|runner|pr-api|7|#301" "lib/x.sh:40|13|runner|auto-prefix|8|#302" \
+  "lib/z.sh:1|-|peritty|-|-|#301" ".env.example:2|9|runner|msg-ref|4|#303"
+erun --escapes "$FX/esc.json" --json
+check "escapes: exit 0" "$RC" "0"
+check "escapes: only runner rows join" "$(printf '%s' "$OUT" | jq '[.findings[] | select(.kind == "ESCAPE")] | length')" "3"
+check "escapes: finding shape" \
+  "$(printf '%s' "$OUT" | jq -c '[.findings[] | select(.kind == "ESCAPE")][0] | [.repo, .issue, .run_id, .at]')" \
+  '["repo-alpha","7","pr-5",""]'
+check "escapes: two runner PRs, one file → stage_or_gate" \
+  "$(printf '%s' "$OUT" | jq -r '.groups[] | select(.keys == ["lib/x.sh"]) | "\(.target) \(.run_count)"')" "stage_or_gate 2"
+check "escapes: ESCAPE outranks FIXED" \
+  "$(printf '%s' "$OUT" | jq -r '.groups[] | select(.keys == [".env.example"]) | .target')" "stage_or_gate"
+erun --escapes "$FX/esc.json"
+has   "escapes: human target text" "$OUT" "vaiheen prompti tai merge-portti (cycle review, toteutus, Evolution, tietoturva- tai semanttinen portti)"
+has   "escapes: human row" "$OUT" 'repo-alpha#7 (läpi päässyt): `lib/x.sh` rivi 3 — löydös #301, runner-PR #5 (pr-api)'
+erun --escapes "$FX/esc.json" --repo "$B" --json
+check "escapes: --repo of another repo skips the file" \
+  "$(printf '%s' "$OUT" | jq '[.findings[] | select(.kind == "ESCAPE")] | length')" "0"
+
+STUB2="$FX/claude-stub2"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do last="$a"; done\nprintf "%%s" "$last" | grep -q ESCAPE && echo ESCAPE-SEEN\nexit 0\n' > "$STUB2"
+chmod +x "$STUB2"
+OUT="$(PATH="$FX/bin:$PATH" RUN_ISSUES_WATCHLIST="$WL" RUN_ISSUES_CLAUDE_CMD="$STUB2" RUN_ISSUES_ENV_FILE="/nonexistent" \
+  $TO bash "$DIGEST" --claude --escapes "$FX/esc.json" 2>"$FX/err")"; RC=$?
+check "escapes --claude: exit 0" "$RC" "0"
+has   "escapes --claude: ESCAPE reached the prompt" "$OUT" "ESCAPE-SEEN"
+
+erun --escapes "$FX/no-such.json";        check "escapes: missing file → 1" "$RC" "1"
+printf 'not json\n' > "$FX/bad.json"
+erun --escapes "$FX/bad.json";            check "escapes: not JSON → 1" "$RC" "1"
+printf '{"repo":"x"}\n' > "$FX/bad.json"
+erun --escapes "$FX/bad.json";            check "escapes: no locations → 1" "$RC" "1"
+erun --escapes;                           check "escapes: no value → 1" "$RC" "1"
+if [ -e "$FX/gh-calls" ]; then bad "escapes: gh was called: $(cat "$FX/gh-calls")"; else ok "escapes: no gh call"; fi
+
+PROMPT_MD="$(cat "$ROOT/prompts/evolution-digest.md")"
+has "prompt: ESCAPE kind" "$PROMPT_MD" '`ESCAPE`: vika'
+has "prompt: stage-or-gate target" "$PROMPT_MD" "Vaiheen prompti tai merge-portti** (cycle review, toteutus, Evolution, tietoturva- tai semanttinen portti)"
+has "prompt: mechanical check line" "$PROMPT_MD" "- Mekaaninen tarkistus:"
 
 # ---- 8. read-only ----
 if [ "$(snapshot)" = "$BEFORE" ]; then ok "fixture tree unchanged"; else bad "fixture tree changed"; fi

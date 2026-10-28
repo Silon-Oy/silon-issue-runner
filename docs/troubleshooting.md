@@ -285,7 +285,7 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | Koodi | Merkitys |
 |---|---|
 | 0 | Raportti tuotettu, myös silloin kun havaintoja ei ole |
-| 1 | Käyttövirhe (tuntematon lippu, virheellinen arvo, `--json` ja `--claude` yhdessä) tai `--out`-tiedostoa ei voi kirjoittaa |
+| 1 | Käyttövirhe (tuntematon lippu, virheellinen arvo, `--json` ja `--claude` yhdessä), `--escapes`-tiedosto puuttuu tai ei ole `escape-trace.sh --json` -dokumentti, tai `--out`-tiedostoa ei voi kirjoittaa |
 | 2 | Watchlist puuttuu, yksikään repo ei ole levyllä tai `jq` puuttuu |
 | 3 | `--claude`-ryhmittely epäonnistui. Mekaaninen raportti tuotettiin sen tilalle |
 

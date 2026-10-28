@@ -410,8 +410,8 @@ käytettävissä.
 | `run-epic.sh` | `run-epic.sh <N> --repo <polku>` | Validoi ja käynnistää epicin: propagoi ajolabelit alaissueille. `--stop` keskeyttää (pysäyttää elävät lapsiajot + poistaa ajolabelit). `--dry-run`, `--start-now`, `--remote`, `--labels` |
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
-| `evolution-digest.sh` | `evolution-digest.sh [--since <vrk>] [--claude]` | Evolutionin toistuvat havainnot jakson ajoista ja kohde-ehdotus kullekin. Puhtaasti lukeva, ajetaan käsin |
-| `escape-trace.sh` | `escape-trace.sh --repo <polku> (--issues <N,…> \| --label <label>) [--at <sha>]` | Löydösissueiden `tiedosto:rivi`-viittaukset `git blame`lla commitiin ja commitista PR:ään: runner / peritty / tuntematon. Puhtaasti lukeva, ajetaan käsin |
+| `evolution-digest.sh` | `evolution-digest.sh [--since <vrk>] [--escapes <tiedosto>] [--claude]` | Evolutionin toistuvat havainnot jakson ajoista ja kohde-ehdotus kullekin. Puhtaasti lukeva, ajetaan käsin |
+| `escape-trace.sh` | `escape-trace.sh --repo <polku> (--issues <N,…> \| --label <label>) [--at <sha>] [--json]` | Löydösissueiden `tiedosto:rivi`-viittaukset `git blame`lla commitiin ja commitista PR:ään: runner / peritty / tuntematon. Puhtaasti lukeva, ajetaan käsin |
 | `security-audit.sh` | `security-audit.sh <repo> [--remote <nimi>] [--dry-run]` | Koko repon tietoturva-auditointi oletushaarasta väliaikaisessa worktreessä: skannerit ja agentin uhkamalli, löydös → yksi issue sormenjäljellä (`lib/finding-issues.sh`). Avointa ei monisteta, korjattu avataan vain toistuessa, *not planned* -tilaan suljettua ei koskaan. Poller ajastaa sen repokohtaisella välillä (`RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS`, `.security.audit_interval_days`, #340) |
 | `coherence-audit.sh` | `coherence-audit.sh <repo> [--remote <nimi>] [--dry-run]` | Katselmoi runnerin (`auto-run/`-haarat) oletushaaraan mergetyt PR:t yhdessä oman kursorinsa jälkeen, epicistä riippumatta. Yhteinen muutospinta tulee `lib/pr-surface.sh`:sta, löydös → yksi `coherence`-issue sormenjäljellä, ei koskaan poimintalabeleita. Kursori siirtyy vain onnistuneella ajolla. Poller ajastaa sen (`RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS`, `.coherence.audit_interval_days`) |
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run`. **Ei koske ajastettua auditointia**: sillä ei ole run-diriä eikä issueta. Auditointi pysäytetään `tmux kill-session -t run-issues-audit-<laji>-<repo-slug>` (nimi näkyy `status.sh --human`issa), ks. [`env-reference.md`](env-reference.md) |
@@ -686,6 +686,7 @@ evolution-digest.sh --since 90         # pidempi jakso
 evolution-digest.sh --claude           # ryhmittely merkityksen perusteella (yksi Claude-kutsu)
 evolution-digest.sh --json | jq …      # havainnot ja ryhmät koneluettavina
 evolution-digest.sh --out raportti.md  # raportti tiedostoon
+evolution-digest.sh --escapes esc.json # mukaan runnerin ajojen läpi päästämät viat
 ```
 
 Kooste lukee watchlist-repojen elävät ja arkistoidut run-dirit. Se avaa vain jakson ajojen
@@ -702,6 +703,7 @@ backtickeissä olevan tunnisteen. Aihe on toistuva, kun se esiintyy vähintään
 | Yksi repo, Evolution korjasi (`FIXED`) | Kohderepon `CLAUDE.md` | Repon konventio, jota Implementer ei tunne |
 | Yksi repo, vain jatkotoimia tai Δψ-rivejä | Uusi issue | Korjaamaton rakenteellinen vika, ei ohjeen puute |
 | `tooling`-lajin Δψ-rivit | Kohderepon testiympäristö tai provisiointi (`.claude/provision-test-env.sh`) tai runnerin paketti | Toistuva ympäristökitka, ei tuotevika |
+| Mukana yksikin `ESCAPE` (ohittaa muut säännöt) | Vaiheen prompti tai merge-portti (cycle review, toteutus, Evolution, tietoturva- tai semanttinen portti) | Runnerin ajo päästi vian mainiin, joten jonkin vaiheen olisi pitänyt nähdä se |
 
 Δψ-rivillä on laji (`EVOLUTION_DELTA_PSI: <tooling|product> | <virke>`): `tooling` koskee
 testiympäristöä, provisiointia tai runnerin omaa toimintaa, `product` kohdesovelluksen koodia.
@@ -709,6 +711,20 @@ Lajiton vanha rivi luetaan lajiksi `unclassified`. Kooste ryhmittelee `tooling`-
 kaistakseen, joten ne eivät yhdisty tuotehavaintoon, vaikka mainitsisivat saman tiedoston, ja
 raportissa on erilliset osiot tuotteen ja testiympäristön toistuville aiheille. PR-kuvauksen
 Δψ-osiossa on vastaavasti alaotsikko kullekin lajille, jolla on rivejä.
+
+**Läpi päässeet viat (`--escapes`).** Neljäs havaintolaji `ESCAPE` tulee run-dirien ulkopuolelta:
+`--escapes` lukee [`escape-trace.sh --json`](#löydösten-jäljitys-escape-tracesh) -dokumentin ja
+ottaa siitä mukaan `runner`-luokan sijainnit. Yksi runnerin PR lasketaan yhdeksi ajoksi, ja
+havainnon teksti nimeää tiedoston backtickeissä, joten saman tiedoston viat eri PR:istä
+ryhmittyvät yhteen. Tiedosto luetaan sellaisenaan ilman jaksorajausta; `--repo` ohittaa toisen
+repon dokumentin. Kooste ei aja jäljitystä itse, koska jäljitys tekee gh-kutsuja:
+
+```bash
+escape-trace.sh --repo ~/src/app --label security --json > esc.json \
+  && evolution-digest.sh --escapes esc.json
+```
+
+Ilman lippua tuloste on täsmälleen sama kuin ennen lajin lisäämistä.
 
 Mekaaninen ryhmittely ei tunnista saman asian eri sanamuotoja. `--claude` antaa havainnot ja
 mekaaniset ryhmät yhdelle Claude-kutsulle, joka ryhmittelee merkityksen perusteella ja ehdottaa
@@ -746,6 +762,11 @@ ohittaa molemmat. Tuloste on sarkaineroteltu, rivi per viittaus:
 numeron runnerin otsikon `Auto: <otsikko> (#<issue>)` perään. Lopussa on yhteenveto luokkien
 määristä ja osuuksista sekä muistutus: blame kertoo viimeisimmän muuttajan eikä aina vian
 aiheuttajaa, eikä puuttuvalla tarkistuksella ole riviä.
+
+`--json` tulostaa saman yhtenä dokumenttina: `{repo, owner_repo, locations: [...], summary:
+{total, runner, peritty, tuntematon}, limitation}`. `locations`-rivien kentät ovat samat
+merkkijonot kuin taulukon sarakkeet (myös `-` ja `#N`), ja `repo` on `--repo`-polku
+absoluuttisena. Tämä on `evolution-digest.sh --escapes` -lipun syöte.
 
 Kustannus: issuet luetaan REST:llä (yksi kutsu per `--issues`-numero tai yksi sivutettu
 labelilistaus), ei koskaan hakurajapinnalla. Jokaisesta uniikista commitista tehdään yksi
