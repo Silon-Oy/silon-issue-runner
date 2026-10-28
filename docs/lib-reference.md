@@ -11,6 +11,7 @@ lukuihin.
 
 | Tiedosto | Vastuu |
 |---|---|
+| `accretion.sh` | Tiedostojen kasautumisen mittari (#411): `accretion_findings <base> <head>` antaa muuttuneet tiedostot, jotka ylittävät rivikynnyksen (`.accretion.max_lines`, oletus 1 000) ja kasvavat. Ohittaa lukkotiedostot, snapshotit ja `linguist-generated`-tiedostot. Neuvoa-antava, fail-soft: orkestraattori vie osumat PR-kuvauksen jatkohavaintoihin ja `run.json`iin, ei luonnostilaan |
 | `action-service.py` | **Ainoa Python-tiedosto.** Ohjaamon HTTP + auth -ydin: fail-closed `tailscale whois`, kolmikerroksinen CSRF, audit-loki, `execve` dispatcheriin — ei koskaan koske gh:hun itse |
 | `action-token.sh` | Ohjaamon jaettu CSRF-token. Bearer-salaisuus: ei koskaan `status.json`iin, lokiin eikä kommenttiin |
 | `archive.sh` | Terminaalitilaisten run-dirien siirto `run-issues-archive/`iin. PR-suoja on paikallinen, ei gh-kutsu |

@@ -438,6 +438,7 @@ Kohderepo voi ohjata orkestraattoria tiedostolla `.claude/run-issues.json`:
 |---|---|
 | `claude_timeout_seconds` | aikabudjetti per claude-kutsu tässä repossa |
 | `base_branch` | pakotettu base-haara worktreelle ja PR:lle |
+| `accretion.max_lines` | rivikynnys, jonka ylittävän tiedoston kasvu kirjataan PR:n jatkohavaintoihin (oletus 1000) |
 | `principles_file` | tämän repon oma koodausstandardi paketin oletuksen tilalle (suhteellinen polku tulkitaan repo-juuresta) |
 
 Ympäristömuuttuja voittaa aina tiedoston. Puuttuva tiedosto on no-op.

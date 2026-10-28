@@ -325,6 +325,8 @@ source "$SCRIPT_DIR/lib/claude-call.sh"
 source "$SCRIPT_DIR/lib/evolution-findings.sh"
 # shellcheck source=lib/test-skips.sh
 source "$SCRIPT_DIR/lib/test-skips.sh"
+# shellcheck source=lib/accretion.sh
+source "$SCRIPT_DIR/lib/accretion.sh"
 # shellcheck source=lib/preflight.sh
 source "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=lib/hook-runner.sh
@@ -2933,6 +2935,25 @@ phase_b_deliver() {
       "only=$(printf '%s\n' "$test_skips" | awk -F '\t' '$3 == "only"' | grep -c .)"
   fi
 
+  # File accretion (#411): a deterministic line-count meter, advisory only. It
+  # feeds the follow-up section and run.json, never evo_result or the draft
+  # flag. Base is the merge-base with the same base ref create_worktree used;
+  # an unresolved ref (brand-new repo) or a git error skips the measurement.
+  local accretion_rows="" accretion_ref accretion_base
+  if [ -n "$BASE_BRANCH" ]; then
+    accretion_ref="$REMOTE_NAME/$BASE_BRANCH"
+  else
+    accretion_ref=$(git -C "$WORKTREE_PATH" symbolic-ref --short "refs/remotes/$REMOTE_NAME/HEAD" 2>/dev/null || true)
+  fi
+  if [ -n "$accretion_ref" ] \
+    && accretion_base=$(git -C "$WORKTREE_PATH" merge-base HEAD "$accretion_ref" 2>/dev/null); then
+    accretion_rows=$(accretion_findings "$accretion_base" HEAD "$WORKTREE_PATH" || true)
+    state_set_json "$RUN_DIR" accretion "$(printf '%s\n' "$accretion_rows" | accretion_to_json)" || true
+    state_event "$RUN_DIR" "accretion_measured" "count=$(printf '%s' "$accretion_rows" | grep -c . || true)"
+  else
+    log "S9: accretion meter skipped — base ref '${accretion_ref:-<none>}' does not resolve"
+  fi
+
   # ---------- S10: PR ----------
   enter_state "S10_PR"
   log "S10_PR"
@@ -3005,7 +3026,7 @@ phase_b_deliver() {
       fi
       echo
     fi
-    if [ -n "$evo_delta_psi" ]; then
+    if [ -n "$evo_delta_psi" ] || [ -n "$accretion_rows" ]; then
       echo "## Δψ — follow-up outside this PR"
       echo
       local dp_class dp_heading dp_rows
@@ -3022,6 +3043,12 @@ phase_b_deliver() {
         echo "$dp_rows"
         echo
       done
+      if [ -n "$accretion_rows" ]; then
+        echo "### Structural (file accretion)"
+        echo
+        printf '%s\n' "$accretion_rows" | accretion_format_markdown
+        echo
+      fi
     fi
     echo "Run dir: \`$RUN_DIR\`"
     echo
