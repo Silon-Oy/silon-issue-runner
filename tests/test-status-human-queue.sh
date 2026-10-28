@@ -142,9 +142,16 @@ run_status --json --github --no-cache --repo "$FX/repo-b" > "$FX/out4.json" 2>/d
 check "--repo: only that repo listed" "$(count '/pulls?state=open')" "1"
 check "--repo: only its PR" "$(jq -c '[.human_queue.prs[] | .number]' "$FX/out4.json")" '[7]'
 
+# ---- --human: the queue gets its own section ----
+HUM="$(run_status --human --github --repo "$FX/repo-b" 2>/dev/null)"
+case "$HUM" in *"ODOTTAA IHMISTÄ (1 PR)"*"o/repo-b#7"*) ok "--human: queue section with the PR" ;;
+  *) bad "--human: queue section missing" ;; esac
+
 # ---- page cap: a full page at the cap marks the repo truncated ----
 FULL="$FX/full.json"
-jq -nc '[range(100) | {number: (100 + .), html_url: "u", title: "t", created_at: "2026-10-01T00:00:00Z", head: {ref: "auto-run/x"}, labels: [{name: "needs-human"}]}]' > "$FULL"
+# One queued PR in a full page of unqueued ones: the cap is what is tested.
+jq -nc '[range(100) | {number: (100 + .), html_url: "u", title: "t", created_at: "2026-10-01T00:00:00Z", head: {ref: "auto-run/x"},
+         labels: [{name: (if . == 0 then "needs-human" else "auto-merge" end)}]}]' > "$FULL"
 cat > "$BIN/gh" <<SHIM
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$CALLS"
@@ -158,7 +165,7 @@ chmod +x "$BIN/gh"
 RUN_ISSUES_STATUS_HUMAN_QUEUE_PAGES=1 run_status --json --github --no-cache --repo "$FX/repo-a" > "$FX/out5.json" 2>/dev/null
 check "page cap: repo truncated" "$(jq -c '.human_queue.repos_truncated' "$FX/out5.json")" '["o/repo-a"]'
 check "page cap: one page read" "$(count '/pulls?state=open')" "1"
-check "page cap: rows kept" "$(jq -r '.human_queue.prs | length' "$FX/out5.json")" "100"
+check "page cap: the read rows are kept" "$(jq -c '[.human_queue.prs[] | .number]' "$FX/out5.json")" "[100]"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -666,6 +666,90 @@ if [ -f "$HTMLAR" ]; then
   fi
 fi
 
+# ---- Case 11: human queue (#414) ---------------------------------------------
+# human_queue with an XSS payload in a PR title and an unknown label. The page
+# is data-free; the JS reads only the named fields, shows a label only through
+# its own static map, and inserts text only.
+HQ_LEAK="HQ-TITLE-<script>alert(11)</script>-SECRET"
+cat > "$FX/hq.json" <<JSON
+{"schema_version":1,"generated_at":"2026-10-23T12:00:00Z","host":"studio",
+ "stale_after_seconds":3600,
+ "enrichment":{"mode":"github","fetched_at":null,"cache_age_seconds":0},
+ "totals":{"runs":0,"by_class":{"running":0,"stalled":0,"attention":0,"pr_in_flight":0,"cleanup":0},"audits":0,"degraded":false},
+ "read_errors":[],"runs":[],"epics":[],"audits":[],"audit_results":[],
+ "human_queue":{"prs":[{"repo":"o/b","repo_slug":"o-b","number":7,"url":"https://github.com/o/b/pull/7","title":"$HQ_LEAK","labels":["manual-merge","<img src=y>"],"waiting_since":"2026-10-01T00:00:00Z","waiting_seconds":1900800,"waiting_source":"labeled"},
+                       {"repo":"o/a","repo_slug":"o-a","number":1,"url":"javascript:alert(1)","title":"t","labels":["needs-human"],"waiting_since":"2026-10-20T00:00:00Z","waiting_seconds":300000,"waiting_source":"created"}],
+                "repos_failed":["o/c"],"repos_truncated":[]}}
+JSON
+OUTHQ="$FX/wwwhq"
+RUN_ISSUES_STATUS_OUT_DIR="$OUTHQ" RUN_ISSUES_LOG_DIR="$LOGS" \
+  bash "$RENDER" --input "$FX/hq.json"; rchq=$?
+HTMLHQ="$OUTHQ/index.html"
+check "human_queue doc renders (exit 0)" "$rchq" "0"
+if [ -f "$HTMLHQ" ]; then
+  absent "PR title not embedded" "$HQ_LEAK" "$HTMLHQ"
+  absent "unknown label not embedded" "<img src=y>" "$HTMLHQ"
+  present "JS reads data.human_queue" "data.human_queue" "$HTMLHQ"
+  present "JS renders the human queue" "renderHumanQueue(data)" "$HTMLHQ"
+  present "human queue has its mount point" 'id="human-queue"' "$HTMLHQ"
+  for f in p.repo p.number p.url p.title p.labels p.waiting_seconds p.waiting_source q.repos_failed; do
+    present "JS reads the named field $f" "$f" "$HTMLHQ"
+  done
+  presenti "section title" "Odottaa ihmistä" "$HTMLHQ"
+  present "created fallback is marked" "(luontihetkestä)" "$HTMLHQ"
+  present "label text comes from the static map" "käsin yhdistettävä" "$HTMLHQ"
+  absent "the JS does not re-sort the queue" "prs.sort" "$HTMLHQ"
+  if grep -n 'function renderHumanQueue' -A32 "$HTMLHQ" | grep -q 'innerHTML'; then
+    bad "renderHumanQueue uses innerHTML"
+  else
+    ok "renderHumanQueue inserts text only"
+  fi
+  # Behaviour: run the page's own function against the document in node, with
+  # a minimal DOM, and read the text it produced.
+  if command -v node >/dev/null 2>&1; then
+    JS="$FX/hq-run.js"
+    {
+      cat <<'NODE'
+var nodes = {};
+function mk(tag){ return {tag: tag, className: "", textContent: "", children: [], href: null,
+  get firstChild(){ return this.children[0] || null; },
+  appendChild: function(c){ this.children.push(c); return c; },
+  removeChild: function(c){ this.children.splice(this.children.indexOf(c), 1); },
+  setAttribute: function(){}, addEventListener: function(){} }; }
+var document = { createElement: mk, getElementById: function(id){ return nodes[id] || (nodes[id] = mk("div")); } };
+function text(n){ return (n.textContent || "") + n.children.map(text).join("|"); }
+NODE
+      awk '/function el\(tag, cls, text\)/,/^  }$/' "$HTMLHQ"
+      awk '/function link\(url, text\)/,/^  }$/' "$HTMLHQ"
+      awk '/function dur\(s\)/,/^  }$/' "$HTMLHQ"
+      awk '/function clear\(node\)/{print}' "$HTMLHQ"
+      awk '/var HQ_LABELS/{print} /function renderHumanQueue\(data\)/,/^  }$/' "$HTMLHQ"
+      printf 'var d = %s;
+' "$(cat "$FX/hq.json")"
+      cat <<'NODE'
+renderHumanQueue(d);
+var box = nodes["human-queue"], rows = box.children[0].children;
+console.log(JSON.stringify({head: rows[0].textContent, first: text(rows[1]), second: text(rows[2]),
+  href0: rows[1].children[0].href, href1: rows[2].children[0].href, note: rows[3].textContent}));
+NODE
+    } > "$JS"
+    R="$(node "$JS" 2>&1)"
+    check "node: heading counts the queue" "$(jq -r '.head' <<<"$R" 2>/dev/null)" "Odottaa ihmistä (2)"
+    case "$(jq -r '.first' <<<"$R" 2>/dev/null)" in
+      "o/b#7|$HQ_LEAK|käsin yhdistettävä|22 d") ok "node: first row ref, title as text, mapped label, wait" ;;
+      *) bad "node: first row wrong: $R" ;; esac
+    case "$(jq -r '.second' <<<"$R" 2>/dev/null)" in
+      "o/a#1|t|needs-human|3 d (luontihetkestä)") ok "node: created fallback marked" ;;
+      *) bad "node: second row wrong: $R" ;; esac
+    check "node: https link kept" "$(jq -r '.href0' <<<"$R" 2>/dev/null)" "https://github.com/o/b/pull/7"
+    check "node: javascript: link dropped" "$(jq -r '.href1' <<<"$R" 2>/dev/null)" "null"
+    case "$(jq -r '.note' <<<"$R" 2>/dev/null)" in *"1 repossa"*) ok "node: failed repo noted" ;;
+      *) bad "node: failed-repo note missing: $R" ;; esac
+  else
+    echo "SKIP: node not installed — human queue behaviour not run"
+  fi
+fi
+
 echo "----------------------------------------"
 echo "status-render: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

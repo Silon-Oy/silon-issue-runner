@@ -35,6 +35,13 @@
 #                      classification: an unreachable repo lands in
 #                      enrichment.repos_failed, its runs stay github:null + low
 #                      confidence, exit code unaffected.
+#                      Also emits the top-level human_queue (issue #414): every
+#                      watchlist repo's open runner PRs (auto-run/ head) labelled
+#                      manual-merge or needs-human, oldest first, with the time
+#                      they have waited since the label (from the PR's events;
+#                      created_at when unavailable, waiting_source "created").
+#                      {prs[], repos_failed[], repos_truncated[]}; null without
+#                      --github, so "not asked" differs from "no queue".
 #   --github-full      with --github: also split each NOT_OPEN PR into MERGED vs
 #                      CLOSED (one `gh pr view` per closed PR). Both mean cleanup,
 #                      hence the extra flag.
@@ -77,6 +84,8 @@
 #                                a day, not every time the main cache TTL lapses.
 #                                0 disables the carry-forward (details re-read on
 #                                every miss).
+#   RUN_ISSUES_STATUS_HUMAN_QUEUE_PAGES  page cap per REST listing of the
+#                                human_queue sweep (default 5, 100 rows a page)
 #   RUN_ISSUES_LOG_DIR           where the audit schedule's state files live
 #                                (default: the pollers' log dir, lib/paths.sh)
 #   RUN_ISSUES_HOME              install root (test injection point; defaults to
@@ -174,7 +183,7 @@ CACHE_TTL="${RUN_ISSUES_STATUS_CACHE_TTL:-300}"
 DETAIL_TTL="${RUN_ISSUES_STATUS_DETAIL_TTL:-86400}"
 
 usage() {
-  sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die_usage() {
@@ -1277,6 +1286,19 @@ else
     fi
   fi
   printf '\n'
+
+  # Human queue (#414): runner PRs waiting for a human, oldest first.
+  if [ "$GITHUB_MODE" -eq 1 ]; then
+    n_hq="$(printf '%s' "$DOC" | jq -r '.human_queue.prs | length')"
+    printf '%sODOTTAA IHMISTÄ (%s PR)%s\n' "$C_BOLD" "$n_hq" "$C_RESET"
+    if [ "$n_hq" = "0" ]; then
+      printf '  %s(ei mitään)%s\n' "$C_DIM" "$C_RESET"
+    else
+      printf '%s' "$DOC" | jq -r '.human_queue.prs[]
+        | "  \(.repo)#\(.number)  \(((.waiting_seconds // 0)/86400)|floor)d\(if .waiting_source == "created" then " (luontihetkestä)" else "" end)  \(.labels | join(","))  \(.title)"'
+    fi
+    printf '\n'
+  fi
 
   # One-line counters.
   read -r n_run n_stall n_pr <<<"$(printf '%s' "$DOC" | jq -r \

@@ -54,6 +54,9 @@
 #      audit_results[] list (#373) reads only kind, repo_slug, started_at,
 #      exit_code and outcome; the outcome's text comes from the JS's own static
 #      map, so an unknown outcome is shown as "(tuntematon)", never as data.
+#      The human_queue list (#414) reads only prs[].{repo, number, url, title,
+#      labels, waiting_seconds, waiting_source} and repos_failed; a label is
+#      shown only when the JS's own static map knows it.
 #
 # EPIC ROLLUP (#79). status.sh --github also emits a top-level epics[] list (open
 # epic-labelled issues + their sub-issues). The JS renders one lane per epic
@@ -314,6 +317,9 @@ h1{font-size:1.35rem;margin:0 0 .2rem}
 .audit-row{display:flex;gap:.6rem;flex-wrap:wrap;color:var(--muted)}
 .audit-row.ar-failed,.audit-row.ar-no_scanner{color:var(--c-stalled);font-weight:600}
 .audit-row.ar-scanner_failed,.audit-row.ar-pending{color:var(--c-attention)}
+.hq-row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:baseline}
+.hq-label{font-size:.78rem;padding:0 .35rem;border:1px solid var(--border);border-radius:4px;color:var(--muted)}
+.hq-wait{color:var(--c-attention);font-weight:600}
 .chips{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.5rem;margin:.4rem 0 .8rem}
 .chip{border:1px solid var(--border);background:var(--card);color:var(--fg);
   padding:.35rem .7rem;border-radius:999px;font-size:.85rem;cursor:pointer;
@@ -421,6 +427,7 @@ a:hover{text-decoration:underline}
   <div id="runner"></div>
   <div id="audits"></div>
   <div id="audit-results"></div>
+  <div id="human-queue"></div>
   <ul class="chips" id="chips"></ul>
   <div class="controls">
     <label>Järjestys:
@@ -902,6 +909,40 @@ a:hover{text-decoration:underline}
     box.appendChild(wrap);
   }
 
+  // Human queue (#414): runner PRs waiting for a human, oldest first as
+  // status.sh sorted them. Shown only when status.sh asked GitHub (an object);
+  // null = local mode, where "0" would be a claim the data does not hold.
+  var HQ_LABELS = {"manual-merge": "käsin yhdistettävä", "needs-human": "needs-human"};
+  function renderHumanQueue(data){
+    var box = document.getElementById("human-queue");
+    clear(box);
+    var q = data.human_queue;
+    if (!q || typeof q !== "object" || Array.isArray(q)) return;
+    var prs = Array.isArray(q.prs) ? q.prs : [];
+    var wrap = el("div", "audits");
+    wrap.appendChild(el("div", "runner-label", "Odottaa ihmistä (" + prs.length + ")"));
+    if (prs.length === 0) wrap.appendChild(el("div", "audit-row", "Ei ihmistä odottavia PR:iä."));
+    prs.forEach(function(p){
+      var row = el("div", "hq-row");
+      var ref = (typeof p.repo === "string" ? p.repo : "?") + "#" +
+                (typeof p.number === "number" ? p.number : "?");
+      row.appendChild(link(p.url, ref));
+      row.appendChild(el("span", null, typeof p.title === "string" ? p.title : ""));
+      (Array.isArray(p.labels) ? p.labels : []).forEach(function(l){
+        if (typeof l === "string" && Object.prototype.hasOwnProperty.call(HQ_LABELS, l))
+          row.appendChild(el("span", "hq-label", HQ_LABELS[l]));
+      });
+      var w = typeof p.waiting_seconds === "number" ? dur(p.waiting_seconds) : "—";
+      if (p.waiting_source === "created") w += " (luontihetkestä)";
+      row.appendChild(el("span", "hq-wait", w));
+      wrap.appendChild(row);
+    });
+    var failed = Array.isArray(q.repos_failed) ? q.repos_failed : [];
+    if (failed.length)
+      wrap.appendChild(el("div", "act-note", "Haku epäonnistui " + failed.length + " repossa — lista voi olla vajaa."));
+    box.appendChild(wrap);
+  }
+
   function renderChips(data){
     var box = document.getElementById("chips");
     clear(box);
@@ -1194,6 +1235,7 @@ a:hover{text-decoration:underline}
     renderRunner(data);
     renderAudits(data);
     renderAuditResults(data);
+    renderHumanQueue(data);
     renderChips(data);
     document.getElementById("sort").value = sortMode;
 
