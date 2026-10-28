@@ -13,8 +13,9 @@
 # Two responsibilities, kept separate so the URL recognition is a pure,
 # fixture-testable function (mirroring detect_answer / parse_marker in issue.sh):
 #   1. extract_image_urls <issue-json>  — pure: prints deduped image URLs.
-#   2. download_issue_images <issue-json> <dest> — best-effort: downloads them
-#      with the gh token and prints local paths. Never fails the run.
+#   2. download_issue_images <issue-json> <dest> — best-effort: downloads those
+#      on GitHub's own image hosts (gh token only where _image_url_gets_token
+#      allows) and prints local paths. Never fails the run.
 #
 # All download failures (auth/network/404/non-image) degrade gracefully: the URL
 # is skipped with a log line and the run proceeds in text mode, exactly like the
@@ -30,6 +31,8 @@ RUN_ISSUES_IMAGE_TIMEOUT="${RUN_ISSUES_IMAGE_TIMEOUT:-60}"
 # Per-image size ceiling (bytes) — curl aborts when the server advertises a
 # larger Content-Length. Default 10 MiB.
 RUN_ISSUES_MAX_IMAGE_BYTES="${RUN_ISSUES_MAX_IMAGE_BYTES:-10485760}"
+# Maximum redirect hops _download_one follows by hand (each one re-checked).
+RUN_ISSUES_IMAGE_MAX_REDIRECTS="${RUN_ISSUES_IMAGE_MAX_REDIRECTS:-5}"
 
 _img_log() {
   printf '[issue-images %s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2
@@ -115,72 +118,148 @@ _detect_image_ext() {
   esac
 }
 
-# _image_url_gets_token <url> — rc 0 iff the gh token may be sent to <url>.
-# Pure (no network), so the decision is unit-testable. The host is parsed out
-# of the URL and compared EXACTLY; a shell glob such as
-# "https://*.githubusercontent.com/<anything>" is not a host check, because `*` also
-# matches `/`, `?`, `#` and `@` — https://attacker.example/x.githubusercontent.com/a.png
-# would match it. Allowed targets:
-#   - https://github.com/user-attachments/...      (private attachments)
-#   - https://user-images.githubusercontent.com/... (legacy attachments)
-# The authority must not carry userinfo (`@`), a port (`:`), a backslash or
-# whitespace. Comparison is case-sensitive on purpose: fail-closed.
-_image_url_gets_token() {
+# _image_url_host <url> — print the host of an https URL, rc 1 if there is
+# none we are willing to compare. Pure (no network). The host is parsed out of
+# the URL rather than matched with a shell glob: `*` also matches `/`, `?`, `#`
+# and `@`, so "https://*.githubusercontent.com/*" would accept
+# https://attacker.example/x.githubusercontent.com/a.png. The authority must not
+# carry userinfo (`@`), a port (`:` — this also rejects every IPv6 literal), a
+# backslash or whitespace. Callers compare the result case-sensitively on
+# purpose: an unexpected spelling is refused, not normalised (fail-closed).
+_image_url_host() {
   local url="$1"
   case "$url" in
     https://*) ;;
     *) return 1 ;;
   esac
 
-  local rest authority path
+  local rest authority
   rest=${url#https://}
   authority=${rest%%[/?#]*}
-  path=${rest#"$authority"}
 
+  [ -n "$authority" ] || return 1
   case "$authority" in
     *[@:\\[:space:]]*) return 1 ;;
   esac
+  printf '%s\n' "$authority"
+}
 
-  case "$authority" in
-    github.com) [[ "$path" == /user-attachments/* ]] ;;
-    user-images.githubusercontent.com) [[ "$path" == /* ]] ;;
+# _image_url_gets_token <url> — rc 0 iff the gh token may be sent to <url>.
+# Pure, so the decision is unit-testable. GitHub's own image hosts only:
+#   - github.com, any path (user-attachments, <owner>/<repo>/assets, /raw/ …) —
+#     narrowing the path adds nothing, the token goes to GitHub either way
+#   - user-images.githubusercontent.com          (legacy attachments)
+#   - private-user-images.githubusercontent.com  (private-repo attachments)
+#   - raw.githubusercontent.com                  (private-repo files)
+_image_url_gets_token() {
+  local host
+  host=$(_image_url_host "$1") || return 1
+  case "$host" in
+    github.com|user-images.githubusercontent.com|private-user-images.githubusercontent.com|raw.githubusercontent.com)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# _image_url_may_fetch <url> — rc 0 iff the runner may download <url> at all.
+# Pure. The allow-list is the token hosts plus the storage hosts GitHub
+# attachments redirect to (fetched WITHOUT the token: a signed S3 URL rejects an
+# extra Authorization header):
+#   - objects.githubusercontent.com
+#   - github-production-user-asset-<[a-z0-9]+>.s3.amazonaws.com
+#
+# Why an allow-list and not "any public address": image URLs come from the
+# issue body and comments, whose authors are not trusted, so an open fetch is
+# SSRF — the runner machine would request the LAN, localhost, the tailnet or a
+# cloud metadata service on the author's behalf. Refusing private addresses
+# instead would need name resolution, and there is no portable resolver across
+# macOS, Linux and Git Bash (getent, dig, dscacheutil each miss one); it would
+# also need --resolve pinning against DNS rebinding and parsing of every IP
+# spelling (IPv6, v4-mapped, decimal, octal). Each of those is a new way to
+# fail open. Any other host is reported to the agent instead (skipped-urls.txt).
+_image_url_may_fetch() {
+  local host
+  host=$(_image_url_host "$1") || return 1
+  _image_url_gets_token "$1" && return 0
+  case "$host" in
+    objects.githubusercontent.com) return 0 ;;
+  esac
+  local prefix="github-production-user-asset-" suffix=".s3.amazonaws.com" mid
+  case "$host" in
+    "$prefix"*"$suffix") ;;
     *) return 1 ;;
   esac
+  mid=${host#"$prefix"}
+  mid=${mid%"$suffix"}
+  [ -n "$mid" ] || return 1
+  case "$mid" in
+    *[!a-z0-9]*) return 1 ;;
+  esac
+  return 0
 }
 
 # _download_one <url> <out-base> <token> — download a single image best-effort.
 # On success renames to <out-base><ext> and prints that path; returns non-zero
-# on any failure (bad scheme, HTTP error, network, or non-image content). The gh
-# token is sent ONLY to the exactly parsed hosts of _image_url_gets_token
-# (private user-attachments need it) and is never forwarded across a redirect
-# to a different host — curl drops the Authorization header on cross-host
-# redirects by default, so it cannot leak to the signed S3 asset URL the
-# attachment redirects to.
+# on any failure (refused host, HTTP error, network, or non-image content).
+#
+# Redirects are followed by hand, not with `curl -L`: every hop's target must
+# pass _image_url_may_fetch BEFORE it is requested, so an allowed host cannot
+# bounce the runner to a private address. The token is decided per hop: sent
+# only when the hop passes _image_url_gets_token AND stays on the original
+# URL's host (the cross-host drop `curl -L` used to provide).
 _download_one() {
   local url="$1" out_base="$2" token="$3"
 
-  # Only fetch over http(s). Guards against file:// and other schemes.
-  case "$url" in
-    https://*|http://*) ;;
-    *) _img_log "skipping non-http(s) URL"; return 1 ;;
-  esac
-
-  local -a auth=()
-  if [ -n "$token" ] && _image_url_gets_token "$url"; then
-    auth=(-H "Authorization: Bearer $token")
-  fi
-
-  local tmp="${out_base}.download"
-  # -f fail on HTTP >=400, -s/-S quiet but show errors, -L follow redirects,
-  # bounded by time and advertised size.
-  # ${auth[@]+...}: an empty array is "unbound" under set -u on bash 3.2.
-  if ! curl -fsSL ${auth[@]+"${auth[@]}"} \
-        --max-time "$RUN_ISSUES_IMAGE_TIMEOUT" \
-        --max-filesize "$RUN_ISSUES_MAX_IMAGE_BYTES" \
-        -o "$tmp" "$url" 2>/dev/null; then
-    rm -f "$tmp" 2>/dev/null || true
+  local origin_host
+  if ! _image_url_may_fetch "$url"; then
+    _img_log "refusing non-GitHub image host $(_image_url_host "$url" 2>/dev/null || echo '(unparsable or non-https)')"
     return 1
   fi
+  origin_host=$(_image_url_host "$url")
+
+  local tmp="${out_base}.download"
+  local hop=0 meta code next host
+  local -a auth
+  while :; do
+    auth=()
+    host=$(_image_url_host "$url")
+    if [ -n "$token" ] && [ "$host" = "$origin_host" ] && _image_url_gets_token "$url"; then
+      auth=(-H "Authorization: Bearer $token")
+    fi
+    # -f fail on HTTP >=400 (3xx returns 0), no -L: redirects are handled
+    # below. https only, bounded by time and advertised size.
+    # ${auth[@]+...}: an empty array is "unbound" under set -u on bash 3.2.
+    if ! meta=$(curl -fsS ${auth[@]+"${auth[@]}"} \
+          --proto '=https' \
+          --max-time "$RUN_ISSUES_IMAGE_TIMEOUT" \
+          --max-filesize "$RUN_ISSUES_MAX_IMAGE_BYTES" \
+          -w '%{http_code}\n%{redirect_url}\n' \
+          -o "$tmp" "$url" 2>/dev/null); then
+      rm -f "$tmp" 2>/dev/null || true
+      return 1
+    fi
+    code=$(printf '%s\n' "$meta" | sed -n 1p)
+    next=$(printf '%s\n' "$meta" | sed -n 2p)
+    case "$code" in
+      2??) break ;;
+      3??) ;;
+      *)
+        _img_log "unexpected HTTP status $code — skipping"
+        rm -f "$tmp" 2>/dev/null || true
+        return 1 ;;
+    esac
+    rm -f "$tmp" 2>/dev/null || true
+    hop=$((hop + 1))
+    if [ "$hop" -gt "$RUN_ISSUES_IMAGE_MAX_REDIRECTS" ]; then
+      _img_log "too many redirects (> $RUN_ISSUES_IMAGE_MAX_REDIRECTS) — skipping"
+      return 1
+    fi
+    if [ -z "$next" ] || ! _image_url_may_fetch "$next"; then
+      _img_log "refusing redirect to $(_image_url_host "$next" 2>/dev/null || echo '(unparsable or non-https)')"
+      return 1
+    fi
+    url="$next"
+  done
 
   local ext
   ext=$(_detect_image_ext "$tmp")
@@ -205,6 +284,10 @@ _download_one() {
 # S6->S8 chain downloads once); a separate --continue/--restart/--resume process
 # re-downloads from the freshest issue.json on purpose, so a clarification reply
 # that adds a new screenshot is picked up.
+#
+# URLs refused by _image_url_may_fetch are not requested at all: they consume
+# neither an image-NN number nor the cap, and are written one per line to
+# <dest>/skipped-urls.txt so the prompt can name them. stdout stays paths only.
 download_issue_images() {
   local fixture="$1" dest="$2"
   local max="$RUN_ISSUES_MAX_IMAGES"
@@ -214,6 +297,8 @@ download_issue_images() {
   [ -n "$urls" ] || return 0
 
   mkdir -p "$dest"
+  local skipped_file="$dest/skipped-urls.txt"
+  rm -f "$skipped_file" 2>/dev/null || true
 
   # Resolve the gh token once. Never logged, never written to disk.
   local token=""
@@ -222,6 +307,11 @@ download_issue_images() {
   local i=0 url out_base
   while IFS= read -r url; do
     [ -n "$url" ] || continue
+    if ! _image_url_may_fetch "$url"; then
+      _img_log "refusing non-GitHub image host $(_image_url_host "$url" 2>/dev/null || echo '(unparsable or non-https)') — listed in the prompt instead"
+      printf '%s\n' "$url" >> "$skipped_file"
+      continue
+    fi
     i=$((i + 1))
     if [ "$i" -gt "$max" ]; then
       _img_log "image cap ($max) reached — skipping remaining URLs"
@@ -237,14 +327,30 @@ EOF
 
 # build_issue_images_block <path1> [<path2> ...] — produce the {{ISSUE_IMAGES}}
 # prompt block listing the downloaded image paths with a Read-tool instruction.
-# Empty output when given no paths, so the prompt section collapses cleanly
-# (mirroring CLARIFICATION_CONTEXT / RESTART_CONTEXT).
+# ISSUE_IMAGES_SKIPPED (newline-separated URLs, optional) adds a note naming the
+# image URLs that were not downloaded because their host is not GitHub's own.
+# Empty output when there are neither paths nor skipped URLs, so the prompt
+# section collapses cleanly (mirroring CLARIFICATION_CONTEXT / RESTART_CONTEXT).
 build_issue_images_block() {
-  [ "$#" -gt 0 ] || return 0
+  local skipped="${ISSUE_IMAGES_SKIPPED:-}"
+  [ "$#" -gt 0 ] || [ -n "$skipped" ] || return 0
   printf '### Issueen liitetyt kuvat\n\n'
-  printf 'Tähän issueen on liitetty %d kuva(a), jotka on ladattu paikallisesti. **Lue jokainen Read-työkalulla** — Claude Code -CLI:n Read näyttää kuvat visuaalisesti, joten näet kuvakaappausten, mockuppien tai diagrammien sisällön:\n\n' "$#"
-  local p
-  for p in "$@"; do
-    printf -- '- `%s`\n' "$p"
-  done
+  if [ "$#" -gt 0 ]; then
+    printf 'Tähän issueen on liitetty %d kuva(a), jotka on ladattu paikallisesti. **Lue jokainen Read-työkalulla** — Claude Code -CLI:n Read näyttää kuvat visuaalisesti, joten näet kuvakaappausten, mockuppien tai diagrammien sisällön:\n\n' "$#"
+    local p
+    for p in "$@"; do
+      printf -- '- `%s`\n' "$p"
+    done
+  fi
+  if [ -n "$skipped" ]; then
+    [ "$#" -gt 0 ] && printf '\n'
+    printf 'Seuraavia kuvaosoitteita ei ladattu, koska ne eivät ole GitHubin omilla kuvapalvelimilla (runner ei hae issuen kirjoittajan valitsemia osoitteita). Et näe niiden sisältöä:\n\n'
+    local u
+    while IFS= read -r u; do
+      [ -n "$u" ] || continue
+      printf -- '- `%s`\n' "$(printf '%s' "$u" | tr -d '`')"
+    done <<EOF
+$skipped
+EOF
+  fi
 }

@@ -1232,7 +1232,10 @@ prepare_issue_images() {
 
   local paths
   paths=$(download_issue_images "$issue_json" "$dest" 2>>"$RUN_DIR/issue-images.log") || true
-  [ -n "$paths" ] || return 0
+  # URLs on non-GitHub hosts are never fetched (SSRF); the prompt names them.
+  local skipped=""
+  [ -f "$dest/skipped-urls.txt" ] && skipped=$(cat "$dest/skipped-urls.txt" 2>/dev/null || true)
+  [ -n "$paths" ] || [ -n "$skipped" ] || return 0
 
   local -a arr=()
   while IFS= read -r p; do
@@ -1240,9 +1243,9 @@ prepare_issue_images() {
   done <<EOF
 $paths
 EOF
-  [ "${#arr[@]}" -gt 0 ] || return 0
+  [ "${#arr[@]}" -gt 0 ] || [ -n "$skipped" ] || return 0
 
-  ISSUE_IMAGES=$(build_issue_images_block "${arr[@]}")
+  ISSUE_IMAGES=$(ISSUE_IMAGES_SKIPPED="$skipped" build_issue_images_block ${arr[@]+"${arr[@]}"})
   log "issue-images: prepared ${#arr[@]} image(s) for the prompt"
   state_event "$RUN_DIR" "issue_images_prepared" "count=${#arr[@]}" || true
 }

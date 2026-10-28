@@ -75,13 +75,19 @@ jobs:
           # Some tests build repositories on top of this checkout's history.
           fetch-depth: 0
 
-      - name: Install coreutils
+      - name: Install coreutils and bash
         # The runner image ships without GNU coreutils, so `gtimeout` is absent
         # and the implementer-timeout path (rc 124 -> exit 7) would be SKIPped
         # rather than tested. README section 2 lists coreutils as the optional
         # dependency that gives claude calls a time cap; CI installs it so that
         # path is exercised on every run.
-        run: brew install coreutils
+        # bash: /bin/bash is 3.2 here; a Homebrew bash 5 lets tests that run
+        # themselves under every bash they find (test-image-token-host.sh)
+        # cover both set -u array semantics. Unlinked, so `bash` on PATH stays
+        # 3.2 for the rest of the suite; the keg stays reachable under opt/.
+        run: |
+          brew install coreutils bash
+          brew unlink bash
 
       - name: Configure git
         # The runners ship without an identity, and without an explicit default
@@ -95,6 +101,7 @@ jobs:
       - name: Show toolchain
         run: |
           bash --version | head -1
+          "$(brew --prefix bash)/bin/bash" --version | head -1 || echo "brew bash: not available"
           git --version
           jq --version || echo "jq: not available"
           gtimeout --version | head -1 || echo "gtimeout: not available"
