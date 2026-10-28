@@ -288,3 +288,12 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 | 1 | Käyttövirhe (tuntematon lippu, virheellinen arvo, `--json` ja `--claude` yhdessä) tai `--out`-tiedostoa ei voi kirjoittaa |
 | 2 | Watchlist puuttuu, yksikään repo ei ole levyllä tai `jq` puuttuu |
 | 3 | `--claude`-ryhmittely epäonnistui. Mekaaninen raportti tuotettiin sen tilalle |
+
+### Löydösten jäljitys (`escape-trace.sh`)
+
+| Koodi | Merkitys |
+|---|---|
+| 0 | Raportti tuotettu, myös silloin kun issueissa ei ole yhtään `tiedosto:rivi`-viittausta. Yksittäisen viittauksen epäonnistunut blame tai GitHub-luku ei muuta koodia: rivi luokitellaan `tuntematon` ja syy näkyy `note`-sarakkeessa |
+| 1 | Käyttövirhe (tuntematon lippu, puuttuva arvo, `--issues` ja `--label` yhdessä tai kumpikin puuttuu, `--at` ei ole commit) |
+| 2 | `--repo` ei ole git-työpuu, remote ei ole github.com-remote, `<remote>/HEAD` ei resolvoidu ilman `--at`-lippua (⇒ `git remote set-head <remote> -a`), tai `git`/`gh`/`jq` puuttuu |
+| 3 | Issueiden luku GitHubista epäonnistui |

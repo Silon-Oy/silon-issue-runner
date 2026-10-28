@@ -411,6 +411,7 @@ käytettävissä.
 | `pr-watch.sh` | `pr-watch.sh <repo> <PR\|scan>` | PR → merge. Idempotentti, ei resume-tilaa |
 | `status.sh` | `status.sh --json\|--human` | Kaikkien watchlist-repojen ajojen kokonaistila. Puhtaasti lukeva (ks. 6.10) |
 | `evolution-digest.sh` | `evolution-digest.sh [--since <vrk>] [--claude]` | Evolutionin toistuvat havainnot jakson ajoista ja kohde-ehdotus kullekin. Puhtaasti lukeva, ajetaan käsin |
+| `escape-trace.sh` | `escape-trace.sh --repo <polku> (--issues <N,…> \| --label <label>) [--at <sha>]` | Löydösissueiden `tiedosto:rivi`-viittaukset `git blame`lla commitiin ja commitista PR:ään: runner / peritty / tuntematon. Puhtaasti lukeva, ajetaan käsin |
 | `security-audit.sh` | `security-audit.sh <repo> [--remote <nimi>] [--dry-run]` | Koko repon tietoturva-auditointi oletushaarasta väliaikaisessa worktreessä: skannerit ja agentin uhkamalli, löydös → yksi issue sormenjäljellä (`lib/finding-issues.sh`). Avointa ei monisteta, korjattu avataan vain toistuessa, *not planned* -tilaan suljettua ei koskaan. Poller ajastaa sen repokohtaisella välillä (`RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS`, `.security.audit_interval_days`, #340) |
 | `coherence-audit.sh` | `coherence-audit.sh <repo> [--remote <nimi>] [--dry-run]` | Katselmoi runnerin (`auto-run/`-haarat) oletushaaraan mergetyt PR:t yhdessä oman kursorinsa jälkeen, epicistä riippumatta. Yhteinen muutospinta tulee `lib/pr-surface.sh`:sta, löydös → yksi `coherence`-issue sormenjäljellä, ei koskaan poimintalabeleita. Kursori siirtyy vain onnistuneella ajolla. Poller ajastaa sen (`RUN_ISSUES_COHERENCE_AUDIT_INTERVAL_DAYS`, `.coherence.audit_interval_days`) |
 | `stop-run.sh` | `stop-run.sh --repo <polku> --issue <N> --yes` | Yhden elävän ajon hallittu pysäytys (`blocked/stopped_by_operator`). Ei siivoa worktreetä/haaraa/run-diriä. `--run-dir`, `--remote`, `--force`, `--dry-run`. **Ei koske ajastettua auditointia**: sillä ei ole run-diriä eikä issueta. Auditointi pysäytetään `tmux kill-session -t run-issues-audit-<laji>-<repo-slug>` (nimi näkyy `status.sh --human`issa), ks. [`env-reference.md`](env-reference.md) |
@@ -705,6 +706,44 @@ Mekaaninen ryhmittely ei tunnista saman asian eri sanamuotoja. `--claude` antaa 
 mekaaniset ryhmät yhdelle Claude-kutsulle, joka ryhmittelee merkityksen perusteella ja ehdottaa
 kullekin aiheelle konkreettisen ohjerivin tai issuen otsikon. Kutsu on opt-in, eikä koostetta
 ajasteta. Jos kutsu epäonnistuu, tuloste on mekaaninen raportti ja exit-koodi 3.
+
+## Löydösten jäljitys (`escape-trace.sh`)
+
+Auditointien ja bugi-issueiden löydökset nimeävät `tiedosto:rivi`-sijainteja, mutta mikään ei
+kerro, tuliko vika runnerin omasta PR:stä vai oliko se koodissa jo ennestään. Jäljitys ajaa
+jokaiselle viittaukselle `git blame`n ja selvittää commitin PR:n:
+
+```bash
+escape-trace.sh --repo ~/src/app --label security          # kaikki security-löydökset
+escape-trace.sh --repo ~/src/app --issues 41,57             # nimetyt issuet
+escape-trace.sh --repo ~/src/app --issues 41 --at <sha>     # blame annetusta commitista
+```
+
+Blame ajetaan issuen rungon `Auditoitu commit:`-SHA:sta, jos commit on paikallisessa repossa,
+muuten `<remote>/HEAD`:sta sellaisena kuin se on viimeksi haettu (skripti ei fetchaa). `--at`
+ohittaa molemmat. Tuloste on sarkaineroteltu, rivi per viittaus:
+
+| Sarake | Sisältö |
+|---|---|
+| `location` | `tiedosto:rivi` (rivialueesta alkurivi) |
+| `commit` | Blamen commit lyhyenä, tai `-` |
+| `pr` | PR:n numero, tai `-` |
+| `class` | `runner` (runnerin `auto-run/`-haaran PR), `peritty` (ei runnerin PR:ää) tai `tuntematon` |
+| `method` | Mikä yhdisti commitin runnerin PR:ään: `pr-api` (GitHubin commit → PR -yhteys), `auto-prefix` (squash-mergetyn commitin `Auto:`-otsikko) tai `msg-ref` (viestin viimeinen `(#N)` osoittaa runnerin PR:ään) |
+| `issue` | Runnerin PR:n issue, tai `-` |
+| `source` | Löydösissue, josta viittaus luettiin |
+| `note` | `tuntematon`-luokan syy: `ei-tiedostoa`, `ei-riviä`, `ei-löydy` (GitHub ei tunne committia), `api-virhe` tai `kutsuraja`. Viestin `(#N)`, jota repossa ei ole PR:nä (404, esim. toisesta reposta tuotu historia), luokittuu `peritty` |
+
+`Auto:`-otsikossa ensimmäinen `(#N)` on issue ja viimeinen PR, koska squash-merge lisää PR:n
+numeron runnerin otsikon `Auto: <otsikko> (#<issue>)` perään. Lopussa on yhteenveto luokkien
+määristä ja osuuksista sekä muistutus: blame kertoo viimeisimmän muuttajan eikä aina vian
+aiheuttajaa, eikä puuttuvalla tarkistuksella ole riviä.
+
+Kustannus: issuet luetaan REST:llä (yksi kutsu per `--issues`-numero tai yksi sivutettu
+labelilistaus), ei koskaan hakurajapinnalla. Jokaisesta uniikista commitista tehdään yksi
+`commits/<sha>/pulls`-kutsu, ja `pulls/<N>` luetaan vain, kun GitHub ei tunne commitille PR:ää
+ja viestissä on pelkkä `(#N)` — kerran per uniikki numero. Kutsurajan torjunta lopettaa kutsut
+ajon loppuun asti. Kaikki kutsut ovat lukevia.
 
 ## Julkaisu julkiseen peiliin (`publish-release.sh`)
 
