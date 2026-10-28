@@ -17,6 +17,7 @@
 #   E) the blamed commit: default branch tip, the body's audited SHA, --at
 #   F) --label: one paginated REST listing, PRs dropped
 #   G) a rate-limit refusal stops further calls; usage and setup exit codes
+#   H) --json: the same rows, summary and gh calls as the table
 #
 # Run: bash tests/test-escape-trace.sh
 
@@ -223,6 +224,23 @@ g symbolic-ref --delete refs/remotes/origin/HEAD
 run --repo "$REPO" --issues 103; expect G "no origin/HEAD" "$RC" 2
 if grep -q "git remote set-head origin -a" "$WORK/stderr"; then ok G "set-head hint"; else bad G "no set-head hint"; fi
 run --repo "$REPO" --issues 103 --at "$C7"; expect G "--at needs no origin/HEAD" "$RC" 0
+
+# ---- H) --json ----------------------------------------------------------------------------
+run --repo "$REPO" --issues 101 --at "$C7"
+TABLE="$OUT" TABLE_CALLS=$(sort "$WORK/calls.log")
+run --repo "$REPO" --issues 101 --at "$C7" --json
+expect H "exit code" "$RC" 0
+if printf '%s' "$OUT" | jq -e 'type == "object"' >/dev/null 2>&1; then ok H "valid JSON"; else bad H "not JSON: $OUT"; fi
+expect H "nine locations" "$(printf '%s' "$OUT" | jq '.locations | length')" 9
+expect H "rows = table rows" \
+  "$(printf '%s' "$OUT" | jq -r '.locations[] | [.location, .commit, .pr, .class, .method, .issue, .source, .note] | @tsv')" \
+  "$(printf '%s\n' "$TABLE" | sed -n '2,/^$/p' | sed '/^$/d')"
+expect H "summary = table summary" "$(printf '%s' "$OUT" | jq -r '.summary | "\(.total) \(.runner) \(.peritty) \(.tuntematon)"')" \
+  "$(printf '%s\n' "$TABLE" | awk '/^Yhteenveto/ {gsub(/[(]/, "", $2); t = $2} $1 == "runner" {r = $2} $1 == "peritty" {p = $2} $1 == "tuntematon" {u = $2} END {print t, r, p, u}')"
+expect H "repo is absolute, owner_repo" "$(printf '%s' "$OUT" | jq -r '"\(.repo) \(.owner_repo)"')" "$(cd "$REPO" && pwd) o/app"
+expect H "same gh calls as the table" "$(sort "$WORK/calls.log")" "$TABLE_CALLS"
+OUT=$(cd "$WORK" && PATH="$BIN:$PATH" bash "$TRACE" --repo repo --issues 103 --at "$C7" --json 2>/dev/null)
+expect H "relative --repo made absolute" "$(printf '%s' "$OUT" | jq -r '.repo')" "$(cd "$REPO" && pwd)"
 
 [ "$FAIL" = 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$FAIL"

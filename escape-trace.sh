@@ -29,13 +29,14 @@
 #
 # Usage:
 #   escape-trace.sh --repo <path> (--issues <N,N,...> | --label <label>)
-#                   [--at <sha>] [--remote <name>]
+#                   [--at <sha>] [--remote <name>] [--json]
 #
 #   --repo <path>      local clone of the repo the issues are in (required).
 #   --issues <list>    comma-separated issue numbers.
 #   --label <label>    every issue carrying <label> (state=all; PRs dropped).
 #   --at <rev>         blame at <rev> for every issue (overrides the body SHA).
 #   --remote <name>    the GitHub remote. Default origin.
+#   --json             one JSON document instead of the table (see Output).
 #
 # Output: a header row, then one tab-separated row per location:
 #   location  commit  pr  class  method  issue  source  note
@@ -44,6 +45,10 @@
 # the runner PR's issue (or -), source the finding issue `#N`, note the reason
 # for tuntematon (empty otherwise). A summary of counts and shares follows,
 # with one line on what blame cannot tell.
+# With --json: { repo, owner_repo, locations: [{location, commit, pr, class,
+# method, issue, source, note}], summary: {total, runner, peritty, tuntematon},
+# limitation } — the same strings as the table's columns, `-` and `#N` included
+# (repo is the --repo path made absolute). evolution-digest.sh --escapes reads it.
 #
 # Exit codes (own space):
 #   0  report produced (also when the issues name no locations)
@@ -77,7 +82,7 @@ usage() { sed -n '/^# Usage:/,/^# Output:/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}
 die() { echo "escape-trace: $2" >&2; exit "$1"; }
 warn() { echo "escape-trace: WARNING: $*" >&2; }
 
-REPO="" ISSUES="" LABEL="" AT="" REMOTE="origin"
+REPO="" ISSUES="" LABEL="" AT="" REMOTE="origin" JSON_MODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo|--issues|--label|--at|--remote)
@@ -87,6 +92,7 @@ while [ $# -gt 0 ]; do
         --at) AT="$2" ;; --remote) REMOTE="$2" ;;
       esac
       shift 2 ;;
+    --json) JSON_MODE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die 1 "unknown argument: $1" ;;
   esac
@@ -181,7 +187,10 @@ pr_head() {
 }
 
 # ---- trace ----------------------------------------------------------------------
-printf 'location\tcommit\tpr\tclass\tmethod\tissue\tsource\tnote\n'
+# Rows are collected as TSV and rendered once at the end, as the table or as
+# JSON — the classification above has a single output path.
+ROWS="$WORK/rows.tsv"
+: >"$ROWS"
 N_RUNNER=0 N_PERITTY=0 N_TUNTEMATON=0
 
 while IFS= read -r issue_json; do
@@ -246,17 +255,32 @@ while IFS= read -r issue_json; do
     esac
     short="-"; [ "$commit" = - ] || short="${commit:0:12}"
     printf '%s:%s\t%s\t%s\t%s\t%s\t%s\t#%s\t%s\n' \
-      "$path" "$line" "$short" "$pr" "$class" "$method" "$issue" "$src" "$note"
+      "$path" "$line" "$short" "$pr" "$class" "$method" "$issue" "$src" "$note" >>"$ROWS"
   done < <(escape_trace_refs "$body")
 done <"$ISSUES_FILE"
 
-# ---- summary --------------------------------------------------------------------
+# ---- report ---------------------------------------------------------------------
 TOTAL=$((N_RUNNER + N_PERITTY + N_TUNTEMATON))
+LIMITATION="blame kertoo viimeisimmän muuttajan, ei aina vian aiheuttajaa; puuttuvalla tarkistuksella ei ole riviä."
+if [ "$JSON_MODE" = 1 ]; then
+  REPO_ABS=$(cd "$REPO" && pwd)
+  jq -Rn --arg repo "$REPO_ABS" --arg or "$OWNER_REPO" --arg lim "$LIMITATION" \
+    --argjson t "$TOTAL" --argjson r "$N_RUNNER" --argjson p "$N_PERITTY" --argjson u "$N_TUNTEMATON" '
+    { repo: $repo, owner_repo: $or,
+      locations: [inputs | split("\t")
+                  | {location: .[0], commit: .[1], pr: .[2], class: .[3], method: .[4],
+                     issue: .[5], source: .[6], note: (.[7] // "")}],
+      summary: {total: $t, runner: $r, peritty: $p, tuntematon: $u},
+      limitation: $lim }' <"$ROWS"
+  exit 0
+fi
+printf 'location\tcommit\tpr\tclass\tmethod\tissue\tsource\tnote\n'
+cat "$ROWS"
 share() { if [ "$TOTAL" -gt 0 ]; then awk -v n="$1" -v t="$TOTAL" 'BEGIN { printf "%.1f", 100 * n / t }'; else echo "0.0"; fi; }
 echo
 echo "Yhteenveto ($TOTAL viittausta):"
 printf '  runner      %4d  %5s %%\n' "$N_RUNNER" "$(share "$N_RUNNER")"
 printf '  peritty     %4d  %5s %%\n' "$N_PERITTY" "$(share "$N_PERITTY")"
 printf '  tuntematon  %4d  %5s %%\n' "$N_TUNTEMATON" "$(share "$N_TUNTEMATON")"
-echo "Rajoitus: blame kertoo viimeisimmän muuttajan, ei aina vian aiheuttajaa; puuttuvalla tarkistuksella ei ole riviä."
+echo "Rajoitus: $LIMITATION"
 exit 0
