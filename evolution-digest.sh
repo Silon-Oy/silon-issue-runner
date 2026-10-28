@@ -42,6 +42,7 @@
 # runner itself) form their own lane: they are grouped apart from the rest even
 # when they mention the same file, and their target is always the target repo's
 # test environment / provisioning hook or the runner package.
+# Findings are ordered by timestamp, ties broken by repo, issue and run id.
 # With --claude (opt-in) the findings and the mechanical groups are handed to one
 # call_claude call that groups by MEANING; on failure the deterministic report is
 # printed instead (exit 3).
@@ -240,6 +241,9 @@ fi
 # Groups with the same member run set are merged so one recurrence that touches
 # three files is one topic, not three. Both steps are per lane, so a tooling
 # finding never joins a product topic.
+# Order: by at, ties broken by repo, issue and run_id, so the output does not
+# depend on find's order or on live-before-archive. sort_by is stable, so one
+# run's findings keep the parser's order.
 DOC="$TMPD/doc.json"
 jq -s --argjson days "$SINCE_DAYS" --argjson min "$MIN_COUNT" '
   def keys_of:
@@ -253,7 +257,7 @@ jq -s --argjson days "$SINCE_DAYS" --argjson min "$MIN_COUNT" '
     elif (.repos | length) > 1 then "implementer_prompt"
     elif any(.findings[]; .kind == "FIXED") then "repo_claude_md"
     else "new_issue" end;
-  (sort_by(.at) | to_entries | map(.value + {id: .key, class: (.value.class // null)})) as $f
+  (sort_by([.at, .repo, (.issue | tonumber? // -1), .issue, .run_id]) | to_entries | map(.value + {id: .key, class: (.value.class // null)})) as $f
   | ([ $f[] | . as $x | (.text | keys_of)[] | {lane: ($x | lane), key: ., id: $x.id} ]
      | group_by([.lane, .key])
      | map({lane: .[0].lane, key: .[0].key, ids: (map(.id) | unique)})

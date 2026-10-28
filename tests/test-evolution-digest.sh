@@ -23,6 +23,9 @@
 #      golden taken before the flag existed, and to a run whose file has no
 #      runner rows; runner rows become ESCAPE findings → stage_or_gate; a bad
 #      file → exit 1; still no gh call and no state.jsonl read
+#  12. tie-break (issue #428): two findings with the same timestamp come out in
+#      the same order whatever their live/archive placement, creation order
+#      and mtime
 #
 # Run: bash tests/test-evolution-digest.sh   (exit 0 = all pass)
 
@@ -84,8 +87,12 @@ check "parser: empty guide is nothing" "$(evolution_review_guide "$P")" ""
 check "parser: guide missing file is empty, rc 0" "$(evolution_review_guide "$FX/nope"; echo "rc=$?")" "rc=0"
 
 # ---- fixtures ----
+# One "now" for every fixture: the same days-ago is the same timestamp, so a tie
+# is deliberate and tests the tie-break rather than whether a second boundary
+# fell between two mkrun calls (issue #428).
+FIXTURE_NOW=$(date -u +%s)
 iso_ago() {  # <days> -> ISO timestamp that many days ago
-  local e=$(( $(date -u +%s) - $1 * 86400 ))
+  local e=$(( FIXTURE_NOW - $1 * 86400 ))
   date -u -r "$e" +%FT%TZ 2>/dev/null || date -u -d "@$e" +%FT%TZ
 }
 # mkrun <repo> <live|archive> <run-id> <issue> <days-ago> <evolution lines...>
@@ -216,7 +223,7 @@ Ei toistuvia aiheita.
 EOF
 )
 GOLDEN_JSON=$(cat <<'EOF'
-{"findings":[{"class":"unclassified","issue":"23","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b3","text":"src/cache.ts invalidation is ad hoc"},{"class":null,"issue":"22","kind":"NEEDS_FOLLOWUP","repo":"repo-beta","run_id":"b2","text":"`src/cache.ts` races"},{"class":null,"issue":"13","kind":"FIXED","repo":"repo-alpha","run_id":"a3","text":"again no `.env.example` update"},{"class":"unclassified","issue":"21","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b1","text":"orchestrate.sh has no unit test seam"},{"class":null,"issue":"14","kind":"FIXED","repo":"repo-alpha","run_id":"a4","text":"one-off in `lonely.sh`"},{"class":null,"issue":"12","kind":"FIXED","repo":"repo-alpha","run_id":"a2","text":"missing `.env.example` entry"},{"class":null,"issue":"11","kind":"FIXED","repo":"repo-alpha","run_id":"a1","text":"`orchestrate.sh` lacked a test"}],"groups":[{"findings":[{"class":null,"issue":"13","kind":"FIXED","repo":"repo-alpha","run_id":"a3","text":"again no `.env.example` update"},{"class":null,"issue":"12","kind":"FIXED","repo":"repo-alpha","run_id":"a2","text":"missing `.env.example` entry"}],"keys":[".env.example"],"lane":"product","repos":["repo-alpha"],"run_count":2,"target":"repo_claude_md"},{"findings":[{"class":"unclassified","issue":"21","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b1","text":"orchestrate.sh has no unit test seam"},{"class":null,"issue":"11","kind":"FIXED","repo":"repo-alpha","run_id":"a1","text":"`orchestrate.sh` lacked a test"}],"keys":["orchestrate.sh"],"lane":"product","repos":["repo-alpha","repo-beta"],"run_count":2,"target":"implementer_prompt"},{"findings":[{"class":"unclassified","issue":"23","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b3","text":"src/cache.ts invalidation is ad hoc"},{"class":null,"issue":"22","kind":"NEEDS_FOLLOWUP","repo":"repo-beta","run_id":"b2","text":"`src/cache.ts` races"}],"keys":["src/cache.ts"],"lane":"product","repos":["repo-beta"],"run_count":2,"target":"new_issue"}],"min_count":2,"repos_scanned":2,"runs_read":7,"ungrouped":[{"class":null,"issue":"14","kind":"FIXED","repo":"repo-alpha","run_id":"a4","text":"one-off in `lonely.sh`"}],"window_days":30}
+{"findings":[{"class":"unclassified","issue":"23","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b3","text":"src/cache.ts invalidation is ad hoc"},{"class":null,"issue":"22","kind":"NEEDS_FOLLOWUP","repo":"repo-beta","run_id":"b2","text":"`src/cache.ts` races"},{"class":null,"issue":"13","kind":"FIXED","repo":"repo-alpha","run_id":"a3","text":"again no `.env.example` update"},{"class":"unclassified","issue":"21","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b1","text":"orchestrate.sh has no unit test seam"},{"class":null,"issue":"12","kind":"FIXED","repo":"repo-alpha","run_id":"a2","text":"missing `.env.example` entry"},{"class":null,"issue":"14","kind":"FIXED","repo":"repo-alpha","run_id":"a4","text":"one-off in `lonely.sh`"},{"class":null,"issue":"11","kind":"FIXED","repo":"repo-alpha","run_id":"a1","text":"`orchestrate.sh` lacked a test"}],"groups":[{"findings":[{"class":null,"issue":"13","kind":"FIXED","repo":"repo-alpha","run_id":"a3","text":"again no `.env.example` update"},{"class":null,"issue":"12","kind":"FIXED","repo":"repo-alpha","run_id":"a2","text":"missing `.env.example` entry"}],"keys":[".env.example"],"lane":"product","repos":["repo-alpha"],"run_count":2,"target":"repo_claude_md"},{"findings":[{"class":"unclassified","issue":"21","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b1","text":"orchestrate.sh has no unit test seam"},{"class":null,"issue":"11","kind":"FIXED","repo":"repo-alpha","run_id":"a1","text":"`orchestrate.sh` lacked a test"}],"keys":["orchestrate.sh"],"lane":"product","repos":["repo-alpha","repo-beta"],"run_count":2,"target":"implementer_prompt"},{"findings":[{"class":"unclassified","issue":"23","kind":"DELTA_PSI","repo":"repo-beta","run_id":"b3","text":"src/cache.ts invalidation is ad hoc"},{"class":null,"issue":"22","kind":"NEEDS_FOLLOWUP","repo":"repo-beta","run_id":"b2","text":"`src/cache.ts` races"}],"keys":["src/cache.ts"],"lane":"product","repos":["repo-beta"],"run_count":2,"target":"new_issue"}],"min_count":2,"repos_scanned":2,"runs_read":7,"ungrouped":[{"class":null,"issue":"14","kind":"FIXED","repo":"repo-alpha","run_id":"a4","text":"one-off in `lonely.sh`"}],"window_days":30}
 EOF
 )
 nojq_at() { jq -cS 'del(.findings[].at, .groups[].findings[].at, .ungrouped[].at)'; }
@@ -250,7 +257,7 @@ erun --escapes "$FX/esc.json" --json
 check "escapes: exit 0" "$RC" "0"
 check "escapes: only runner rows join" "$(printf '%s' "$OUT" | jq '[.findings[] | select(.kind == "ESCAPE")] | length')" "3"
 check "escapes: finding shape" \
-  "$(printf '%s' "$OUT" | jq -c '[.findings[] | select(.kind == "ESCAPE")][0] | [.repo, .issue, .run_id, .at]')" \
+  "$(printf '%s' "$OUT" | jq -c '.findings[] | select(.kind == "ESCAPE" and .run_id == "pr-5") | [.repo, .issue, .run_id, .at]')" \
   '["repo-alpha","7","pr-5",""]'
 check "escapes: two runner PRs, one file → stage_or_gate" \
   "$(printf '%s' "$OUT" | jq -r '.groups[] | select(.keys == ["lib/x.sh"]) | "\(.target) \(.run_count)"')" "stage_or_gate 2"
@@ -319,6 +326,39 @@ OUT="$(RUN_ISSUES_WATCHLIST="$WL" $TO bash "$DIGEST" 2>"$FX/err")"
 has   "lane human: empty tooling section says so" "$OUT" "## Toistuvat aiheet — testiympäristö ja runner
 
 Ei toistuvia aiheita."
+
+# ---- 12. tie-break ----
+# Two runs with the same `at` in one repo. The variants swap live/archive,
+# creation order and mtime, i.e. every input that decides the order in which the
+# digest reads them; the output must not move.
+tie_run() {  # <repo> <where> <p|q> — the content depends on the run id only
+  case "$3" in
+    p) mkrun "$1" "$2" p 41 1 "EVOLUTION_RESULT: FIXED — tie in \`tie.sh\`" ;;
+    q) mkrun "$1" "$2" q 42 1 "EVOLUTION_RESULT: FIXED — tie again in \`tie.sh\`" ;;
+  esac
+}
+tie_variant() {  # <dir> <first-rid> <first-where> <second-rid> <second-where>
+  local r="$1/repo-tie" w="$1/watchlist.json"
+  tie_run "$r" "$3" "$2"
+  tie_run "$r" "$5" "$4"
+  # The first-created run gets the older mtime in both variants.
+  touch -t "$(date -r "$((FIXTURE_NOW - 7200))" +%Y%m%d%H%M 2>/dev/null || date -d "@$((FIXTURE_NOW - 7200))" +%Y%m%d%H%M)" \
+    "$(find "$r" -path "*/$2/run.json")"
+  jq -n --arg r "$r" '{repos: [{path: $r}]}' > "$w"
+}
+mkdir -p "$FX/tie1" "$FX/tie2"
+tie_variant "$FX/tie1" p live q archive
+tie_variant "$FX/tie2" q live p archive
+for f in json human; do
+  flag=""; [ "$f" = json ] && flag="--json"
+  T1="$(RUN_ISSUES_WATCHLIST="$FX/tie1/watchlist.json" $TO bash "$DIGEST" $flag 2>"$FX/err")"
+  T2="$(RUN_ISSUES_WATCHLIST="$FX/tie2/watchlist.json" $TO bash "$DIGEST" $flag 2>"$FX/err")"
+  check "tie-break: $f output identical across variants" "$(printf '%s' "$T1" | cksum)" "$(printf '%s' "$T2" | cksum)"
+done
+T1="$(RUN_ISSUES_WATCHLIST="$FX/tie1/watchlist.json" $TO bash "$DIGEST" --json 2>"$FX/err")"
+check "tie-break: same at" "$(printf '%s' "$T1" | jq -r '[.findings[].at] | unique | length')" "1"
+check "tie-break: order by issue" "$(printf '%s' "$T1" | jq -r '[.findings[].run_id] | join(",")')" "p,q"
+check "tie-break: group order by issue" "$(printf '%s' "$T1" | jq -r '[.groups[0].findings[].run_id] | join(",")')" "p,q"
 
 printf '\nevolution-digest: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
