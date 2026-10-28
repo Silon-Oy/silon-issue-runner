@@ -361,6 +361,34 @@ rm -f "$STATE"
 run "$FXU" --force
 case "$OUT" in *"A/B-vertailu"*) bad "ab section without an experiment" ;; *) ok "ab: no section without an experiment" ;; esac
 
+# ---- human queue line (issue #414) ----------------------------------------
+# status.sh --github's human_queue becomes one line; local mode (null) and an
+# input without the key print none; an empty queue says 0; the queue never
+# changes the fingerprint (the issue scopes notifications out).
+FXHQ="$FX/hq.json"
+jq '.human_queue = {prs: [
+      {repo:"o/b", repo_slug:"o-b", number:7, waiting_seconds: 864000},
+      {repo:"o/a", repo_slug:"o-a", number:1, waiting_seconds: 90000}],
+    repos_failed: [], repos_truncated: []}' "$FXA" > "$FXHQ"
+rm -f "$STATE"
+run "$FXHQ" --dry-run
+case "$OUT" in *"Odottaa ihmistä: 2 PR:ää, vanhin 10 vrk (o/b#7)"*) ok "hq: line with count, oldest and ref" ;;
+  *) bad "hq: line missing or wrong" ;; esac
+jq '.human_queue = {prs: [], repos_failed: ["o/c"], repos_truncated: []}' "$FXA" > "$FX/hq0.json"
+run "$FX/hq0.json" --dry-run
+case "$OUT" in *"Odottaa ihmistä: 0 PR:ää — 1 repon tieto puuttuu"*) ok "hq: empty queue says 0, failed repo noted" ;;
+  *) bad "hq: empty-queue line missing or wrong" ;; esac
+jq '.human_queue = null' "$FXA" > "$FX/hqnull.json"
+run "$FX/hqnull.json" --dry-run
+case "$OUT" in *"Odottaa ihmistä"*) bad "hq: line printed for null (local mode)" ;; *) ok "hq: no line for null" ;; esac
+run "$FXA" --dry-run
+case "$OUT" in *"Odottaa ihmistä"*) bad "hq: line printed without the key" ;; *) ok "hq: no line without the key" ;; esac
+rm -f "$STATE"
+run "$FXA" --force >/dev/null 2>&1   # writes FXA's fingerprint
+run "$FXHQ"
+check "hq: the queue does not change the fingerprint (no send)" "$OUT" ""
+rm -f "$STATE"
+
 # ---- usage errors -> exit 1 ----
 RUN_ISSUES_DIGEST_ENV_FILE="/nonexistent/digest.env" bash "$DIGEST" --min-class bogus < "$FXA" >/dev/null 2>&1; rc=$?
 check "bad --min-class -> exit 1" "$rc" "1"

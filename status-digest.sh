@@ -408,6 +408,28 @@ build_ab_section() {
       end'
 }
 
+# ---- human queue line (issue #414) ----
+# status.sh --github's human_queue: runner PRs labelled manual-merge or
+# needs-human, oldest first. One line, only when the input carries the object —
+# a local-mode input has `human_queue: null` ("not asked"), and saying "0" there
+# would be a claim the data does not hold. Deliberately NOT part of the
+# fingerprint: the issue scopes out notifications, so the queue is context for
+# the reader and never the reason a digest is sent.
+build_human_queue_section() {
+  printf '%s' "$INPUT" | jq -r '
+    .human_queue as $q
+    | if ($q | type) != "object" then empty else
+        ($q.prs // []) as $p
+        | ($q.repos_failed // [] | length) as $nf
+        | (if ($p | length) == 0 then "Odottaa ihmistä: 0 PR:ää"
+           else ($p[0]) as $o
+             | "Odottaa ihmistä: \($p | length) PR:ää, vanhin \((($o.waiting_seconds // 0) / 86400) | floor) vrk (\($o.repo)#\($o.number))"
+           end)
+          + (if $nf > 0 then " — \($nf) repon tieto puuttuu" else "" end)
+          + "\n"
+      end'
+}
+
 # ---- after-fix meter (issue #314) ----
 # Opt-in (--fix-rate / RUN_ISSUES_DIGEST_FIX_RATE=1) because it is the only part
 # of the digest that calls GitHub; the rest stays a pure function of status.sh's
@@ -484,6 +506,9 @@ if [ "$SHOULD_SEND" -eq 0 ]; then
 fi
 
 BODY="$(build_body)"
+HUMAN_QUEUE_SECTION="$(build_human_queue_section 2>/dev/null || true)"
+[ -n "$HUMAN_QUEUE_SECTION" ] && BODY="$BODY
+$HUMAN_QUEUE_SECTION"
 USAGE_SECTION="$(build_usage_section 2>/dev/null || true)"
 [ -n "$USAGE_SECTION" ] && BODY="$BODY
 $USAGE_SECTION"
