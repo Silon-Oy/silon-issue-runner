@@ -62,7 +62,7 @@
 # file an issue per audit); it is reported and turns the exit code into 5.
 #
 # Usage:
-#   security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--scanners-only]
+#   security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--group [--write]] [--scanners-only]
 #
 #   <repo>             a local clone of the audited repository
 #   --remote <name>    the remote to audit and to file issues in (default origin)
@@ -73,6 +73,14 @@
 #                      ONLY candidate). A repo the watchlist does not list gets
 #                      the built-in default pickup label. Its `assignees` key
 #                      routes the auto-run issues to the first allowed login.
+#   --group            group the new confirmed findings into fix-sized issues and
+#                      those into epics by severity (prompts/15-finding-group.md,
+#                      lib/repo-audit.sh); alone it prints the plan (markdown and
+#                      a JSON file) and writes nothing, like --dry-run
+#   --write            with --group: write the plan — epic, children, sub-issue
+#                      links, dependencies (lib/epic-write.sh). No pickup label
+#                      and no assignee on anything; a finding that already has an
+#                      issue, or an unsure one, keeps its single-finding issue
 #   --scanners-only    the scanners alone: no agent call, no launch check
 #
 # Output (stdout): one line per finding — action, severity, location, text —
@@ -80,9 +88,9 @@
 #
 # Exit codes (own space):
 #   0  audit done, issues written (also: no findings); or --dry-run done
-#   1  usage error
+#   1  usage error (also --write without --group, or with --dry-run)
 #   2  repo, remote or its default branch does not resolve, or git/jq/gh is missing
-#   3  the audit did not happen: agent launch failure, empty or unparseable result, or the worktree changed — nothing written
+#   3  the audit did not happen: agent launch failure, empty or unparseable result, or the worktree changed; with --group also a failed grouping agent or a rejected plan — nothing written
 #   4  GitHub read or write failed — issues may be partially written
 #   5  audit done, but at least one scanner failed (its class was not checked deterministically)
 #   6  code unchanged since the last successful audit: the agent pass was skipped, the scanners ran
@@ -109,6 +117,7 @@
 #        refuted ones are dropped, unsure ones filed without pickup labels or
 #        assignee (default 0; the poller sets 1)
 #   RUN_ISSUES_AUDIT_VERIFY_TIMEOUT     time cap per verifier call in seconds (default 600)
+#   RUN_ISSUES_AUDIT_GROUP_TIMEOUT      time cap of the grouping agent (--group) in seconds (default 1800)
 #   RUN_ISSUES_AUDIT_STATE_FILE         internal: set by audit_run (lib/audit-schedule.sh)
 #        for a scheduled run — where the last successfully audited commit is kept
 #   RUN_ISSUES_CLAUDE_CMD and the rest of lib/claude-call.sh's settings; the
@@ -140,6 +149,8 @@ die_usage() { printf 'security-audit.sh: %s\n' "$1" >&2; exit 1; }
 REPO=""
 REMOTE="origin"
 DRY_RUN=0
+GROUP=0
+GROUP_WRITE=0
 SCANNERS_ONLY=0
 WATCHLIST_OVERRIDE="${RUN_ISSUES_WATCHLIST:-}"
 
@@ -147,6 +158,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --remote)    shift; [ "$#" -gt 0 ] || die_usage "--remote needs a value"; REMOTE="$1" ;;
     --dry-run)   DRY_RUN=1 ;;
+    --group)     GROUP=1 ;;
+    --write)     GROUP_WRITE=1 ;;
     --scanners-only) SCANNERS_ONLY=1 ;;
     --watchlist) shift; [ "$#" -gt 0 ] || die_usage "--watchlist needs a value"; WATCHLIST_OVERRIDE="$1" ;;
     -h|--help)   sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -155,7 +168,12 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-[ -n "$REPO" ] || die_usage "usage: security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--scanners-only]"
+[ -n "$REPO" ] || die_usage "usage: security-audit.sh <repo> [--remote <name>] [--dry-run] [--watchlist <path>] [--group [--write]] [--scanners-only]"
+[ "$GROUP_WRITE" = 0 ] || [ "$GROUP" = 1 ] || die_usage "--write needs --group"
+[ "$GROUP_WRITE" = 0 ] || [ "$DRY_RUN" = 0 ] || die_usage "--write and --dry-run contradict each other"
+# The grouping plan alone writes nothing: it is a dry run in every other respect
+# too (no recorded audit, no moved cursor).
+[ "$GROUP" = 1 ] && [ "$GROUP_WRITE" = 0 ] && DRY_RUN=1
 
 # Libraries. claude-call.sh (via repo-audit.sh) carries `set -e`; this script
 # does not (every failure below is an explicit exit code), so it is switched
@@ -511,10 +529,15 @@ EOF
 
 # ---- apply --------------------------------------------------------------------
 REOPEN_COMMENT="Löydös toistui koko repon tietoturva-auditoinnissa (\`security-audit.sh\`, commit \`$HEAD_SHA\`), joten issue avattiin uudelleen."
-repo_audit_apply "$AUDIT_KIND" "$DRY_RUN" "$REOPEN_COMMENT" \
-  _audit_source_key _audit_labels _audit_title _audit_body _audit_assignee _audit_supersede <<EOF
+if [ "$GROUP" = 1 ]; then
+  repo_audit_group "$AUDIT_KIND" "$GROUP_WRITE" "Tietoturva" "$REOPEN_COMMENT" \
+    _audit_source_key _audit_labels _audit_title _audit_body _audit_supersede || exit $?
+else
+  repo_audit_apply "$AUDIT_KIND" "$DRY_RUN" "$REOPEN_COMMENT" \
+    _audit_source_key _audit_labels _audit_title _audit_body _audit_assignee _audit_supersede <<EOF
 $FINDINGS
 EOF
+fi
 
 SCANNERS_RAN=$(security_scan_ran_count "$SCAN_DIR")
 # Not a `case` inside $(...): bash 3.2 cannot parse its unbalanced `)`.

@@ -248,10 +248,10 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 
 | Koodi | Merkitys |
 |---|---|
-| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` valmis |
-| 1 | Käyttövirhe |
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole), tai `--dry-run` tai pelkkä `--group` valmis |
+| 1 | Käyttövirhe (myös `--write` ilman `--group`ia tai yhdessä `--dry-run`in kanssa) |
 | 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
-| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä". Työhakemisto jätetään tarkasteltavaksi (polku stderrissä) |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. `--group`: myös ryhmittelyagentin epäonnistuminen tai hylätty suunnitelma (löydös puuttuu tai on kahdessa ryhmässä, tuntematon riippuvuus, kehä). Mitään ei kirjoitettu, eikä tämä ole "ei löydöksiä". Työhakemisto jätetään tarkasteltavaksi (polku stderrissä) |
 | 4 | GitHub-luku tai -kirjoitus epäonnistui. Issueita voi olla luotu osittain; uusi ajo ei monista niitä |
 | 5 | Auditointi valmis, mutta vähintään yksi skanneri epäonnistui: sen luokka jäi tarkistamatta deterministisesti. Epäonnistumisesta ei luoda issueta |
 | 6 | Koodi muuttumaton edellisen onnistuneen auditoinnin jälkeen: agenttikierros ohitettiin ja vain skannerit ajettiin. Ajastus kirjaa tämän onnistumiseksi (`unchanged`). Vain ajastetussa ajossa; käsiajo ja `--dry-run` auditoivat aina kokonaan |
@@ -274,10 +274,10 @@ eikä toteuta purku-, merge- tai restart-logiikkaa itse.
 
 | Koodi | Merkitys |
 |---|---|
-| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole tai uusia runnerin PR:iä ei ole mergetty), tai `--dry-run` valmis. Kursori siirtyy vain tällä koodilla, eikä `--dry-run`illa |
-| 1 | Käyttövirhe |
+| 0 | Auditointi valmis ja issuet kirjoitettu (myös silloin kun löydöksiä ei ole tai uusia runnerin PR:iä ei ole mergetty), tai `--dry-run` tai pelkkä `--group` valmis. Kursori siirtyy vain tällä koodilla, eikä `--dry-run`illa tai pelkällä `--group`illa |
+| 1 | Käyttövirhe (myös `--write` ilman `--group`ia tai yhdessä `--dry-run`in kanssa) |
 | 2 | Repo, remote tai sen oletushaara ei resolvoidu (`<remote>/HEAD` puuttuu ⇒ `git remote set-head <remote> -a`), tai `git`/`jq`/`gh` puuttuu |
-| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. Mitään ei kirjoitettu, kursori ei siirry, eikä tämä ole "ei löydöksiä" |
+| 3 | Auditointia ei tapahtunut: agentti ei käynnistynyt, tulos oli tyhjä tai jäsentymätön, tai agentti muutti worktreetä. `--group`: myös ryhmittelyagentin epäonnistuminen tai hylätty suunnitelma. Mitään ei kirjoitettu, kursori ei siirry, eikä tämä ole "ei löydöksiä" |
 | 4 | GitHub-luku tai -kirjoitus epäonnistui: PR-joukko, muutospinta, issue-indeksi tai issuen kirjoitus. Kursori ei siirry, joten seuraava ajo katselmoi samat PR:t; dedup estää duplikaatit |
 
 ### Laatuauditointi (`quality-audit.sh`)

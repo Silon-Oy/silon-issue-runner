@@ -114,6 +114,26 @@ finding_issues_index o/r security "$WORK/index2.tsv"; rc=$?
 check "failed listing is rc 1" "$rc" 1
 rm -f "$WORK/fail"
 
+# ---- a group issue (#396): one issue, several members' markers ------------------
+# Each member is recognised through the group issue: open → exists, completed →
+# reopen, not planned → dismissed.
+labels_gh() {
+  cat <<'JSON'
+[{"number":20,"state":"open","title":"g open","body":"## Löydökset\n<!-- run-issues:finding kind=security fp=bbbb000000000001 -->\n<!-- run-issues:finding kind=security fp=bbbb000000000002 -->"},
+ {"number":21,"state":"closed","state_reason":"completed","title":"g done","body":"<!-- run-issues:finding kind=security fp=bbbb000000000003 -->\n<!-- run-issues:finding kind=security fp=bbbb000000000004 -->"},
+ {"number":22,"state":"closed","state_reason":"not_planned","title":"g no","body":"<!-- run-issues:finding kind=security fp=bbbb000000000005 -->\n<!-- run-issues:finding kind=security fp=bbbb000000000006 -->"}]
+JSON
+}
+GIDX="$WORK/group-index.tsv"
+finding_issues_index o/r security "$GIDX"
+check "group issues: one index row per member" "$(wc -l < "$GIDX" | tr -d ' ')" 6
+check "group open, member 1" "$(finding_issue_plan "$GIDX" security bbbb000000000001)" "exists 20"
+check "group open, member 2" "$(finding_issue_plan "$GIDX" security bbbb000000000002)" "exists 20"
+check "group completed, member 1" "$(finding_issue_plan "$GIDX" security bbbb000000000003)" "reopen 21"
+check "group completed, member 2" "$(finding_issue_plan "$GIDX" security bbbb000000000004)" "reopen 21"
+check "group not planned, member 1" "$(finding_issue_plan "$GIDX" security bbbb000000000005)" "dismissed 22"
+check "group not planned, member 2" "$(finding_issue_plan "$GIDX" security bbbb000000000006)" "dismissed 22"
+
 # ---- policy ----------------------------------------------------------------------
 pol() { finding_issues_auto_run_min "$1" security "$2" 2>/dev/null; }
 check "default is high" "$(pol "" "")" high

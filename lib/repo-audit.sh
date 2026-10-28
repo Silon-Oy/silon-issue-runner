@@ -18,6 +18,8 @@
 #   - the refutation pass (opt-in): each agent finding is checked by an agent
 #     that tries to disprove it, under the same read-only gate
 #   - the finding loop: fingerprint → plan → write, via lib/finding-issues.sh
+#   - the grouping mode (--group, #396): new findings grouped into fix-sized
+#     issues under epics instead of one issue per finding
 #
 # The functions share state through globals the calling script also reads:
 # REPO REMOTE OWNER_REPO BASE_REF BASE_BRANCH HEAD_SHA WORK WT KEEP_WORK INDEX
@@ -38,6 +40,8 @@ _REPO_AUDIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_REPO_AUDIT_DIR/merge-gate.sh"
 # shellcheck source=lib/finding-issues.sh
 . "$_REPO_AUDIT_DIR/finding-issues.sh"
+# shellcheck source=lib/epic-write.sh
+. "$_REPO_AUDIT_DIR/epic-write.sh"
 # shellcheck source=lib/claude-call.sh
 . "$_REPO_AUDIT_DIR/claude-call.sh"
 
@@ -337,6 +341,269 @@ $body"
         || REPO_AUDIT_WRITE_FAILED=$((REPO_AUDIT_WRITE_FAILED + 1))
     fi
   done
+}
+
+# _repo_audit_group_labels <severity> — the audit's labels-fn cut to the kind's
+# own label (its first, by the labels-fn contract): in grouping mode nothing
+# gets a pickup label, not even a reopened single-finding issue.
+_repo_audit_group_labels() {
+  local l
+  l=$("$_REPO_AUDIT_GROUP_LABELS_FN" "$1")
+  printf '%s' "${l%%,*}"
+}
+
+# _repo_audit_group_jq — validates the grouping agent's plan against the
+# candidates ($c) and builds the plan epic_write_plan writes. A rejected plan is
+# a jq error() whose message is the reason. The bodies are built here, not by
+# the agent, so the locations and the finding markers ($marker, with __FP__ for
+# the fingerprint — the format stays finding_marker's) are exact.
+# shellcheck disable=SC2016
+_REPO_AUDIT_GROUP_JQ='
+def rank: ({"critical": 4, "high": 3, "medium": 2, "low": 1}[ascii_downcase] // 0);
+def sevname: (["unknown", "low", "medium", "high", "critical"][.]);
+def strs: ((. // []) | if type == "array" then map(select(type == "string" and length > 0)) else [] end);
+def acyclic:
+  { left: map({id, deps: ((.depends_on // []) | unique)}), stuck: false }
+  | until((.left | length) == 0 or .stuck;
+      ([.left[] | select((.deps | length) == 0) | .id]) as $ready
+      | if ($ready | length) == 0 then .stuck = true
+        else .left |= (map(select(.id as $i | ($ready | index($i)) | not)) | map(.deps -= $ready)) end)
+  | .stuck | not;
+
+$c[0] as $cand
+| ($cand | map({key: (.n | tostring), value: .}) | from_entries) as $byn
+| if type != "object" or (.epics | type) != "array" or (.epics | length) == 0 then error("the plan has no epics") else . end
+| if any(.epics[]; (.title | type) != "string" or .title == "" or (.groups | type) != "array" or (.groups | length) == 0)
+  then error("an epic lacks a title or groups") else . end
+| [.epics[].groups[]] as $groups
+| if any($groups[]; (.id | type) != "string" or .id == "" or (.title | type) != "string" or .title == ""
+                    or (.members | type) != "array" or (.members | length) == 0)
+  then error("a group lacks an id, a title or members") else . end
+| ($groups | map(.id)) as $ids
+| if ($ids | unique | length) != ($ids | length) then error("group ids are not unique") else . end
+| [$groups[].members[]] as $m
+| if any($m[]; type != "number" or $byn[tostring] == null) then error("a member is not a finding number of this audit") else . end
+| if ($m | length) != ($cand | length) or ($m | unique | length) != ($cand | length)
+  then error("every finding must be in exactly one group") else . end
+| if any($groups[]; (.depends_on // []) | type != "array") then error("depends_on is not a list") else . end
+| if any($groups[]; .id as $g | (.depends_on // [])[] | . as $d | $d == $g or (($ids | index($d)) == null))
+  then error("a dependency names no group of this plan, or the group itself") else . end
+| if ($groups | acyclic) then . else error("the dependencies form a cycle") end
+
+| ($groups | map({key: .id, value: .title}) | from_entries) as $gtitle
+| .epics
+| map(
+    . as $e
+    | (.groups | map(
+        . as $g
+        | ($g.members | map($byn[tostring])) as $mem
+        | ($mem | map(.sev | rank) | max) as $r
+        | ($prefix + " (" + ($r | sevname) + "): " + $g.title) as $title
+        | {key: $g.id, title: $title, severity: ($r | sevname), rank: $r,
+           labels: [$kind], blocked_by: (($g.depends_on // []) | unique),
+           members: $mem,
+           body: ("## Tavoite\n\n" + ($g.goal // $g.title)
+                  + "\n\nOsa epiciä «" + $e.title + "». Löydökset tuotti koko repon auditointi (`" + $script
+                  + "`), commit `" + $sha + "` (`" + $base + "`).\n\n## Löydökset\n\n"
+                  + ($mem | map("- `" + .loc + "` — " + .sev + " (varmuus " + .conf + ") — " + .desc) | join("\n"))
+                  + "\n\n## Toteutus\n\n" + ($g.implementation // "Korjaa yllä listatut löydökset yhtenä muutoksena.")
+                  + "\n\n## Hyväksyntäkriteerit\n\n"
+                  + ((($g.acceptance | strs) + ["Jokainen Löydökset-osion löydös on korjattu, tai PR-kuvaus perustelee, miksi löydös on väärä."])
+                     | map("- [ ] " + .) | join("\n"))
+                  + "\n\n## Rajaukset\n\n"
+                  + ((($g.out_of_scope | strs)
+                      + ["Vain tämän issuen löydökset. Saman auditoinnin muut korjausyksiköt ovat omia issueitaan.",
+                         "Jos löydös osoittautuu vääräksi, älä muuta sitä koskevaa koodia: kirjaa perustelu PR-kuvaukseen. Jos koko issue on väärä, ihminen sulkee sen tilaan *not planned*, jolloin auditointi ei avaa sitä uudelleen."])
+                     | map("- " + .) | join("\n"))
+                  + "\n\n" + ($mem | map(.fp as $fp | $marker | sub("__FP__"; $fp)) | join("\n")) + "\n")
+          })
+        | sort_by(-.rank)) as $children
+    | ($children | map(.rank) | max) as $r
+    | {title: ($prefix + " (" + ($r | sevname) + "): " + $e.title), severity: ($r | sevname), rank: $r,
+       labels: ["epic", $kind],
+       overlaps: (($e.overlaps // []) | if type == "array" then map(select(type == "object" and (.issue | type) == "number")) else [] end),
+       human_tasks: ($e.human_tasks | strs),
+       children: $children}
+    | . as $ep
+    | .body = ("## Tavoite\n\n" + ($e.goal // $e.title)
+               + "\n\nKoko repon auditoinnin (`" + $script + "`, commit `" + $sha + "`, `" + $base
+               + "`) löydökset koottuna korjauksen kokoisiksi issueiksi. Epic ei käynnisty itsestään: ajoon vienti on ihmisen päätös (`/issue-runner:run-epic`).\n\n## Alaissuet\n\n"
+               + ($ep.children | map("- " + .title + " — " + (.members | length | tostring) + " löydös(tä)"
+                   + (if (.blocked_by | length) > 0 then "; odottaa: " + (.blocked_by | map($gtitle[.]) | join(", ")) else "" end))
+                  | join("\n"))
+               + "\n\n## Päällekkäisyydet avoimien issueiden kanssa\n\n"
+               + (if ($ep.overlaps | length) == 0 then "Ei havaittuja."
+                  else ($ep.overlaps | map("- #" + (.issue | tostring) + " — " + (.note // "")) | join("\n")) end)
+               + "\n\n## Ihmisen tehtävät\n\n"
+               + (if ($ep.human_tasks | length) == 0 then "Ei."
+                  else ($ep.human_tasks | map("- [ ] " + .) | join("\n")) end)
+               + "\n"))
+| sort_by(-.rank)
+| to_entries | map(.value + {key: ("epic-" + ((.key + 1) | tostring))})
+| {kind: $kind, head_sha: $sha, epics: .}
+'
+
+# _repo_audit_group_md <plan-file> — the plan as markdown, for the operator.
+_repo_audit_group_md() {
+  jq -r '
+    "# Ryhmittelysuunnitelma (\(.kind)): \([.epics[].children[].members[]] | length) löydöstä → \([.epics[].children[]] | length) issueta, \(.epics | length) epiciä",
+    (.epics[] |
+      "",
+      "## \(.title)",
+      (.children[] |
+        "- \(.title) [\(.key)]\(if (.blocked_by | length) > 0 then " — odottaa: " + (.blocked_by | join(", ")) else "" end)",
+        (.members[] | "  - `\(.loc)` — \(.sev) — \(.desc)")),
+      (if (.overlaps | length) > 0 then "Päällekkäisyydet: " + (.overlaps | map("#\(.issue) (\(.note // ""))") | join("; ")) else empty end),
+      (if (.human_tasks | length) > 0 then "Ihmisen tehtävät: " + (.human_tasks | join("; ")) else empty end))' "$1"
+}
+
+# repo_audit_group <kind> <write 0|1> <title-prefix> <reopen-comment> <key-fn>
+#                  <labels-fn> <title-fn> <body-fn>
+# The grouping mode (issue #396), run instead of repo_audit_apply: the
+# findings are grouped into fix-sized issues and those into epics by severity,
+# rather than one issue per finding. Reads the global FINDINGS (the rows
+# repo_audit_apply reads) and the same functions, so a finding means the same in
+# both modes.
+#
+# Which findings are grouped: only the ones finding_issue_plan says `create`
+# and the verifier did not leave UNSURE — confirmed, new findings. A finding
+# that already has an issue stays with it (exists / dismissed / reopen), and an
+# UNSURE one is filed alone with its note; both go through repo_audit_apply as
+# before, with the kind's label only. A group issue carries every member's
+# finding marker and the kind's label, so the index of the next audit sees each
+# member through it: open → exists, completed → reopen, not planned → dismissed.
+#
+# An agent (prompts/15-finding-group.md) proposes the grouping as JSON under the
+# read-only gate; bash validates it fail-closed — every finding in exactly one
+# group, dependencies only to groups of the plan, no cycle — and builds the
+# bodies. <title-prefix> starts every title ("Tietoturva", …).
+#
+# <write> 0: prints the plan (markdown on stdout, the JSON path after it) and
+# writes nothing. <write> 1: also writes it with epic_write_plan — epic, its
+# children, the sub-issue links, then the dependencies; the epic gets `epic`
+# and the kind's label, a group issue the kind's label, nothing gets a pickup
+# label or an assignee. Running an epic stays a human's decision.
+#
+# Sets REPO_AUDIT_FINDINGS and REPO_AUDIT_WRITE_FAILED like repo_audit_apply.
+# rc 3 (KEEP_WORK=1) when the agent cannot start, fails, changes the worktree
+# or its plan is rejected — nothing is written then; rc 4 when listing the open
+# issues failed.
+repo_audit_group() {
+  local kind="$1" write="$2" prefix="$3" comment="$4" key_fn="$5" labels_fn="$6" title_fn="$7" body_fn="$8"
+  local row origin rest sev conf loc desc sk source key fp plan seen=" " n=0 pass="" dups=""
+  local cand="$WORK/group.candidates.tsv" out_plan="$WORK/group-plan.json"
+  local timeout="${RUN_ISSUES_AUDIT_GROUP_TIMEOUT:-1800}"
+  local step="15-finding-group" total failed=0
+  REPO_AUDIT_FINDINGS=0
+  REPO_AUDIT_WRITE_FAILED=0
+  _REPO_AUDIT_GROUP_LABELS_FN="$labels_fn"
+  : > "$cand"
+
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    origin="${row%%|*}"; rest="${row#*|}"
+    IFS='|' read -r sev conf loc desc <<<"$rest"
+    desc="${rest#*|*|*|}"
+    sk=$("$key_fn" "$origin" "$desc")
+    source="${sk%%$'\t'*}"; key="${sk#*$'\t'}"
+    fp=$(finding_fingerprint "$source" "$loc" "$key")
+    REPO_AUDIT_FINDINGS=$((REPO_AUDIT_FINDINGS + 1))
+    if [[ "$seen" == *" $fp "* ]]; then
+      dups="${dups}duplicate"$'\t'"$sev"$'\t'"$loc"$'\t'"$desc"$'\n'
+      continue
+    fi
+    seen="$seen$fp "
+    plan=$(finding_issue_plan "$INDEX" "$kind" "$fp")
+    if [ "$plan" = create ] && ! { [ -s "$WORK/verify.unsure" ] && grep -qxF -- "$row" "$WORK/verify.unsure"; }; then
+      n=$((n + 1))
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$sev" "$conf" "$loc" "$(printf '%s' "$desc" | tr '\t' ' ')" "$fp" >> "$cand"
+    else
+      pass="$pass$row"$'\n'
+    fi
+  done <<<"$FINDINGS"
+  total=$REPO_AUDIT_FINDINGS
+
+  if [ "$n" -gt 0 ]; then
+    local raw open_issues listing prompt arc=0 answer
+    if ! raw=$(labels_gh api --paginate "repos/$OWNER_REPO/issues?state=open&per_page=100" 2>/dev/null); then
+      repo_audit_say "listing the open issues of $OWNER_REPO failed — nothing written"
+      return 4
+    fi
+    open_issues=$(printf '%s' "$raw" | jq -r '.[]? | select(.pull_request | not)
+                    | "#\(.number) \(.title // "" | gsub("[\t\r\n]"; " "))"' 2>/dev/null | head -n 300)
+    [ -n "$open_issues" ] || open_issues="Ei avoimia issueita."
+    listing=$(awk -F'\t' '{ printf "%s | %s | %s | %s | %s\n", $1, $2, $3, $4, $5 }' "$cand")
+
+    repo_audit_preflight || return 3
+    prompt="$WORK/$step.prompt"
+    if ! render_prompt "$_REPO_AUDIT_DIR/../prompts/$step.md" "$prompt" \
+         REPO="$OWNER_REPO" HEAD_SHA="$HEAD_SHA" AUDIT_KIND="$kind" \
+         FINDINGS="$listing" OPEN_ISSUES="$open_issues" || [ ! -s "$prompt" ]; then
+      KEEP_WORK=1
+      repo_audit_say "cannot render the grouping prompt — nothing written"
+      return 3
+    fi
+    ( cd "$WT" && RUN_ISSUES_CLAUDE_TIMEOUT="$timeout" call_claude "$WORK" "$step" "$prompt" ) </dev/null >&2 || arc=$?
+    repo_audit_say "grouping agent returned rc=$arc"
+    repo_audit_readonly_check "grouping agent" || return 3
+    if [ "$arc" -ne 0 ] || [ "$(awk 'NF { l = $0 } END { sub(/\r$/, "", l); print l }' "$WORK/$step.out" 2>/dev/null)" != "GROUP_RESULT: OK" ]; then
+      KEEP_WORK=1
+      repo_audit_say "the grouping agent gave no result (rc=$arc; 127 = did not start, 124 = timeout; or no final GROUP_RESULT: OK line) — nothing written"
+      return 3
+    fi
+    # The last ```json block of the answer.
+    answer=$(tr -d '\r' < "$WORK/$step.out" | awk '
+      /^[[:space:]]*```json[[:space:]]*$/ { buf = ""; inb = 1; next }
+      inb && /^[[:space:]]*```[[:space:]]*$/ { inb = 0; last = buf; got = 1; next }
+      inb { buf = buf $0 "\n" }
+      END { if (got) printf "%s", last }')
+    jq -R -s 'split("\n") | map(select(length > 0) | split("\t")
+               | {n: (.[0] | tonumber), sev: .[1], conf: .[2], loc: .[3], desc: .[4], fp: .[5]})' \
+      "$cand" > "$WORK/group.candidates.json"
+    local err
+    if ! err=$(printf '%s' "$answer" | jq --slurpfile c "$WORK/group.candidates.json" \
+                 --arg kind "$kind" --arg prefix "$prefix" --arg sha "$HEAD_SHA" --arg base "$BASE_REF" \
+                 --arg script "${REPO_AUDIT_NAME:-audit}.sh" --arg marker "$(finding_marker "$kind" __FP__)" \
+                 "$_REPO_AUDIT_GROUP_JQ" 2>&1 > "$out_plan") || [ ! -s "$out_plan" ]; then
+      KEEP_WORK=1
+      repo_audit_say "grouping plan rejected: $(printf '%s' "${err:-no JSON block}" | sed -E 's/^jq: error \(at [^)]*\): //' | head -n 1) — nothing written"
+      return 3
+    fi
+  fi
+
+  # What is not grouped keeps its single-finding path.
+  if [ -n "$pass" ] || [ -n "$dups" ]; then
+    printf '# Ennallaan (ei ryhmitelty)\n'
+    printf '%s' "$dups"
+    if [ -n "$pass" ]; then
+      repo_audit_apply "$kind" "$((1 - write))" "$comment" "$key_fn" _repo_audit_group_labels "$title_fn" "$body_fn" <<<"$pass"
+      failed=$REPO_AUDIT_WRITE_FAILED
+    fi
+    printf '\n'
+  fi
+  REPO_AUDIT_FINDINGS=$total
+  REPO_AUDIT_WRITE_FAILED=$failed
+
+  if [ "$n" -eq 0 ]; then
+    printf 'grouping: no new confirmed findings to group\n'
+    return 0
+  fi
+
+  _repo_audit_group_md "$out_plan"
+  local keep
+  if keep=$(mktemp "${TMPDIR:-/tmp}/${REPO_AUDIT_NAME:-audit}-group-plan.XXXXXX") && cp "$out_plan" "$keep"; then
+    printf '\nplan JSON: %s\n' "$keep"
+  else
+    repo_audit_say "cannot keep a copy of the plan JSON"
+  fi
+
+  [ "$write" = 1 ] || return 0
+  printf '\n# Kirjoitus\n'
+  : > "$WORK/group.ledger"
+  if ! epic_write_plan "$OWNER_REPO" "$out_plan" "$WORK/group.ledger"; then
+    REPO_AUDIT_WRITE_FAILED=$((REPO_AUDIT_WRITE_FAILED + 1))
+  fi
+  return 0
 }
 
 # repo_audit_poller_env_value <var> — one variable out of poller.env

@@ -97,11 +97,11 @@ fi
 PHASES=$(
   # shellcheck disable=SC1090
   . "$LIB"
-  for s in 01-cycle-review-light 01-cycle-review 02-implementer 03-evolution 04-conflict-resolution 05-ci-repair 06-security-review 07-security-fix 08-security-audit 09-epic-review 10-semantic-review 11-semantic-fix 12-coherence-audit 13-finding-verify 14-quality-audit 99-other; do
+  for s in 01-cycle-review-light 01-cycle-review 02-implementer 03-evolution 04-conflict-resolution 05-ci-repair 06-security-review 07-security-fix 08-security-audit 09-epic-review 10-semantic-review 11-semantic-fix 12-coherence-audit 13-finding-verify 14-quality-audit 15-finding-group 99-other; do
     printf '%s=%s ' "$s" "$(_claude_step_phase "$s")"
   done
 )
-WANT="01-cycle-review-light=LIGHT_REVIEW 01-cycle-review=CYCLE_REVIEW 02-implementer=IMPLEMENTER 03-evolution=EVOLUTION 04-conflict-resolution=CONFLICT 05-ci-repair=CI_REPAIR 06-security-review=SECURITY_REVIEW 07-security-fix=SECURITY_FIX 08-security-audit=SECURITY_AUDIT 09-epic-review=EPIC_REVIEW 10-semantic-review=SEMANTIC_REVIEW 11-semantic-fix=SEMANTIC_FIX 12-coherence-audit=COHERENCE_AUDIT 13-finding-verify=FINDING_VERIFY 14-quality-audit=QUALITY_AUDIT 99-other= "
+WANT="01-cycle-review-light=LIGHT_REVIEW 01-cycle-review=CYCLE_REVIEW 02-implementer=IMPLEMENTER 03-evolution=EVOLUTION 04-conflict-resolution=CONFLICT 05-ci-repair=CI_REPAIR 06-security-review=SECURITY_REVIEW 07-security-fix=SECURITY_FIX 08-security-audit=SECURITY_AUDIT 09-epic-review=EPIC_REVIEW 10-semantic-review=SEMANTIC_REVIEW 11-semantic-fix=SEMANTIC_FIX 12-coherence-audit=COHERENCE_AUDIT 13-finding-verify=FINDING_VERIFY 14-quality-audit=QUALITY_AUDIT 15-finding-group=FINDING_GROUP 99-other= "
 if [ "$PHASES" = "$WANT" ]; then
   ok b "step id -> phase mapping"
 else
