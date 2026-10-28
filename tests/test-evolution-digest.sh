@@ -71,6 +71,17 @@ check "parser: Δψ classes" "$(evolution_findings "$P" | tr '\t' '|' | tr '\n' 
   "DELTA_PSI|tooling|x;DELTA_PSI|product|y;DELTA_PSI|unclassified|infra | z;DELTA_PSI|unclassified|productive w;"
 check "parser: classified helper" "$(evolution_delta_psi_classified "$P" | sed -n 1p | tr '\t' '|')" "tooling|x"
 check "parser: missing file is empty, rc 0" "$(evolution_findings "$FX/nope"; echo "rc=$?")" "rc=0"
+# Review guide (#413): the last heading wins, the section ends at `## ` or the
+# first EVOLUTION_ line, blank edges trimmed, a missing file is nothing.
+printf '%s\n' "## Katselmointiohje" "quoted early" "## Katselmointiohje" "" "### Mihin katsoa" \
+  "lib/x.sh:3" "" "## Muu" "outside" > "$P"
+check "parser: guide last heading, ends at ##" "$(evolution_review_guide "$P" | tr '\n' ';')" \
+  "### Mihin katsoa;lib/x.sh:3;"
+printf '%s\n' "## Katselmointiohje" "g1" "EVOLUTION_DELTA_PSI: tooling | x" "after" "EVOLUTION_RESULT: CLEAN" > "$P"
+check "parser: guide ends at EVOLUTION_" "$(evolution_review_guide "$P" | tr '\n' ';')" "g1;"
+printf '%s\n' "## Katselmointiohje" "" "EVOLUTION_RESULT: CLEAN" > "$P"
+check "parser: empty guide is nothing" "$(evolution_review_guide "$P")" ""
+check "parser: guide missing file is empty, rc 0" "$(evolution_review_guide "$FX/nope"; echo "rc=$?")" "rc=0"
 
 # ---- fixtures ----
 iso_ago() {  # <days> -> ISO timestamp that many days ago

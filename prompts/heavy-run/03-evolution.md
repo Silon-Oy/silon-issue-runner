@@ -1,23 +1,34 @@
-## Raskas polku (`heavy-run`) — kohdistuuko korjaus vahvistettuun syyhyn?
+## Raskas polku (`heavy-run`) — katselmointiohje käsin yhdistettävään PR:ään
 
-Tämä issue on raskaan polun bugi. Toteutus ajoi diagnostisen kokeen ennen korjausta ja
-vahvisti yhden cycle reviewn hypoteeseista. Raakatulos on tiedostossa `{{DIAGNOSIS_FILE}}`,
-ja vahvistettu hypoteesi on toteutuslokin rivillä `DIAGNOSIS_RESULT: CONFIRMED H<n>`.
+Tämä on raskaan polun ajo. Sen PR ei mergeydy automaattisesti: se saa `manual-merge`-labelin,
+ja ihminen katselmoi ja yhdistää sen käsin. Orkestraattori nostaa kirjoittamasi
+katselmointiohjeen PR-kuvauksen alkuun, joten ohje on ensimmäinen asia, jonka katselmoija lukee.
 
-Lue tiedosto ja vertaa diffiä vahvistetun hypoteesin väitteeseen:
+**Kirjoita vastaukseesi pakollinen osio** täsmälleen otsikolla `## Katselmointiohje`, kerran,
+ennen `EVOLUTION_*`-rivejä. Älä käytä osion sisällä muita `## `-tason otsikoita: osio päättyy
+seuraavaan `## `-otsikkoon tai ensimmäiseen `EVOLUTION_`-riviin. Käytä alaotsikoina `###`-tasoa.
+Älä mainitse otsikkoa muualla vastauksessasi. Osiossa on nämä viisi kohtaa:
 
-- Muuttaako korjaus sitä kohtaa, jonka vahvistettu hypoteesi nimeää syyksi?
-- Korjaako se samalla kumottujen hypoteesien kohtia? Se on arvaamista, ei korjausta.
-- Tukeeko raakatulos todella vahvistusta, vai tulkittiinko se väkisin?
+### Mihin katsoa
+Muutoksen kriittiset kohdat muodossa `tiedosto:rivi`, kukin yhdellä virkkeellä siitä, miksi
+juuri siihen kannattaa katsoa.
 
-Kirjaa arvio vastaukseesi. Jos korjaus ei kohdistu vahvistettuun hypoteesiin tai raakatulos
-ei tue sitä, lopeta `EVOLUTION_RESULT: NEEDS_FOLLOWUP — <selitys>` -rivillä.
+### Riskit
+Mikä muutoksessa voi mennä rikki ja **miksi** se on riski (mihin se vaikuttaa, kuka sen
+huomaisi). Älä listaa geneerisiä riskejä, jotka koskevat mitä tahansa muutosta.
 
-Tarkista vahvistetun syyn korjaus myös cycle reviewn τ:ssa nimeämiä luvun *Invarianttiluokat*
-invariantteja vasten. Korjauksen rikkoma invariantti johtaa `NEEDS_FOLLOWUP`-tulokseen.
+### Hyväksyntäkriteerien todennus
+Jokainen issuen hyväksyntäkriteeri omalla rivillään muodossa
+`kriteeri → todennuskomento → tulos`. Tulos on se, minkä komento tuotti, kun ajoit cycle
+reviewn Ω-todennussuunnitelman — ei odotettu tulos. Jos kriteeriä ei voitu todentaa, kirjoita
+se ja syy.
 
-Diagnostisen kokeen ympäristökitka (esim. testiajon esto tai puuttuva `.env`) ei ole
-tuotevika: kirjaa se Δψ-osion muodossa lajilla `tooling` (`EVOLUTION_DELTA_PSI: tooling | …`).
+### Jäännösriski
+Mitä todennus ei kata ja mikä jää katselmoijan arvioitavaksi.
 
-Jos ajat diagnostisen kokeen uudelleen tai todennat korjauksen testeillä, raportoi nekin
-ajot `EVOLUTION_TEST_RUN`-riveinä (`EVOLUTION_TEST_RUN: <komento> | passed=<n> | skipped=<n> | failed=<n>`).
+### Peruminen
+Miten muutos perutaan (esim. `git revert <commit>`, ja jos muutos koskee tilaa, konfiguraatiota
+tai migraatiota, mitä sen lisäksi on tehtävä).
+
+Osio julkaistaan PR-kuvauksessa: **älä kirjoita siihen salaisuuksia** (API-avaimia, salasanoja,
+tokeneita) äläkä niitä sisältäviä komentotulosteita.

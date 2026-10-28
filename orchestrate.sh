@@ -2218,17 +2218,43 @@ diagnosis_gate_applies() {
 # run_path_section <step> — echo the run-path-specific prompt section for
 # <step> (01-cycle-review / 02-implementer / 03-evolution), or nothing. The
 # section is its own template, rendered first, because render_prompt never
-# re-scans a substituted value for placeholders. Only heavy runs have sections;
-# the implementer and evolution ones apply only behind the diagnosis gate.
+# re-scans a substituted value for placeholders. Only heavy runs have sections.
+# The evolution one (the review guide, issue #413) applies to every heavy run,
+# its diagnosis part and the implementer section only behind the diagnosis gate.
 DIAGNOSIS_FILE_NAME="diagnosis.md"
 run_path_section() {
-  local step="$1" tpl="$SCRIPT_DIR/prompts/heavy-run/$1.md"
+  local step="$1"
   [ "$(current_run_path)" = "heavy" ] || return 0
-  [ "$step" = "01-cycle-review" ] || diagnosis_gate_applies || return 0
+  case "$step" in
+    01-cycle-review) _render_run_path_part "$step" ;;
+    03-evolution)
+      _render_run_path_part "$step"
+      if diagnosis_gate_applies; then
+        echo
+        _render_run_path_part "$step-diagnosis"
+      fi
+      ;;
+    *) diagnosis_gate_applies && _render_run_path_part "$step" ;;
+  esac
+  return 0
+}
+
+# _render_run_path_part <name> — render prompts/heavy-run/<name>.md into its own
+# .section file and echo it; nothing when the template is missing.
+_render_run_path_part() {
+  local tpl="$SCRIPT_DIR/prompts/heavy-run/$1.md"
   [ -f "$tpl" ] || return 0
-  local out="$RUN_DIR/heavy-run-$step.section"
+  local out="$RUN_DIR/heavy-run-$1.section"
   render_prompt "$tpl" "$out" "DIAGNOSIS_FILE=$RUN_DIR/$DIAGNOSIS_FILE_NAME"
   cat "$out"
+}
+
+# pr_gets_manual_merge — exit 0 when this run's PR carries manual-merge instead
+# of the merge label. The ONE predicate behind both the label decision
+# (propagate_pr_labels) and the PR body (manual-merge note, review guide at the
+# top), so the body can never describe a merge policy the labels do not apply.
+pr_gets_manual_merge() {
+  [ "$(current_run_path)" = "heavy" ]
 }
 
 # diagnosis_result <implementer-out> — the DIAGNOSIS_RESULT payload, or empty.
@@ -2315,7 +2341,7 @@ EOF
   # A heavy-run PR is never merged automatically (issue #313): the merge label
   # is withheld even when the issue carries it, and manual-merge goes on the PR
   # instead so the reason is visible where the merge decision is made.
-  if [ "$(current_run_path)" = "heavy" ]; then
+  if pr_gets_manual_merge; then
     local merge_label kept="" m
     merge_label=$(poller_merge_label)
     while IFS= read -r m; do
@@ -2957,8 +2983,29 @@ phase_b_deliver() {
   # ---------- S10: PR ----------
   enter_state "S10_PR"
   log "S10_PR"
+  # The review guide (issue #413): a manual-merge PR is merged by a human, so the
+  # evolution step's `## Katselmointiohje` section opens the body. A missing
+  # section is one advisory line, never a blocker. Other paths ignore it, so
+  # their body stays byte-identical even when evolution wrote one anyway.
+  local evo_guide=""
+  pr_gets_manual_merge && evo_guide=$(evolution_review_guide "$evo_out")
   local pr_body="$RUN_DIR/pr-body.md"
   {
+    if pr_gets_manual_merge; then
+      if [ -n "$evo_guide" ]; then
+        echo "## Katselmointiohje"
+        echo
+        # Agent-written and published: the prompt forbids secrets in it. Capped
+        # so it fits GitHub's 65536-byte body limit beside the cycle review and
+        # the diagnosis (20000).
+        printf '%s\n' "$evo_guide" | truncate_for_github 15000
+        echo
+        echo
+      else
+        echo "> **Review guide missing:** the heavy-run evolution step did not write a \`## Katselmointiohje\` section — review the diff and the cycle review's Ω directly."
+        echo
+      fi
+    fi
     echo "Auto-run for issue #$ISSUE_NUM — $ISSUE_TITLE"
     echo
     # One line, only when the target repo has not declared the languages of its
@@ -2980,7 +3027,7 @@ phase_b_deliver() {
     echo "$cr_full"
     echo '```'
     echo
-    if [ "$(current_run_path)" = "heavy" ]; then
+    if pr_gets_manual_merge; then
       echo "> **heavy-run:** this PR is not merged automatically — it carries \`$EPIC_MANUAL_MERGE_LABEL\` instead of \`$(poller_merge_label)\`. Review and merge it by hand."
       echo
     fi

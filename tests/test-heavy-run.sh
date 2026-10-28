@@ -19,7 +19,13 @@
 #   (c) heavy, no HEAVY_RUN_KIND, no result line -> fail-closed as a bug: blocked
 #   (d) heavy bug, CONFIRMED but no raw record   -> blocked
 #   (e) heavy NOT_BUG                      -> PR without the gate, manual-merge
-#   (f) standard issue                     -> auto-merge propagated, no sections
+#   (f) standard issue                     -> auto-merge propagated, no sections,
+#       and a review guide in the evolution output stays out of the PR body
+#   (g) heavy bug, CONFIRMED + review guide -> the guide opens the PR body
+#   (h) heavy, no review guide             -> one advisory line opens the body,
+#       the PR is still created
+#   (i) heavy NOT_BUG + review guide       -> the guide opens the body; the
+#       evolution prompt asks for it without the diagnosis part
 #
 # Run: bash tests/test-heavy-run.sh   (exit 0 = all pass)
 
@@ -65,12 +71,15 @@ chmod +x "$BIN/git"
 
 # claude mock: MOCK_DIAG (when set) becomes the DIAGNOSIS_RESULT line, and
 # MOCK_DIAG_RAW (when set) is written to MOCK_DIAG_FILE as the raw record.
+# MOCK_EVO_GUIDE (when set) is printed before the result lines, as evolution's
+# `## Katselmointiohje` section would be.
 cat > "$BIN/claude" <<'SH'
 #!/usr/bin/env bash
 if [ -n "${MOCK_DIAG_RAW:-}" ] && [ -n "${MOCK_DIAG_FILE:-}" ]; then
   printf '%s\n' "$MOCK_DIAG_RAW" > "$MOCK_DIAG_FILE"
 fi
 [ -n "${MOCK_DIAG:-}" ] && echo "DIAGNOSIS_RESULT: $MOCK_DIAG"
+[ -n "${MOCK_EVO_GUIDE:-}" ] && printf '%s\n' "$MOCK_EVO_GUIDE"
 echo "IMPLEMENTER_RESULT: SUCCESS"
 echo "EVOLUTION_RESULT: CLEAN"
 SH
@@ -193,10 +202,13 @@ grep -qF 'heavy-run:** this PR is not merged automatically' "$RD/pr-body.md" || 
 grep -qF 'Raskas polku' "$RD/02-implementer.prompt" && fail "(e): non-bug implementer got the gate section"
 [ "$FAIL" = "$P" ] && echo "PASS (e): heavy non-bug -> normal path without auto-merge"
 
+GUIDE=$(printf '%s\n' "## Katselmointiohje" "" "### Mihin katsoa" "- lib/x.sh:12 guide-marker-q7")
+MISSING_NOTE='**Review guide missing:**'
+
 # === (f) standard issue ====================================================
 P=$FAIL
 setup_run '[{"name":"auto-run"},{"name":"auto-merge"}]' ""
-OUT=$(run_orch env)
+OUT=$(run_orch env MOCK_EVO_GUIDE="$GUIDE")
 RC=$?
 [ "$RC" = "0" ] || { fail "(f): expected exit 0, got $RC"; echo "$OUT" | tail -5; }
 [ "$(jq -r '.run_path' "$RD/run.json")" = "standard" ] || fail "(f): run_path not standard"
@@ -204,7 +216,59 @@ grep -qF 'labels[]=auto-merge' "$GH_LOG" || fail "(f): auto-merge not propagated
 grep -qF 'manual-merge' "$GH_LOG" && fail "(f): manual-merge on a standard PR"
 grep -qF 'Raskas polku' "$RD/02-implementer.prompt" && fail "(f): standard implementer got a heavy-run section"
 grep -qF '{{RUN_PATH_SECTION}}' "$RD/02-implementer.prompt" && fail "(f): placeholder left unrendered"
+grep -qF 'guide-marker-q7' "$RD/pr-body.md" && fail "(f): review guide reached a standard PR body"
+grep -qF "$MISSING_NOTE" "$RD/pr-body.md" && fail "(f): missing-guide note on a standard PR body"
+[ "$(head -1 "$RD/pr-body.md")" = "Auto-run for issue #313 — t" ] || fail "(f): body no longer opens with the Auto-run line"
+grep -qF 'katselmointiohje käsin yhdistettävään' "$RD/03-evolution.prompt" && fail "(f): standard evolution asked for a review guide"
 [ "$FAIL" = "$P" ] && echo "PASS (f): standard path unchanged"
+
+# guide_opens_body <case> — the guide is the first block, before the cycle review.
+guide_opens_body() {
+  local c="$1" b="$RD/pr-body.md" g cr
+  [ "$(head -1 "$b")" = "## Katselmointiohje" ] || fail "($c): body does not open with the review guide"
+  grep -qF 'guide-marker-q7' "$b" || fail "($c): guide content missing from the body"
+  g=$(grep -nF 'guide-marker-q7' "$b" | head -1 | cut -d: -f1)
+  cr=$(grep -nF '## Cycle review' "$b" | head -1 | cut -d: -f1)
+  [ -n "$g" ] && [ -n "$cr" ] && [ "$g" -lt "$cr" ] || fail "($c): guide not before the cycle review"
+  [ "$(grep -cF '## Katselmointiohje' "$b")" = "1" ] || fail "($c): guide heading not exactly once"
+  grep -qF "$MISSING_NOTE" "$b" && fail "($c): missing-guide note despite a guide"
+  return 0
+}
+
+# === (g) heavy bug, confirmed, review guide ================================
+P=$FAIL
+setup_run "$HEAVY" "HEAVY_RUN_KIND: BUG"
+OUT=$(run_orch env MOCK_DIAG="CONFIRMED H2" MOCK_DIAG_RAW="raw" MOCK_EVO_GUIDE="$GUIDE")
+RC=$?
+[ "$RC" = "0" ] || { fail "(g): expected exit 0, got $RC"; echo "$OUT" | tail -5; }
+guide_opens_body g
+grep -qF 'labels[]=manual-merge' "$GH_LOG" || fail "(g): manual-merge not added"
+grep -qF 'katselmointiohje käsin yhdistettävään' "$RD/03-evolution.prompt" || fail "(g): evolution prompt lacks the review guide"
+grep -qF 'kohdistuuko korjaus vahvistettuun syyhyn' "$RD/03-evolution.prompt" || fail "(g): bug evolution prompt lacks the diagnosis part"
+[ "$FAIL" = "$P" ] && echo "PASS (g): review guide opens a heavy bug PR body"
+
+# === (h) heavy, no review guide ============================================
+P=$FAIL
+setup_run "$HEAVY" "HEAVY_RUN_KIND: NOT_BUG"
+OUT=$(run_orch env)
+RC=$?
+[ "$RC" = "0" ] || { fail "(h): expected exit 0, got $RC"; echo "$OUT" | tail -5; }
+grep -q 'pr create' "$GH_LOG" || fail "(h): no PR created"
+head -1 "$RD/pr-body.md" | grep -qF "$MISSING_NOTE" || fail "(h): body does not open with the missing-guide note"
+[ "$(grep -cF "$MISSING_NOTE" "$RD/pr-body.md")" = "1" ] || fail "(h): missing-guide note not exactly one line"
+[ "$(jq -r '.status' "$RD/run.json")" = "completed" ] || fail "(h): status not completed"
+[ "$FAIL" = "$P" ] && echo "PASS (h): missing guide -> one advisory line, PR still created"
+
+# === (i) heavy NOT_BUG, review guide =======================================
+P=$FAIL
+setup_run "$HEAVY" "HEAVY_RUN_KIND: NOT_BUG"
+OUT=$(run_orch env MOCK_EVO_GUIDE="$GUIDE")
+RC=$?
+[ "$RC" = "0" ] || { fail "(i): expected exit 0, got $RC"; echo "$OUT" | tail -5; }
+guide_opens_body i
+grep -qF 'katselmointiohje käsin yhdistettävään' "$RD/03-evolution.prompt" || fail "(i): non-bug evolution prompt lacks the review guide"
+grep -qF 'kohdistuuko korjaus vahvistettuun syyhyn' "$RD/03-evolution.prompt" && fail "(i): non-bug evolution prompt got the diagnosis part"
+[ "$FAIL" = "$P" ] && echo "PASS (i): review guide opens a heavy non-bug PR body"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "heavy-run: all passed" || echo "heavy-run: FAILURES"

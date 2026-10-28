@@ -13,6 +13,8 @@
 # environment, provisioning or the runner itself; `product` is a structural
 # defect in the target application's code. A line without a recognised class —
 # including the pre-#392 format — reads as `unclassified`, never dropped.
+# A heavy-run evolution also writes a `## Katselmointiohje` prose section, the
+# review guide the PR body opens with (evolution_review_guide).
 # Two readers with their own grep would drift the first time the line format
 # changes, and the digest would silently stop seeing what the PR body shows.
 #
@@ -115,4 +117,24 @@ evolution_test_runs_json() {
           passed: $c.passed, skipped: $c.skipped, failed: $c.failed }
     ]' 2>/dev/null || echo '[]'
   return 0
+}
+
+# evolution_review_guide <evolution-out> — the body of the LAST
+# `## Katselmointiohje` section (the heavy-run review guide, issue #413), or
+# nothing. The last heading wins because the agent may quote it earlier in its
+# answer. The section ends at the next `## ` heading or the first EVOLUTION_
+# line; blank edge lines are trimmed, so a heading without content is "no guide".
+evolution_review_guide() {
+  [ -f "$1" ] || return 0
+  awk '
+    /^## Katselmointiohje[[:space:]]*$/ { n = 0; on = 1; found = 1; next }
+    on && (/^## / || /^EVOLUTION_/)     { on = 0 }
+    on                                  { buf[++n] = $0 }
+    END {
+      if (!found) exit
+      s = 1; while (s <= n && buf[s] ~ /^[[:space:]]*$/) s++
+      e = n; while (e >= s && buf[e] ~ /^[[:space:]]*$/) e--
+      for (i = s; i <= e; i++) print buf[i]
+    }
+  ' "$1" 2>/dev/null || true
 }

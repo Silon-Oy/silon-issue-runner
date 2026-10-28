@@ -41,7 +41,7 @@ done
 
 # Every prompt that applies the classes points at the chapter by name.
 for p in prompts/01-cycle-review.md prompts/heavy-run/01-cycle-review.md \
-         prompts/03-evolution.md prompts/heavy-run/03-evolution.md; do
+         prompts/03-evolution.md prompts/heavy-run/03-evolution-diagnosis.md; do
   grep -qF 'Invarianttiluokat' "$ROOT/$p" && pass "$p refers to the chapter" \
     || fail "$p lost the Invarianttiluokat reference"
   # single-rule: the prompts refer to the rules, they do not restate them.
@@ -63,7 +63,7 @@ grep -qF 'Invarianttiluokat' "$ROOT/prompts/01-cycle-review-light.md" \
   || pass "light cycle review unchanged"
 
 # Evolution: a violation is fixed or leads to NEEDS_FOLLOWUP.
-for p in prompts/03-evolution.md prompts/heavy-run/03-evolution.md; do
+for p in prompts/03-evolution.md prompts/heavy-run/03-evolution-diagnosis.md; do
   awk '/Invarianttiluokat/{on=1} on' "$ROOT/$p" | grep -qF 'NEEDS_FOLLOWUP' \
     && pass "$p routes a violation to NEEDS_FOLLOWUP" \
     || fail "$p does not route a violation to NEEDS_FOLLOWUP"
