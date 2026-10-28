@@ -23,7 +23,7 @@ WORK=$(mktemp -d -t cleanup-lock.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git"
+git init -q "$REPO"
 
 export RUN_ISSUES_LOCK_ROOT="$WORK/locks"
 

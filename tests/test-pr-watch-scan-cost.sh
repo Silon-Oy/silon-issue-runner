@@ -45,7 +45,7 @@ WORK=$(mktemp -d -t pr-watch-scan-cost.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git"
+git init -q "$REPO"
 
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"

@@ -78,8 +78,8 @@ seed_state()    { seed state "$1" "$2"; }         # OPEN / CLOSED
 seed_subs()     { seed subissues "$1" "$2"; }     # JSON array
 seed_blockers() { printf '%s' "$2" > "$STATE/blockers/$1"; }  # JSON array
 
-# A GitHub repository is a git dir; run-epic checks for .git.
-REPO="$WORK/repo"; mkdir -p "$REPO/.git"
+# A GitHub repository is a git work tree; run-epic asks git (is_git_repo_root).
+REPO="$WORK/repo"; git init -q "$REPO"
 
 # --- gh mock ---------------------------------------------------------------
 BIN="$WORK/bin"; mkdir -p "$BIN"
@@ -230,6 +230,35 @@ printf '%s\n' "$out" | grep -qi "dry-run" && pass "report: dry-run banner presen
 # #284: the default epic (no manual-merge) reports that children auto-merge.
 printf '%s\n' "$out" | grep -qE "merge: +auto" && pass "report #284: default epic reports children auto-merge" \
   || fail "report #284: 'merge: auto' state line missing (out: $out)"
+
+# ===========================================================================
+# 1a. #429 — a submodule checkout (`.git` is a FILE) is accepted; a directory
+#     that is not a repo is refused with the SAME error as before.
+# ===========================================================================
+# Isolated identity + file protocol: the submodule clone is local and HOME-free.
+GITC=(-c user.name=t -c user.email=t@example.invalid -c protocol.file.allow=always -c init.defaultBranch=main)
+SUBSRC="$WORK/subsrc"; git init -q "$SUBSRC"
+git -C "$SUBSRC" "${GITC[@]}" commit -q --allow-empty -m init
+SUPER="$WORK/super"; git init -q "$SUPER"
+git -C "$SUPER" "${GITC[@]}" submodule add -q "$SUBSRC" pkg >/dev/null 2>&1
+SUBREPO="$SUPER/pkg"
+if [ -f "$SUBREPO/.git" ]; then
+  reset_rec
+  out=$(run_epic 100 --repo "$SUBREPO" --dry-run 2>&1); rc=$?
+  [ "$rc" = 0 ] && pass "#429: submodule checkout accepted by --dry-run" \
+    || fail "#429: submodule --dry-run exited $rc (out: $out)"
+  printf '%s\n' "$out" | grep -q "first to run:  #201" && pass "#429: submodule --dry-run prints the report" \
+    || fail "#429: submodule --dry-run report missing (out: $out)"
+else
+  fail "#429: fixture did not produce a submodule with a .git file"
+fi
+
+NOTREPO="$WORK/notrepo"; mkdir -p "$NOTREPO"
+out=$(run_epic 100 --repo "$NOTREPO" --dry-run 2>&1); rc=$?
+[ "$rc" = 1 ] && pass "#429: non-repo directory exits 1" || fail "#429: non-repo exited $rc (out: $out)"
+[ "$out" = "run-epic: '$NOTREPO' is not a git repository (pass --repo <path>)" ] \
+  && pass "#429: non-repo directory refused with the unchanged message" \
+  || fail "#429: non-repo message changed (out: $out)"
 
 # ===========================================================================
 # 1b. #284 — an epic carrying manual-merge reports MANUAL merge (dry-run), and

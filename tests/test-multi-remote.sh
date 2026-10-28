@@ -178,7 +178,7 @@ WL="$RUN_ISSUES_LOCK_ROOT/partner-issue-77.lock"
 [ -d "$WL" ] || { echo "FAIL (e) partner lock dir 77 not created"; FAIL=1; }
 
 REPO_E="$WORK/repo-e"
-mkdir -p "$REPO_E/.git"
+git init -q "$REPO_E"
 RID_E="20260601-1200-partner-issue-77"
 RD_E="$REPO_E/.claude/run-issues/$RID_E"
 state_init "$RD_E" "$RID_E" "$REPO_E" 77

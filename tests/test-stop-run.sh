@@ -42,7 +42,7 @@ export RUN_ISSUES_LOCK_ROOT="$WORK/locks"
 mkdir -p "$RUN_ISSUES_LOCK_ROOT"
 
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git"
+git init -q "$REPO"
 
 # --- Mocks (hostname / tmux / gh) --------------------------------------------
 mkdir -p "$WORK/bin"

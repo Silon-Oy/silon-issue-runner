@@ -244,7 +244,7 @@ grep -q -- "pulls?"     "$ARGS" || fail "not using the REST pulls endpoint"
 echo "=== Case 2: no local candidates => no network at all ==="
 # Before #107 such a repo made zero calls from this pass; the new pass must not
 # ADD one to repos with nothing to do.
-FOREIGN="$WORK/foreign"; mkdir -p "$FOREIGN/.git"
+FOREIGN="$WORK/foreign"; git init -q "$FOREIGN"
 mk_run 70 completed other-host - - a "$FOREIGN" >/dev/null
 reset_ledgers
 OUT2=$(scan_finished "$FOREIGN" 2>/dev/null)
@@ -254,7 +254,7 @@ check "foreign-only: pulls calls"  "$(n_plist)"  "0"
 
 # ---------------------------------------------------------------------------
 echo "=== Case 3: no candidate carries a PR => the pulls list is not fetched ==="
-NOPR="$WORK/nopr"; mkdir -p "$NOPR/.git"
+NOPR="$WORK/nopr"; git init -q "$NOPR"
 mk_run 80 blocked test-host - - a "$NOPR" >/dev/null
 reset_ledgers
 OUT3=$(scan_finished "$NOPR" 2>/dev/null)

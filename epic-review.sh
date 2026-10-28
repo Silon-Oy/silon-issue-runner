@@ -62,6 +62,8 @@ machine_env_capture
 # Windows/Git Bash: LF jq output (lib/jq-binary.sh).
 # shellcheck source=lib/jq-binary.sh
 . "$SCRIPT_DIR/lib/jq-binary.sh"
+# shellcheck source=lib/git-repo.sh
+. "$SCRIPT_DIR/lib/git-repo.sh"
 
 REVIEW_MARKER="<!-- run-issues:epic-review -->"
 
@@ -98,7 +100,7 @@ case "$EPIC" in
 esac
 
 [ -n "$REPO_ROOT" ] || REPO_ROOT="$(pwd)"
-if [ ! -e "$REPO_ROOT/.git" ]; then
+if ! is_git_repo_root "$REPO_ROOT"; then
   echo "epic-review: '$REPO_ROOT' is not a git repository (pass --repo <path>)" >&2
   exit 1
 fi

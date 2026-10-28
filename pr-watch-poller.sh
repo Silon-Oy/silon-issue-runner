@@ -56,6 +56,8 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # host gate. Functions only; no top-level work.
 # shellcheck source=lib/paths.sh
 . "${RUN_ISSUES_HOME}/lib/paths.sh"
+# shellcheck source=lib/git-repo.sh
+. "${RUN_ISSUES_HOME}/lib/git-repo.sh"
 
 # Machine configuration; the pollers' only channel under launchd, which hands
 # an agent no environment of its own. Sourced, so the FILE WINS over an
@@ -315,7 +317,7 @@ for (( i=0; i<N; i++ )); do
   repo_json="${REPOS[$idx]}"
   REPO_PATH="${REPOS_PATHS[$idx]}"
 
-  if [ -z "$REPO_PATH" ] || [ ! -d "$REPO_PATH/.git" ]; then
+  if [ -z "$REPO_PATH" ] || ! is_git_repo_root "$REPO_PATH"; then
     echo "$(date -u +%FT%TZ) pr-watch-poller: skip invalid repo entry: $repo_json" >> "$LOG"
   else
     # tmux-safe suffix from the repo path's basename so concurrent repos get

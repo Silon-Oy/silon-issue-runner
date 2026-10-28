@@ -132,7 +132,7 @@ SH
 
 mk_repo() {  # fresh repo dir
   local r="$WORK/repo-$RANDOM"
-  mkdir -p "$r/.git"
+  git init -q "$r"
   printf '%s' "$r"
 }
 

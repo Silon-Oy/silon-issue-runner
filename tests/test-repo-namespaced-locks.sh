@@ -91,7 +91,7 @@ eq "$(repo_slug "$CLONE" partner)" "partner-org-map-api" \
   "(a) repo_slug is per-remote (different owner -> different slug)"
 
 NOREMOTE="$WORK/Plain.Repo"
-mkdir -p "$NOREMOTE/.git"
+git init -q "$NOREMOTE"
 eq "$(repo_slug "$NOREMOTE")" "plain-repo" \
   "(a) fallback to repo-dir basename when no remote resolves"
 eq "$(repo_slug '')" "" "(a) empty repo root -> empty slug (legacy naming)"
@@ -269,7 +269,7 @@ PATH="$WORK/bin:$PATH"
 
 REPO_A="$WORK/repo-a"
 REPO_B="$WORK/repo-b"
-mkdir -p "$REPO_A/.git" "$REPO_B/.git"
+git init -q "$REPO_A" && git init -q "$REPO_B"
 
 # repo-a: a post-#67 run for issue 42, stalled. repo-b: a LIVE run for its own
 # issue 42 (same number, different repo) holding its own lock and session.
@@ -351,7 +351,7 @@ finalize_stalled 55 "$RD_L"
 # (g) cleanup-run.sh removes the repo-namespaced lock of a post-#67 run
 # ===========================================================================
 REPO_G="$WORK/repo-g"
-mkdir -p "$REPO_G/.git"
+git init -q "$REPO_G"
 export RUN_ISSUES_LOCK_ROOT="$WORK/locks-g"
 RID_G="20260730-1400-repo-g-issue-77"
 RD_G="$REPO_G/.claude/run-issues/$RID_G"

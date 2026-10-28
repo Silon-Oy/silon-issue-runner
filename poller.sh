@@ -39,6 +39,8 @@ RUN_ISSUES_HOME="${RUN_ISSUES_HOME:-$SCRIPT_DIR}"
 # work, so sourcing it on a foreign machine still creates nothing.
 # shellcheck source=lib/paths.sh
 . "${RUN_ISSUES_HOME}/lib/paths.sh"
+# shellcheck source=lib/git-repo.sh
+. "${RUN_ISSUES_HOME}/lib/git-repo.sh"
 
 # rotate_log_if_big (issue #65). Sourced here — before the exec redirect below —
 # because rotating .stdout.log/.stderr.log AFTER their fds are opened would leave
@@ -1238,7 +1240,7 @@ _rl_hit() {
 while IFS= read -r stalled_repo_json; do
   [ -n "$stalled_repo_json" ] || continue
   STALLED_REPO_PATH=$(jq -r '.path // empty' <<<"$stalled_repo_json")
-  [ -n "$STALLED_REPO_PATH" ] && [ -d "$STALLED_REPO_PATH/.git" ] || continue
+  [ -n "$STALLED_REPO_PATH" ] && is_git_repo_root "$STALLED_REPO_PATH" || continue
   while IFS= read -r stalled_line; do
     [ -n "$stalled_line" ] || continue
     finalize_stalled "${stalled_line%% *}" "${stalled_line#* }" || true
@@ -1316,7 +1318,7 @@ while IFS= read -r repo_json; do
   REPO_PATH=$(jq -r '.path // empty' <<<"$repo_json")
   REPO_LABELS=$(jq -r '(.labels // []) | map(select(type == "string" and length > 0)) | join(",")' <<<"$repo_json")
 
-  if [ -z "$REPO_PATH" ] || [ ! -d "$REPO_PATH/.git" ]; then
+  if [ -z "$REPO_PATH" ] || ! is_git_repo_root "$REPO_PATH"; then
     echo "$(date -u +%FT%TZ) poller: skip invalid repo entry: $repo_json" >> "$LOG"
     continue
   fi

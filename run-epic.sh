@@ -68,6 +68,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Sourced before any other library because they all read jq output (lib/jq-binary.sh).
 # shellcheck source=lib/jq-binary.sh
 . "$SCRIPT_DIR/lib/jq-binary.sh"
+# shellcheck source=lib/git-repo.sh
+. "$SCRIPT_DIR/lib/git-repo.sh"
 
 usage() {
   sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'
@@ -116,7 +118,7 @@ if [ "$STOP" -eq 1 ] && [ "$START_NOW" -eq 1 ]; then
 fi
 
 [ -n "$REPO_ROOT" ] || REPO_ROOT="$(pwd)"
-if [ ! -d "$REPO_ROOT/.git" ]; then
+if ! is_git_repo_root "$REPO_ROOT"; then
   echo "run-epic: '$REPO_ROOT' is not a git repository (pass --repo <path>)" >&2
   exit 1
 fi

@@ -44,7 +44,7 @@ LOG="$WORK/run.log"          # run_terminate logs here when $LOG is set
 : > "$LOG"
 
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git"
+git init -q "$REPO"
 
 # --- Mock tmux (same model as test-poller-stale-detection.sh) ----------------
 # Sessions "exist" as files in $WORK/tmux-sessions/. run_terminate addresses

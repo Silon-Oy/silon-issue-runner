@@ -34,7 +34,7 @@ WORK=$(mktemp -d -t scan-clean.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git"
+git init -q "$REPO"
 
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"
@@ -203,7 +203,7 @@ check "truncated: view calls (uncovered only)" "$(n_view)" "2"
 # Every run-dir belongs to another host, so there is nothing to intersect. The
 # repo-wide query must NOT be issued: before #124 such a repo made zero calls,
 # and the new shape must not ADD one.
-FOREIGN="$WORK/foreign"; mkdir -p "$FOREIGN/.git"
+FOREIGN="$WORK/foreign"; git init -q "$FOREIGN"
 mk_run 70 "other-host" "a" "$FOREIGN"
 reset_ledgers
 OUT3=$(scan_clean "$FOREIGN")
@@ -250,7 +250,7 @@ echo "$OUTC" | grep -q "^80 " && fail "clean: issue 80 (auto-reset) WAS selected
 check "clean: candidate count unchanged by reset fixtures" "$(printf '%s\n' "$OUTC" | grep -c '^[0-9]')" "4"
 
 # ---- Case 4: no run-dir directory at all => no network ---------------------
-EMPTY="$WORK/empty"; mkdir -p "$EMPTY/.git"
+EMPTY="$WORK/empty"; git init -q "$EMPTY"
 reset_ledgers
 OUT4=$(scan_clean "$EMPTY")
 check "no run-dirs: no output" "$OUT4" ""

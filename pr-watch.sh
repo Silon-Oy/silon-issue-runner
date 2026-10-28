@@ -187,6 +187,8 @@ machine_env_capture
 # lib/machine-env.sh above precedes it, and it never calls jq.
 # shellcheck source=lib/jq-binary.sh
 . "$SCRIPT_DIR/lib/jq-binary.sh"
+# shellcheck source=lib/git-repo.sh
+. "$SCRIPT_DIR/lib/git-repo.sh"
 # shellcheck source=lib/git-remote.sh
 # Multi-remote routing (issue #33): resolve_remote_to_owner_repo is the fallback
 # owner/repo derivation for a non-origin run whose run.json predates the
@@ -306,7 +308,7 @@ done
 [ "$#" -eq 2 ] || usage
 REPO_ROOT="$1"
 TARGET="$2"
-[ -d "$REPO_ROOT/.git" ] || { echo "pr-watch: not a git repo: $REPO_ROOT" >&2; exit 1; }
+is_git_repo_root "$REPO_ROOT" || { echo "pr-watch: not a git repo: $REPO_ROOT" >&2; exit 1; }
 
 RUNS_DIR="$REPO_ROOT/.claude/run-issues"
 THIS_HOST="$(runner_host)"

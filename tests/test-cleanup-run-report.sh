@@ -35,7 +35,7 @@ FAIL=0
 # a fresh repo and echo "REPO RID" so callers can assert on the artefacts.
 make_run() {
   local issue="$1" repo="$2"
-  mkdir -p "$repo/.git"
+  git init -q "$repo"
   # shellcheck source=lib/state.sh
   ( . "$STATE_LIB"
     RID="20260806-00${issue}-issue-${issue}"

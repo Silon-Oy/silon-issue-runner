@@ -106,7 +106,7 @@ exit 0
 SH
 chmod +x "$STUB"
 
-REPO="$WORK/repo"; mkdir -p "$REPO/.git"
+REPO="$WORK/repo"; git init -q "$REPO"
 
 REPLY_FINDINGS='Gaps found.
 

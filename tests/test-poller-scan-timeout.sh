@@ -23,7 +23,7 @@ WORK=$(mktemp -d -t poller-scan.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git"  # scan_timed_out only needs the run-issues dir
+git init -q "$REPO" # scan_timed_out only needs the run-issues dir
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"
 

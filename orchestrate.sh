@@ -247,7 +247,10 @@ else
   if [ "$#" -ne 2 ]; then usage; fi
   REPO_ROOT="$1"
   ISSUE_ARG="$2"
-  [ -d "$REPO_ROOT/.git" ] || { echo "orchestrate: not a git repo: $REPO_ROOT" >&2; exit 1; }
+  # The repo check precedes library loading below, so resolve the lib dir here.
+  # shellcheck source=lib/git-repo.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/git-repo.sh"
+  is_git_repo_root "$REPO_ROOT" || { echo "orchestrate: not a git repo: $REPO_ROOT" >&2; exit 1; }
 fi
 
 RUN_ISSUES_AUTO="${RUN_ISSUES_AUTO:-0}"

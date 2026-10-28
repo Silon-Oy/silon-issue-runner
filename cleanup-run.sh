@@ -96,11 +96,13 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$MODE" ] || usage 1
-[ -d "$REPO_ROOT/.git" ] || { echo "cleanup-run: not a git repo: $REPO_ROOT" >&2; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/git-repo.sh
+. "$SCRIPT_DIR/lib/git-repo.sh"
+is_git_repo_root "$REPO_ROOT" || { echo "cleanup-run: not a git repo: $REPO_ROOT" >&2; exit 1; }
 
 RUNS_DIR="$REPO_ROOT/.claude/run-issues"
 ARCHIVE_DIR="$REPO_ROOT/.claude/run-issues-archive"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Windows/Git Bash: give `jq` its --binary flag so its output is LF, not CRLF.
 # Sourced before any other library because they all read jq output (lib/jq-binary.sh).
 # shellcheck source=lib/jq-binary.sh

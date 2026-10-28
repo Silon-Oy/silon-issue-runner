@@ -64,6 +64,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Sourced before any other library because they all read jq output (lib/jq-binary.sh).
 # shellcheck source=lib/jq-binary.sh
 . "$SCRIPT_DIR/lib/jq-binary.sh"
+# shellcheck source=lib/git-repo.sh
+. "$SCRIPT_DIR/lib/git-repo.sh"
 
 RUN_ISSUES_RESET_LABEL="${RUN_ISSUES_RESET_LABEL:-auto-reset}"
 SKIPPED_LABEL="auto-reset-skipped"
@@ -95,7 +97,7 @@ done
 [ -n "$REPO_ROOT" ] || { echo "auto-reset: --repo is required" >&2; usage 1; }
 [ -n "$ISSUE_NUM" ] || { echo "auto-reset: --issue is required" >&2; usage 1; }
 [ -n "$REMOTE_NAME" ] || REMOTE_NAME="origin"
-[ -d "$REPO_ROOT/.git" ] || { echo "auto-reset: not a git repo: $REPO_ROOT" >&2; exit 1; }
+is_git_repo_root "$REPO_ROOT" || { echo "auto-reset: not a git repo: $REPO_ROOT" >&2; exit 1; }
 
 # ---------- libs ----------
 # Same set as auto-clean.sh, and for the same reasons: locking.sh for the

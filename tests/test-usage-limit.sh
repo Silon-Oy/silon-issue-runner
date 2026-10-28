@@ -297,7 +297,7 @@ eval "$FN"
 # shellcheck disable=SC2034  # read by the eval'd function
 THIS_HOST="test-host"
 PREPO="$WORK/prepo"
-mkdir -p "$PREPO/.git"
+git init -q "$PREPO"
 mk_limited() { # <rid> <host> <reset>
   local rd="$PREPO/.claude/run-issues/$1"
   state_init "$rd" "$1" "$PREPO" "${1##*-}"

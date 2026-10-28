@@ -25,7 +25,7 @@ WORK=$(mktemp -d -t scan-answered.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git"
+git init -q "$REPO"
 
 # shellcheck source=lib/state.sh
 . "$STATE_LIB"
