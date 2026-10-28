@@ -38,6 +38,15 @@
 #   R) accepted full audit -> leaves the audited commit pending for audit_run;
 #                            a rejected one does not
 #   S) --scanners-only     -> no agent call, no launch check
+#   V) finding verification (#394, RUN_ISSUES_AUDIT_VERIFY=1) -> CONFIRMED is
+#                            filed as before with its pickup labels; REFUTED is
+#                            dropped and logged; UNSURE is filed with the
+#                            security label only, no assignee and a note; a
+#                            verifier that fails (rc 1, rc 124, unparseable)
+#                            reads as UNSURE; one that moves HEAD or dirties
+#                            the worktree rejects the audit (exit 3, no write);
+#                            scanner rows are not verified; off => no verifier
+#                            call; --dry-run marks [unsure]
 #
 # Run: bash tests/test-security-audit.sh
 
@@ -129,8 +138,29 @@ exit 0
 SH
   chmod +x "$BIN/gh"
 
+  # A verifier call (prompts/13-finding-verify.md, #394) answers from
+  # verify/<slug>.txt for the finding whose description holds [<slug>] —
+  # CONFIRMED when there is none — with verify/<slug>.rc and verify/<slug>.sh
+  # as the exit code and a side effect.
+  mkdir -p "$WORK/verify"
   cat > "$BIN/claude-mock" <<SH
 #!/usr/bin/env bash
+case "\$*" in
+  *"VERIFY_RESULT: CONFIRMED|REFUTED|UNSURE"*)
+    echo VERIFY >> "$WORK/calls.log"
+    for f in "$WORK"/verify/*.txt; do
+      [ -f "\$f" ] || continue
+      slug=\$(basename "\$f" .txt)
+      case "\$*" in *"[\$slug]"*)
+        [ -f "$WORK/verify/\$slug.sh" ] && bash "$WORK/verify/\$slug.sh"
+        cat "\$f"
+        [ -f "$WORK/verify/\$slug.rc" ] && exit "\$(cat "$WORK/verify/\$slug.rc")"
+        exit 0 ;;
+      esac
+    done
+    printf 'Looks real: src/a.php:1\nVERIFY_RESULT: CONFIRMED\n'
+    exit 0 ;;
+esac
 echo AUDIT >> "$WORK/calls.log"
 printf '%s\n' "\$*" > "$WORK/prompt-seen"
 [ -f "$WORK/agent.sh" ] && bash "$WORK/agent.sh"
@@ -595,6 +625,102 @@ AUDIT_ENV="RUN_ISSUES_CLAUDE_CMD=$WORK/no-such-cli" run_audit --scanners-only
 grep -q '(scanners only)' <<<"$OUT" || bad S "the summary does not name the mode"
 done_case
 [ "$FAIL" = "$F0" ] && ok S "scanners only: no agent, no launch check"
+
+echo "=== V: finding verification ==="
+F0=$FAIL
+F_SQL='FINDING: high | high | src/a.php:1 | [sql-injection] q reaches a query unescaped'
+F_CMD='FINDING: high | high | src/a.php:1 | [command-injection] q reaches a shell'
+verify_calls() { grep -c VERIFY "$WORK/calls.log" 2>/dev/null || true; }
+# created_for <slug> — the number of the created issue whose title names [slug].
+created_for() { grep -l -F "[$1]" "$WORK"/created/*.title 2>/dev/null | sed -E 's#.*/([0-9]+)\.title#\1#' | head -1; }
+VON="RUN_ISSUES_AUDIT_VERIFY=1"
+
+setup V1   # CONFIRMED / REFUTED / UNSURE in one audit, with assignee routing
+printf '%s\n%s\n%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" "$F_SQL" "$F_CMD" > "$WORK/review.txt"
+printf 'Escaped at src/a.php:1\nVERIFY_RESULT: REFUTED\n' > "$WORK/verify/sql-injection.txt"
+printf 'Depends on config\nVERIFY_RESULT: UNSURE\n' > "$WORK/verify/command-injection.txt"
+jq -n --arg p "$REPO" '{repos: [{path: $p, labels: ["auto-run"], assignees: ["bot-a"]}]}' > "$WORK/wl.json"
+WL="$WORK/wl.json" AUDIT_ENV="$VON" run_audit
+[ "$RC" = 0 ] || { show V1; bad V1 "rc $RC, want 0"; }
+[ "$(verify_calls)" = 3 ] || bad V1 "$(verify_calls) verifier call(s), want 3"
+[ "$(creates)" = 2 ] || bad V1 "created $(creates) issues, want 2 (refuted dropped)"
+[ -z "$(created_for sql-injection)" ] || bad V1 "the refuted finding was filed"
+grep -q 'finding refuted by verifier: src/a.php:1 — \[sql-injection\]' <<<"$OUT" || bad V1 "the refuted finding is not logged"
+grep -q 'verified: 1 confirmed, 1 refuted, 1 unsure' <<<"$OUT" || bad V1 "no summary line"
+n=$(created_for xss)
+grep -qx auto-run "$WORK/created/$n.labels" 2>/dev/null || bad V1 "the confirmed finding lost its pickup label"
+grep -qx bot-a "$WORK/created/$n.assignees" 2>/dev/null || bad V1 "the confirmed finding lost its route"
+grep -q 'Tarkistus:' "$WORK/created/$n.body" 2>/dev/null && bad V1 "the confirmed finding carries the unsure note"
+n=$(created_for command-injection)
+[ "$(cat "$WORK/created/$n.labels" 2>/dev/null)" = security ] || bad V1 "unsure labels '$(tr '\n' ',' < "$WORK/created/$n.labels" 2>/dev/null)', want security only"
+[ ! -e "$WORK/created/$n.assignees" ] || bad V1 "the unsure finding was routed"
+grep -q '^> \*\*Tarkistus:\*\*' "$WORK/created/$n.body" 2>/dev/null || bad V1 "the unsure finding lacks the note"
+grep -qF '<!-- run-issues:finding kind=security' "$WORK/created/$n.body" 2>/dev/null || bad V1 "the unsure finding lost its marker"
+[ "$FAIL" = "$F0" ] && ok V1 "confirmed filed, refuted dropped, unsure filed without pickup"
+done_case
+
+verifier_fails() { # <label> <what> <reply> [<rc>]
+  setup "$1"
+  printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+  printf '%b' "$3" > "$WORK/verify/xss.txt"
+  [ -n "${4:-}" ] && echo "$4" > "$WORK/verify/xss.rc"
+  AUDIT_ENV="$VON" run_audit
+  if [ "$RC" = 0 ] && [ "$(creates)" = 1 ] && [ "$(cat "$WORK/created/100.labels" 2>/dev/null)" = security ] \
+     && grep -q 'Tarkistus:' "$WORK/created/100.body"; then
+    ok "$1" "$2: filed as unsure"
+  else show "$1"; bad "$1" "$2: rc $RC, $(creates) issue(s), labels '$(tr '\n' ',' < "$WORK/created/100.labels" 2>/dev/null)'"; fi
+  done_case
+}
+verifier_fails V2 "verifier rc 1" 'VERIFY_RESULT: REFUTED\n' 1
+verifier_fails V3 "verifier timeout (rc 124)" '' 124
+verifier_fails V4 "unparseable answer" 'I think it is refuted.\n'
+verifier_fails V5 "result not on the last line" 'VERIFY_RESULT: REFUTED\nmore text\n'
+
+for v in V6 V7; do   # a verifier that moves HEAD / dirties the worktree
+  setup "$v"
+  printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+  printf 'VERIFY_RESULT: CONFIRMED\n' > "$WORK/verify/xss.txt"
+  if [ "$v" = V6 ]; then
+    echo 'git -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m moved' > "$WORK/verify/xss.sh"
+  else
+    echo 'echo dirt >> src/a.php' > "$WORK/verify/xss.sh"
+  fi
+  AUDIT_ENV="$VON" run_audit
+  if [ "$RC" = 3 ] && [ "$(writes)" = 0 ] && grep -q 'finding verifier changed the worktree' <<<"$OUT"; then
+    ok "$v" "a verifier that writes rejects the audit"
+  else show "$v"; bad "$v" "rc $RC, $(writes) write(s), want 3 and 0"; fi
+  done_case
+done
+
+setup V8   # off: no verifier call
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+run_audit
+if [ "$RC" = 0 ] && [ "$(verify_calls)" = 0 ] && [ "$(creates)" = 1 ]; then ok V8 "off: no verifier call"
+else show V8; bad V8 "off: rc $RC, $(verify_calls) verifier call(s), want 0 and 0"; fi
+done_case
+setup V9   # a scanner row is not verified, and keeps its pickup label
+cat > "$BIN/gitleaks-mock" <<'SH'
+#!/usr/bin/env bash
+r=""
+while [ $# -gt 0 ]; do [ "$1" = --report-path ] && r="$2"; shift; done
+echo '[{"File":"config/app.php","StartLine":3,"RuleID":"generic-api-key","Description":"Generic API Key","Commit":"abcdef1234567890"}]' > "$r"
+exit 99
+SH
+chmod +x "$BIN/gitleaks-mock"
+GITLEAKS="$BIN/gitleaks-mock" AUDIT_ENV="$VON" run_audit
+if [ "$RC" = 0 ] && [ "$(verify_calls)" = 0 ] && [ "$(creates)" = 1 ] && ! grep -q 'Tarkistus:' "$WORK/created/100.body"; then
+  ok V9 "scanner rows pass unverified"
+else show V9; bad V9 "rc $RC, $(verify_calls) verifier call(s), $(creates) issue(s)"; fi
+done_case
+
+setup V10  # --dry-run marks the unsure plan and writes nothing
+printf '%s\nMERGE_GATE_RESULT: FINDINGS\n' "$F_HIGH" > "$WORK/review.txt"
+printf 'VERIFY_RESULT: UNSURE\n' > "$WORK/verify/xss.txt"
+AUDIT_ENV="$VON" run_audit --dry-run
+if [ "$RC" = 0 ] && [ "$(writes)" = 0 ] && grep -q '^create \[security\] \[unsure\]' <<<"$OUT"; then ok V10 "dry run shows the unsure plan"
+else show V10; bad V10 "rc $RC, $(writes) write(s), plan not '[security] [unsure]'"; fi
+done_case
+[ "$FAIL" = "$F0" ] && ok V "finding verification"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "security-audit: all passed" || echo "security-audit: FAILURES"

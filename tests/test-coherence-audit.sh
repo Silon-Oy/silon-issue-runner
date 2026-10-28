@@ -21,6 +21,11 @@
 #   I) first run without a cursor: the window is the interval (repo setting wins)
 #   J) first run without a cursor and without a repo setting: the watchlist
 #      entry's coherence_audit_interval_days wins over the environment (#373)
+#   V) finding verification (#394, RUN_ISSUES_AUDIT_VERIFY=1): CONFIRMED filed,
+#      REFUTED dropped and logged, UNSURE filed with a note; a failing verifier
+#      (rc 1, rc 124, unparseable) reads as UNSURE; a verifier that dirties the
+#      worktree rejects the audit (exit 3, no write, cursor unchanged); off =>
+#      no verifier call
 #
 # Run: bash tests/test-coherence-audit.sh
 
@@ -114,8 +119,28 @@ exit 0
 SH
   chmod +x "$BIN/gh"
 
+  # A verifier call (#394) answers from verify/<slug>.txt for the finding whose
+  # description holds [<slug>] — CONFIRMED when there is none — with
+  # verify/<slug>.rc and verify/<slug>.sh as the exit code and a side effect.
+  mkdir -p "$WORK/verify"
   cat > "$BIN/claude-mock" <<SH
 #!/usr/bin/env bash
+case "\$*" in
+  *"VERIFY_RESULT: CONFIRMED|REFUTED|UNSURE"*)
+    echo VERIFY >> "$WORK/calls.log"
+    for f in "$WORK"/verify/*.txt; do
+      [ -f "\$f" ] || continue
+      slug=\$(basename "\$f" .txt)
+      case "\$*" in *"[\$slug]"*)
+        [ -f "$WORK/verify/\$slug.sh" ] && bash "$WORK/verify/\$slug.sh"
+        cat "\$f"
+        [ -f "$WORK/verify/\$slug.rc" ] && exit "\$(cat "$WORK/verify/\$slug.rc")"
+        exit 0 ;;
+      esac
+    done
+    printf 'Real: lib/b.sh:1\nVERIFY_RESULT: CONFIRMED\n'
+    exit 0 ;;
+esac
 echo AUDIT >> "$WORK/calls.log"
 printf '%s\n' "\$*" > "$WORK/prompt-seen"
 cat "$WORK/review.txt"
@@ -370,6 +395,66 @@ grep -q '#62' "$WORK/prompt-seen" && bad J "PR outside the watchlist's window re
 echo "$OUT" | grep -q 'last 2 day' || bad J "window not taken from the watchlist"
 [ "$FAIL" = "$F0" ] && ok J "first window is the watchlist interval, which wins over the environment"
 done_case
+
+echo "=== V: finding verification ==="
+F0=$FAIL
+F_CONV='FINDING: low | medium | lib/c.sh:1 | [conflicting-convention] c() logs to stdout, a() to stderr'
+F_ABS='FINDING: medium | medium | lib/d.sh:1 | [parallel-abstraction] d() wraps what a() does'
+verify_calls() { grep -c VERIFY "$WORK/calls.log" 2>/dev/null || true; }
+created_for() { grep -l -F "[$1]" "$WORK"/created/*.title 2>/dev/null | sed -E 's#.*/([0-9]+)\.title#\1#' | head -1; }
+vsetup() { # <label> <finding...>
+  local label="$1"; shift
+  setup "$label"; set_cursor "$T_OLD"
+  page 1 "$(pr 11 "$T1" auto-run/x-issue-1-a)"; printf 'lib/a.sh\n' > "$WORK/files/11"
+  { printf '%s\n' "$@"; echo 'MERGE_GATE_RESULT: FINDINGS'; } > "$WORK/review.txt"
+}
+VON="RUN_ISSUES_AUDIT_VERIFY=1"
+
+vsetup V1 "$F_DUP" "$F_CONV" "$F_ABS"
+printf 'Logged at lib/c.sh:1 via log()\nVERIFY_RESULT: REFUTED\n' > "$WORK/verify/conflicting-convention.txt"
+printf 'VERIFY_RESULT: UNSURE\n' > "$WORK/verify/parallel-abstraction.txt"
+AUDIT_ENV="$VON" run_audit; AUDIT_ENV=""
+[ "$RC" = 0 ] || { show V1; bad V1 "rc $RC, want 0"; }
+[ "$(verify_calls)" = 3 ] || bad V1 "$(verify_calls) verifier call(s), want 3"
+[ "$(creates)" = 2 ] || bad V1 "created $(creates) issues, want 2"
+[ -z "$(created_for conflicting-convention)" ] || bad V1 "the refuted finding was filed"
+grep -q 'finding refuted by verifier: lib/c.sh:1' <<<"$OUT" || bad V1 "the refuted finding is not logged"
+n=$(created_for duplicate-implementation)
+grep -q 'Tarkistus:' "$WORK/created/$n.body" 2>/dev/null && bad V1 "the confirmed finding carries the unsure note"
+n=$(created_for parallel-abstraction)
+grep -q '^> \*\*Tarkistus:\*\*' "$WORK/created/$n.body" 2>/dev/null || bad V1 "the unsure finding lacks the note"
+[ "$(cat "$WORK/created/$n.labels" 2>/dev/null)" = coherence ] || bad V1 "unsure labels are not coherence only"
+[ "$(cursor)" = "$(epoch_of "$T1")" ] || bad V1 "cursor did not move after a complete audit"
+[ "$FAIL" = "$F0" ] && ok V1 "confirmed filed, refuted dropped, unsure filed with a note"
+done_case
+
+for c in "V2 1 VERIFY_RESULT: REFUTED" "V3 124 " "V4 0 it is probably refuted"; do
+  set -- $c; label="$1"; rc="$2"; shift 2
+  vsetup "$label" "$F_DUP"
+  printf '%s\n' "$*" > "$WORK/verify/duplicate-implementation.txt"
+  echo "$rc" > "$WORK/verify/duplicate-implementation.rc"
+  AUDIT_ENV="$VON" run_audit; AUDIT_ENV=""
+  if [ "$RC" = 0 ] && [ "$(creates)" = 1 ] && grep -q 'Tarkistus:' "$WORK/created/100.body"; then
+    ok "$label" "verifier rc $rc, answer '$*' reads as unsure"
+  else show "$label"; bad "$label" "rc $RC, $(creates) issue(s), want 0 and 1 unsure"; fi
+  done_case
+done
+
+vsetup V5 "$F_DUP"
+printf 'VERIFY_RESULT: CONFIRMED\n' > "$WORK/verify/duplicate-implementation.txt"
+echo 'echo dirt > stray.txt' > "$WORK/verify/duplicate-implementation.sh"
+AUDIT_ENV="$VON" run_audit; AUDIT_ENV=""
+if [ "$RC" = 3 ] && [ "$(writes)" = 0 ] && [ "$(cursor)" = "$(epoch_of "$T_OLD")" ]; then
+  ok V5 "a verifier that writes rejects the audit"
+else show V5; bad V5 "rc $RC, $(writes) write(s), cursor $(cursor)"; fi
+done_case
+
+vsetup V6 "$F_DUP"
+run_audit
+if [ "$RC" = 0 ] && [ "$(verify_calls)" = 0 ] && [ "$(creates)" = 1 ]; then ok V6 "off: no verifier call"
+else show V6; bad V6 "rc $RC, $(verify_calls) verifier call(s)"; fi
+done_case
+[ "$FAIL" = "$F0" ] && ok V "finding verification"
 
 echo "----------------------------------------"
 [ "$FAIL" -eq 0 ] && echo "coherence-audit: all passed" || echo "coherence-audit: FAILURES"

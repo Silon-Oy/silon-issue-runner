@@ -20,6 +20,8 @@
 #   m  "script not executable" and "cannot record" are logged once over two
 #      ticks, and again after the condition went away and came back (#360)
 #   n  a custom RUN_ISSUES_POLLER_ENV_FILE reaches the audit session (#360)
+#   v  the audit session gets RUN_ISSUES_AUDIT_VERIFY='1', and '0' when
+#      poller.env exports 0 (#394)
 #   w  the watchlist entry's <kind>_audit_interval_days (#373): schedules without
 #      an environment value, `0` switches the environment's value off, the repo
 #      config still wins, a bad value is logged once and starts nothing
@@ -319,6 +321,21 @@ line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)
 case "$line" in
   *"RUN_ISSUES_POLLER_ENV_FILE='$WORK/hn2/.config/run-issues/poller.env' "*) ok "n the default poller.env path is passed too" ;;
   *) bad "n default env file not passed: $line" ;;
+esac
+
+# ---- v: finding verification is switched on for the audit session (#394) -------
+line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)   # hn2: the default
+case "$line" in
+  *"RUN_ISSUES_AUDIT_VERIFY='1' "*) ok "v the poller switches finding verification on by default" ;;
+  *) bad "v RUN_ISSUES_AUDIT_VERIFY='1' not passed: $line" ;;
+esac
+mkdir -p "$WORK/hv/.config/run-issues"
+printf 'export RUN_ISSUES_AUDIT_VERIFY=0\n' > "$WORK/hv/.config/run-issues/poller.env"
+run_poller "$WORK/hv" "$WORK/logs-v" "$WL" RUN_ISSUES_SECURITY_AUDIT_INTERVAL_DAYS=7
+line=$(grep "run-issues-audit-" "$TMUX_LOG" || true)
+case "$line" in
+  *"RUN_ISSUES_AUDIT_VERIFY='0' "*) ok "v poller.env switches finding verification off" ;;
+  *) bad "v poller.env RUN_ISSUES_AUDIT_VERIFY=0 not honoured: $line" ;;
 esac
 
 # ---- w: the watchlist entry's interval (#373) ---------------------------------------

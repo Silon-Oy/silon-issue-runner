@@ -161,6 +161,7 @@ _claude_step_phase() {
     10-semantic-review*)     printf 'SEMANTIC_REVIEW' ;;
     11-semantic-fix*)        printf 'SEMANTIC_FIX' ;;
     12-coherence-audit*)     printf 'COHERENCE_AUDIT' ;;
+    13-finding-verify*)      printf 'FINDING_VERIFY' ;;
   esac
 }
 

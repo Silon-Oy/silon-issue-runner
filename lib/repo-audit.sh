@@ -15,6 +15,8 @@
 #     chances for one of them to go missing silently
 #   - "not a result" (CLAUDE.md §9): a launch failure, an empty or unparseable
 #     answer is exit 3, never "no findings"
+#   - the refutation pass (opt-in): each agent finding is checked by an agent
+#     that tries to disprove it, under the same read-only gate
 #   - the finding loop: fingerprint → plan → write, via lib/finding-issues.sh
 #
 # The functions share state through globals the calling script also reads:
@@ -141,22 +143,30 @@ repo_audit_index() {
   fi
 }
 
+# repo_audit_readonly_check <who> — the read-only gate, ONE copy for every agent
+# that runs in WT (the audit agent and each finding verifier): HEAD must still
+# be HEAD_SHA and the worktree clean. rc 3 (KEEP_WORK=1) otherwise.
+repo_audit_readonly_check() {
+  local head_after
+  head_after=$(git -C "$WT" rev-parse HEAD 2>/dev/null)
+  if [ "$head_after" != "$HEAD_SHA" ] || [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
+    KEEP_WORK=1
+    repo_audit_say "the $1 changed the worktree (head ${head_after:-?}) although it may only read — audit rejected, nothing written"
+    return 3
+  fi
+}
+
 # repo_audit_agent <step> <prompt-file> <timeout-secs> — run the audit agent in
 # WT and accept its answer only if it left the worktree untouched. Sets RESULT
 # to clean | findings; the answer is in $WORK/<step>.out. rc 3 (KEEP_WORK=1)
 # when the worktree changed, the agent failed or its answer is empty or
 # unparseable — nothing may be written then.
 repo_audit_agent() {
-  local step="$1" prompt="$2" timeout="$3" arc=0 head_after
+  local step="$1" prompt="$2" timeout="$3" arc=0
   ( cd "$WT" && RUN_ISSUES_CLAUDE_TIMEOUT="$timeout" call_claude "$WORK" "$step" "$prompt" ) >&2 || arc=$?
   repo_audit_say "audit agent returned rc=$arc"
 
-  head_after=$(git -C "$WT" rev-parse HEAD 2>/dev/null)
-  if [ "$head_after" != "$HEAD_SHA" ] || [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
-    KEEP_WORK=1
-    repo_audit_say "the audit agent changed the worktree (head ${head_after:-?}) although it may only read — audit rejected, nothing written"
-    return 3
-  fi
+  repo_audit_readonly_check "audit agent" || return 3
   RESULT=$(merge_gate_parse "$WORK/$step.out" "$WORK/$step.exit")
   [ "$arc" -ne 0 ] && RESULT="launch_failed"
   if [ "$RESULT" = "launch_failed" ]; then
@@ -169,6 +179,76 @@ repo_audit_agent() {
     return 3
   fi
 }
+
+# repo_audit_verify <kind> — the refutation pass (issue #394), run between
+# parsing and repo_audit_apply. Opt-in: RUN_ISSUES_AUDIT_VERIFY=1 (the poller
+# sets it, CLAUDE.md §9); otherwise a no-op. Operates on the global FINDINGS
+# (the rows repo_audit_apply reads) rather than a pipe: a subshell would lose
+# KEEP_WORK, and a verifier reading the rows' stdin would swallow the rest.
+#
+# Each `agent|` row is handed, alone and in a fresh context, to an agent told
+# to disprove it from the code (prompts/13-finding-verify.md):
+#   CONFIRMED → kept as is
+#   REFUTED   → dropped from FINDINGS and logged
+#   UNSURE    → kept, and listed in $WORK/verify.unsure: repo_audit_apply files
+#               it with the kind's label only, no assignee, and a note
+# A launch failure, a timeout or an unparseable answer reads as UNSURE, never
+# REFUTED: a finding must not vanish because its verifier did. Scanner rows are
+# deterministic tool output and pass unverified. Every verifier runs under the
+# same read-only gate as the audit agent: rc 3 rejects the whole audit.
+repo_audit_verify() {
+  local kind="$1" row rest sev conf loc desc i=0 rc verdict prompt step kept=""
+  local n_conf=0 n_ref=0 n_uns=0
+  local timeout="${RUN_ISSUES_AUDIT_VERIFY_TIMEOUT:-600}"
+  local template="$_REPO_AUDIT_DIR/../prompts/13-finding-verify.md"
+  : > "$WORK/verify.unsure"
+  [ "${RUN_ISSUES_AUDIT_VERIFY:-0}" = 1 ] || return 0
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    if [ "${row%%|*}" != agent ]; then
+      kept="$kept$row"$'\n'
+      continue
+    fi
+    i=$((i + 1))
+    rest="${row#*|}"
+    IFS='|' read -r sev conf loc desc <<<"$rest"
+    desc="${rest#*|*|*|}"
+    step="13-finding-verify-$i"
+    prompt="$WORK/$step.prompt"
+    verdict=""
+    if render_prompt "$template" "$prompt" \
+         REPO="$OWNER_REPO" HEAD_SHA="$HEAD_SHA" AUDIT_KIND="$kind" \
+         FINDING_SEVERITY="$sev" FINDING_CONFIDENCE="$conf" \
+         FINDING_LOCATION="$loc" FINDING_DESCRIPTION="$desc" 2>/dev/null && [ -s "$prompt" ]; then
+      rc=0
+      ( cd "$WT" && RUN_ISSUES_CLAUDE_TIMEOUT="$timeout" call_claude "$WORK" "$step" "$prompt" ) </dev/null >&2 || rc=$?
+      repo_audit_readonly_check "finding verifier" || return 3
+      if [ "$rc" -eq 0 ]; then
+        verdict=$(awk 'NF { l = $0 } END { sub(/\r$/, "", l); print l }' "$WORK/$step.out" 2>/dev/null \
+                  | sed -nE 's/^VERIFY_RESULT: (CONFIRMED|REFUTED|UNSURE)$/\1/p')
+      fi
+      [ -n "$verdict" ] || repo_audit_say "finding verifier gave no result (rc=$rc; 127 = did not start, 124 = timeout) — read as UNSURE: $loc"
+    else
+      repo_audit_say "cannot render the verifier prompt — read as UNSURE: $loc"
+    fi
+    case "${verdict:-UNSURE}" in
+      CONFIRMED)
+        n_conf=$((n_conf + 1)); kept="$kept$row"$'\n' ;;
+      REFUTED)
+        n_ref=$((n_ref + 1))
+        repo_audit_say "finding refuted by verifier: $loc — $desc" ;;
+      *)
+        n_uns=$((n_uns + 1)); kept="$kept$row"$'\n'
+        printf '%s\n' "$row" >> "$WORK/verify.unsure" ;;
+    esac
+  done <<<"$FINDINGS"
+  FINDINGS="${kept%$'\n'}"
+  [ "$i" -gt 0 ] && repo_audit_say "verified: $n_conf confirmed, $n_ref refuted, $n_uns unsure"
+  return 0
+}
+
+# REPO_AUDIT_UNSURE_NOTE — prepended to the body of an UNSURE finding's issue.
+REPO_AUDIT_UNSURE_NOTE="> **Tarkistus:** riippumaton tarkistus ei pystynyt vahvistamaan eikä kumoamaan tätä löydöstä, joten issue ei saanut poimintalabelia automaattisesti. Arvioi löydös ennen toteutusta."
 
 # repo_audit_apply <kind> <dry-run 0|1> <reopen-comment> <key-fn> <labels-fn>
 #                  <title-fn> <body-fn> [<assignee-fn>]
@@ -189,7 +269,7 @@ repo_audit_agent() {
 repo_audit_apply() {
   local kind="$1" dry="$2" comment="$3" key_fn="$4" labels_fn="$5" title_fn="$6" body_fn="$7"
   local assignee_fn="${8:-}"
-  local row origin rest sev conf loc desc sk source key fp labels assignee plan title body res seen=" "
+  local row origin rest sev conf loc desc sk source key fp labels assignee plan title body res unsure seen=" "
   REPO_AUDIT_FINDINGS=0
   REPO_AUDIT_WRITE_FAILED=0
   while IFS= read -r row; do
@@ -211,16 +291,26 @@ repo_audit_apply() {
     labels=$("$labels_fn" "$sev")
     assignee=""
     [ -n "$assignee_fn" ] && assignee=$("$assignee_fn" "$sev")
+    unsure=0
+    # An UNSURE finding (repo_audit_verify): the kind's own label only — the
+    # labels-fn contract puts it first — and no route, at any severity.
+    if [ -s "${WORK:-}/verify.unsure" ] && grep -qxF -- "$row" "$WORK/verify.unsure"; then
+      unsure=1; labels="${labels%%,*}"; assignee=""
+    fi
 
     if [ "$dry" = 1 ]; then
       plan=$(finding_issue_plan "$INDEX" "$kind" "$fp")
       case "$plan" in create|reopen*) plan="$plan [$labels]${assignee:+ @$assignee}" ;; esac
+      [ "$unsure" = 1 ] && plan="$plan [unsure]"
       printf '%s\t%s\t%s\t%s\n' "$plan" "$sev" "$loc" "$desc"
       continue
     fi
 
     title=$("$title_fn" "$sev" "$loc" "$desc")
     body=$("$body_fn" "$sev" "$conf" "$loc" "$desc" "$source" "$fp")
+    [ "$unsure" = 1 ] && body="$REPO_AUDIT_UNSURE_NOTE
+
+$body"
     if res=$(finding_issue_apply "$OWNER_REPO" "$INDEX" "$kind" "$fp" "$title" "$body" "$labels" "$comment" "$assignee"); then
       printf '%s\t%s\t%s\t%s\n' "$res" "$sev" "$loc" "$desc"
     else

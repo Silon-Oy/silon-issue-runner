@@ -82,6 +82,11 @@
 #   RUN_ISSUES_SECURITY_AUDIT_TIMEOUT   agent call time cap in seconds (default 3600)
 #   RUN_ISSUES_SECURITY_AUDIT_FETCH_TIMEOUT  git fetch time cap (default 300)
 #   RUN_ISSUES_WATCHLIST                watchlist override (poller semantics)
+#   RUN_ISSUES_AUDIT_VERIFY             1 = every agent finding is first checked by
+#        a verifier agent that tries to refute it (prompts/13-finding-verify.md):
+#        refuted ones are dropped, unsure ones filed without pickup labels or
+#        assignee (default 0; the poller sets 1)
+#   RUN_ISSUES_AUDIT_VERIFY_TIMEOUT     time cap per verifier call in seconds (default 600)
 #   RUN_ISSUES_AUDIT_STATE_FILE         internal: set by audit_run (lib/audit-schedule.sh)
 #        for a scheduled run — where the last successfully audited commit is kept
 #   RUN_ISSUES_CLAUDE_CMD and the rest of lib/claude-call.sh's settings; the
@@ -236,6 +241,9 @@ if [ ! -f "$SCAN_DIR/scan.summary" ]; then
 elif [ -s "$SCAN_DIR/scan.failed" ]; then
   SCAN_FAILED=$(cut -d'|' -f1 "$SCAN_DIR/scan.failed" | paste -sd, -)
 fi
+
+# The refutation pass over the agent's rows (opt-in, lib/repo-audit.sh).
+repo_audit_verify "$AUDIT_KIND" || exit $?
 
 # ---- one finding → fingerprint, title, body -----------------------------------
 

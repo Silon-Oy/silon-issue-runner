@@ -440,6 +440,7 @@ virhe.** Tämä on koko listan kantava sääntö.
 | `PR_WATCH_ENABLE_CI_REPAIR` | poller nostaa `1`:ksi | punainen CI ⇒ `WAIT_CI` |
 | `PR_WATCH_ENABLE_SECURITY_GATE` | poller nostaa `1`:ksi | merge ilman diffin tietoturvakatselmusta |
 | `PR_WATCH_ENABLE_SEMANTIC_CHECK` | poller nostaa `1`:ksi | merge ilman sisar-PR:ien vertailua |
+| Auditointilöydösten tarkistus | poller nostaa `RUN_ISSUES_AUDIT_VERIFY=1` | löydös kirjoitetaan tarkistamatta |
 | Cycle reviewn havaintoissuet | poller nostaa `RUN_ISSUES_OBSERVED_DEFECTS=1` | havainto jää vain `.out`-tiedostoon |
 | Tietoturva-auditoinnin ajastus | `security_audit_interval_days`: repo > watchlist > `poller.env` | repoa ei auditoida |
 | Koherenssiauditoinnin ajastus | `coherence_audit_interval_days`: sama ketju | repoa ei auditoida |

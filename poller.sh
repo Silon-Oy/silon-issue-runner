@@ -900,7 +900,7 @@ _dispatch_audit_pass() {
   # policy from the same poller.env the poller sourced (#360). Only here, not in
   # ORCH_ENV — the orchestrator never reads poller.env (CLAUDE.md §8).
   tmux new-session -d -s "$session" \
-    "$ORCH_ENV RUN_ISSUES_POLLER_ENV_FILE='$POLLER_ENV_FILE' bash -c '. \"\$0\"; audit_run \"\$@\"' '${RUN_ISSUES_HOME}/lib/audit-schedule.sh' '$state' '$now' '${RUN_ISSUES_HOME}/$script' '$REPO_PATH' --remote '$REMOTE' --watchlist '$WATCHLIST' 2>&1 | tee -a '$RUNS_LOG'"
+    "$ORCH_ENV RUN_ISSUES_POLLER_ENV_FILE='$POLLER_ENV_FILE' ${AUDIT_ENV:-} bash -c '. \"\$0\"; audit_run \"\$@\"' '${RUN_ISSUES_HOME}/lib/audit-schedule.sh' '$state' '$now' '${RUN_ISSUES_HOME}/$script' '$REPO_PATH' --remote '$REMOTE' --watchlist '$WATCHLIST' 2>&1 | tee -a '$RUNS_LOG'"
   return 0
 }
 
@@ -1281,6 +1281,12 @@ ORCH_ENV="$ORCH_ENV RUN_ISSUES_OBSERVED_DEFECTS='$RUN_ISSUES_OBSERVED_DEFECTS'"
 if [ -n "${RUN_ISSUES_OBSERVED_DEFECT_MAX:-}" ]; then
   ORCH_ENV="$ORCH_ENV RUN_ISSUES_OBSERVED_DEFECT_MAX='$RUN_ISSUES_OBSERVED_DEFECT_MAX'"
 fi
+
+# Verify every audit finding before it becomes an issue (issue #394). The audit
+# scripts default this OFF (0); the poller flips it ON, and poller.env can
+# export RUN_ISSUES_AUDIT_VERIFY=0 to disable. Only the audit session gets it:
+# the orchestrator never reads it, so it is not part of ORCH_ENV.
+AUDIT_ENV="RUN_ISSUES_AUDIT_VERIFY='${RUN_ISSUES_AUDIT_VERIFY:-1}'"
 
 # Count currently active run-issues tmux sessions to respect the cap.
 # The `|| ACTIVE=0` fallback lives OUTSIDE the command substitution on purpose:

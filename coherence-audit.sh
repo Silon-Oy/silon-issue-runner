@@ -63,6 +63,11 @@
 #        over it and the repo's `.coherence.audit_interval_days` over both.
 #        Default 7.
 #   RUN_ISSUES_WATCHLIST                      watchlist override (poller semantics)
+#   RUN_ISSUES_AUDIT_VERIFY                   1 = every agent finding is first checked by
+#        a verifier agent that tries to refute it (prompts/13-finding-verify.md):
+#        refuted ones are dropped, unsure ones filed without pickup labels or
+#        assignee (default 0; the poller sets 1)
+#   RUN_ISSUES_AUDIT_VERIFY_TIMEOUT           time cap per verifier call in seconds (default 600)
 #   RUN_ISSUES_COHERENCE_AUDIT_TIMEOUT        agent call time cap in seconds (default 3600)
 #   RUN_ISSUES_COHERENCE_AUDIT_FETCH_TIMEOUT  git fetch time cap (default 300)
 #   RUN_ISSUES_COHERENCE_AUDIT_MAX            change-surface size cap in the prompt,
@@ -241,6 +246,9 @@ repo_audit_agent "$AUDIT_STEP" "$PROMPT" "$AUDIT_TIMEOUT" || exit $?
 
 FINDINGS=""
 [ "$RESULT" = "findings" ] && FINDINGS=$(merge_gate_findings "$WORK/$AUDIT_STEP.out" | sed 's/^/agent|/' | awk 'NF && !seen[$0]++')
+
+# The refutation pass (opt-in, lib/repo-audit.sh).
+repo_audit_verify "$AUDIT_KIND" || exit $?
 
 # ---- one finding → fingerprint, title, body -----------------------------------
 
