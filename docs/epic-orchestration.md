@@ -175,6 +175,12 @@ arkkitehtuurin ydin:
 | **Kokoava** | parent → sub-issue | epic-tason automaatio (uusi) | *Mitkä* issuet kuuluvat epiciin |
 | **Järjestävä** | `blocked_by` | S2b-portti (#28, olemassa) | *Missä järjestyksessä* alaissueet ajetaan |
 
+Järjestävä graafi kuvaa **sisällöllistä** järjestystä: lapsi käyttää toisen lapsen tuottamaa
+koodia, skeemaa, rajapintaa tai päätöstä. Se, että kaksi lasta muuttaa samaa tiedostoa, ei ole
+peruste kaarelle — tiedostotörmäyksen hoitavat ajonaikainen sarjoitus (#338) ja PR-vahdin
+semanttinen portti (#341). Pelkästä törmäyksestä merkityt kaaret jonottaisivat ajot turhaan
+sarjaan ja vaatisivat käsin ylläpitoa (`/issue-runner:new-epic`, kohta *Riippuvuudet*).
+
 Epic **ei** ole automaattisesti `blocked_by`-estetty lastensa toimesta — sub-issue-relaatio ei
 luo estoa. Tämä on olennaista §2:n löydökselle: mikään olemassa oleva portti ei pidättele
 epiciä, koska S2b lukee vain järjestävää graafia.

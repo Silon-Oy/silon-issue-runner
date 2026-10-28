@@ -141,6 +141,12 @@ Lue kuvaus ja perehdy repoon sen verran, että pilkkominen osuu todelliseen kood
 - **Riippuvuudet:** mitkä lapset ovat `blocked_by` mihinkin lapseen. Vain aitoja
   järjestysriippuvuuksia — löysä ketjutus jonottaa ajot turhaan sarjaan. **Graafi ei saa olla
   syklinen** (`/issue-runner:run-epic` kieltäytyy syklistä exit-koodilla 4).
+
+  **Kelpaava peruste on sisällöllinen:** lapsi käyttää toisen lapsen tuottamaa koodia, skeemaa,
+  rajapintaa tai päätöstä. **"Muuttaa samaa tiedostoa" ei kelpaa** — älä merkitse siitä
+  riippuvuutta. Jos lapset koskevat samaan tiedostoon ilman sisällöllistä järjestystä,
+  suunnitelma sanoo sen ääneen: ajonaikainen sarjoitus (#338) ja semanttinen portti (#341)
+  hoitavat törmäyksen, joten lapset jäävät rinnakkaisiksi.
 - **Ajopolku jokaiselle alaissueelle:** `light-run`, tavallinen (ei labelia) tai `heavy-run`,
   ja yhden rivin perustelu. Kriteerit ovat kirjattuina yhdessä paikassa, skillin
   [`claude-issue-runner`](../../skills/claude-issue-runner/SKILL.md) osiossa *Ajopolku* — **lue

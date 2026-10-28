@@ -184,6 +184,10 @@ Kun issuen pitää odottaa toista, merkitse riippuvuus GitHubin **"Mark as block
 2. **Merkitse riippuvuudet** GitHubin omalla toiminnolla (ei labelia).
 3. **Lisää `auto-run` vasta sitten.**
 
+Riippuvuus kuvaa sisällöllistä järjestystä (issue käyttää toisen tuottamaa koodia, skeemaa,
+rajapintaa tai päätöstä), ei sitä että kaksi issueta muuttaa samaa tiedostoa — sen hoitavat
+ajonaikainen sarjoitus ja semanttinen portti; ks. `/issue-runner:new-epic`, kohta *Riippuvuudet*.
+
 Automaatio etenee ketjussa yksi lenkki kerrallaan itsestään: kun viimeinen estäjä sulkeutuu,
 issue vapautuu poimintaan seuraavalla tikillä. Yksi avoin estäjä riittää pitämään issuen
 poiminnan ulkopuolella, eikä estoa voi vahingossa poistaa labelia poistamalla.
