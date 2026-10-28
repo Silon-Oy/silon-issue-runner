@@ -165,15 +165,6 @@ expect B "summary total" "$(printf '%s\n' "$summary" | head -n1)" "Yhteenveto (9
 expect B "summary runner" "$(printf '%s\n' "$summary" | awk '$1 == "runner" {print $2, $3}')" "4 44.4"
 expect B "summary peritty" "$(printf '%s\n' "$summary" | awk '$1 == "peritty" {print $2, $3}')" "3 33.3"
 expect B "summary tuntematon" "$(printf '%s\n' "$summary" | awk '$1 == "tuntematon" {print $2, $3}')" "2 22.2"
-# The summary must not follow the machine's locale: a Finnish LC_NUMERIC turns 44.4 into 44,4.
-FI_LOCALE=$(locale -a 2>/dev/null | grep -Eix 'fi_FI\.utf-?8' | head -n1)
-if [ -n "$FI_LOCALE" ]; then
-  LC_ALL=$FI_LOCALE run --repo "$REPO" --issues 101
-  summary_fi=$(printf '%s\n' "$OUT" | sed -n '/^Yhteenveto/,$p')
-  expect B "summary under $FI_LOCALE" "$(printf '%s\n' "$summary_fi" | awk '$1 == "runner" {print $2, $3}')" "4 44.4"
-else
-  echo "SKIP B: Finnish locale (fi_FI.UTF-8) not installed — locale-independence case not run"
-fi
 if printf '%s\n' "$summary" | grep -q 'blame kertoo viimeisimmän muuttajan, ei aina vian aiheuttajaa; puuttuvalla tarkistuksella ei ole riviä'; then
   ok B "blame limitation line"
 else bad B "blame limitation line missing"; fi
@@ -192,6 +183,17 @@ expect D "the shared commit is asked once" "$(calls "commits/$C2/pulls")" 1
 expect D "pulls/<N> only for msg-ref subjects" "$(calls 'repos/o/app/pulls/')" 3
 expect D "the Auto: subject needs no PR read" "$(calls 'pulls/13')" 0
 expect D "one read per issue" "$(calls 'issues/101')" 1
+
+# Runs after C and D, which read the calls.log of the first B run.
+# The summary must not follow the machine's locale: a Finnish LC_NUMERIC turns 44.4 into 44,4.
+FI_LOCALE=$(locale -a 2>/dev/null | grep -Eix 'fi_FI\.utf-?8' | head -n1)
+if [ -n "$FI_LOCALE" ]; then
+  LC_ALL=$FI_LOCALE run --repo "$REPO" --issues 101
+  summary_fi=$(printf '%s\n' "$OUT" | sed -n '/^Yhteenveto/,$p')
+  expect B "summary under $FI_LOCALE" "$(printf '%s\n' "$summary_fi" | awk '$1 == "runner" {print $2, $3}')" "4 44.4"
+else
+  echo "SKIP B: Finnish locale (fi_FI.UTF-8) not installed — locale-independence case not run"
+fi
 
 # ---- E) the blamed commit ------------------------------------------------------------
 run --repo "$REPO" --issues 103
