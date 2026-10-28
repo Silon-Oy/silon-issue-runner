@@ -130,6 +130,33 @@ Kieli ei myöskään ole turvallisuuskysymys, joten fail-closed olisi tässä v�
 Issue-luontikomennot `/issue-runner:new-issue` ja `/issue-runner:new-epic` esittävät kysymyksen
 ja kirjaavat vastauksen tässä kuvatussa muodossa.
 
+## Invarianttiluokat
+
+Nämä kuusi sääntöä pätevät kaikkeen koodiin sovelluksesta riippumatta. Kukin rikkoutuu
+tavalla, joka ei näy testeistä eikä tavallisesta käytöstä: vika ilmenee vasta toistossa,
+keskeytyksessä, hitaassa vastapuolessa tai uudessa kentässä. Siksi niillä on pysyvät
+tunnisteet: orkestroidussa ajossa cycle review nimeää tunnisteilla ne luokat, joita muutos
+koskee, todennussuunnitelma todentaa jokaisen, ja Evolution tarkistaa ne diffistä.
+
+- **`allowlist-output`** — Asiakkaalle tai julkiseen rajapintaan palautettava data
+  rakennetaan sallittujen kenttien listasta, ei poistamalla kenttiä kokonaisesta oliosta.
+  Poistolistassa jokainen myöhemmin lisätty kenttä vuotaa oletuksena.
+- **`idempotent-retry`** — Jonon tai uudelleenyrityksen kautta kulkeva operaatio on
+  idempotentti: toisto ei tuota sivuvaikutusta kahdesti (esim. idempotenssiavain tai tilan
+  tarkistus ennen kirjoitusta). Jono ja uudelleenyritys toimittavat saman viestin ennemmin
+  tai myöhemmin uudestaan.
+- **`atomic-write`** — Monivaiheinen kirjoitus on atominen (transaktio, väliaikaistiedosto ja
+  rename tai vastaava), jotta keskeytys ei jätä puolivalmista tilaa, jota mikään ei korjaa.
+- **`server-state-guard`** — Tilasiirtymä vartioidaan palvelimella sallittujen siirtymien
+  perusteella. Asiakkaan lähettämään tilaan tai käyttöliittymän piilottamaan painikkeeseen ei
+  luoteta.
+- **`external-timeout`** — Ulkoisella kutsulla (HTTP, tietokanta, aliprosessi, jono) on
+  eksplisiittinen aikakatkaisu. Ilman sitä yksi jumittunut vastapuoli pysäyttää kutsujan
+  rajattomasti.
+- **`single-rule`** — Sama sääntö (validointi, oikeus, raja-arvo, laskentakaava) toteutetaan
+  yhdessä funktiossa, jota kaikki kutsupaikat käyttävät. Kaksi toteutusta ajautuu erilleen,
+  eikä ajautuma näy kummastakaan.
+
 ## Kehityspalvelimen portti worktreessä
 
 Kun työskentelet git-worktreessä, kehityspalvelimen oletusportti voi olla jo varattu.
