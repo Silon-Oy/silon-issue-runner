@@ -68,6 +68,20 @@ ennen PR:n avaamista.
 
 {{RUN_PATH_SECTION}}
 
+## Testiajojen määrät
+
+Kirjaa **jokaisesta ajamastasi testikomennosta** oma rivinsä ennen tulosriviä:
+
+```
+EVOLUTION_TEST_RUN: <komento> | passed=<n> | skipped=<n> | failed=<n>
+```
+
+Lue luvut testityökalun omasta yhteenvedosta, älä arvioi niitä. Jos jotakin lukua ei saa
+selville (työkalu ei raportoi sitä tai ajo kaatui ennen yhteenvetoa), kirjoita sen
+paikalle `?`. Vihreä sviitti, joka ohitti testinsä, näyttää läpäisseeltä — siksi
+ohitettujen määrä kirjataan erikseen. Orkestraattori tallentaa rivit ajon tilaan; ne
+eivät vaikuta tulokseen.
+
 ## Δψ — muutospaine tämän PR:n ulkopuolelle
 
 Jos huomasit toistuvan tai rakenteellisen ongelman, jonka korjaus ei kuulu tähän

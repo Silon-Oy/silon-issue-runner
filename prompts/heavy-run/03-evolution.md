@@ -18,3 +18,6 @@ invariantteja vasten. Korjauksen rikkoma invariantti johtaa `NEEDS_FOLLOWUP`-tul
 
 Diagnostisen kokeen ympäristökitka (esim. testiajon esto tai puuttuva `.env`) ei ole
 tuotevika: kirjaa se Δψ-osion muodossa lajilla `tooling` (`EVOLUTION_DELTA_PSI: tooling | …`).
+
+Jos ajat diagnostisen kokeen uudelleen tai todennat korjauksen testeillä, raportoi nekin
+ajot `EVOLUTION_TEST_RUN`-riveinä (`EVOLUTION_TEST_RUN: <komento> | passed=<n> | skipped=<n> | failed=<n>`).

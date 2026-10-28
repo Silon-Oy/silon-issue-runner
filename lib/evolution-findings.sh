@@ -7,6 +7,8 @@
 # lines:
 #   EVOLUTION_RESULT: CLEAN | FIXED — <why> | NEEDS_FOLLOWUP — <why>
 #   EVOLUTION_DELTA_PSI: <tooling|product> | <one sentence>   (zero or more)
+#   EVOLUTION_TEST_RUN: <command> | passed=<n> | skipped=<n> | failed=<n>
+#                                                            (zero or more, #410)
 # A Δψ line carries a class (issue #392): `tooling` is friction in the test
 # environment, provisioning or the runner itself; `product` is a structural
 # defect in the target application's code. A line without a recognised class —
@@ -85,5 +87,32 @@ evolution_findings() {
   done <<EOF
 $(evolution_delta_psi_classified "$out")
 EOF
+  return 0
+}
+
+# evolution_test_runs_json <evolution-out> — every EVOLUTION_TEST_RUN line as a
+# compact JSON array [{"command","passed","skipped","failed"}], or [] when there
+# is none (an older evolution output). The counts are the three RIGHTMOST
+# "|"-fields, so a command with a pipe in it stays whole. A count that is not a
+# number ("?", missing) is null — the line is kept, never dropped, because a
+# run the agent could not count is still a run it made.
+evolution_test_runs_json() {
+  local lines
+  lines=$(grep -E '^EVOLUTION_TEST_RUN:' "$1" 2>/dev/null || true)
+  printf '%s' "$lines" | jq -Rsc '
+    def num: if test("^[0-9]+$") then tonumber else null end;
+    [ split("\n")[]
+      | sub("\r$"; "")
+      | select(length > 0)
+      | sub("^EVOLUTION_TEST_RUN:\\s*"; "")
+      | split("|") as $p
+      | ($p | length) as $n
+      | (if $n >= 4 then $p[$n-3:] else [] end) as $kv
+      | (reduce $kv[] as $f ({};
+           ($f | capture("^\\s*(?<k>[a-z]+)\\s*=\\s*(?<v>.*?)\\s*$")?) as $m
+           | if $m then .[$m.k] = ($m.v | num) else . end)) as $c
+      | { command: ((if $n >= 4 then $p[:$n-3] else $p end) | join("|") | sub("^\\s+"; "") | sub("\\s+$"; "")),
+          passed: $c.passed, skipped: $c.skipped, failed: $c.failed }
+    ]' 2>/dev/null || echo '[]'
   return 0
 }

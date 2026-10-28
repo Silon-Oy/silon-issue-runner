@@ -323,6 +323,8 @@ source "$SCRIPT_DIR/lib/status-read.sh"
 source "$SCRIPT_DIR/lib/claude-call.sh"
 # shellcheck source=lib/evolution-findings.sh
 source "$SCRIPT_DIR/lib/evolution-findings.sh"
+# shellcheck source=lib/test-skips.sh
+source "$SCRIPT_DIR/lib/test-skips.sh"
 # shellcheck source=lib/preflight.sh
 source "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=lib/hook-runner.sh
@@ -2850,6 +2852,19 @@ _result_class() {
   printf '%s' "${w:-UNKNOWN}"
 }
 
+# _test_skip_rows <flagged|justified> — test_skips_added TSV on stdin as PR
+# body rows "- `file:line` — kind — `text`". Flagged = every focus marker and
+# every unjustified skip. Backticks would break the inline code span, so they
+# become quotes; a long line is cut at 200 characters.
+_test_skip_rows() {
+  awk -F '\t' -v want="$1" '
+    NF >= 5 && (want == "flagged" ? ($3 == "only" || $4 == "0") : ($3 == "skip" && $4 == "1")) {
+      t = $5; gsub(/`/, "\047", t)
+      if (length(t) > 200) t = substr(t, 1, 200) "…"
+      printf "- `%s:%s` — %s — `%s`\n", $1, $2, ($3 == "only" ? "only (focus: every other test is skipped)" : "skip"), t
+    }'
+}
+
 # phase_b_deliver — S9 evolution → S10 push → S11 PR → S12 finalize. Split from
 # phase_b_implement (issue #294) so a usage limit that interrupted evolution can
 # resume HERE instead of re-running a finished implementer. Everything it needs
@@ -2902,6 +2917,21 @@ phase_b_deliver() {
   # section has one subheading per class (#392), an empty one is not printed.
   local evo_delta_psi
   evo_delta_psi=$(evolution_delta_psi_classified "$evo_out")
+  # Test-run counts (#410): how many tests evolution's Ω run actually ran.
+  # Missing lines are "[]", recorded as data and never a change to the run.
+  state_set_json "$RUN_DIR" test_runs "$(evolution_test_runs_json "$evo_out")" \
+    || log "S9_Evolution test_runs not recorded"
+  # Skip and focus markers the branch adds (#410), scanned from the local diff
+  # after evolution, which may itself commit. A git error is zero hits.
+  local test_skips test_skips_flagged
+  test_skips=$(cd "$WORKTREE_PATH" && test_skips_added "${REMOTE_NAME}/${BASE_BRANCH:-HEAD}" HEAD) || test_skips=""
+  test_skips_flagged=$(printf '%s\n' "$test_skips" | awk -F '\t' 'NF >= 5 && ($3 == "only" || $4 == "0")')
+  if [ -n "$test_skips" ]; then
+    state_event "$RUN_DIR" "test_skips_added" \
+      "count=$(printf '%s\n' "$test_skips" | grep -c .)" \
+      "unjustified=$(printf '%s\n' "$test_skips" | awk -F '\t' '$3 == "skip" && $4 == "0"' | grep -c .)" \
+      "only=$(printf '%s\n' "$test_skips" | awk -F '\t' '$3 == "only"' | grep -c .)"
+  fi
 
   # ---------- S10: PR ----------
   enter_state "S10_PR"
@@ -2959,6 +2989,22 @@ phase_b_deliver() {
     echo "${evo_result:-UNKNOWN}"
     echo '```'
     echo
+    if [ -n "$test_skips_flagged" ]; then
+      echo "## Added test skips"
+      echo
+      echo "This branch adds test skip or focus markers that make a green suite say less than it seems. A \`.only\` always drafts the PR; a skip drafts it unless a comment on the same or the previous line, or the marker's own reason argument, explains it."
+      echo
+      printf '%s\n' "$test_skips" | _test_skip_rows flagged
+      local justified_rows
+      justified_rows=$(printf '%s\n' "$test_skips" | _test_skip_rows justified)
+      if [ -n "$justified_rows" ]; then
+        echo
+        echo "Justified skips (informational):"
+        echo
+        echo "$justified_rows"
+      fi
+      echo
+    fi
     if [ -n "$evo_delta_psi" ]; then
       echo "## Δψ — follow-up outside this PR"
       echo
@@ -2986,6 +3032,12 @@ phase_b_deliver() {
   case "${imp_result}${evo_result}" in
     *PARTIAL*|*NEEDS_FOLLOWUP*) pr_draft_flag="--draft" ;;
   esac
+  # An unjustified skip or any focus marker holds the PR as a draft (#410):
+  # a green suite that skipped its tests must not auto-merge.
+  if [ -n "$test_skips_flagged" ]; then
+    pr_draft_flag="--draft"
+    log "S10_PR draft: added test skips or focus markers"
+  fi
 
   # When App mode is on AND the remote is origin, push as the App via
   # `git -c http.extraheader=...` so the commit's pusher event (and any GitHub

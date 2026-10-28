@@ -121,6 +121,32 @@ state_set() {
   mv -f "$tmp" "$run_dir/run.json"
 }
 
+# state_set_json <run-dir> <key> <json>
+# Like state_set, but the value is stored as JSON (an array, object or
+# number), not as a string. Same key contract. Invalid JSON returns 1 and
+# leaves run.json untouched.
+state_set_json() {
+  local run_dir="$1"
+  local key="$2"
+  local value="$3"
+
+  if [[ ! "$key" =~ ^[a-zA-Z0-9_.]+$ ]]; then
+    echo "state_set_json: invalid key '$key' (allowed: [a-zA-Z0-9_.])" >&2
+    return 1
+  fi
+
+  local tmp
+  tmp=$(mktemp "$run_dir/.run.json.XXXXXX")
+  if ! jq --argjson v "$value" --arg path ".$key" \
+    'setpath(($path | ltrimstr(".") | split(".")); $v)' \
+    "$run_dir/run.json" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "state_set_json: invalid JSON for '$key'" >&2
+    return 1
+  fi
+  mv -f "$tmp" "$run_dir/run.json"
+}
+
 # state_increment_retry <run-dir>
 # Atomically increments .retry_count in run.json and prints the NEW value
 # to stdout. Used by the restart path under the per-issue lock, so the
