@@ -75,7 +75,11 @@ MAX_BYTES=88300
 # Raised to 88400 by issue #411, whose plan requires the README's
 # .claude/run-issues.json table to name the new accretion.max_lines key: one
 # row, ~120 B. The module description went to docs/lib-reference.md.
-MAX_BYTES=88400
+# Raised to 89400 by issue #409 (data-migration hold). Its criteria require a
+# README section-7 entry. The scan patterns, the config key, the hold and its
+# dedup went to docs/env-reference.md first; README carries one section-5 row
+# and a short section 7.14, ~0.95 KB.
+MAX_BYTES=89400
 MAX_CODE_TABLES=0      # exit-code tables: docs/troubleshooting.md is the mirror
 
 if [ ! -f "$README" ]; then

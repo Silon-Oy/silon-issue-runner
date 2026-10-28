@@ -142,18 +142,16 @@ data_migration_scan() {
   return 0
 }
 
-# How many lines of state.jsonl's TAIL data_migration_held_before reads
-# (CLAUDE.md §5.3: the file is never read whole). A lost record fails toward
-# noise, not toward a merge: the hold comment is posted once more.
-DATA_MIGRATION_TAIL_LINES="${DATA_MIGRATION_TAIL_LINES:-1000}"
-
 # data_migration_held_before <state-jsonl> <pr-number> <sha> — rc 0 when a
 # pr_data_migration_held event for this PR and head is already in the tail, i.e.
 # the hold comment for this head has been posted. A new head is a new comment.
+# Reads PR_WATCH_GATE_TAIL_LINES lines of the tail, the merge gates' window
+# (CLAUDE.md §5.3: never the whole file). A lost record fails toward noise, not
+# toward a merge: the comment is posted once more.
 data_migration_held_before() {
   local jsonl="$1" pr="$2" sha="$3" n
   [ -f "$jsonl" ] || return 1
-  n=$(tail -n "$DATA_MIGRATION_TAIL_LINES" "$jsonl" 2>/dev/null \
+  n=$(tail -n "${PR_WATCH_GATE_TAIL_LINES:-1000}" "$jsonl" 2>/dev/null \
     | jq -Rrn --arg p "$pr" --arg s "$sha" '
         [inputs | fromjson? | select(.event == "pr_data_migration_held"
                                      and (.data.pr | tostring) == $p and .data.sha == $s)] | length' \

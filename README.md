@@ -585,6 +585,7 @@ lähde on koodin `${VAR:-oletus}`.
 | `PR_WATCH_MAX_CI_REPAIRS` | `1` | CI-korjauksen yrityskatto per PR |
 | `PR_WATCH_ENABLE_SECURITY_GATE` | `0` (poller nostaa `1`:ksi) | Merge-hetken tietoturvaportti (ks. osio 7.12) |
 | `PR_WATCH_ENABLE_SEMANTIC_CHECK` | `0` (poller nostaa `1`:ksi) | Rinnakkaisajojen kaksoistoteutusten tarkistus (ks. osio 7.13) |
+| `PR_WATCH_ENABLE_DATA_MIGRATION_GATE` | `0` (poller nostaa `1`:ksi) | Datan tuhoavan migraation pidätys (ks. osio 7.14) |
 
 ### Asennin
 
@@ -1138,6 +1139,20 @@ runner-PR (`auto-run/`) muuttaa samaa hakemistoa kuin tämä PR. Muuten portti l
 agenttia. **Mergetty toteutus voittaa:** korjaus poistaa tämän PR:n kaksoiskappaleen, tai PR
 pidätetään kommentilla, joka nimeää sisar-PR:n. Tulos sidotaan headiin ja baseen, myös
 korjauksen jälkeen: base tarkistetaan uudelleen ennen mergeä.
+Yksityiskohdat: [`docs/env-reference.md`](docs/env-reference.md#pr-vahti).
+
+### 7.14 Datan tuhoavan migraation pidätys
+
+Merge-portit eivät tunnista datan tuhoamista. Siksi vahti skannaa ennen niitä PR:n
+migraatiotiedostoihin lisätyt rivit ilman agenttia (`PR_WATCH_ENABLE_DATA_MIGRATION_GATE`).
+
+- Tunnistetaan `DROP COLUMN`, `DROP TABLE`, `TRUNCATE`, `DELETE`, `UPDATE` ja `ALTER … TYPE`.
+  Repo voi lisätä polkuja (esim. backfill-skriptit) avaimella `.data_migration.paths`, joka
+  luetaan base-haarasta.
+- Osuma tai epäonnistunut skannaus ⇒ `manual-merge`-label ja yksi kommentti osumineen. Vahti
+  ei mergeä `manual-merge`-PR:ää, vaan ihminen mergeää sen käsin. Kloonikannan todennus ei
+  vapauta PR:ää.
+
 Yksityiskohdat: [`docs/env-reference.md`](docs/env-reference.md#pr-vahti).
 
 ---

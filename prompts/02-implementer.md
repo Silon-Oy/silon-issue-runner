@@ -86,6 +86,29 @@ sync_commit "feat: ..."
 lippu periytyy ympäristöstä; `sync_commit` asettaa sen itse. Ilman lippua hook voi ajaa
 taustalla, eivätkä sen korjauscommitit ehdi PR:ään ennen sen avaamista.
 
+## Datan tuhoava muutos: laajenna–supista
+
+Jos muutos voi tuhota dataa — sarakkeen tai taulun poisto, sarakkeen tyypin muutos,
+backfill-`UPDATE` tai `DELETE`, `TRUNCATE` — tee se **laajenna–supista-mallilla**:
+
+1. lisää uusi muoto (sarake, taulu) vanhan rinnalle,
+2. kopioi tai backfillaa data uuteen muotoon koskematta vanhaan,
+3. vaihda lukijat ja kirjoittajat uuteen muotoon,
+4. jätä vanhan muodon poisto **erilliseksi, myöhemmäksi muutokseksi** — älä tee sitä tässä
+   ajossa, ellei issue nimenomaan pyydä sitä.
+
+Lisää PR-kuvaukseen osio `## Datamigraation todennus`:
+
+- **Kun DB-klooni on annettu** (`{{RUN_ISSUES_DB_CLONE}}` ei ole tyhjä), aja kosketettujen
+  taulujen rivimäärät ja kohdesarakkeiden ei-NULL-määrät kloonikantaa vasten **ennen
+  migraatiota ja sen jälkeen**, ja kirjaa molemmat lukemat osioon. Älä koskaan aja
+  migraatiota tuotantokantaa vasten.
+- **Ilman kloonia** kirjaa osioon, ettei todennusta ajettu, koska kloonikantaa ei ollut.
+
+PR-vahti tunnistaa datan tuhoavat lauseet migraatiotiedostoista ja pidättää PR:n ihmisen
+käsin mergettäväksi (`manual-merge`), vaikka issuella olisi `auto-merge`. Todennus ei
+vapauta PR:ää; se palvelee katselmoijaa.
+
 ## Päämäärä
 
 1. Lue issue + cycle-review tarkasti.
