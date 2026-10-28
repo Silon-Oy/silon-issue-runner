@@ -30,6 +30,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=case-workdir.sh
+. "$HERE/case-workdir.sh"
 # Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
 export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 SCAN="$HERE/../dependency-scan.sh"
@@ -50,7 +52,7 @@ AGENT_CALLS_TOTAL=0
 # github.com URL, gh / git / agent shims, and an osv-scanner shim reporting one
 # vulnerability of the given CVSS score (none when omitted).
 setup() {
-  WORK=$(mktemp -d -t depscan-"$1".XXXXXX)
+  case_workdir depscan-"$1"
   export HOME="$WORK/home"; mkdir -p "$HOME"
   export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
   ORIGIN="$WORK/origin.git"; REPO="$WORK/repo"; BIN="$WORK/bin"

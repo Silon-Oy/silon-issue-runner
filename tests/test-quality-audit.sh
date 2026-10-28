@@ -24,6 +24,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=case-workdir.sh
+. "$HERE/case-workdir.sh"
 # Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
 export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 AUDIT="$HERE/../quality-audit.sh"
@@ -41,7 +43,7 @@ REAL_GIT=$(command -v git)
 
 # setup <name> — origin (bare) + clone whose origin is a github.com URL, shims.
 setup() {
-  WORK=$(mktemp -d -t qualaudit-"$1".XXXXXX)
+  case_workdir qualaudit-"$1"
   export HOME="$WORK/home"; mkdir -p "$HOME"
   export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
   ORIGIN="$WORK/origin.git"; REPO="$WORK/repo"; BIN="$WORK/bin"

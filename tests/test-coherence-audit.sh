@@ -32,6 +32,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=case-workdir.sh
+. "$HERE/case-workdir.sh"
 # Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
 export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 AUDIT="$HERE/../coherence-audit.sh"
@@ -51,7 +53,7 @@ epoch_of() { jq -rn --arg t "$1" '$t | fromdateiso8601'; }
 
 # setup <name> — origin (bare) + clone whose origin is a github.com URL, shims.
 setup() {
-  WORK=$(mktemp -d -t cohaudit-"$1".XXXXXX)
+  case_workdir cohaudit-"$1"
   export HOME="$WORK/home"; mkdir -p "$HOME"
   export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
   LOGS="$WORK/logs"; mkdir -p "$LOGS"

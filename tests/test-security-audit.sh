@@ -58,6 +58,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=case-workdir.sh
+. "$HERE/case-workdir.sh"
 # Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
 export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 AUDIT="$HERE/../security-audit.sh"
@@ -75,7 +77,7 @@ REAL_GIT=$(command -v git)
 
 # setup <name> — origin (bare) + clone whose origin is a github.com URL, shims.
 setup() {
-  WORK=$(mktemp -d -t secaudit-"$1".XXXXXX)
+  case_workdir secaudit-"$1"
   export HOME="$WORK/home"; mkdir -p "$HOME"
   # The audit keeps its work dir on exit 3 — inside WORK, so it is cleaned too.
   export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"

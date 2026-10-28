@@ -28,6 +28,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=case-workdir.sh
+. "$HERE/case-workdir.sh"
 # Hermetic: never source this machine's real env file (CLAUDE.md §5.5, #358).
 export RUN_ISSUES_ENV_FILE="$HERE/.no-such-machine-env"
 AUDIT="$HERE/../security-audit.sh"
@@ -44,10 +46,9 @@ bad() { echo "FAIL $1: $2"; FAIL=1; }
 ok()  { echo "PASS $1: $2"; }
 
 REAL_GIT=$(command -v git)
-TMPDIR_ORIG="${TMPDIR:-/tmp}"
 
 setup() {
-  WORK=$(mktemp -d -t auditgroup-"$1".XXXXXX)
+  case_workdir auditgroup-"$1"
   export HOME="$WORK/home"; mkdir -p "$HOME"
   export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
   ORIGIN="$WORK/origin.git"; REPO="$WORK/repo"; BIN="$WORK/bin"
@@ -338,7 +339,7 @@ done_case
 # ===========================================================================
 echo "=== G: epic_write_plan failures ==="
 F0=$FAIL
-export TMPDIR="${TMPDIR_ORIG:-/tmp}"
+export TMPDIR="$CASE_TMPDIR_ROOT"
 G=$(mktemp -d "$TMPDIR/epicwrite.XXXXXX")
 (
   export TMPDIR="$G"
@@ -382,7 +383,7 @@ echo "=== H: a finding with an id set is not grouped (#397) ==="
 # fingerprint matches the ordinary audit's, and passes the finding through to
 # its single-finding path with <after-fn>: no grouping agent is called.
 F0=$FAIL
-export TMPDIR="${TMPDIR_ORIG:-/tmp}"
+export TMPDIR="$CASE_TMPDIR_ROOT"
 H=$(mktemp -d "$TMPDIR/auditgroup-H.XXXXXX")
 HFP=$(fp_of osv-scanner-pkg package-lock.json npm/left-pad@1.0.0)
 (
