@@ -54,6 +54,12 @@
 #                           carries no parseable reset time (default 3600)
 #   RUN_ISSUES_CLAIM_VERIFY_DELAY  seconds S3 waits between the claim and
 #                           verify_claim (default 5; test injection point)
+#   RUN_ISSUES_OBSERVED_DEFECTS  "1" = file the cycle review's
+#                           CYCLE_REVIEW_OBSERVED_DEFECT lines as `observed`
+#                           issues after S6 (default 0; the poller sets 1 —
+#                           issue #391)
+#   RUN_ISSUES_OBSERVED_DEFECT_MAX  at most this many defect issues per run
+#                           (default 3; the rest are logged)
 #
 # Exit codes:
 #   0   success — PR opened, or resume cancelled cleanly
@@ -325,6 +331,8 @@ source "$SCRIPT_DIR/lib/hook-runner.sh"
 source "$SCRIPT_DIR/lib/env-bootstrap.sh"
 # shellcheck source=lib/labels.sh
 source "$SCRIPT_DIR/lib/labels.sh"
+# shellcheck source=lib/observed-defects.sh
+source "$SCRIPT_DIR/lib/observed-defects.sh"
 # shellcheck source=lib/poller-config.sh
 # For the ONE merge-label resolver (poller_merge_label) and the manual-merge
 # label name: a heavy-run PR swaps the former for the latter (issue #313).
@@ -1400,6 +1408,34 @@ run_cycle_review() {
   [ "$CR_DECISION" = "SERIALIZE" ] \
     && state_set "$RUN_DIR" "cycle_review_serialize_target" "${CR_SERIALIZE_TARGET:-}"
   state_event "$RUN_DIR" "cycle_review_done" "decision=${CR_DECISION:-UNKNOWN}"
+  record_observed_defects
+}
+
+# record_observed_defects — file the full cycle review's
+# CYCLE_REVIEW_OBSERVED_DEFECT lines as `observed` issues (issue #391). Opt-in
+# (RUN_ISSUES_OBSERVED_DEFECTS=1, the poller's default) and never a gate: it
+# runs after the decision is recorded, for every decision, and nothing it does
+# changes CR_DECISION or the run's exit. The light review returns before this.
+record_observed_defects() {
+  [ "${RUN_ISSUES_OBSERVED_DEFECTS:-0}" = 1 ] || return 0
+  local res line found=0 written=0
+  res=$(observed_defects_record "$RUN_DIR/01-cycle-review.out" "$OWNER_REPO" "$ISSUE_NUM" \
+          "${RUN_ISSUES_OBSERVED_DEFECT_MAX:-$OBSERVED_DEFECT_MAX_DEFAULT}" \
+          "$RUN_DIR/observed-defects.index.tsv" 2>&1) || true
+  [ -n "$res" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    log "S6_CycleReview: $line"
+    case "$line" in
+      "observed-defect: created "*|"observed-defect: reopened "*)
+        found=$((found + 1)); written=$((written + 1)) ;;
+      "observed-defect: exists "*|"observed-defect: dismissed "*|"observed-defect: FAILED "*)
+        found=$((found + 1)) ;;
+    esac
+  done <<EOF
+$res
+EOF
+  state_event "$RUN_DIR" "observed_defects" "count=$found" "written=$written" || true
 }
 
 # _serialize_reject <reason> — a SERIALIZE that is not taken: the run carries on

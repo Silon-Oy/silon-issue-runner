@@ -38,3 +38,7 @@ Hypoteesien on oltava aidosti kilpailevia: ne ennustavat eri tuloksen samasta ko
 
 φ-osio kuvaa korjauksen ehdollisena: mitä korjataan kunkin hypoteesin vahvistuessa. Toteutus
 ajaa kokeen ensin ja korjaa vain vahvistetun syyn.
+
+**3. Rajauksen ulkopuolinen vika.** Jos näet vian, joka ei ole tämän issuen bugi, älä kirjaa
+sitä hypoteesiksi. Kirjaa se `CYCLE_REVIEW_OBSERVED_DEFECT`-rivillä ennen päätösriviä
+osion *Perityt viat* sääntöjen mukaan.

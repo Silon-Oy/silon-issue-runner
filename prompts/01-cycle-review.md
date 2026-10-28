@@ -105,12 +105,30 @@ Kirjoita lopuksi oma osionsa otsikolla **täsmälleen** `## Ω — todennussuunn
 - Jos kriteeriä ei voi todentaa komennolla, kerro miten se tarkistetaan käsin ja miksi
   komento ei riitä.
 
+## Perityt viat (valinnainen)
+
+Jos näit tässä tarkistuksessa lukemassasi koodissa **olemassa olevan vian**, jota tämä issue
+ei tuota eikä korjaa, kirjaa se omalle rivilleen:
+
+```
+CYCLE_REVIEW_OBSERVED_DEFECT: <critical|high|medium|low> | <tiedosto:rivi> | <kuvaus>
+```
+
+- Kirjaa vain **todennettu** vika koodissa, jonka luit. Ei arvauksia, tyylihuomioita eikä
+  refaktorointitoiveita.
+- Kirjoita kukin rivi omalle rivilleen ilman koodiaitaa ja **ennen** päätösriviä.
+  Enintään kolme riviä, tärkein ensin.
+- Kuvauksesta on käytävä ilmi, mikä on vialla ja miksi, ilman tätä keskustelua.
+- Rivi **ei muuta** φ-suunnitelmaa eikä päätöstä: vikaa ei lisätä rajaukseen, eikä se ole
+  BLOCKER-peruste. Orkestraattori tekee rivistä erillisen issuen, ja ihminen päättää jatkosta.
+- Jos et nähnyt tällaista vikaa, älä kirjoita riviä.
+
 {{RUN_PATH_SECTION}}
 
 ## Lopetus (PAKOLLINEN VIIMEINEN RIVI)
 
 Lopeta vastauksesi **TÄSMÄLLEEN YHDELLÄ** seuraavista riveistä. Mitään ei saa olla rivin
-jälkeen.
+jälkeen. Mahdolliset `CYCLE_REVIEW_OBSERVED_DEFECT`-rivit tulevat ennen sitä.
 
 ```
 CYCLE_REVIEW_DECISION: PROCEED

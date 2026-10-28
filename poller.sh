@@ -1272,6 +1272,16 @@ _claude_work_allowed() {
 # would have the run write one file and the poller read another.
 ORCH_ENV="RUN_ISSUES_AUTO=1 RUN_ISSUES_LOG_DIR='$LOG_DIR'"
 
+# File the cycle review's inherited-defect lines as `observed` issues (issue
+# #391). orchestrate.sh defaults this OFF (0); the poller flips it ON, and
+# poller.env can export RUN_ISSUES_OBSERVED_DEFECTS=0 to disable. Passed on the
+# command line for the same tmux-environment reason as the log dir.
+RUN_ISSUES_OBSERVED_DEFECTS="${RUN_ISSUES_OBSERVED_DEFECTS:-1}"
+ORCH_ENV="$ORCH_ENV RUN_ISSUES_OBSERVED_DEFECTS='$RUN_ISSUES_OBSERVED_DEFECTS'"
+if [ -n "${RUN_ISSUES_OBSERVED_DEFECT_MAX:-}" ]; then
+  ORCH_ENV="$ORCH_ENV RUN_ISSUES_OBSERVED_DEFECT_MAX='$RUN_ISSUES_OBSERVED_DEFECT_MAX'"
+fi
+
 # Count currently active run-issues tmux sessions to respect the cap.
 # The `|| ACTIVE=0` fallback lives OUTSIDE the command substitution on purpose:
 # grep -c always prints a count to stdout (0 on no matches) but exits 1 when the
