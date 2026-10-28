@@ -35,6 +35,10 @@
 #       scan.failed    scanner|rc|reason per scanner that failed
 #       scan.ran       one scanner name per line that was installed and ran
 #                      (failed or not) — what security_scan_ran_count counts
+#       scan.osv.tsv   audit mode, osv-scanner ran: one row per vulnerability
+#                      group with its fixed versions (_security_scan_osv_details)
+#                      — the whole-repo audit groups these by package version
+#                      (#397). Diff mode does not write it.
 #     rc 0 whenever the function itself worked — a scanner failing is data, not
 #     an error. rc 1 on a usage error (unknown mode, diff without a resolvable
 #     base-ref, unwritable out-dir); then nothing is a result.
@@ -242,11 +246,12 @@ _security_scan_gitleaks() {
 
 # ----- osv-scanner -------------------------------------------------------------
 
-# _security_scan_osv_rows <json-file> — "key<TAB>finding-row" per vulnerability
-# group; the key (path, package, version, ids) lets diff mode drop what the base
-# already had. Location is source.path as reported. rc 1 on unparseable JSON.
-_security_scan_osv_rows() {
-  jq -r '
+# _SECURITY_SCAN_OSV_GROUPS — the jq definitions both readers of an osv-scanner
+# report share: `osv_groups` streams one object per vulnerability group, so the
+# finding row and the audit's per-package detail (#397) cannot disagree on a
+# group's severity or ids. `fixed` is every `fixed` event the group's advisories
+# name for this package (empty when none is known).
+_SECURITY_SCAN_OSV_GROUPS='
     def clean: tostring | gsub("[|\r\n\t]"; " ");
     def sevof($score; $db):
       if $score != null then
@@ -255,18 +260,52 @@ _security_scan_osv_rows() {
       else
         ({"CRITICAL":"critical","HIGH":"high","MODERATE":"medium","MEDIUM":"medium","LOW":"low"}[($db // "") | ascii_upcase] // "medium")
       end;
-    if type != "object" then error("not an object") else . end
-    | (.results // [])[] | (.source.path // "?") as $path
-    | (.packages // [])[] | .package as $pkg | (.vulnerabilities // []) as $vulns
-    | ((.groups // []) | if length > 0 then . else [$vulns[] | {ids: [.id]}] end)[]
-    | .ids as $ids
-    | ([$vulns[] | select(.id as $i | $ids | index($i))] | first) as $v
-    | (try ((.max_severity // "") | tostring | tonumber) catch null) as $score
-    | sevof($score; $v.database_specific.severity // null) as $sev
-    | ($ids | join(",")) as $idtxt
-    | "\($path)\t\($pkg.name)\t\($pkg.version)\t\($idtxt)\t"
-      + "\($sev)|high|\($path | clean)|osv-scanner: \($pkg.name | clean)@\(($pkg.version // "?") | clean) (\(($pkg.ecosystem // "?") | clean)): \($idtxt | clean)"
-      + (if ($v.summary // "") != "" then " — \($v.summary | clean)" else "" end)
+    def osv_groups:
+      if type != "object" then error("not an object") else . end
+      | (.results // [])[] | (.source.path // "?") as $path
+      | (.packages // [])[] | .package as $pkg | (.vulnerabilities // []) as $vulns
+      | ((.groups // []) | if length > 0 then . else [$vulns[] | {ids: [.id]}] end)[]
+      | .ids as $ids
+      | [$vulns[] | select(.id as $i | $ids | index($i))] as $gv
+      | ($gv | first) as $v
+      | (try ((.max_severity // "") | tostring | tonumber) catch null) as $score
+      | {path: $path, name: $pkg.name, rawver: $pkg.version,
+         version: ($pkg.version // "?"), eco: ($pkg.ecosystem // "?"),
+         sev: sevof($score; $v.database_specific.severity // null),
+         ids: $ids, summary: ($v.summary // ""),
+         fixed: ([$gv[] | (.affected // [])[]
+                  | select((.package.name // $pkg.name) == $pkg.name)
+                  | (.ranges // [])[] | (.events // [])[] | .fixed // empty | tostring]
+                 | unique)};
+    def osv_desc:
+      "osv-scanner: \(.name | clean)@\(.version | clean) (\(.eco | clean)): \(.ids | join(",") | clean)"
+      + (if .summary != "" then " — \(.summary | clean)" else "" end);
+'
+
+# _security_scan_osv_rows <json-file> — "key<TAB>finding-row" per vulnerability
+# group; the key (path, package, version, ids) lets diff mode drop what the base
+# already had. Location is source.path as reported. rc 1 on unparseable JSON.
+_security_scan_osv_rows() {
+  jq -r "$_SECURITY_SCAN_OSV_GROUPS"'
+    osv_groups
+    | (.ids | join(",")) as $idtxt
+    | "\(.path)\t\(.name)\t\(.rawver)\t\($idtxt)\t"
+      + "\(.sev)|high|\(.path | clean)|\(osv_desc)"
+  ' "$1" 2>/dev/null
+}
+
+# _security_scan_osv_details <json-file> — one TSV row per vulnerability group,
+# for the audit's grouping by package version (#397):
+#   path  ecosystem  package  version  severity  ids  fixed  summary  description
+# ids and fixed are comma-separated; fixed lists every fixed version the
+# advisories name for the package (the reader picks the one above the installed
+# version). description is the group's scan.findings description, so a reader
+# can still derive what was keyed on it before #397.
+_security_scan_osv_details() {
+  jq -r "$_SECURITY_SCAN_OSV_GROUPS"'
+    osv_groups
+    | [.path, .eco, .name, .version, .sev, (.ids | join(",")), (.fixed | join(",")), .summary, osv_desc]
+    | map(tostring | gsub("[\t\r\n]"; " ")) | join("\t")
   ' "$1" 2>/dev/null
 }
 
@@ -303,6 +342,11 @@ _security_scan_osv() {
     # jq, so a path never crosses a native-binary boundary (CLAUDE.md §5.8).
     rows=$(printf '%s\n' "$raw" | grep . | cut -f5- | awk -F'|' -v p="$repo/" -v OFS='|' '
       index($3, p) == 1 { $3 = substr($3, length(p) + 1) } { print }' || true)
+    # The same groups per package version, with their fixed versions, for the
+    # audit's one-issue-per-package grouping (#397). Same prefix rule.
+    { [ -s "$out/osv-audit.json" ] && _security_scan_osv_details "$out/osv-audit.json"; } \
+      | awk -F'\t' -v p="$repo/" -v OFS='\t' '
+        NF { if (index($1, p) == 1) $1 = substr($1, length(p) + 1); print }' > "$out/scan.osv.tsv"
   else
     local -a changed=()
     local f base

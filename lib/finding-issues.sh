@@ -23,6 +23,17 @@
 #   closed as not planned            dismissed — a human decided it is not a
 #                                              finding; an audit does not
 #                                              overrule that, ever
+#   an open issue lacking some of    update  — the body is rewritten and a
+#   the finding's ids (optional)               comment names the new ids
+#
+# A finding may carry a set of ids (a package version's advisories, #397). They
+# ride in a second marker next to the first, so the next audit sees which ids
+# the issue already covers:
+#
+#   <!-- run-issues:finding-ids fp=<fingerprint> ids=<id>,<id>,... -->
+#
+# finding_issue_supersede closes an issue a finding has replaced (a per-advisory
+# issue of before #397) with a comment pointing at its replacement.
 #
 # The index is a REST label listing (state=all), never a search: the search
 # connection can be blocked on its own (CLAUDE.md §5.2). Its cost is
@@ -72,9 +83,16 @@ finding_marker() {
   printf '<!-- run-issues:finding kind=%s fp=%s -->' "$1" "$2"
 }
 
+# finding_ids_marker <fingerprint> <ids-csv> — the marker of the ids an issue
+# covers (finding_issue_plan's update).
+finding_ids_marker() {
+  printf '<!-- run-issues:finding-ids fp=%s ids=%s -->' "$1" "$2"
+}
+
 # finding_issues_index <owner/repo> <label> <index-file> — write every issue
 # carrying <label> that has a finding marker, one TSV row per marker:
-#   fingerprint  kind  number  state  title
+#   fingerprint  kind  number  state  title  ids
+# ids: the issue's finding-ids marker for that fingerprint, else empty.
 # state is open | closed | dismissed (closed as not planned). PRs are dropped
 # (REST /issues returns them too). rc 1 if the listing failed: the caller must
 # then write NOTHING — an empty index would turn every known finding into a
@@ -88,42 +106,97 @@ finding_issues_index() {
   printf '%s' "$raw" | jq -r '
       .[]? | select(.pull_request | not)
       | . as $i
-      | ($i.body // "") | [scan("<!-- run-issues:finding kind=([a-z0-9-]+) fp=([0-9a-f]+) -->")][]
+      | ($i.body // "") as $b
+      | ([$b | scan("<!-- run-issues:finding-ids fp=([0-9a-f]+) ids=([^ >]*) -->") | {(.[0]): .[1]}]
+         | add // {}) as $ids
+      | $b | [scan("<!-- run-issues:finding kind=([a-z0-9-]+) fp=([0-9a-f]+) -->")][]
       | [.[1], .[0], ($i.number | tostring),
          (if $i.state == "open" then "open"
           elif ($i.state_reason // "") == "not_planned" then "dismissed"
           else "closed" end),
-         ($i.title // "" | gsub("[\t\r\n]"; " "))]
+         ($i.title // "" | gsub("[\t\r\n]"; " ")),
+         ($ids[.[1]] // "")]
       | @tsv' > "$index" 2>/dev/null || return 1
 }
 
-# finding_issue_plan <index-file> <kind> <fingerprint> — prints one of
-# "create", "exists <N>", "reopen <N>", "dismissed <N>". An open issue wins over
-# a closed one with the same fingerprint (a human may have opened a fresh copy).
+# finding_issue_plan <index-file> <kind> <fingerprint> [<ids-csv>] — prints one
+# of "create", "exists <N>", "update <N>", "reopen <N>", "dismissed <N>". An open
+# issue wins over a closed one with the same fingerprint (a human may have
+# opened a fresh copy). update: <ids-csv> was given and the open issue does not
+# cover all of it (finding_issue_ids).
 finding_issue_plan() {
-  local index="$1" kind="$2" fp="$3" rows n
+  local index="$1" kind="$2" fp="$3" ids="${4:-}" rows n
   rows=$(awk -F'\t' -v fp="$fp" -v k="$kind" '$1 == fp && $2 == k' "$index" 2>/dev/null)
   if [ -z "$rows" ]; then printf 'create'; return 0; fi
   n=$(printf '%s\n' "$rows" | awk -F'\t' '$4 == "open" { print $3; exit }')
-  if [ -n "$n" ]; then printf 'exists %s' "$n"; return 0; fi
+  if [ -n "$n" ]; then
+    if [ -n "$ids" ] && [ -n "$(finding_ids_missing "$ids" "$(finding_issue_ids "$index" "$kind" "$fp")")" ]; then
+      printf 'update %s' "$n"
+    else
+      printf 'exists %s' "$n"
+    fi
+    return 0
+  fi
   n=$(printf '%s\n' "$rows" | awk -F'\t' '$4 == "dismissed" { print $3; exit }')
   if [ -n "$n" ]; then printf 'dismissed %s' "$n"; return 0; fi
   n=$(printf '%s\n' "$rows" | awk -F'\t' 'NR == 1 { print $3 }')
   printf 'reopen %s' "$n"
 }
 
-# finding_issue_note <index-file> <kind> <fingerprint> <number> <title> — record
-# that the finding now has an OPEN issue, so a second occurrence in the same
-# audit plans "exists" instead of a second create or reopen.
+# finding_issue_note <index-file> <kind> <fingerprint> <number> <title> [<ids>]
+# — record that the finding now has an OPEN issue, so a second occurrence in
+# the same audit plans "exists" instead of a second create or reopen.
 finding_issue_note() {
-  printf '%s\t%s\t%s\topen\t%s\n' "$3" "$2" "$4" "$(printf '%s' "$5" | tr '\t\r\n' '   ')" >> "$1"
+  printf '%s\t%s\t%s\topen\t%s\t%s\n' "$3" "$2" "$4" "$(printf '%s' "$5" | tr '\t\r\n' '   ')" "${6:-}" >> "$1"
+}
+
+# finding_issue_ids <index-file> <kind> <fingerprint> — the ids the OPEN issues
+# of the fingerprint cover, comma-separated (empty when none recorded).
+finding_issue_ids() {
+  awk -F'\t' -v fp="$3" -v k="$2" '$1 == fp && $2 == k && $4 == "open" { print $6 }' "$1" 2>/dev/null \
+    | tr ',' '\n' | awk 'NF && !seen[$0]++' | paste -sd, -
+}
+
+# finding_ids_missing <ids-csv> <covered-csv> — the ids of the first list that
+# the second lacks, comma-separated (empty when all are covered).
+finding_ids_missing() {
+  printf '%s\n' "$1" | tr ',' '\n' | awk -v c=",$2," 'NF && index(c, "," $0 ",") == 0 && !seen[$0]++' \
+    | paste -sd, -
+}
+
+# finding_issue_supersede <owner/repo> <index-file> <number> <comment>
+#                         [<state-reason>]
+# Close issue <number> as replaced by another: post <comment> (which names the
+# replacement), then close it as <state-reason> (default completed). Every
+# index row of the issue is marked closed, so the same audit does not close it
+# twice. Prints "superseded #<N>"; rc 1 on a failed GitHub write.
+finding_issue_supersede() {
+  local owner_repo="$1" index="$2" n="$3" comment="$4" reason="${5:-completed}" resp
+  if ! resp=$(labels_gh api --method POST "repos/$owner_repo/issues/$n/comments" -f "body=$comment" 2>&1 >/dev/null); then
+    _labels_diag "finding_issue_supersede($owner_repo#$n: comment)" "$resp"
+    return 1
+  fi
+  if ! resp=$(labels_gh api --method PATCH "repos/$owner_repo/issues/$n" -f state=closed \
+                -f "state_reason=$reason" 2>&1 >/dev/null); then
+    _labels_diag "finding_issue_supersede($owner_repo#$n: close)" "$resp"
+    return 1
+  fi
+  awk -F'\t' -v OFS='\t' -v n="$n" '$3 == n { $4 = "closed" } { print }' "$index" > "$index.tmp" \
+    && mv "$index.tmp" "$index"
+  printf 'superseded #%s' "$n"
 }
 
 # finding_issue_apply <owner/repo> <index-file> <kind> <fingerprint> <title>
-#                     <body> <labels-csv> <reopen-comment> [<assignee>]
+#                     <body> <labels-csv> <reopen-comment> [<assignee>] [<ids-csv>]
 # Carries out finding_issue_plan. <labels-csv> is every label the issue should
 # carry (the kind's label first, then e.g. pickup labels); each is ensured in the
 # repo before use. A reopened issue gets <reopen-comment> and the labels.
+#
+# <ids-csv> (optional, #397): the finding's ids, which the body's
+# finding_ids_marker must list. An open issue lacking some of them is updated:
+# its body is replaced, a comment names the new ids and the labels are added (a
+# new id may raise the severity past the auto-run threshold). A reopened issue
+# gets the new body too, so its ids marker is current.
 #
 # <assignee> (optional, issue #374) routes the issue to a login — the caller
 # resolves it with pick_assignee_route so the issue matches this machine's
@@ -137,9 +210,9 @@ finding_issue_note() {
 # prints "created #N"); rc 1 on a failed GitHub write, with the reason on stderr.
 finding_issue_apply() {
   local owner_repo="$1" index="$2" kind="$3" fp="$4" title="$5" body="$6" labels="$7" comment="$8"
-  local assignee="${9:-}"
+  local assignee="${9:-}" ids="${10:-}"
   local plan action n lbl resp
-  plan=$(finding_issue_plan "$index" "$kind" "$fp")
+  plan=$(finding_issue_plan "$index" "$kind" "$fp" "$ids")
   action="${plan%% *}"
   n="${plan#* }"
   case "$action" in
@@ -179,13 +252,36 @@ EOF
       _labels_diag "finding_issue_apply($owner_repo#$n: assign $assignee)" \
         "GitHub did not keep the assignee (no repo access?) — the issue is not routed"
     fi
-    finding_issue_note "$index" "$kind" "$fp" "$n" "$title"
+    finding_issue_note "$index" "$kind" "$fp" "$n" "$title" "$ids"
     printf 'created #%s' "$n"
     return 0
   fi
 
+  if [ "$action" = "update" ]; then
+    local added
+    added=$(finding_ids_missing "$ids" "$(finding_issue_ids "$index" "$kind" "$fp")")
+    if ! resp=$(labels_gh api --method PATCH "repos/$owner_repo/issues/$n" -f "body=$body" 2>&1 >/dev/null); then
+      _labels_diag "finding_issue_apply($owner_repo#$n: update)" "$resp"
+      return 1
+    fi
+    finding_issue_note "$index" "$kind" "$fp" "$n" "$title" "$ids"
+    if ! resp=$(labels_gh api --method POST "repos/$owner_repo/issues/$n/comments" \
+                  -f "body=Auditointi löysi tälle löydökselle uusia tunnisteita: ${added//,/, }. Kuvaus päivitettiin kattamaan ne." 2>&1 >/dev/null); then
+      _labels_diag "finding_issue_apply($owner_repo#$n: comment)" "$resp"
+      return 1
+    fi
+    if [ -n "$labels" ]; then
+      labels_add "$owner_repo" "$n" "$labels" || return 1
+    fi
+    printf 'updated #%s' "$n"
+    return 0
+  fi
+
   # reopen
-  if ! resp=$(labels_gh api --method PATCH "repos/$owner_repo/issues/$n" -f state=open 2>&1); then
+  local -a body_args=()
+  [ -n "$ids" ] && body_args=(-f "body=$body")
+  if ! resp=$(labels_gh api --method PATCH "repos/$owner_repo/issues/$n" -f state=open \
+                ${body_args[@]+"${body_args[@]}"} 2>&1); then
     _labels_diag "finding_issue_apply($owner_repo#$n: reopen)" "$resp"
     return 1
   fi
@@ -198,7 +294,7 @@ EOF
       _labels_diag "finding_issue_apply($owner_repo#$n: assign $assignee)" "$aresp"
     fi
   fi
-  finding_issue_note "$index" "$kind" "$fp" "$n" "$title"
+  finding_issue_note "$index" "$kind" "$fp" "$n" "$title" "$ids"
   if ! resp=$(labels_gh api --method POST "repos/$owner_repo/issues/$n/comments" -f "body=$comment" 2>&1 >/dev/null); then
     _labels_diag "finding_issue_apply($owner_repo#$n: comment)" "$resp"
     return 1
@@ -248,4 +344,38 @@ finding_issues_auto_runs() {
   mr=$(merge_gate_severity_rank "$min") || return 1
   sr=$(merge_gate_severity_rank "$sev") || return 1
   [ "$sr" -ge "$mr" ]
+}
+
+# finding_issues_dependency_auto_merge <repo-config-json> <section> <machine-value>
+# — 1 when a DEPENDENCY finding that gets the pickup labels also gets the merge
+# label (poller_merge_label), else 0 (#397). A version upgrade is the kind of
+# change the merge gates (security review, semantic check, CI) are built to
+# judge, so it merges without a human by default; a code finding never gets the
+# label — that is the caller's rule, not a setting.
+#
+# The repo's `.<section>.dependency_auto_merge` wins over the machine value
+# (the watchlist entry, else the environment / poller.env), which wins over the
+# default 1 — the chain of finding_issues_auto_run_min. Accepted: true/false,
+# 1/0, yes/no, on/off. An unparseable config or an unknown value resolves to 0:
+# the safe side is a human merging, not an unattended merge.
+finding_issues_dependency_auto_merge() {
+  local cfg="$1" section="$2" machine="$3" repo_val="@absent" val
+  if [ -n "$cfg" ]; then
+    if ! repo_val=$(jq -r --arg s "$section" '
+        (if type == "object" then (.[$s] // {}) else error("not an object") end) as $c
+        | if ($c | type) == "object" and ($c | has("dependency_auto_merge")) and $c.dependency_auto_merge != null
+          then ($c.dependency_auto_merge | tostring) else "@absent" end' <<<"$cfg" 2>/dev/null); then
+      echo "finding-issues: .claude/run-issues.json on the default branch is not a valid JSON object — no $section dependency finding gets the merge label" >&2
+      printf '0'
+      return 0
+    fi
+  fi
+  if [ "$repo_val" = "@absent" ]; then val="${machine:-1}"; else val="$repo_val"; fi
+  case "$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on)  printf '1' ;;
+    0|false|no|off) printf '0' ;;
+    *)
+      echo "finding-issues: unknown $section dependency_auto_merge '$val' (want true or false) — no dependency finding gets the merge label" >&2
+      printf '0' ;;
+  esac
 }

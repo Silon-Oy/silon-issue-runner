@@ -251,25 +251,35 @@ repo_audit_verify() {
 REPO_AUDIT_UNSURE_NOTE="> **Tarkistus:** riippumaton tarkistus ei pystynyt vahvistamaan eikä kumoamaan tätä löydöstä, joten issue ei saanut poimintalabelia automaattisesti. Arvioi löydös ennen toteutusta."
 
 # repo_audit_apply <kind> <dry-run 0|1> <reopen-comment> <key-fn> <labels-fn>
-#                  <title-fn> <body-fn> [<assignee-fn>]
+#                  <title-fn> <body-fn> [<assignee-fn>] [<after-fn>]
 # Read findings `<origin>|<severity>|<confidence>|<location>|<description>` on
 # stdin (origin: agent | scanner) and carry each out. The audit's own parts are
-# the four functions:
+# the functions:
 #
-#   <key-fn> <origin> <description>         → "<source>\t<key>" (the fingerprint class)
-#   <labels-fn> <severity>                  → the labels CSV, <kind>'s label first
+#   <key-fn> <origin> <description>         → "<source>\t<key>[\t<ids>]" (the
+#                                             fingerprint class; <ids>, comma-
+#                                             separated, makes an open issue
+#                                             that lacks one of them an update)
+#   <labels-fn> <severity> <source>         → the labels CSV, <kind>'s label first
 #   <title-fn> <severity> <location> <description>
 #   <body-fn> <severity> <confidence> <location> <description> <source> <fingerprint>
-#   <assignee-fn> <severity>                → the login to route the issue to, or
+#   <assignee-fn> <severity> <source>       → the login to route the issue to, or
 #                                             nothing (optional; finding_issue_apply)
+#   <after-fn> <source> <key> <number> <action>
+#                                           → runs once the finding has an issue
+#                                             (<number>, empty in a dry run that
+#                                             would create one; <action> is the
+#                                             plan or result word). Prints its
+#                                             own output lines; rc 1 counts as a
+#                                             failed write (optional)
 #
 # Prints one line per finding: <action>\t<severity>\t<location>\t<description>.
 # Sets REPO_AUDIT_FINDINGS and REPO_AUDIT_WRITE_FAILED (counts). Uses OWNER_REPO
 # and INDEX.
 repo_audit_apply() {
   local kind="$1" dry="$2" comment="$3" key_fn="$4" labels_fn="$5" title_fn="$6" body_fn="$7"
-  local assignee_fn="${8:-}"
-  local row origin rest sev conf loc desc sk source key fp labels assignee plan title body res unsure seen=" "
+  local assignee_fn="${8:-}" after_fn="${9:-}"
+  local row origin rest sev conf loc desc sk source key ids fp labels assignee plan title body res num unsure seen=" "
   REPO_AUDIT_FINDINGS=0
   REPO_AUDIT_WRITE_FAILED=0
   while IFS= read -r row; do
@@ -278,7 +288,8 @@ repo_audit_apply() {
     IFS='|' read -r sev conf loc desc <<<"$rest"
     desc="${rest#*|*|*|}"
     sk=$("$key_fn" "$origin" "$desc")
-    source="${sk%%$'\t'*}"; key="${sk#*$'\t'}"
+    source="${sk%%$'\t'*}"; key="${sk#*$'\t'}"; ids=""
+    case "$key" in *$'\t'*) ids="${key#*$'\t'}"; key="${key%%$'\t'*}" ;; esac
     fp=$(finding_fingerprint "$source" "$loc" "$key")
     REPO_AUDIT_FINDINGS=$((REPO_AUDIT_FINDINGS + 1))
 
@@ -288,9 +299,9 @@ repo_audit_apply() {
     fi
     seen="$seen$fp "
 
-    labels=$("$labels_fn" "$sev")
+    labels=$("$labels_fn" "$sev" "$source")
     assignee=""
-    [ -n "$assignee_fn" ] && assignee=$("$assignee_fn" "$sev")
+    [ -n "$assignee_fn" ] && assignee=$("$assignee_fn" "$sev" "$source")
     unsure=0
     # An UNSURE finding (repo_audit_verify): the kind's own label only — the
     # labels-fn contract puts it first — and no route, at any severity.
@@ -299,23 +310,31 @@ repo_audit_apply() {
     fi
 
     if [ "$dry" = 1 ]; then
-      plan=$(finding_issue_plan "$INDEX" "$kind" "$fp")
-      case "$plan" in create|reopen*) plan="$plan [$labels]${assignee:+ @$assignee}" ;; esac
+      plan=$(finding_issue_plan "$INDEX" "$kind" "$fp" "$ids")
+      res="$plan"
+      case "$plan" in create|reopen*|update*) plan="$plan [$labels]${assignee:+ @$assignee}" ;; esac
       [ "$unsure" = 1 ] && plan="$plan [unsure]"
       printf '%s\t%s\t%s\t%s\n' "$plan" "$sev" "$loc" "$desc"
-      continue
-    fi
-
-    title=$("$title_fn" "$sev" "$loc" "$desc")
-    body=$("$body_fn" "$sev" "$conf" "$loc" "$desc" "$source" "$fp")
-    [ "$unsure" = 1 ] && body="$REPO_AUDIT_UNSURE_NOTE
+    else
+      title=$("$title_fn" "$sev" "$loc" "$desc")
+      body=$("$body_fn" "$sev" "$conf" "$loc" "$desc" "$source" "$fp")
+      [ "$unsure" = 1 ] && body="$REPO_AUDIT_UNSURE_NOTE
 
 $body"
-    if res=$(finding_issue_apply "$OWNER_REPO" "$INDEX" "$kind" "$fp" "$title" "$body" "$labels" "$comment" "$assignee"); then
-      printf '%s\t%s\t%s\t%s\n' "$res" "$sev" "$loc" "$desc"
-    else
-      REPO_AUDIT_WRITE_FAILED=$((REPO_AUDIT_WRITE_FAILED + 1))
-      printf 'FAILED\t%s\t%s\t%s\n' "$sev" "$loc" "$desc"
+      if res=$(finding_issue_apply "$OWNER_REPO" "$INDEX" "$kind" "$fp" "$title" "$body" "$labels" "$comment" "$assignee" "$ids"); then
+        printf '%s\t%s\t%s\t%s\n' "$res" "$sev" "$loc" "$desc"
+      else
+        REPO_AUDIT_WRITE_FAILED=$((REPO_AUDIT_WRITE_FAILED + 1))
+        printf 'FAILED\t%s\t%s\t%s\n' "$sev" "$loc" "$desc"
+        continue
+      fi
+    fi
+    # "created #12" / "exists 12" / "create" → action word and number.
+    if [ -n "$after_fn" ]; then
+      num="${res##*[ #]}"
+      [ "$num" = "$res" ] && num=""
+      "$after_fn" "$source" "$key" "$num" "${res%% *}" \
+        || REPO_AUDIT_WRITE_FAILED=$((REPO_AUDIT_WRITE_FAILED + 1))
     fi
   done
 }

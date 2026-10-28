@@ -241,6 +241,19 @@ yes_ "8 osv recursive" grep -q -- "-r $REPO" "$WORK/osv.calls"
 yes_ "8 base vulns reported in audit" grep -q 'left-pad@1.0.0' "$O/scan.findings"
 check "8 audit location repo-relative" "package-lock.json" "$(grep 'left-pad@' "$O/scan.findings" | cut -d'|' -f3)"
 yes_ "8 both scanners OK" sh -c "grep -q '^gitleaks: OK' '$O/scan.summary' && grep -q '^osv-scanner: OK' '$O/scan.summary'"
+# #397: the per-group detail for the audit's grouping, repo-relative like the rows.
+T=$'\t'
+check "8 osv detail row per group" "$(grep -c 'osv-scanner: ' "$O/scan.findings")" "$(grep -c . "$O/scan.osv.tsv")"
+check "8 osv detail path repo-relative" "package-lock.json" "$(grep "${T}left-pad${T}" "$O/scan.osv.tsv" | cut -f1)"
+check "8 osv detail carries the finding's description" \
+  "$(grep 'left-pad@' "$O/scan.findings" | cut -d'|' -f4-)" "$(grep "${T}left-pad${T}" "$O/scan.osv.tsv" | cut -f9)"
+no_ "8 diff mode writes no detail" test -e "$WORK/o5/scan.osv.tsv"
+
+printf '%s' '{"results":[{"source":{"path":"p"},"packages":[{"package":{"name":"x","version":"1.0","ecosystem":"npm"},
+ "vulnerabilities":[{"id":"A","affected":[{"package":{"name":"x"},"ranges":[{"events":[{"introduced":"0"},{"fixed":"1.2"},{"introduced":"2.0"},{"fixed":"2.1"}]}]},
+                                         {"package":{"name":"other"},"ranges":[{"events":[{"fixed":"9.9"}]}]}]}],
+ "groups":[{"ids":["A"]}]}]}]}' > "$WORK/fixed.json"
+check "8 detail lists the package's fixed versions only" "1.2,2.1" "$(_security_scan_osv_details "$WORK/fixed.json" | cut -f7)"
 
 # --- 9 ------------------------------------------------------------------------
 echo "=== 9: tamper signals ==="

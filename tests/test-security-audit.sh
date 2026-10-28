@@ -7,7 +7,9 @@
 #
 #   A) finding            -> one issue: security + pickup label, marker, the
 #                            issue format (Tavoite / Hyväksyntäkriteerit /
-#                            Rajaukset), exactly one finding in the body
+#                            Rajaukset), exactly one finding in the body; a code
+#                            finding never gets the merge label (#397 — the
+#                            dependency side is in test-dependency-scan.sh)
 #   B) open duplicate     -> no write, "exists #N"
 #   C) closed, recurs     -> reopened + comment
 #   D) closed, no recur   -> stays closed, no write
@@ -220,6 +222,7 @@ done
 [ "$(grep -c '^- \*\*Vakavuus:\*\*' "$B" 2>/dev/null)" = 1 ] || bad A "body does not hold exactly one finding"
 grep -qx security "$WORK/created/100.labels" 2>/dev/null || bad A "security label missing"
 grep -qx auto-run "$WORK/created/100.labels" 2>/dev/null || bad A "high finding lacks the default pickup label"
+grep -qx auto-merge "$WORK/created/100.labels" 2>/dev/null && bad A "a code finding got the merge label (#397: dependency findings only)"
 grep -q 'labels -f name=security' "$WORK/gh.log" || bad A "security label not ensured"
 grep -q "^created #100" <<<"$OUT" || bad A "output does not report the created issue"
 [ -z "$(git -C "$REPO" worktree list | sed 1d)" ] || bad A "temporary worktree left behind"
