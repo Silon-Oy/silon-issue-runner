@@ -1,8 +1,10 @@
-## Raskas polku (`heavy-run`) — katselmointiohje käsin yhdistettävään PR:ään
+## Raskas polku (`heavy-run`) — katselmointiohje ennen mergeä katselmoitavaan PR:ään
 
-Tämä on raskaan polun ajo. Sen PR ei mergeydy automaattisesti: se saa `manual-merge`-labelin,
-ja ihminen katselmoi ja yhdistää sen käsin. Orkestraattori nostaa kirjoittamasi
-katselmointiohjeen PR-kuvauksen alkuun, joten ohje on ensimmäinen asia, jonka katselmoija lukee.
+Tämä on raskaan polun ajo. Sen PR mergeytyy automaattisesti vasta, kun PR-vahdin
+koodikatselmus on hyväksynyt sen. Jos katselmus pidättää PR:n, ihminen katselmoi ja yhdistää
+sen. Orkestraattori nostaa kirjoittamasi katselmointiohjeen PR-kuvauksen alkuun, ja PR-vahti
+antaa saman ohjeen koodikatselmoijalle. Ohje on siis ensimmäinen asia, jonka kumpikin
+katselmoija lukee.
 
 **Kirjoita vastaukseesi pakollinen osio** täsmälleen otsikolla `## Katselmointiohje`, kerran,
 ennen `EVOLUTION_*`-rivejä. Älä käytä osion sisällä muita `## `-tason otsikoita: osio päättyy

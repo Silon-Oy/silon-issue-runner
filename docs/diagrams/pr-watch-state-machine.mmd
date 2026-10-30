@@ -32,7 +32,7 @@ stateDiagram-v2
     P5b_FixCI --> P5c_Gate: fixed + CI green
     P5b_FixCI --> CI_HELD: no fix / CI still red / cap reached
 
-    P5c_Gate: P5c Merge gates, in order: security (PR_WATCH_ENABLE_SECURITY_GATE), semantic (PR_WATCH_ENABLE_SEMANTIC_CHECK)\nsemantic trigger first, no agent: 1 REST listing of merged auto-run/ siblings since run start, dir overlap?\nagent reviews the final diff base...head, result per head SHA (semantic: head + base SHA)\nholding finding -> AI fix in worktree + CI revalidation + re-review\n(fix-attempt cap; a reviewed head is never reviewed again; a head move re-runs every gate)
+    P5c_Gate: P5c Merge gates, in order: review (heavy-run issue only, no switch), security (PR_WATCH_ENABLE_SECURITY_GATE), semantic (PR_WATCH_ENABLE_SEMANTIC_CHECK)\nsemantic trigger first, no agent: 1 REST listing of merged auto-run/ siblings since run start, dir overlap?\nagent reviews the final diff base...head, result per head SHA (semantic: head + base SHA)\nholding finding -> AI fix in worktree + CI revalidation + re-review\n(fix-attempt cap; a reviewed head is never reviewed again; a head move re-runs every gate)
     P5c_Gate --> P6_Merge: clean / below threshold / semantic not triggered (gate OFF: pass-through)
     P5c_Gate --> GATE_HELD: fix failed / cap spent / review did not run
     P5c_Gate --> NOT_MERGEABLE: no run-dir / worktree, fetch failed, head mismatch, sibling listing failed

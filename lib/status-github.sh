@@ -426,7 +426,8 @@ status_github_issue_only_object() {
 # Human queue (issue #414).
 #
 # Runner PRs that wait for a human: `manual-merge` (the watcher leaves them for
-# a hand merge on purpose — heavy-run, an epic or child opt-out) and
+# a hand merge on purpose — an epic or child opt-out, a data-destroying
+# migration) and
 # `needs-human` (the watcher handed them over). Neither set showed its waiting
 # time anywhere, so a growing queue was only seen when someone went looking.
 # status.sh sweeps EVERY watchlist repo for them (not only repos with local

@@ -18,7 +18,7 @@
 #   W4) scan cannot run (invalid base config) -> held, no merge
 #   W5) no hit -> merge bound to the scanned head
 #   W6) switch off -> no scan, merge
-#   W7) heavy-run override: manual-merge + auto-merge, no hit -> merged
+#   W7) human override: manual-merge + auto-merge, no hit -> merged
 #
 # Run: bash tests/test-data-migration.sh
 
@@ -277,14 +277,14 @@ merged || bad W6 "not merged with the switch off"
 [ "$FAIL" = "$FB" ] && ok W6 "switch off -> no scan"
 
 # ---- W7 ---------------------------------------------------------------------
-# A heavy-run PR carries manual-merge from birth; a human releases it by adding
-# auto-merge. Without a data-destroying statement the hold must not stop it.
+# A PR can carry manual-merge for another reason (an epic or child opt-out); a
+# human releases it by adding auto-merge. Without a data-destroying statement the hold must not stop it.
 FB=$FAIL
 setup W7 migrations/002.sql 'ALTER TABLE users ADD COLUMN phone2 text;'
 echo '[{"name":"auto-merge"},{"name":"manual-merge"}]' > "$WORK/pr_labels"
 run_watch
 [ "$RC" = 0 ] || { show W7; bad W7 "rc $RC, want 0"; }
-merged || bad W7 "heavy-run override not merged"
+merged || bad W7 "human override not merged"
 [ "$(comments)" = 0 ] || bad W7 "commented"
 [ "$(label_adds)" = 0 ] || bad W7 "label written"
 [ "$FAIL" = "$FB" ] && ok W7 "manual-merge alone does not hold a PR without a hit"

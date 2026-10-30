@@ -57,7 +57,7 @@ odottamaan, eikä automaation lisäämää labelia kannata poistaa ennen kuin sy
 | `auto-merge` (`PR_WATCH_MERGE_LABEL`) | sinä issuelle, automaatio PR:lle; **epicin lapsille propagoituu oletuksena** | sinä | PR-vahti mergeää **vain** labeloidun PR:n |
 | `manual-merge` | sinä epicille tai sen lapselle | sinä | Opt-out `auto-merge`-propagoinnista: epicillä estää koko ketjulta, lapsella vain siltä lapselta. Lapsi ajetaan silti — vain automerge jää pois |
 | `light-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: kevyt polku. Ei poimintaehto eikä estä poimintaa. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
-| `heavy-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: raskas polku. Ei poimintaehto eikä estä poimintaa. PR saa `manual-merge`n eikä yhdisty automaattisesti, vaikka issuella olisi `auto-merge`. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
+| `heavy-run` | sinä, issuen kirjoitushetkellä (`/issue-runner:new-issue`, `/issue-runner:new-epic`) | sinä | Ajopolun luokitus: raskas polku. Ei poimintaehto eikä estä poimintaa. PR yhdistyy automaattisesti vasta PR-vahdin koodikatselmuksen jälkeen. Kriteerit: [Ajopolku](#ajopolku--light-run-ei-labelia-vai-heavy-run) |
 | `priority-high` | sinä | sinä | Järjestys, ei ehto: poimitaan ennen saman repon muita ehdokkaita, ryhmän sisällä vanhin ensin. Estetty prioriteetti-issue ohitetaan kuten muutkin estetyt. Luo label repoon itse |
 | `auto-claimed` | automaatio, kun ajo varaa issuen (S3) | automaatio, kun ajo perääntyy tai siivotaan | **Varaus**: estää poiminnan käynnissä olevan tai siivoamattoman ajon ajaksi. Kiinteä nimi. **Älä lisää tai poista käsin** |
 | `needs-human` | automaatio, kun ajo luovuttaa | siivous, tai sinä PR:llä | Signaali sinulle. Issuella ei estä poimintaa; PR:llä pidättää vahdin CI-korjauksen luovutuksen jälkeen |
@@ -131,9 +131,14 @@ koskaan lisätä watchlistin poimintalabeleihin.
 
 **`heavy-run` muuttaa ajoa kahdella tavalla:**
 
-- **PR ei yhdisty automaattisesti.** Ajo jättää `auto-merge`n siirtämättä PR:lle ja lisää
-  sinne `manual-merge`n — myös silloin, kun issue ei ole bugi. Yhdistä PR itse tai lisää
-  `auto-merge` suoraan PR:lle.
+- **PR katselmoidaan ennen automaattista yhdistämistä.** `auto-merge` siirtyy PR:lle kuten
+  muillakin issueilla, mutta PR-vahti ajaa ennen mergeä koodikatselmuksen (merge-portti
+  `review`). Katselmus koskee PR:n lopullista headia ja vertaa sitä issueen. Pidätysrajan
+  ylittävän löydöksen agentti korjaa, tai PR jää ihmiselle `needs-human`-labelilla ja
+  kommentilla, joka listaa löydökset. Portilla ei ole kytkintä: `heavy-run` on sen ainoa ehto.
+  Raja ja muut asetukset: `docs/env-reference.md`, `PR_WATCH_REVIEW_*`. Jos haluat yhdistää
+  raskaan PR:n itse, jätä issuelta `auto-merge` pois. Epicin lapselle lisää `manual-merge`,
+  koska poller propagoi `auto-merge`n lapsille.
 - **Bugia ei korjata ennen kuin syy on vahvistettu.** Cycle review luokittelee, onko issue bugi
   (`HEAVY_RUN_KIND`-rivi; puuttuva rivi = bugi), ja kirjaa vähintään kolme kilpailevaa
   hypoteesia sekä niitä erottelevan diagnostisen kokeen. Toteutus ajaa kokeen ensin. Jos koe

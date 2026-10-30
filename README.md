@@ -825,7 +825,7 @@ vastaamatta. Rajoittimet ovat muualla: ajo tapahtuu omassa worktreessään omall
 feature-haarallaan, ja PR on ihmisen katselmoitavissa ennen mergeä — **paitsi kun issuella on
 `auto-merge`-label** (epicin alaissueilla oletuksena, ellei `manual-merge` estä). Silloin
 PR-vahti mergeää PR:n ilman ihmistä, kun vaaditut CI-tarkistukset ovat vihreät ja merge-portit
-(tietoturva §7.12, semanttinen §7.13) on läpäisty. Voimassa ovat vain rakenteelliset rajat:
+(§7.12, §7.13) on läpäisty. Voimassa ovat vain rakenteelliset rajat:
 oma worktree, oma feature-haara (ei koskaan oletushaaraan), CI ja portit.
 
 ### 7.2 Kohderepon oma shell-koodi ajetaan
@@ -1129,6 +1129,8 @@ voi valita valinnaisen Codexin: `PR_WATCH_SECURITY_REVIEWER=codex`.
   `principles_file`ä; PR:n `CLAUDE.md` on jäännösriski, jonka prompti käsittelee datana.
 - Asennetut skannerit (osio 2) ajetaan diffille ennen katselmusta, ja niiden löydökset
   lisätään päätökseen. Salaisuus on aina `high`, epäonnistunut skanneri `low`-rivi.
+- `heavy-run`-issuen PR saa samalla mekanismilla koodikatselmuksen (portti `review`, ei
+  kytkintä: [`PR_WATCH_REVIEW_*`](docs/env-reference.md#pr-vahti)).
 
 ### 7.13 Semanttisen konfliktin tarkistus
 
@@ -1137,8 +1139,7 @@ samaa tekevää toteutusta. Toinen merge-portti (`PR_WATCH_ENABLE_SEMANTIC_CHECK
 mekanismia kuin 7.12. Agentti ajetaan vain, jos ajon alun jälkeen baseen mergetty
 runner-PR (`auto-run/`) muuttaa samaa hakemistoa kuin tämä PR. Muuten portti läpäisee ilman
 agenttia. **Mergetty toteutus voittaa:** korjaus poistaa tämän PR:n kaksoiskappaleen, tai PR
-pidätetään kommentilla, joka nimeää sisar-PR:n. Tulos sidotaan headiin ja baseen, myös
-korjauksen jälkeen: base tarkistetaan uudelleen ennen mergeä.
+pidätetään kommentilla, joka nimeää sisar-PR:n.
 Yksityiskohdat: [`docs/env-reference.md`](docs/env-reference.md#pr-vahti).
 
 ### 7.14 Datan tuhoavan migraation pidätys

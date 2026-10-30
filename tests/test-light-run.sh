@@ -21,6 +21,9 @@
 #   (d) light-run + no decision line -> escalates (reason=no_decision).
 #   (e) the light-run label is read only inside S6 — S9 evolution has no branch
 #       on it, so no label can skip evolution.
+#   (f) heavy-run -> S6 keeps run_path=heavy. current_run_path reads run.json
+#       first, so a run_path S6 overwrote with "default" made a --restart forget
+#       the heavy path.
 #
 # Run: bash tests/test-light-run.sh
 
@@ -176,6 +179,14 @@ if [ -z "$OUTSIDE" ] && grep -q 'LIGHT_RUN_LABEL' "$ORCH"; then
   ok e "light-run label is read only in run_cycle_review (no evolution bypass)"
 else
   bad e "label read outside S6: $OUTSIDE"
+fi
+
+# (f)
+run_case f '[{"name":"heavy-run"}]' ''
+if [ "$RC" = 10 ] && [ "$(rj .run_path)" = heavy ]; then
+  ok f "heavy-run -> run_path stays heavy through S6"
+else
+  bad f "rc=$RC run_path='$(rj .run_path)'"
 fi
 
 echo "----------------------------------------"

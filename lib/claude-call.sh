@@ -164,6 +164,8 @@ _claude_step_phase() {
     13-finding-verify*)      printf 'FINDING_VERIFY' ;;
     14-quality-audit*)       printf 'QUALITY_AUDIT' ;;
     15-finding-group*)       printf 'FINDING_GROUP' ;;
+    16-code-review*)         printf 'CODE_REVIEW' ;;
+    17-code-review-fix*)     printf 'CODE_REVIEW_FIX' ;;
   esac
 }
 

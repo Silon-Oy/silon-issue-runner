@@ -340,10 +340,6 @@ source "$SCRIPT_DIR/lib/env-bootstrap.sh"
 source "$SCRIPT_DIR/lib/labels.sh"
 # shellcheck source=lib/observed-defects.sh
 source "$SCRIPT_DIR/lib/observed-defects.sh"
-# shellcheck source=lib/poller-config.sh
-# For the ONE merge-label resolver (poller_merge_label) and the manual-merge
-# label name: a heavy-run PR swaps the former for the latter (issue #313).
-source "$SCRIPT_DIR/lib/poller-config.sh"
 # shellcheck source=lib/version.sh
 # Runner-version visibility (issue #32): read by _post_situation_to_issue so a
 # hand-off report names the code version that produced it, and by --version.
@@ -1375,7 +1371,9 @@ run_cycle_review() {
       log "S6_CycleReview: issue carries $LIGHT_RUN_LABEL — running the light review"
       state_set "$RUN_DIR" "run_path" "light"
       run_light_review && return 0
-    else
+    elif [ "$(current_run_path)" != "heavy" ]; then
+      # heavy stays recorded: current_run_path reads run.json first, so a
+      # restarted run would otherwise lose the path its S1 recorded.
       state_set "$RUN_DIR" "run_path" "default"
     fi
   fi
@@ -2252,11 +2250,11 @@ _render_run_path_part() {
   cat "$out"
 }
 
-# pr_gets_manual_merge — exit 0 when this run's PR carries manual-merge instead
-# of the merge label. The ONE predicate behind both the label decision
-# (propagate_pr_labels) and the PR body (manual-merge note, review guide at the
-# top), so the body can never describe a merge policy the labels do not apply.
-pr_gets_manual_merge() {
+# pr_is_heavy_run — exit 0 when this run's PR is a heavy-run PR. The ONE
+# predicate behind the PR body's heavy-run parts (review guide at the top, the
+# review-gate note), so the body and the PR watcher's code review gate, which
+# reads the same issue.json label, describe the same PR.
+pr_is_heavy_run() {
   [ "$(current_run_path)" = "heavy" ]
 }
 
@@ -2340,21 +2338,6 @@ propagate_pr_labels() {
   done <<EOF
 $(printf '%s' "$PR_LABELS_CSV" | tr ',' '\n')
 EOF
-
-  # A heavy-run PR is never merged automatically (issue #313): the merge label
-  # is withheld even when the issue carries it, and manual-merge goes on the PR
-  # instead so the reason is visible where the merge decision is made.
-  if pr_gets_manual_merge; then
-    local merge_label kept="" m
-    merge_label=$(poller_merge_label)
-    while IFS= read -r m; do
-      [ -n "$m" ] && [ "$m" != "$merge_label" ] && kept="${kept:+$kept,}$m"
-    done <<EOF
-$(printf '%s' "$matched" | tr ',' '\n')
-EOF
-    matched="${kept:+$kept,}$EPIC_MANUAL_MERGE_LABEL"
-    log "propagate_pr_labels: heavy-run — withholding $merge_label, adding $EPIC_MANUAL_MERGE_LABEL"
-  fi
 
   if [ -z "$matched" ]; then
     log "propagate_pr_labels: no propagatable labels on issue #$ISSUE_NUM (configured: $PR_LABELS_CSV)"
@@ -2986,15 +2969,17 @@ phase_b_deliver() {
   # ---------- S10: PR ----------
   enter_state "S10_PR"
   log "S10_PR"
-  # The review guide (issue #413): a manual-merge PR is merged by a human, so the
-  # evolution step's `## Katselmointiohje` section opens the body. A missing
-  # section is one advisory line, never a blocker. Other paths ignore it, so
-  # their body stays byte-identical even when evolution wrote one anyway.
+  # The review guide (issue #413): a heavy-run PR is reviewed before its merge —
+  # by the PR watcher's code review gate, which reads the same guide, and by a
+  # human when the gate holds it — so the evolution step's `## Katselmointiohje`
+  # section opens the body. A missing section is one advisory line, never a
+  # blocker. Other paths ignore it, so their body stays byte-identical even when
+  # evolution wrote one anyway.
   local evo_guide=""
-  pr_gets_manual_merge && evo_guide=$(evolution_review_guide "$evo_out")
+  pr_is_heavy_run && evo_guide=$(evolution_review_guide "$evo_out")
   local pr_body="$RUN_DIR/pr-body.md"
   {
-    if pr_gets_manual_merge; then
+    if pr_is_heavy_run; then
       if [ -n "$evo_guide" ]; then
         echo "## Katselmointiohje"
         echo
@@ -3030,8 +3015,8 @@ phase_b_deliver() {
     echo "$cr_full"
     echo '```'
     echo
-    if pr_gets_manual_merge; then
-      echo "> **heavy-run:** this PR is not merged automatically — it carries \`$EPIC_MANUAL_MERGE_LABEL\` instead of \`$(poller_merge_label)\`. Review and merge it by hand."
+    if pr_is_heavy_run; then
+      echo "> **heavy-run:** before any automatic merge, the PR watcher runs a code review of this PR's final head (merge gate \`review\`). A finding at or above the hold threshold is fixed by an agent or the PR is held for a human."
       echo
     fi
     if diagnosis_gate_applies; then

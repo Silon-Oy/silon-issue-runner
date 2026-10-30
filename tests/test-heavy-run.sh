@@ -4,21 +4,24 @@
 # A heavy-run bug must not be fixed before its cause is confirmed: the
 # implementer runs the cycle review's diagnostic experiment first, records the
 # raw result and prints a DIAGNOSIS_RESULT line, and the orchestrator stops the
-# run for a human unless exactly one hypothesis was confirmed. Every heavy-run
-# PR — bug or not — is withheld from auto-merge and labelled manual-merge.
+# run for a human unless exactly one hypothesis was confirmed. A heavy-run PR —
+# bug or not — gets the issue's auto-merge like any other PR: the PR watcher's
+# code review gate (tests/test-pr-watch-review-gate.sh) stands where the human
+# merge used to, and the PR body says so.
 #
 # Same harness as test-pr-label-propagation.sh: orchestrate.sh in resume mode
 # (PROCEED) jumps straight to Phase B; claude, git and gh are PATH shims.
 #
 # Cases:
 #   (u) issue_run_path: heavy / light / standard, heavy wins over light
-#   (a) heavy bug, CONFIRMED + raw record  -> PR, manual-merge not auto-merge,
+#   (a) heavy bug, CONFIRMED + raw record  -> PR with auto-merge, no manual-merge,
 #       diagnosis in the PR body, run_path + confirmed_hypothesis in run.json
 #   (b) heavy bug, REFUTED                 -> blocked diagnosis_unconfirmed,
 #       exit 5, needs-human, no PR
 #   (c) heavy, no HEAVY_RUN_KIND, no result line -> fail-closed as a bug: blocked
 #   (d) heavy bug, CONFIRMED but no raw record   -> blocked
-#   (e) heavy NOT_BUG                      -> PR without the gate, manual-merge
+#   (e) heavy NOT_BUG                      -> PR without the gate, auto-merge,
+#       the review-gate note in the PR body
 #   (f) standard issue                     -> auto-merge propagated, no sections,
 #       and a review guide in the evolution output stays out of the PR body
 #   (g) heavy bug, CONFIRMED + review guide -> the guide opens the PR body
@@ -158,15 +161,15 @@ RC=$?
 [ "$(jq -r '.status' "$RD/run.json")" = "completed" ] || fail "(a): status not completed"
 [ "$(jq -r '.run_path' "$RD/run.json")" = "heavy" ] || fail "(a): run_path not heavy"
 [ "$(jq -r '.confirmed_hypothesis' "$RD/run.json")" = "H2" ] || fail "(a): confirmed_hypothesis not H2"
-grep -qF 'labels[]=manual-merge' "$GH_LOG" || fail "(a): manual-merge not added to PR"
-grep -qF 'labels[]=auto-merge' "$GH_LOG" && fail "(a): auto-merge reached a heavy-run PR"
+grep -qF 'labels[]=auto-merge' "$GH_LOG" || fail "(a): auto-merge not propagated to a heavy-run PR"
+grep -qF 'manual-merge' "$GH_LOG" && fail "(a): manual-merge on a heavy-run PR"
 grep -qF '## Diagnosis (heavy-run)' "$RD/pr-body.md" || fail "(a): no diagnosis section in PR body"
 grep -qF 'raw-output-xyz' "$RD/pr-body.md" || fail "(a): raw result missing from PR body"
 grep -qF 'Confirmed hypothesis: H2' "$RD/pr-body.md" || fail "(a): confirmed hypothesis missing from PR body"
 grep -qF 'Raskas polku' "$RD/02-implementer.prompt" || fail "(a): implementer prompt lacks heavy-run section"
 grep -qF "$RD/diagnosis.md" "$RD/02-implementer.prompt" || fail "(a): implementer prompt lacks the diagnosis path"
 grep -qF 'Raskas polku' "$RD/03-evolution.prompt" || fail "(a): evolution prompt lacks heavy-run section"
-[ "$FAIL" = "$P" ] && echo "PASS (a): confirmed diagnosis -> PR with manual-merge and diagnosis section"
+[ "$FAIL" = "$P" ] && echo "PASS (a): confirmed diagnosis -> PR with auto-merge and diagnosis section"
 
 # === (b) heavy bug, refuted ================================================
 P=$FAIL
@@ -195,12 +198,12 @@ setup_run "$HEAVY" "HEAVY_RUN_KIND: NOT_BUG"
 OUT=$(run_orch env)
 RC=$?
 [ "$RC" = "0" ] || { fail "(e): expected exit 0, got $RC"; echo "$OUT" | tail -5; }
-grep -qF 'labels[]=manual-merge' "$GH_LOG" || fail "(e): manual-merge not added"
-grep -qF 'labels[]=auto-merge' "$GH_LOG" && fail "(e): auto-merge reached a heavy-run PR"
+grep -qF 'labels[]=auto-merge' "$GH_LOG" || fail "(e): auto-merge not propagated"
+grep -qF 'manual-merge' "$GH_LOG" && fail "(e): manual-merge on a heavy-run PR"
 grep -qF '## Diagnosis' "$RD/pr-body.md" && fail "(e): diagnosis section on a non-bug"
-grep -qF 'heavy-run:** this PR is not merged automatically' "$RD/pr-body.md" || fail "(e): no manual-merge note in PR body"
+grep -qF 'merge gate `review`' "$RD/pr-body.md" || fail "(e): no review-gate note in PR body"
 grep -qF 'Raskas polku' "$RD/02-implementer.prompt" && fail "(e): non-bug implementer got the gate section"
-[ "$FAIL" = "$P" ] && echo "PASS (e): heavy non-bug -> normal path without auto-merge"
+[ "$FAIL" = "$P" ] && echo "PASS (e): heavy non-bug -> normal path, auto-merge behind the review gate"
 
 GUIDE=$(printf '%s\n' "## Katselmointiohje" "" "### Mihin katsoa" "- lib/x.sh:12 guide-marker-q7")
 MISSING_NOTE='**Review guide missing:**'
@@ -215,11 +218,12 @@ RC=$?
 grep -qF 'labels[]=auto-merge' "$GH_LOG" || fail "(f): auto-merge not propagated"
 grep -qF 'manual-merge' "$GH_LOG" && fail "(f): manual-merge on a standard PR"
 grep -qF 'Raskas polku' "$RD/02-implementer.prompt" && fail "(f): standard implementer got a heavy-run section"
+grep -qF 'merge gate `review`' "$RD/pr-body.md" && fail "(f): review-gate note on a standard PR"
 grep -qF '{{RUN_PATH_SECTION}}' "$RD/02-implementer.prompt" && fail "(f): placeholder left unrendered"
 grep -qF 'guide-marker-q7' "$RD/pr-body.md" && fail "(f): review guide reached a standard PR body"
 grep -qF "$MISSING_NOTE" "$RD/pr-body.md" && fail "(f): missing-guide note on a standard PR body"
 [ "$(head -1 "$RD/pr-body.md")" = "Auto-run for issue #313 — t" ] || fail "(f): body no longer opens with the Auto-run line"
-grep -qF 'katselmointiohje käsin yhdistettävään' "$RD/03-evolution.prompt" && fail "(f): standard evolution asked for a review guide"
+grep -qF 'katselmointiohje ennen mergeä katselmoitavaan' "$RD/03-evolution.prompt" && fail "(f): standard evolution asked for a review guide"
 [ "$FAIL" = "$P" ] && echo "PASS (f): standard path unchanged"
 
 # guide_opens_body <case> — the guide is the first block, before the cycle review.
@@ -242,8 +246,8 @@ OUT=$(run_orch env MOCK_DIAG="CONFIRMED H2" MOCK_DIAG_RAW="raw" MOCK_EVO_GUIDE="
 RC=$?
 [ "$RC" = "0" ] || { fail "(g): expected exit 0, got $RC"; echo "$OUT" | tail -5; }
 guide_opens_body g
-grep -qF 'labels[]=manual-merge' "$GH_LOG" || fail "(g): manual-merge not added"
-grep -qF 'katselmointiohje käsin yhdistettävään' "$RD/03-evolution.prompt" || fail "(g): evolution prompt lacks the review guide"
+grep -qF 'manual-merge' "$GH_LOG" && fail "(g): manual-merge on a heavy-run PR"
+grep -qF 'katselmointiohje ennen mergeä katselmoitavaan' "$RD/03-evolution.prompt" || fail "(g): evolution prompt lacks the review guide"
 grep -qF 'kohdistuuko korjaus vahvistettuun syyhyn' "$RD/03-evolution.prompt" || fail "(g): bug evolution prompt lacks the diagnosis part"
 [ "$FAIL" = "$P" ] && echo "PASS (g): review guide opens a heavy bug PR body"
 
@@ -266,7 +270,7 @@ OUT=$(run_orch env MOCK_EVO_GUIDE="$GUIDE")
 RC=$?
 [ "$RC" = "0" ] || { fail "(i): expected exit 0, got $RC"; echo "$OUT" | tail -5; }
 guide_opens_body i
-grep -qF 'katselmointiohje käsin yhdistettävään' "$RD/03-evolution.prompt" || fail "(i): non-bug evolution prompt lacks the review guide"
+grep -qF 'katselmointiohje ennen mergeä katselmoitavaan' "$RD/03-evolution.prompt" || fail "(i): non-bug evolution prompt lacks the review guide"
 grep -qF 'kohdistuuko korjaus vahvistettuun syyhyn' "$RD/03-evolution.prompt" && fail "(i): non-bug evolution prompt got the diagnosis part"
 [ "$FAIL" = "$P" ] && echo "PASS (i): review guide opens a heavy non-bug PR body"
 

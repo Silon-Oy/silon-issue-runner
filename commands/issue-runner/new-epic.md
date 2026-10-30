@@ -161,7 +161,8 @@ Lue kuvaus ja perehdy repoon sen verran, että pilkkominen osuu todelliseen kood
   ajolabelien mukana, joten ketju ajetaan kerralla läpi ilman ihmisen mergejä. Jos halutaan
   **manuaalinen merge**, lisää `manual-merge` epicille (estää koko ketjulta) tai yksittäiselle
   lapselle (vain se lapsi). Komento **ei** kirjoita `auto-merge`a lapsille — se syntyy
-  propagoinnissa.
+  propagoinnissa. `heavy-run`-lapsen PR mergeytyy vasta PR-vahdin koodikatselmuksen jälkeen
+  (skillin *Ajopolku*), joten raskas lapsi ei pysäytä ketjua, ellei katselmus pidätä sitä.
 
 **Esitä suunnitelma käyttäjälle kokonaisuudessaan ja pyydä vahvistus.** Suunnitelmassa näkyvät
 epicin otsikko ja runko, jokaisen alaissueen otsikko, runko ja **ehdotettu ajopolku
